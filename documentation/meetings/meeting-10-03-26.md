@@ -56,5 +56,7 @@ Goal: Understand **network timing requirements** (500 ms tick).
 - How are we **developing the project**?
   - Are we **branching on GitHub**?
 
+- Should we review all questions with you before asking the Devs?
+- Is using our own private github repos ok? Would you like to be added to them?
 ## Questions for Devs
 - (Add discussion questions here)
