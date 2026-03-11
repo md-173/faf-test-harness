@@ -27,8 +27,7 @@ The ICE adapter works around this using NAT traversal to establish a direct peer
 We hopefully don't need to do too much with this.
 
 ### Game Process
-The actual Supreme Commander executable. Has no knowledge of FAF, the lobby, or 
-other players. It opens a UDP port and waits to exchange game data with peers. 
+The actual Supreme Commander executable. Has no knowledge of FAF client or the lobby. It opens a UDP port and waits to exchange game data with peers. 
 From the game's perspective it is just playing a LAN game. The ICE adapter makes 
 remote players look local.
 
