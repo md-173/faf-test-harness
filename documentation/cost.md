@@ -2,8 +2,9 @@
 
 * **Total Resource Pool:** 1,120 Engineering Hours (4 Engineers @ 280 hours each)
 * **Project Timeline:** 25 Weeks (March 12th – September 3rd)
-* **Average Team Velocity:** ~45 combined hours per week
-
+* **Average Team Hours:** ~45 combined hours per week
+* **Average Team Member Weekley Hours:** ~11 hours
+  
 #### **Resource Distribution by Phase:**
 
 * **Phase 1: Architecture & Research** (2 Weeks)
