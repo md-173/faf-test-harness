@@ -1,5 +1,5 @@
 ## Team Roles
-- **Michael** – Team Lead  
-- **Matias** – Architect  
-- **Jai** – Lead Developer / Developer point of contact
-- **Shakiba** – Document Controller / Tester
+- **Michael** – Team Lead
+- **Matias** – Developer / Architect / Scribe
+- **Jai** – Developer / Liason
+- **Shakiba** – Developer / Document Controller / Tester
