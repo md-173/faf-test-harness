@@ -19,6 +19,9 @@ that behave exactly like the original component would. Extending it even further
 
 ## High-Level Architecture Diagram
 
+## High-Level Architecture Diagram
+
+```text
           +-------------------+
           | Lobby Server      |
           | (Auth, Matchmaking, |
@@ -46,6 +49,7 @@ that behave exactly like the original component would. Extending it even further
           |                                |
           | Signaling via Lobby Server     |
           +--------------------------------+
+```
 
 ## Component Responsibilities
 
