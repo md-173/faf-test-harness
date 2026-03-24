@@ -2,7 +2,6 @@ Q: Mid-sem break and mid-year break, will we be working?
 A:  Nein
 
 Q: Should there be a Project Planning category in the WBS, and should it include all of:
-- Milestone Planning
 - WBS
 - Schedule
 - Cost Analysis
