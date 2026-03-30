@@ -8,3 +8,5 @@ Q: Should there be a Project Planning category in the WBS, and should it include
 - Risk Register
 
 Q: Should we be presenting one org chart that combines both teams?
+
+Q: Can we make the github repo public?
