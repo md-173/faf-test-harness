@@ -8,11 +8,16 @@ Q: Should there be a Project Planning category in the WBS, and should it include
 - Risk Register
 
 Q: Should we be presenting one org chart that combines both teams?
+Both is fine
 
 Q: Can we make the github repo public?
+No
 
 Q: When we're getting into it properly are we gonna do sprint standups or retrospectives?
 
+
 Q: Should we be putting technical tasks on the spint backlog, or just user stories?
+Yes put technical
 
 Q: Can we invite other devs than Brutus to the repo?
+Must get confirmation
