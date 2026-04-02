@@ -5,3 +5,7 @@ It also stalled about due to a lack of documentation of the different states and
 
 Q: Would you like access to GitHub?  
 A:  Sure you can give me access if you want to. But I am quite short on time, so if you have specific questions better directly address them here or in the topic I just pinged you 🙂
+
+
+Q: Where would you start on this project if you were in our shoes:
+A: 
