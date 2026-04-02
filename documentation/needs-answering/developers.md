@@ -7,5 +7,14 @@ Q: Would you like access to GitHub?
 A:  Sure you can give me access if you want to. But I am quite short on time, so if you have specific questions better directly address them here or in the topic I just pinged you 🙂
 
 
-Q: Where would you start on this project if you were in our shoes:
+Q: Hey Brutus, we've just got a couple questions.
+
+We've been instructed to keep the repo private for now, but happy to invite anyone that you approve (e.g. magge).
+No worries if you haven't looked over our repository/issues yet - we wanted to ask you though, what would you start with if you were in our shoes developing this test harness? 
+
+We're working in 2 week sprints currently - each team (test harness and user portal) - would you prefer individual sprint reports or combined into the same one?
+
+Cheers, 
+Jai
+
 A: 
