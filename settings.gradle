@@ -1,0 +1,4 @@
+rootProject.name = 'faf-test-harness'
+
+include 'mock-client'
+include 'mock-game'
