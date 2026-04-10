@@ -1,7 +1,13 @@
 package com.students;
 
+@SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
-    public static void main(String[] args) {
+    /**
+     * Entry point.
+     *
+     * @param args command-line arguments
+     */
+    public static void main(final String[] args) {
         System.out.println("Hello World!");
     }
 }

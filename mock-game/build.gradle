@@ -1,6 +1,8 @@
 plugins {
     id 'java'
     id 'application'
+    id 'checkstyle'
+    id('com.diffplug.spotless') version '8.4.0'
 }
 
 group = 'com.students'
@@ -21,4 +23,11 @@ test {
 
 application {
     mainClass = 'com.students.Main'
+}
+
+spotless {
+    java {
+        googleJavaFormat().aosp()
+        formatAnnotations()
+    }
 }
