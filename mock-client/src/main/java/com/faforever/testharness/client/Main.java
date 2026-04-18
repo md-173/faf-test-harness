@@ -1,5 +1,6 @@
-package com.students;
-import com.students.SharedModule;
+package com.faforever.testharness.client;
+
+import com.faforever.testharness.shared.SharedModule;
 
 @SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
@@ -10,6 +11,6 @@ public class Main {
      */
     public static void main(final String[] args) {
         System.out.println("Hello World!");
-        System.out.println("Shared module version: " + SharedModule.getVersion());
+        System.out.println(SharedModule.getVersion());
     }
 }

@@ -5,7 +5,7 @@ plugins {
     id('com.diffplug.spotless') version '8.4.0'
 }
 
-group = 'com.students'
+group = 'com.faforever.testharness'
 version = '1.0-SNAPSHOT'
 
 repositories {
@@ -23,7 +23,7 @@ test {
 }
 
 application {
-    mainClass = 'com.students.Main'
+    mainClass = 'com.faforever.testharness.game.Main'
 }
 
 spotless {

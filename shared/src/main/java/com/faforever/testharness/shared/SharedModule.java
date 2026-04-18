@@ -1,4 +1,4 @@
-package com.students;
+package com.faforever.testharness.shared;
 
 /** Shared module metadata. */
 public final class SharedModule {

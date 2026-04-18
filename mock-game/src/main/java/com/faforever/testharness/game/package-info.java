@@ -1,2 +1,2 @@
 /** Main mock game package, entry point for the program. */
-package com.students;
+package com.faforever.testharness.game;
