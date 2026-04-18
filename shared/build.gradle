@@ -1,6 +1,5 @@
 plugins {
-    id 'java'
-    id 'application'
+    id 'java-library'
     id 'checkstyle'
     id('com.diffplug.spotless') version '8.4.0'
 }
@@ -13,17 +12,12 @@ repositories {
 }
 
 dependencies {
-    implementation project(':shared')
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
 test {
     useJUnitPlatform()
-}
-
-application {
-    mainClass = 'com.students.Main'
 }
 
 spotless {
