@@ -1,6 +1,5 @@
 plugins {
-    id 'java'
-    id 'application'
+    id 'java-library'
     id 'checkstyle'
     id('com.diffplug.spotless') version '8.4.0'
 }
@@ -13,7 +12,10 @@ repositories {
 }
 
 dependencies {
-    implementation project(':shared')
+    api 'org.slf4j:slf4j-api:2.0.16'
+    api 'ch.qos.logback:logback-classic:1.5.16'
+    api 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
@@ -22,13 +24,8 @@ test {
     useJUnitPlatform()
 }
 
-application {
-    mainClass = 'com.faforever.testharness.client.Main'
-}
-
 spotless {
     java {
-        // Use Google AOSP formatting
         googleJavaFormat().aosp()
         formatAnnotations()
     }

@@ -1,4 +1,6 @@
-package com.students;
+package com.faforever.testharness.game;
+
+import com.faforever.testharness.shared.SharedModule;
 
 @SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
@@ -9,5 +11,6 @@ public class Main {
      */
     public static void main(final String[] args) {
         System.out.println("Hello World!");
+        System.out.println(SharedModule.getVersion());
     }
 }
