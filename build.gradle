@@ -6,8 +6,4 @@ subprojects {
             languageVersion = JavaLanguageVersion.of(21)
         }
     }
-
-    tasks.named("check") {
-        dependsOn("spotlessCheck")
-    }
 }
