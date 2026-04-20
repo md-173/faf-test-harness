@@ -49,10 +49,7 @@ to the lobby server. No direct connections between players exist yet.
 
 **3 - Connecting Players**
 
-Once the host starts the game, each client launches the ICE adapter. The ICE adapters 
-exchange connection candidates through the lobby server (the only time the lobby 
-server touches networking data). Once a direct path is found between all players, 
-each client launches the game executable. The game just sees local UDP addresses.
+When a game session is started, each client spawns its ICE adapter and then launches the game executable into a lobby state. The game communicates with the ICE adapter via GPGNet (CreateLobby, HostGame / JoinGame, ConnectToPeer). In parallel, the ICE adapters discover connection candidates via external STUN/TURN servers and relay those candidates to each other through the lobby server. This signaling does not carry actual game traffic. Once direct paths are established, the host starts the match and live game traffic begins flowing peer-to-peer through the ICE adapters.
 
 **4 - Playing**
 
@@ -65,7 +62,7 @@ between players thru the ICE adapter. When the game ends, the client sends the r
 
 | Channel             | Between                 | Protocol               | Carries                                                            |
 | ------------------- | ----------------------- | ---------------------- | ------------------------------------------------------------------ |
-| Lobby connection    | Client and Lobby Server | JSON over TCP          | Auth, game listings, session setup, ICE candidate relay            |
+| Lobby connection    | Client and Lobby Server | Line-delimited JSON over TCP (SimpleJsonProtocol; the server also supports a legacy QDataStream binary format)          | Auth, game listings, session setup, ICE candidate relay            |
 | ICE adapter control | Client and ICE Adapter  | JSON-RPC over TCP      | Instructions: who to connect to, ICE candidates                    |
 | GPGNet              | Game and ICE Adapter    | Custom binary over TCP | Game lifecycle events: lobby ready, game started, player connected |
 | Game traffic        | Game and Game (via ICE) | UDP peer-to-peer       | Live game data: unit movement, commands, game state                |
@@ -100,8 +97,7 @@ Supreme Commander game to the ICE adapter. It goes through the expected game
 lifecycle, produces  the expected network traffic, runs for a duration of our choosing, and 
 exits. 
 
- The ICE adapter is not being mocked. The real faf-ice-adapter will be used 
- th roughout. 
+ The ICE adapter is not being mocked. The real faf-ice-adapter (the Java implementation currently deployed by FAF) will be used throughout. 
 
 ---
 
