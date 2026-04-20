@@ -98,7 +98,14 @@ What this does:
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
-CI currently runs `./gradlew build`, which includes `./gradlew check`. This verifies formatting with `spotlessCheck`; it does not run `spotlessApply`.
+### What CI runs on every PR
+
+Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
+
+- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat.
+- **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
+
+Both jobs are listed as required status checks on `main` (see §4). If either fails or is skipped, the PR cannot be merged.
 
 ## 4. Pull Requests
 
@@ -122,7 +129,7 @@ Rationale: one WBS item → one PR → one commit on `main`. Keeps `git log main
 ### Branch protection on `main`
 
 - Require pull request before merging.
-- Require status checks build and dependency-submission to pass.
+- Require status checks (`build`, `dependency-submission`) to pass.
 - Require branches to be up to date before merging.
 - Disallow force pushes and direct pushes.
 - Delete head branch after merge.
