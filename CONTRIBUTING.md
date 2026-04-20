@@ -52,7 +52,18 @@ We use [Conventional Commits](https://www.conventionalcommits.org/).
 
 ### Types
 
-`feat`, `fix`, `docs`, `style`, `refactor`, `test`, `build`, `ci`, `chore`, `revert`.
+| Prefix | Use for |
+| :--- | :--- |
+| `feat` | A new feature for the application. |
+| `fix` | A bug fix for a specific issue in the codebase. |
+| `docs` | Documentation-only changes (e.g., `README.md`, `CONTRIBUTING.md`). |
+| `style` | Changes that do not affect the meaning of the code (e.g., formatting, missing semi-colons). |
+| `refactor` | A code change that neither fixes a bug nor adds a feature. |
+| `test` | Adding missing tests or correcting existing test suites. |
+| `build` | Changes that affect the build system or external dependencies (e.g., Gradle configurations). |
+| `ci` | Changes to CI configuration files and automation scripts (e.g., GitHub Actions workflows). |
+| `chore` | Minor housekeeping changes that do not modify `src` or `test` files. |
+| `revert` | Reverting a previously merged commit. |
 
 ### Scopes
 
