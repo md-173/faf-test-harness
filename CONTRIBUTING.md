@@ -8,7 +8,9 @@ All work happens on short-lived branches cut from the latest `main`. Never commi
 
 ### Branch name format
 
+```text
 <type>/<wbs-id>-<short-kebab-description>
+```
 
 ### Allowed types
 
@@ -74,7 +76,9 @@ Code must be formatted and verified locally before pushing. CI will reject any P
 
 From the repository root, run:
 
+```bash
 ./gradlew spotlessApply check
+```
 
 What this does:
 
@@ -116,12 +120,16 @@ Rationale: one WBS item → one PR → one commit on `main`. Keeps `git log main
 
 Prefer rebase over merge commits while a branch is in progress:
 
+```bash
 git fetch origin
 git rebase origin/main
+```
 
 If you have already pushed, force-push with lease:
 
+```bash
 git push --force-with-lease
+```
 
 ## 6. When in doubt
 
