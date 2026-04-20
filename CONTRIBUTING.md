@@ -105,7 +105,7 @@ Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically 
 - **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
-Both jobs are listed as required status checks on `main` (see §4). If either fails or is skipped, the PR cannot be merged.
+Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
 
 ## 4. Pull Requests
 
