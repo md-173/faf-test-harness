@@ -47,7 +47,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/).
 
 <optional body explaining the "why">
 
-<optional footer, e.g. "Refs: WBS-12" or "BREAKING CHANGE: ...">
+<optional footer, e.g. "BREAKING CHANGE: ...">
 ```
 
 ### Types
@@ -79,7 +79,6 @@ Prefer a module name: `mock-client`, `mock-game`, `shared`, `ci`, `docker`, `doc
 Rules:
 - Subject line ≤ 72 characters, imperative mood, no trailing period.
 - One logical change per commit. Use `git rebase -i` to tidy up before pushing.
-- Reference the WBS issue in the body or footer when applicable (`Refs: WBS-2.3.1`).
 
 ## 3. Local Formatting and Verification
 
@@ -122,9 +121,20 @@ Both jobs are listed as required status checks on `main` (see [Section 4](#4-pul
 
 ### Merge strategy
 
-`main` uses **Squash and merge**. The squash commit message must itself follow Conventional Commits (the PR title is used as the squash subject, so write the PR title accordingly).
+`main` uses **Squash and merge**. The PR title is used as the squash commit subject, so it must follow Conventional Commits **and include the WBS id in square brackets**:
 
-Rationale: one WBS item → one PR → one commit on `main`. Keeps `git log main` readable as a project changelog and makes `git bisect` trivial.
+```text
+<type>(<optional scope>): <description> [WBS-<id>]
+```
+
+Examples:
+
+feat(shared): add message codec [WBS-2.3.1]
+fix(mock-game): correct GPGNet frame length parsing [WBS-3.1]
+docs: amend CONTRIBUTING.md merge strategy [WBS-2.3.1]
+After squash-merge this lands on main as e.g. feat(shared): add message codec [WBS-2.3.1] (#123).
+
+Rationale: one WBS item → one PR → one commit on main. The [WBS-<id>] suffix survives the squash (branch names are deleted on merge), keeping git log main readable as a WBS-indexed changelog and making git bisect trivial.
 
 ### Branch protection on `main`
 
@@ -139,11 +149,15 @@ Rationale: one WBS item → one PR → one commit on `main`. Keeps `git log main
 Prefer rebase over merge commits while a branch is in progress:
 
 ```bash
+git pull --rebase
+
+or
+
 git fetch origin
 git rebase origin/main
 ```
 
-If you have already pushed, force-push with lease:
+If you've already pushed your feature branch and need to rewrite its history (rebase, amend, squash), use git push --force-with-lease on the feature branch. Never force-push to main or any protected branch.
 
 ```bash
 git push --force-with-lease
