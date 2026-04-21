@@ -34,9 +34,9 @@ flowchart LR
         MG["Mock Game [MOCK]<br/>FA stand-in"]
     end
     subgraph PEER["Peer Player Node (symmetric)"]
-        PMC["Peer Mock Client [MOCK]"]
-        PIA["Peer faf-ice-adapter [REAL]"]
-        PMG["Peer Mock Game [MOCK]"]
+        PMC["Peer Mock Client [MOCK]<br/>Java orchestrator / FSM"]
+        PIA["Peer faf-ice-adapter [REAL]<br/>launched as subprocess"]
+        PMG["Peer Mock Game [MOCK]<br/>FA stand-in"]
     end
     subgraph LEGEND["Legend"]
         L1["MOCK component"]
