@@ -1,11 +1,43 @@
 <configuration>
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+
+    <!--
+      Log level: set LOG_LEVEL env var (DEBUG, INFO, WARN, ERROR).
+      Default: INFO.
+    -->
+    <property name="LOG_LEVEL" value="${LOG_LEVEL:-INFO}" />
+
+    <!--
+      Log file: set LOG_FILE env var to customise the JSONL output path.
+      Use a different path per process to avoid interleaving writes:
+        LOG_FILE=logs/mock-client.jsonl  ./gradlew :mock-client:run
+        LOG_FILE=logs/mock-game.jsonl    ./gradlew :mock-game:run
+      Default: logs/test-harness.jsonl
+    -->
+    <property name="LOG_FILE" value="${LOG_FILE:-logs/test-harness.jsonl}" />
+
+    <!-- Human-readable console output for developers. -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <!--
+              Format: [2026-04-17 12:00:00] [MockClient] [INFO ] Connected.
+              %X{component:-Unknown} reads the SLF4J MDC "component" key set
+              by LoggingSetup.configure().
+            -->
+            <pattern>[%d{yyyy-MM-dd HH:mm:ss}] [%X{component:-Unknown}] [%-5level] %msg%n</pattern>
         </encoder>
     </appender>
 
-    <root level="INFO">
-        <appender-ref ref="STDOUT" />
+    <!-- Machine-parseable JSONL file output for the automated test suite. -->
+    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+        <file>${LOG_FILE}</file>
+        <!-- Append so concurrent processes sharing a file do not overwrite. -->
+        <append>true</append>
+        <encoder class="com.faforever.testharness.shared.logging.JsonLineEncoder" />
+    </appender>
+
+    <root level="${LOG_LEVEL}">
+        <appender-ref ref="CONSOLE" />
+        <appender-ref ref="FILE" />
     </root>
+
 </configuration>
