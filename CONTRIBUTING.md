@@ -80,6 +80,8 @@ Rules:
 - Subject line ≤ 72 characters, imperative mood, no trailing period.
 - One logical change per commit. Use `git rebase -i` to tidy up before pushing.
 
+Note: individual commits on a feature branch do not require [<WBS-id>]. The PR title is the only subject that needs [<WBS-id>], because that's what becomes the squash commit on main.
+
 ## 3. Local Formatting and Verification
 
 Code must be formatted and verified locally before pushing. CI will reject any PR that fails these checks.
@@ -114,7 +116,7 @@ Both jobs are listed as required status checks on `main` (see [Section 4](#4-pul
 4. Request review from at least **one** other team member (two for changes touching `shared/` or CI).
 5. Address review comments with additional commits — do **not** force-push once review has started, except to rebase onto `main`.
 6. A PR is mergeable when:
-   - All CI checks are green.
+   - All CI checks are green.
    - At least one approving review from a teammate other than the author.
    - No unresolved review comments.
    - The branch is up to date with `main`.
@@ -124,17 +126,18 @@ Both jobs are listed as required status checks on `main` (see [Section 4](#4-pul
 `main` uses **Squash and merge**. The PR title is used as the squash commit subject, so it must follow Conventional Commits **and include the WBS id in square brackets**:
 
 ```text
-<type>(<optional scope>): <description> [WBS-<id>]
+<type>(<optional scope>): <description> [<WBS-id>]
 ```
 
 Examples:
 
-feat(shared): add message codec [WBS-2.3.1]
-fix(mock-game): correct GPGNet frame length parsing [WBS-3.1]
-docs: amend CONTRIBUTING.md merge strategy [WBS-2.3.1]
-After squash-merge this lands on main as e.g. feat(shared): add message codec [WBS-2.3.1] (#123).
+- `feat(shared): add message codec [2.3.1]`
+- `fix(mock-game): correct GPGNet frame length parsing [3.1]`
+- `docs: amend CONTRIBUTING.md merge strategy [2.3.1]`
 
-Rationale: one WBS item → one PR → one commit on main. The [WBS-<id>] suffix survives the squash (branch names are deleted on merge), keeping git log main readable as a WBS-indexed changelog and making git bisect trivial.
+After squash-merge this lands on `main` as e.g. `feat(shared): add message codec [2.3.1] (#123)`.
+
+Rationale: one WBS item → one PR → one commit on `main`. The `[<WBS-id>]` suffix survives the squash (branch names are deleted on merge), keeping `git log main` readable as a WBS-indexed changelog and making `git bisect` trivial.
 
 ### Branch protection on `main`
 
@@ -146,18 +149,15 @@ Rationale: one WBS item → one PR → one commit on main. The [WBS-<id>] suffix
 
 ## 5. Keeping your branch current
 
-Prefer rebase over merge commits while a branch is in progress:
+Keep your feature branch rebased on the latest `main` so your PR can merge cleanly (see Section 4 — "branch is up to date with `main`" is a merge requirement). From your feature branch:
 
 ```bash
-git pull --rebase
-
-or
-
 git fetch origin
 git rebase origin/main
 ```
+Shorthand: `git pull --rebase origin main`
 
-If you've already pushed your feature branch and need to rewrite its history (rebase, amend, squash), use git push --force-with-lease on the feature branch. Never force-push to main or any protected branch.
+If you've already pushed your feature branch and need to rewrite its history (rebase, amend, squash), use `git push --force-with-lease` on the feature branch. Never force-push to main or any protected branch.
 
 ```bash
 git push --force-with-lease
