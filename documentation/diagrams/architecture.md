@@ -1,3 +1,10 @@
+# Architecture & data flow
+Component boundaries and transport protocols for a single Local Player Node
+connected to one symmetric peer. The lobby server and OAuth provider are
+shared infrastructure; the four components listed in WBS 2.2.4 — Mock Client,
+FAF Lobby, ICE Adapter, Game Engine — are all represented explicitly and
+labelled as mock or real.
+
 ```mermaid
 flowchart LR
     classDef mock fill:#ffe7b3,stroke:#d98c00,stroke-width:2px,color:#000
@@ -45,3 +52,21 @@ flowchart LR
     style PEER fill:#f0f4ff,stroke:#1f6feb,stroke-width:1px
     style LEGEND fill:#fafafa,stroke:#999999,stroke-width:1px
 ```
+
+## Reading guide
+- **Thin bidirectional arrows** are signalling / control-plane links. They
+  carry JSON, JSON-RPC, or GPGNet control messages.
+- **Thick bidirectional arrows** (just the one between the two ICE adapters)
+  carry the actual UDP game-simulation traffic. The lobby server deliberately
+  never sees game traffic — it only relays ICE candidates during negotiation.
+- **Peer node is drawn symmetrically** so it's visually obvious that the same
+  three local components exist on every player's machine. A real session has
+  N ≥ 2 peer nodes; only one is shown for readability.
+  
+## Protocol label sources
+Every edge label is taken verbatim from the Communication Channels table in
+[`../research/project-briefing.md`](../research/project-briefing.md). The
+`(WebSocket/WSS via ws_bridge_rs)` addendum on the lobby link is drawn from
+[`../research/lobby-protocol-spec.md`](../research/lobby-protocol-spec.md)
+§1, which documents the WebSocket bridge that translates between the mock
+client and the lobby server's internal SimpleJsonProtocol.
