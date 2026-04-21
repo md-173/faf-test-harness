@@ -1,8 +1,7 @@
 # Full-session inter-component message flow
 
-This deliverable is split into three diagrams for readability. Together they
-cover the full inter-component message flow from authentication through
-teardown.
+The complete full inter-component message flow from authentication through to
+teardown is split into three diagrams for readability. 
 
 1. **Part 1 — Signalling & setup.** OAuth, lobby authentication, the
    canonical (matchmaker) game-setup path, local subprocess boot, and ICE
@@ -163,12 +162,6 @@ sequenceDiagram
 
 ## Reading guide
 
-- **Notes instead of `alt` blocks.** The original draft used `alt`/`else`
-  frames to show auth success/failure and the three game-setup flavours.
-  Those frames added a lot of visual weight for little informational gain,
-  so failure handling is demoted to inline notes and the three setup
-  flavours are split into the companion diagram above. The happy path
-  remains a single linear sequence.
 - **Participant-set changes between Part 1 and Part 2.** `Dev` and `Hydra`
   only matter for OAuth and are dropped from Part 2. The peer lane
   (`PIA`, `PMG`) only matters once the UDP tunnel is open, so it is dropped
