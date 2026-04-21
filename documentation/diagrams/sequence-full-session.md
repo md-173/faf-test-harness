@@ -1,6 +1,6 @@
 # Full-session inter-component message flow
 
-The complete full inter-component message flow from authentication through to
+The complete inter-component message flow from authentication through to
 teardown is split into three diagrams for readability. 
 
 1. **Part 1 — Signalling & setup.** OAuth, lobby authentication, the
