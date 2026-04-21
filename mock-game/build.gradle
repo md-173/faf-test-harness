@@ -1,9 +1,11 @@
 plugins {
     id 'java'
     id 'application'
+    id 'checkstyle'
+    id('com.diffplug.spotless') version '8.4.0'
 }
 
-group = 'com.students'
+group = 'com.faforever.testharness'
 version = '1.0-SNAPSHOT'
 
 repositories {
@@ -11,6 +13,7 @@ repositories {
 }
 
 dependencies {
+    implementation project(':shared')
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
@@ -20,5 +23,12 @@ test {
 }
 
 application {
-    mainClass = 'com.students.Main'
+    mainClass = 'com.faforever.testharness.game.Main'
+}
+
+spotless {
+    java {
+        googleJavaFormat().aosp()
+        formatAnnotations()
+    }
 }
