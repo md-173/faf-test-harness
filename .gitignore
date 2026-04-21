@@ -43,3 +43,4 @@ bin/
 
 # Editorconfig
 .editorconfig
+/faf-test-harness/.idea
