@@ -195,9 +195,9 @@ Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and ta
 
 ### Output formats
 
-| Output | Format | Purpose |
-| :--- | :--- | :--- |
-| Console (stderr) | `[2026-04-17 12:00:00] [MockClient] [INFO ] Connected.` | Human-readable during development |
+| Output                           | Format | Purpose |
+|:---------------------------------| :--- | :--- |
+| Console (stdout)                   | `[2026-04-17 12:00:00] [MockClient] [INFO ] Connected.` | Human-readable during development |
 | File (`logs/test-harness.jsonl`) | `{"timestamp":"…","component":"MockClient","level":"INFO","logger":"…","message":"Connected."}` | Programmatic parsing by the test suite |
 
 ### Configuration
