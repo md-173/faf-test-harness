@@ -23,7 +23,7 @@
               %X{component:-Unknown} reads the SLF4J MDC "component" key set
               by LoggingSetup.configure().
             -->
-            <pattern>[%d{yyyy-MM-dd HH:mm:ss}] [%X{component:-Unknown}] [%-5level] %msg%n</pattern>
+            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%X{component:-Unknown}] [%-5level] %msg%n</pattern>
         </encoder>
     </appender>
 

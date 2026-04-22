@@ -38,7 +38,7 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
 
     /** Timestamp format used in the JSON {@code timestamp} field. */
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").withZone(ZoneId.systemDefault());
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault());
 
     /** Shared, thread-safe factory for creating JSON generators. */
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
