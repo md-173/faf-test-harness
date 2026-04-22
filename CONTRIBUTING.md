@@ -155,7 +155,7 @@ All components use a shared structured logging framework built on SLF4J + Logbac
 
 ### Setup in a new component
 
-Call `LoggingSetup.configure(componentName)` once, before any logger is obtained, at the top of `main()`:
+Call `LoggingSetup.configure(componentName)` once in a static initialiser, before any logger is obtained. 
 
 ```java
 import com.faforever.testharness.shared.logging.LoggingSetup;
@@ -163,10 +163,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 public class Main {
+    // must run before the LOG field so Logback picks up LOG_FILE on first init 
+    static {
+        LoggingSetup.configure("MyComponent"); // must be first
+    }
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     public static void main(final String[] args) {
-        LoggingSetup.configure("MyComponent"); // must be first
         LOG.info("Started");
     }
 }
@@ -195,24 +198,18 @@ Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and ta
 
 ### Output formats
 
-| Output                           | Format                                                                                          | Purpose |
-|:---------------------------------|:------------------------------------------------------------------------------------------------| :--- |
-| Console (stdout)                   | `[2026-04-17 12:00:00.000] [MockClient] [INFO ] Connected.`                                     | Human-readable during development |
-| File (`logs/test-harness.jsonl`) | `{"timestamp":"…","component":"MockClient","level":"INFO","logger":"…","message":"Connected."}` | Programmatic parsing by the test suite |
+| Output                                                    | Format                                                                                          | Purpose |
+|:----------------------------------------------------------|:------------------------------------------------------------------------------------------------| :--- |
+| Console (stdout)                                          | `[2026-04-17 12:00:00.000] [MockClient] [INFO ] Connected.`                                     | Human-readable during development |
+| File (`logs/<component>.jsonl;` `LOG_FILE env`/`-D` overrides) | `{"timestamp":"…","component":"MockClient","level":"INFO","logger":"…","message":"Connected."}` | Programmatic parsing by the test suite |
 
 ### Configuration
 
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `LOG_LEVEL` | `INFO` | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
-| `LOG_FILE` | `logs/test-harness.jsonl` | JSONL output file path |
+| Variable | Default                  | Description |
+| :--- |:-------------------------| :--- |
+| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 
-Use a separate `LOG_FILE` per process when running multiple components concurrently to avoid interleaved writes:
-
-```bash
-LOG_FILE=logs/mock-client.jsonl ./gradlew :mock-client:run &
-LOG_FILE=logs/mock-game.jsonl   ./gradlew :mock-game:run &
-```
 
 ## 7. When in doubt
 

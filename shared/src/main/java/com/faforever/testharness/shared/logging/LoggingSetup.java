@@ -28,6 +28,7 @@ import org.slf4j.MDC;
  *
  * <p>The log file path is read from the {@value #LOG_FILE_ENV} environment variable. The default is
  * {@code logs/test-harness.jsonl}.
+ *
  */
 public final class LoggingSetup {
 
@@ -46,13 +47,20 @@ public final class LoggingSetup {
      * Configures logging for the named component.
      *
      * <p>Sets the SLF4J MDC {@value #COMPONENT_MDC_KEY} key so every subsequent log record is
-     * tagged with {@code componentName}, then applies the {@value #LOG_LEVEL_ENV} environment
-     * variable to the root logger.
+     * tagged with {@code componentName}, sets the JSONL file output name as the current
+     * component, then applies the {@value #LOG_LEVEL_ENV} environment variable to the root logger.
      *
      * @param componentName label that appears in every log line, e.g. {@code "MockClient"} or
      *     {@code "MockGame"}
      */
     public static void configure(final String componentName) {
+
+        // Must run in a static call in every Main class so that ${LOG_FILE} in logback.xml picks
+        // it up. An explicit env var or -D overrides this.
+        if (System.getenv(LOG_FILE_ENV) == null && System.getProperty(LOG_FILE_ENV) == null) {
+            System.setProperty(LOG_FILE_ENV, "logs/" + componentName.toLowerCase() + ".jsonl");
+        }
+
         MDC.put(COMPONENT_MDC_KEY, componentName);
         applyLogLevelFromEnv();
     }

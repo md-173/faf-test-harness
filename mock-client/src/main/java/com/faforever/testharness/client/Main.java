@@ -6,6 +6,9 @@ import org.slf4j.LoggerFactory;
 
 @SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
+    static {
+        LoggingSetup.configure("MockClient");
+    }
 
     /** Logger for mock-client startup messages. */
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
@@ -16,7 +19,6 @@ public class Main {
      * @param args command-line arguments
      */
     public static void main(final String[] args) {
-        LoggingSetup.configure("MockClient");
         LOG.info("Mock client started");
     }
 }

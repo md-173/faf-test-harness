@@ -8,10 +8,7 @@
 
     <!--
       Log file: set LOG_FILE env var to customise the JSONL output path.
-      Use a different path per process to avoid interleaving writes:
-        LOG_FILE=logs/mock-client.jsonl  ./gradlew :mock-client:run
-        LOG_FILE=logs/mock-game.jsonl    ./gradlew :mock-game:run
-      Default: logs/test-harness.jsonl
+      Default: logs/<component>.jsonl
     -->
     <property name="LOG_FILE" value="${LOG_FILE:-logs/test-harness.jsonl}" />
 

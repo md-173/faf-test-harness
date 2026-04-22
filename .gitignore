@@ -45,3 +45,5 @@ bin/
 .editorconfig
 /faf-test-harness/.idea
 /.idea
+/mock-client/logs
+/mock-game/logs
