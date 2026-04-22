@@ -1,6 +1,14 @@
 <configuration>
 
     <!--
+      Custom pattern word %component — resolves MDC, then LoggerContext, then "Unknown".
+      Both the MDC key and the LoggerContext property are set by LoggingSetup.configure(),
+      so async threads that don't inherit the thread-local MDC still tag correctly.
+    -->
+    <conversionRule conversionWord="component"
+                    converterClass="com.faforever.testharness.shared.logging.ComponentConverter" />
+
+    <!--
       Log level: set LOG_LEVEL env var (DEBUG, INFO, WARN, ERROR).
       Default: INFO.
     -->
@@ -17,10 +25,11 @@
         <encoder>
             <!--
               Format: [2026-04-17 12:00:00] [MockClient] [INFO ] Connected.
-              %X{component:-Unknown} reads the SLF4J MDC "component" key set
-              by LoggingSetup.configure().
+              %component is defined by ComponentConverter (see <conversionRule> above) and
+              falls back to the LoggerContext property when the thread-local MDC is empty,
+              so log lines emitted from async workers stay tagged with the right component.
             -->
-            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%X{component:-Unknown}] [%-5level] %msg%n</pattern>
+            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%component] [%-5level] %msg%n</pattern>
         </encoder>
     </appender>
 

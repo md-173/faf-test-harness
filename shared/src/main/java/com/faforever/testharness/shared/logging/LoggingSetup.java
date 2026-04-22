@@ -2,6 +2,7 @@ package com.faforever.testharness.shared.logging;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
@@ -28,7 +29,6 @@ import org.slf4j.MDC;
  *
  * <p>The log file path is read from the {@value #LOG_FILE_ENV} environment variable. The default is
  * {@code logs/test-harness.jsonl}.
- *
  */
 public final class LoggingSetup {
 
@@ -47,8 +47,8 @@ public final class LoggingSetup {
      * Configures logging for the named component.
      *
      * <p>Sets the SLF4J MDC {@value #COMPONENT_MDC_KEY} key so every subsequent log record is
-     * tagged with {@code componentName}, sets the JSONL file output name as the current
-     * component, then applies the {@value #LOG_LEVEL_ENV} environment variable to the root logger.
+     * tagged with {@code componentName}, sets the JSONL file output name as the current component,
+     * then applies the {@value #LOG_LEVEL_ENV} environment variable to the root logger.
      *
      * @param componentName label that appears in every log line, e.g. {@code "MockClient"} or
      *     {@code "MockGame"}
@@ -62,6 +62,14 @@ public final class LoggingSetup {
         }
 
         MDC.put(COMPONENT_MDC_KEY, componentName);
+
+        // MDC is thread-local, so async workers (e.g. WebSocket threads) that never inherit
+        // it would otherwise render as [Unknown]. Each JVM runs exactly one component, so
+        // store the same label in the LoggerContext property map as a JVM-wide fallback —
+        // resolved by ComponentConverter and JsonLineEncoder when the MDC is empty.
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        context.putProperty(COMPONENT_MDC_KEY, componentName);
+
         applyLogLevelFromEnv();
     }
 

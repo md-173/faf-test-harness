@@ -21,8 +21,9 @@ import java.time.format.DateTimeFormatter;
  *
  * <ul>
  *   <li>{@code timestamp} – wall-clock time, format {@code yyyy-MM-dd HH:mm:ss}
- *   <li>{@code component} – value of the SLF4J MDC key {@value LoggingSetup#COMPONENT_MDC_KEY}, set
- *       by {@link LoggingSetup#configure}
+ *   <li>{@code component} – component label resolved by {@link ComponentConverter#resolve} (MDC →
+ *       {@code LoggerContext} → {@code "Unknown"}), both populated by {@link
+ *       LoggingSetup#configure}
  *   <li>{@code level} – log level string ({@code DEBUG}, {@code INFO}, …)
  *   <li>{@code logger} – fully-qualified logger name
  *   <li>{@code thread} – thread name
@@ -66,9 +67,6 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
 
     /** JSON field name for the optional exception stack trace. */
     private static final String FIELD_EXCEPTION = "exception";
-
-    /** Placeholder component value when the MDC key is absent. */
-    private static final String UNKNOWN_COMPONENT = "Unknown";
 
     @Override
     public byte[] headerBytes() {
@@ -115,10 +113,7 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
         gen.writeStringField(
                 FIELD_TIMESTAMP,
                 TIMESTAMP_FORMAT.format(Instant.ofEpochMilli(event.getTimeStamp())));
-        gen.writeStringField(
-                FIELD_COMPONENT,
-                event.getMDCPropertyMap()
-                        .getOrDefault(LoggingSetup.COMPONENT_MDC_KEY, UNKNOWN_COMPONENT));
+        gen.writeStringField(FIELD_COMPONENT, ComponentConverter.resolve(event));
         gen.writeStringField(FIELD_LEVEL, event.getLevel().toString());
         gen.writeStringField(FIELD_LOGGER, event.getLoggerName());
         gen.writeStringField(FIELD_THREAD, event.getThreadName());
