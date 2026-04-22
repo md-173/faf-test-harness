@@ -72,4 +72,4 @@ stateDiagram-v2
     JOINING --> PLAYING : Host starts peer-to-peer communication
     PLAYING --> [*]
 ```
-
+*State diagram of the mock client*
