@@ -29,7 +29,7 @@ stateDiagram-v2
     IDLE --> HOSTING : HostGame message from server
     IDLE --> JOINING : JoinGame message from server
     HOSTING --> LIVE : Send GameState(Launching) message
-    JOINING --> LIVE : TODO
+    JOINING --> LIVE : Host starts peer-to-peer communication
     LIVE --> ENDED : Game finished / Send GameState(Ended) message
     ENDED --> [*]
 ```
@@ -69,7 +69,7 @@ stateDiagram-v2
     STARTING_GAME --> JOINING : JoinGame message from server
     JOINING --> JOINING : ConnectToPeer messages from server
     HOSTING --> PLAYING : Send GameState(LAUNCHING) message
-    JOINING --> PLAYING : TODO
+    JOINING --> PLAYING : Host starts peer-to-peer communication
     PLAYING --> [*]
 ```
 
