@@ -276,6 +276,6 @@ Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and ta
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 
 
-## 7. When in doubt
+## 8. When in doubt
 
 Ask in the team channel before inventing a new convention. Amendments to this document go through a normal PR and must be approved by the team lead.
