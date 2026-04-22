@@ -96,6 +96,8 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
             baos.write(NEWLINE);
         } catch (IOException e) {
             addError("Failed to encode log event to JSONL", e);
+            return "{\"level\":\"ERROR\",\"message\":\"JSON encode failed\"}\n"
+                    .getBytes(StandardCharsets.UTF_8);
         }
         return baos.toByteArray();
     }
