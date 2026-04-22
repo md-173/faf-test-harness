@@ -399,14 +399,12 @@ the launched game process, not by the client itself. In the Mock Client this mea
 2. The FSM executes the subprocess boot sequence:
    - launch `faf-ice-adapter` via `ProcessBuilder`
    - launch `mock-game` via `ProcessBuilder`, passing the parsed `game_launch` arguments
-   - await the local TCP IPC connection from `mock-game`
-3. Once `mock-game` connects and emits its first GPGNet `GameState` message over local TCP,
-   the FSM instructs the proxy layer to wrap it as `{"command": "GameState", "target":
-   "game", "args": ["Idle"]}` and forward it to the Lobby Server.
+      - await the GPGNet TCP connection from `mock-game` to `faf-ice-adapter`,
+     and the JSON-RPC TCP connection from `faf-ice-adapter` to the Mock Client
+3. Once `mock-game` connects to `faf-ice-adapter` and emits its first GPGNet `GameState("Idle")` frame, `faf-ice-adapter` forwards that frame to theMock Client as a JSON-RPC notification. The FSM then instructs the proxy layer to wrap the forwarded payload as `{"command": "GameState", "target": "game", "args": ["Idle"]}` and send it to the Lobby Server over the WebSocket.
 
-The Mock Client is therefore a **proxy** for GPGNet traffic, not its originator. The
-architecture flow is: **Protocol → Event → FSM → Subprocess → Proxy.** This note applies
-identically to the custom-host, custom-joiner, and matchmaker flows above.
+The Mock Client is therefore a **proxy** for GPGNet traffic, not its originator —
+specifically, it proxies JSON-RPC notifications it receives from `faf-ice-adapter` onto the lobby WebSocket as `target: "game"` envelopes, and in the opposite direction unwraps `target: "game"` envelopes from the lobby and forwards them to `faf-ice-adapter` as JSON-RPC calls, which the adapter then emits to `mock-game` as GPGNet frames. The architecture flow is: **Protocol → Event → FSM → Subprocess → Proxy.** This note applies identically to the custom-host, custom-joiner, and matchmaker flows above.
 
 ### Key Differences
 
@@ -504,7 +502,15 @@ triggers the local orchestration sequence defined in **4.4 Orchestration Note**
    identifier pattern; enumerated fields are checked against their allowed values).
 4. **Subprocess boot** — launch `faf-ice-adapter` and `mock-game` per §4.4, mapping the
    validated fields into the CLI arguments each executable expects.
-5. **IPC handshake** — hold orchestration state until `mock-game` establishes its local TCP connection and emits its first `GameState("Idle")` message over the local IPC channel (exact wire format to be defined by the Mock Harness architecture — see the architecture doc), which the proxy layer then wraps as `{"command": "GameState", "target": "game", "args": ["Idle"]}` and forwards over the lobby WebSocket.
+5. **IPC handshake** — hold orchestration state until both local TCP channels
+   are up: (a) `mock-game` → `faf-ice-adapter` over GPGNet (binary framing,
+   documented in the GPGNet Framing Format research task), and
+   (b) `faf-ice-adapter` → Mock Client over JSON-RPC. Orchestration resumes
+   when `mock-game` emits its first `GameState("Idle")` GPGNet frame;
+   `faf-ice-adapter` forwards it to the Mock Client as a JSON-RPC
+   notification, and the proxy layer wraps it as
+   `{"command": "GameState", "target": "game", "args": ["Idle"]}` and sends it
+   over the lobby WebSocket.
 
 ### Sources
 AsyncAPI: https://faforever.github.io/faf-api-specs

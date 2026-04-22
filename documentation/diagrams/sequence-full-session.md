@@ -57,12 +57,16 @@ sequenceDiagram
     Note over MC,IA: Phase 3 - Local subprocess boot
     MC->>IA: ProcessBuilder start + JSON-RPC init (TCP loopback)
     MC->>MG: ProcessBuilder start (CLI args from game_launch)
-    MG->>IA: TCP connect (GPGNet framing)
-    MG-->>MC: GameState("Idle") via local IPC
+        MG->>IA: TCP connect (GPGNet framing)
+    MG->>IA: GameState("Idle") (GPGNet)
+    IA->>MC: JSON-RPC GameState forward ("Idle")
     MC->>LS: GameState("Idle") wrapped target:"game"
-    MG->>IA: GameState("Lobby")
-    MC->>LS: GameState("Lobby")
-    LS-->>MC: HostGame / JoinGame / ConnectToPeer
+    MG->>IA: GameState("Lobby") (GPGNet)
+    IA->>MC: JSON-RPC GameState forward ("Lobby")
+    MC->>LS: GameState("Lobby") wrapped target:"game"
+    LS-->>MC: HostGame / JoinGame / ConnectToPeer wrapped target:"game"
+    MC->>IA: JSON-RPC HostGame / JoinGame / ConnectToPeer
+    IA->>MG: HostGame / JoinGame / ConnectToPeer (GPGNet)
 
     Note over MC,IA: Phase 4 - ICE negotiation (signalling via lobby only)
     MC->>IA: JSON-RPC setIceServers / connectToPeer
@@ -129,6 +133,8 @@ sequenceDiagram
     Note over MG,PMG: Phase 5 - Gameplay
     MC->>LS: GameState("Launching")
     MG->>IA: GPGNet control commands (GameOption, PlayerOption, GameMods, ...)
+    IA->>MC: JSON-RPC GPGNet control commands forward
+    MC->>LS: GameOption / PlayerOption / GameMods wrapped target:"game"
     loop simulation ticks
         MG->>IA: UDP simulation packets
         IA->>PIA: UDP over NAT-traversed P2P tunnel
@@ -141,8 +147,11 @@ sequenceDiagram
 
     Note over MC,LS: Phase 6 - End of session / result reporting
     MG->>IA: GameResult per army (GPGNet)
+    IA->>MC: JSON-RPC GameResult forward
     MG->>IA: JsonStats (GPGNet)
+    IA->>MC: JSON-RPC JsonStats forward
     MG->>IA: GameEnded (GPGNet)
+    IA->>MC: JSON-RPC GameEnded forward
     MC->>LS: GameResult / JsonStats / GameEnded wrapped target:"game"
     Note over LS: Server persists results, updates ratings
 
@@ -164,8 +173,18 @@ sequenceDiagram
 
 - **Participant-set changes between Part 1 and Part 2.** `Dev` and `Hydra`
   only matter for OAuth and are dropped from Part 2. The peer lane
-  (`PIA`, `PMG`) only matters once the UDP tunnel is open, so it is dropped
-  from Part 1. This is intentional and keeps each diagram narrow.
+  (`PIA` / Peer ICE Adapter, `PMG` / Peer Mock Game) only matters once the
+  UDP tunnel is open, so it is dropped from Part 1. This is intentional and
+  keeps each diagram narrow.
+- **GPGNet messages always cross through the ICE adapter.** The Mock Game
+  and the Mock Client have no direct channel — GPGNet traffic is proxied by
+  `faf-ice-adapter`, which translates between the GPGNet TCP framing on the
+  game side and the JSON-RPC interface on the client side. Every Mock Game
+  ↔ Mock Client exchange therefore shows three hops on the wire (MG → IA →
+  MC, or MC → IA → MG on the return leg). This matches the upstream
+  FAForever chain `[FA.exe] <--> [faf-pioneer] <--> [faf-client] <-->
+  [faf-lobby-server]` documented in
+  [`faf-pioneer/docs/gpgnet.md`](https://github.com/FAForever/faf-pioneer/blob/main/docs/gpgnet.md).
 - **The `loop simulation ticks` block in Phase 5** is schematic. A real
   session exchanges thousands of UDP packets per second over the tunnel;
   the loop is drawn once for illustration.
@@ -178,5 +197,9 @@ sequenceDiagram
 - Component responsibilities and session narrative:
   [`../research/project-briefing.md`](../research/project-briefing.md)
   "How a Session Works" and "Communication Channels".
+- GPGNet proxy chain and message ordering:
+  [upstream faf-pioneer `gpgnet.md`](https://github.com/FAForever/faf-pioneer/blob/main/docs/gpgnet.md)
+  and
+  [`faf-pioneer/docs/network_architecture.md`](https://github.com/FAForever/faf-pioneer/blob/main/docs/network_architecture.md).
 - Subprocess orchestration (ProcessBuilder, JSON-RPC init, teardown):
   [`../task-desc.md`](../task-desc.md) §1.1 Mock Client Core.

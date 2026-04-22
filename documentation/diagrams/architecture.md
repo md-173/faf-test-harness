@@ -76,7 +76,7 @@ flowchart LR
   traffic — it only relays ICE candidates during negotiation.
 - **Peer node is drawn symmetrically** so it's visually obvious that the
   same three local components exist on every player's machine. A real
-  session has N ≥ 2 peer nodes; only one is shown for readability.
+  session has N ≥ 1 peer nodes; only one is shown for readability.
 - **Edge ordering in the source** groups local-and-peer counterparts
   together (OAuth pair, lobby pair, local ICE/GPGNet pair, peer ICE/GPGNet
   pair, UDP tunnel). This makes it easy to spot label drift if anyone ever
