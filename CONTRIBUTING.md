@@ -163,6 +163,68 @@ If you've already pushed your feature branch and need to rewrite its history (re
 git push --force-with-lease
 ```
 
-## 6. When in doubt
+## 6. Logging
+
+All components use a shared structured logging framework built on SLF4J + Logback.
+
+### Setup in a new component
+
+Call `LoggingSetup.configure(componentName)` once in a static initialiser, before any logger is obtained. 
+
+```java
+import com.faforever.testharness.shared.logging.LoggingSetup;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class Main {
+    // must run before the LOG field so Logback picks up LOG_FILE on first init 
+    static {
+        LoggingSetup.configure("MyComponent"); // must be first
+    }
+    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+
+    public static void main(final String[] args) {
+        LOG.info("Started");
+    }
+}
+```
+
+### Obtaining a logger in any class
+
+```java
+private static final Logger LOG = LoggerFactory.getLogger(MyClass.class);
+```
+
+Never pass loggers as arguments or store them as instance fields — the static pattern is sufficient and safe.
+
+### Capturing subprocess output
+
+Wrap any child process with `ProcessOutputLogger.captureAsync` immediately after starting it:
+
+```java
+Process ice = new ProcessBuilder("faf-ice-adapter", "--args").start();
+ExecutorService readers = ProcessOutputLogger.captureAsync(ice, "ICEAdapter");
+ice.waitFor();
+readers.shutdown();
+```
+
+Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and tagged `[ICEAdapter]` in both console and JSONL output. Consecutive stack-trace lines (starting with a tab or `Caused by:`) are merged into a single log event.
+
+### Output formats
+
+| Output                                                    | Format                                                                                          | Purpose |
+|:----------------------------------------------------------|:------------------------------------------------------------------------------------------------| :--- |
+| Console (stdout)                                          | `[2026-04-17 12:00:00.000] [MockClient] [INFO ] Connected.`                                     | Human-readable during development |
+| File (`logs/<component>.jsonl;` `LOG_FILE env`/`-D` overrides) | `{"timestamp":"…","component":"MockClient","level":"INFO","logger":"…","message":"Connected."}` | Programmatic parsing by the test suite |
+
+### Configuration
+
+| Variable | Default                  | Description |
+| :--- |:-------------------------| :--- |
+| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
+
+
+## 7. When in doubt
 
 Ask in the team channel before inventing a new convention. Amendments to this document go through a normal PR and must be approved by the team lead.

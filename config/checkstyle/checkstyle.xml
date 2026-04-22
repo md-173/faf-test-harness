@@ -72,8 +72,10 @@
   <!-- Checks for Size Violations.                    -->
   <!-- See https://checkstyle.org/checks/sizes/index.html -->
   <module name="FileLength"/>
+  <!-- 100 chars matches Google Java Format AOSP line-length used by spotlessApply. -->
   <module name="LineLength">
     <property name="fileExtensions" value="java"/>
+    <property name="max" value="100"/>
   </module>
 
   <!-- Checks for whitespace                               -->
