@@ -28,7 +28,15 @@
     </appender>
 
     <!-- Machine-parseable JSONL file output for the automated test suite. -->
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- %d rotates daily, %i increments within a day if size limit hit -->
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>5</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
         <file>${LOG_FILE}</file>
         <!-- Append so concurrent processes sharing a file do not overwrite. -->
         <append>true</append>
