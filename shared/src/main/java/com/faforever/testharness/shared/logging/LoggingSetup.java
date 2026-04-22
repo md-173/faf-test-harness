@@ -1,7 +1,5 @@
 package com.faforever.testharness.shared.logging;
 
-import ch.qos.logback.classic.Level;
-import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -24,8 +22,9 @@ import org.slf4j.MDC;
  * // File:    {"timestamp":"2026-04-17 12:00:00","component":"MockClient",...}
  * }</pre>
  *
- * <p>Log level is read from the {@value #LOG_LEVEL_ENV} environment variable (e.g. {@code
- * LOG_LEVEL=DEBUG}). The default is {@code INFO}.
+ * <p>Log level is read by Logback from the {@value #LOG_LEVEL_ENV} environment variable at
+ * config-parse time via {@code ${LOG_LEVEL:-INFO}} in {@code logback.xml} — this class does not
+ * apply it programmatically. The default is {@code INFO}.
  *
  * <p>The log file path is read from the {@value #LOG_FILE_ENV} environment variable. The default is
  * {@code logs/test-harness.jsonl}.
@@ -47,8 +46,9 @@ public final class LoggingSetup {
      * Configures logging for the named component.
      *
      * <p>Sets the SLF4J MDC {@value #COMPONENT_MDC_KEY} key so every subsequent log record is
-     * tagged with {@code componentName}, sets the JSONL file output name as the current component,
-     * then applies the {@value #LOG_LEVEL_ENV} environment variable to the root logger.
+     * tagged with {@code componentName} and sets the JSONL file output name to {@code
+     * logs/<componentName>.jsonl}. Logback picks up {@value #LOG_LEVEL_ENV} and {@value
+     * #LOG_FILE_ENV} on its own via {@code ${…}} substitution in {@code logback.xml}.
      *
      * @param componentName label that appears in every log line, e.g. {@code "MockClient"} or
      *     {@code "MockGame"}
@@ -69,21 +69,5 @@ public final class LoggingSetup {
         // resolved by ComponentConverter and JsonLineEncoder when the MDC is empty.
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.putProperty(COMPONENT_MDC_KEY, componentName);
-
-        applyLogLevelFromEnv();
-    }
-
-    /**
-     * Reads {@value #LOG_LEVEL_ENV} and applies it to the root Logback logger. No-ops if the
-     * variable is absent or blank.
-     */
-    private static void applyLogLevelFromEnv() {
-        String levelStr = System.getenv(LOG_LEVEL_ENV);
-        if (levelStr == null || levelStr.isBlank()) {
-            return;
-        }
-        Level level = Level.toLevel(levelStr, Level.INFO);
-        Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
-        root.setLevel(level);
     }
 }
