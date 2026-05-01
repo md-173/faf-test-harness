@@ -165,7 +165,9 @@ git push --force-with-lease
 
 ## 6. JavaDocs Conventions
 
-All classes and methods need JavaDocs attributed to them.
+Required on all public and protected types and members. Optional (but encouraged where non-obvious) on package-private and private members. Not required on @Override methods, trivial getters/setters, or test methods.
+
+Important: The first sentence of your JavaDoc (up to the first period followed by whitespace) is extracted by the compiler to create the summary tables. This first sentence must be a high-level overview.
 
 
 <b>Class Level Template</b>
@@ -187,7 +189,8 @@ All classes and methods need JavaDocs attributed to them.
  * instance.doSomething();
  * }</pre>
  *
- * @author Name1, Name2
+ * @author Name1
+ * @author Name2
  * @see [RelatedClassOrInterface]
  */
 public class ExampleClass {
@@ -197,7 +200,7 @@ public class ExampleClass {
 <b>Method Level Template</b>
 ```java
 /**
- * [Short, active-voice description of what the method does].
+ * [Short, third-person, active-voice description of what the method does].
  *
  * <p>[Detailed explanation of the method's behavior, state changes, or specific 
  * algorithms used. Mention if it runs synchronously or asynchronously.]
@@ -213,6 +216,14 @@ public Object doSomething(String paramName, int paramName) {
 }
 ```
 
+### Additional rules
+
+**Scope**: Applies to classes, interfaces, enums, records, and annotation types. For records, document each component with @param on the class-level Javadoc. package-info.java carries a package-level summary.  
+**Nullability**: Parameters and return values are non-null by default. Explicitly document any that may be null on @param / @return. Prefer a nullness annotation (e.g. JSpecify) when available.  
+**Exceptions**: Every checked exception in throws needs a matching @throws. Document unchecked exceptions that are part of the contract (e.g. IllegalArgumentException on bad input).  
+**Overrides**: Omit the Javadoc to inherit the parent's doc verbatim. Only write a block when supplementing it, and use {@inheritDoc} where the parent's text should appear.  
+**Void methods**: No @return tag.  
+**Linking**: Use {@link ClassName#method(ParamType)} to reference code (include param types for overloaded methods) and {@code ...} for inline code snippets.  
 
 ## 7. Logging
 
