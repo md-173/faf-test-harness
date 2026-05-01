@@ -176,8 +176,13 @@
     <module name="EmptyStatement"/>
     <module name="EqualsHashCode"/>
     <module name="FallThrough"/>
-    <!-- Disabled: bans the common this.x = x constructor pattern -->
-    <!-- <module name="HiddenField"/> -->
+
+    <!-- Allow the this.x = x pattern without losing protection from shadowing bugs -->
+    <module name="HiddenField">
+      <property name="ignoreConstructorParameter" value="true"/>
+      <property name="ignoreSetter" value="true"/>
+    </module>
+
     <module name="IllegalInstantiation"/>
     <module name="InnerAssignment"/>
     <module name="MagicNumber"/>
