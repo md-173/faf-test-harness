@@ -1,1 +1,133 @@
-`iceAdapterGpgNetPort` defaults to `7237` in the Mock Client so local subprocess startup is deterministic. The upstream `faf-ice-adapter` default for `--gpgnet-port` is `0`, meaning it chooses an ephemeral port.
+# Mock Client
+
+Headless CLI stand-in for the FAF desktop client. Connects to the lobby server,
+launches `faf-ice-adapter` and `mock-game` as subprocesses, and proxies GPGNet
+traffic between them and the lobby. Used for end-to-end integration tests that
+do not require a real game install or a human at the keyboard.
+
+## Configuration
+
+Every Mock Client component reads from a single `MockClientConfig` object
+produced by `ConfigLoader`. No other code calls `System.getenv`,
+`System.getProperty`, or reads the filesystem to discover configuration.
+
+### Precedence
+
+Settings are merged from four sources, lowest to highest priority. Higher
+sources override lower ones on a per-field basis.
+
+1. **Built-in defaults** — compiled into `ConfigKey`.
+2. **Config file** — JSON, supplied with `--config <path>`.
+3. **Environment variables** — `FAF_MOCK_*`, see table below.
+4. **CLI flags** — `--kebab-case`, see table below.
+
+### Environment variable convention
+
+`FAF_MOCK_<UPPER_SNAKE_CASE>` of the JSON key. For example, JSON key
+`lobbyWebSocketUrl` → env var `FAF_MOCK_LOBBY_WEBSOCKET_URL` → CLI flag
+`--lobby-websocket-url`.
+
+### Field reference
+
+| JSON key | Env var | CLI flag | Default | Required | Description |
+|---|---|---|---|---|---|
+| `lobbyWebSocketUrl` | `FAF_MOCK_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
+| `oauthTokenUrl` | `FAF_MOCK_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes | OAuth2 token endpoint used to acquire lobby access tokens. |
+| `oauthClientId` | `FAF_MOCK_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 client identifier. |
+| `oauthClientSecret` | `FAF_MOCK_OAUTH_CLIENT_SECRET` | `--oauth-client-secret` | — | no¹ | OAuth2 client secret. |
+| `oauthUsername` | `FAF_MOCK_OAUTH_USERNAME` | `--oauth-username` | — | no¹ | OAuth username (local/test environments). |
+| `oauthPassword` | `FAF_MOCK_OAUTH_PASSWORD` | `--oauth-password` | — | no¹ | OAuth password (local/test environments). |
+| `oauthAccessToken` | `FAF_MOCK_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token. |
+| `oauthTokenFile` | `FAF_MOCK_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT. |
+| `uniqueId` | `FAF_MOCK_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
+| `iceAdapterBinaryPath` | `FAF_MOCK_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | — | yes | Path to the `faf-ice-adapter` executable. |
+| `mockGameBinaryPath` | `FAF_MOCK_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | — | yes | Path to the `mock-game` executable. |
+| `iceAdapterRpcPort` | `FAF_MOCK_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | yes | Local JSON-RPC port exposed by `faf-ice-adapter`. |
+| `iceAdapterGpgNetPort` | `FAF_MOCK_ICE_ADAPTER_GPG_NET_PORT` | `--ice-adapter-gpg-net-port` | `7237` | yes | Local GPGNet port exposed by `faf-ice-adapter`. |
+| `logLevel` | `FAF_MOCK_LOG_LEVEL` | `--log-level` | `INFO` | yes | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
+| `logFile` | `FAF_MOCK_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
+| `playerIdOverride` | `FAF_MOCK_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
+
+¹ Each individual `oauth*` credential field is optional, but the loader requires
+either a token (`oauthAccessToken` or `oauthTokenFile`) **or** the password-grant
+trio (`oauthUsername` + `oauthPassword` + `oauthClientSecret`). Failing to supply
+at least one channel produces a `ConfigValidationException`.
+
+### Secrets
+
+The example file (`mock-client.example.json`) contains placeholder values only.
+**Do not commit real OAuth credentials, JWTs, or client secrets.** In CI, supply
+these via environment variables or CLI flags, never via a checked-in JSON file.
+
+A typical setup:
+
+- Public values (`lobbyWebSocketUrl`, `oauthTokenUrl`, `oauthClientId`, ports,
+  binary paths) → `mock-client.json`, tracked in version control.
+- Secrets (`oauthClientSecret`, `oauthAccessToken`, `oauthPassword`) → CI
+  secret store, injected as `FAF_MOCK_*` env vars at runtime.
+
+## Example invocations
+
+### Config file only
+
+```bash
+cp mock-client.example.json mock-client.json
+# edit mock-client.json with real values
+./gradlew :mock-client:run --args="--config mock-client.json"
+
+./gradlew :mock-client:run --args="--config mock-client.json"
+```
+
+### Environment variables only
+
+```bash
+export FAF_MOCK_LOBBY_WEBSOCKET_URL=ws://localhost/ws
+export FAF_MOCK_OAUTH_TOKEN_URL=http://localhost:4444/oauth2/token
+export FAF_MOCK_OAUTH_CLIENT_ID=faf-client
+export FAF_MOCK_OAUTH_ACCESS_TOKEN=eyJhbGciOi...
+export FAF_MOCK_UNIQUE_ID=00000000-0000-0000-0000-000000000000
+export FAF_MOCK_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
+export FAF_MOCK_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
+
+./gradlew :mock-client:run
+```
+
+### CLI flags only
+
+```bash
+./gradlew :mock-client:run --args="\
+  --lobby-websocket-url ws://localhost/ws \
+  --oauth-token-url http://localhost:4444/oauth2/token \
+  --oauth-client-id faf-client \
+  --oauth-token-file ./.secrets/access-token.jwt \
+  --unique-id 00000000-0000-0000-0000-000000000000 \
+  --ice-adapter-binary-path /usr/local/bin/faf-ice-adapter \
+  --mock-game-binary-path ./mock-game/build/install/mock-game/bin/mock-game"
+```
+
+### Layered (typical CI shape)
+
+```bash
+# config file holds public values
+./gradlew :mock-client:run --args="\
+  --config mock-client.json \
+  --log-level DEBUG"
+# env adds secrets:
+#   FAF_MOCK_OAUTH_CLIENT_SECRET, FAF_MOCK_OAUTH_ACCESS_TOKEN
+# the --log-level flag overrides whatever the file said
+```
+
+## Failure mode
+
+Running with nothing configured produces a single error listing every missing
+required field and how to set it:
+
+```text
+Mock Client configuration is invalid:
+  - lobbyWebSocketUrl: required field is not set (set via --lobby-websocket-url or FAF_MOCK_LOBBY_WEBSOCKET_URL)
+  - oauthTokenUrl: required field is not set (set via --oauth-token-url or FAF_MOCK_OAUTH_TOKEN_URL)
+  ...
+```
+
+The JVM exits with status `2` so CI can distinguish config errors from runtime
+failures.
