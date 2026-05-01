@@ -1,0 +1,1 @@
+`iceAdapterGpgNetPort` defaults to `7237` in the Mock Client so local subprocess startup is deterministic. The upstream `faf-ice-adapter` default for `--gpgnet-port` is `0`, meaning it chooses an ephemeral port.
