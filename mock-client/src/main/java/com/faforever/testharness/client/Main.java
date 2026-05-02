@@ -1,11 +1,11 @@
 package com.faforever.testharness.client;
 
 import com.faforever.testharness.client.config.ConfigLoader;
-import com.faforever.testharness.client.config.ConfigValidationException;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import picocli.CommandLine;
 
 @SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
@@ -22,8 +22,9 @@ public class Main {
         MockClientConfig config;
         try {
             config = ConfigLoader.load(args);
-        } catch (ConfigValidationException e) {
+        } catch (CommandLine.ParameterException e) {
             System.err.println(e.getMessage());
+            e.getCommandLine().usage(System.err);
             System.exit(EXIT_CONFIG_ERROR);
             return;
         }
@@ -40,12 +41,6 @@ public class Main {
                 config.iceAdapterGpgNetPort());
     }
 
-    /**
-     * Bridge {@link MockClientConfig} into the system properties that {@code logback.xml}
-     * reads via {@code ${LOG_LEVEL}} / {@code ${LOG_FILE}} substitution. This is the only
-     * place outside {@link ConfigLoader} that touches system properties, and it only
-     * <em>writes</em> them — it never reads configuration from them.
-     */
     private static void applyLoggingProperties(final MockClientConfig config) {
         System.setProperty(LoggingSetup.LOG_LEVEL_ENV, config.logLevel());
         config.logFile()
