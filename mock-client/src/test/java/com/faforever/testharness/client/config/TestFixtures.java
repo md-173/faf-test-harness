@@ -1,5 +1,9 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -17,7 +21,6 @@ final class TestFixtures {
 
     private TestFixtures() {}
 
-    /** Minimal CLI args containing every required field plus a token credential. */
     static String[] minimalRequiredCli() {
         return new String[] {
             "--lobby-websocket-url=" + LOBBY_URL,
@@ -30,7 +33,6 @@ final class TestFixtures {
         };
     }
 
-    /** Minimal env map containing every required field plus a token credential. */
     static Map<String, String> minimalRequiredEnv() {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", LOBBY_URL);
@@ -43,7 +45,6 @@ final class TestFixtures {
         return env;
     }
 
-    /** Minimal JSON containing every required field plus a token credential. */
     static String minimalRequiredJson() {
         return """
                 {
@@ -66,10 +67,29 @@ final class TestFixtures {
                         MOCK_GAME_BIN);
     }
 
-    /** Write {@code json} to {@code dir/mock-client.json} and return the path. */
     static Path writeJson(final Path dir, final String json) throws Exception {
         Path file = dir.resolve("mock-client.json");
         Files.writeString(file, json);
         return file;
+    }
+
+    /**
+     * Asserts {@code config} matches the "minimal required" fixture: every required
+     * field equals its fixture constant, every defaulted field equals its built-in
+     * default, every optional field is empty.
+     */
+    static void assertMatchesMinimalRequired(final MockClientConfig config) {
+        assertEquals(URI.create(LOBBY_URL), config.lobbyWebSocketUrl());
+        assertEquals(URI.create(OAUTH_TOKEN_URL), config.oauthTokenUrl());
+        assertEquals(OAUTH_CLIENT_ID, config.oauthClientId());
+        assertEquals(OAUTH_ACCESS_TOKEN, config.oauthAccessToken());
+        assertEquals(UNIQUE_ID, config.uniqueId());
+        assertEquals(Path.of(ICE_ADAPTER_BIN), config.iceAdapterBinaryPath());
+        assertEquals(Path.of(MOCK_GAME_BIN), config.mockGameBinaryPath());
+        assertEquals(7236, config.iceAdapterRpcPort());
+        assertEquals(7237, config.iceAdapterGpgNetPort());
+        assertEquals("INFO", config.logLevel());
+        assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
+        assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
     }
 }
