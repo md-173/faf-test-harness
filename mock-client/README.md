@@ -23,18 +23,22 @@ Higher sources override lower ones.
 
 1. **Built-in defaults** — `@Option(defaultValue = ...)` on `MockClientCli`.
 2. **Config file** — JSON, supplied with `--config <path>`.
-3. **Environment variables** — `FAF_MOCK_*`, see convention below.
+3. **Environment variables** — `FAF_MOCK_CLIENT_*`, see convention below.
 4. **CLI flags** — `--kebab-case`, see `--help` output.
 
 ### Environment variable convention
 
-`FAF_MOCK_<UPPER_SNAKE_CASE>` of the JSON / CLI key. Examples:
+`FAF_MOCK_CLIENT_<UPPER_SNAKE_CASE>` of the JSON / CLI key. The `_CLIENT_`
+segment disambiguates this module from `mock-game`, which uses
+`FAF_MOCK_GAME_*` for its own configuration.
+
+Examples:
 
 | JSON key | Env var | CLI flag |
 |---|---|---|
-| `lobbyWebSocketUrl` | `FAF_MOCK_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` |
-| `oauthClientId` | `FAF_MOCK_OAUTH_CLIENT_ID` | `--oauth-client-id` |
-| `iceAdapterRpcPort` | `FAF_MOCK_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` |
+| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` |
+| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` |
+| `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` |
 
 The mapping is mechanical: kebab-case → upper-snake-case for env vars,
 kebab-case → camelCase for the JSON file.
@@ -53,22 +57,22 @@ The table below is a quick reference. If it ever drifts from `--help`,
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
-| `lobbyWebSocketUrl` | `FAF_MOCK_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
-| `oauthTokenUrl` | `FAF_MOCK_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes | OAuth2 token endpoint used to acquire lobby access tokens. |
-| `oauthClientId` | `FAF_MOCK_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 client identifier. |
-| `oauthClientSecret` | `FAF_MOCK_OAUTH_CLIENT_SECRET` | `--oauth-client-secret` | — | no¹ | OAuth2 client secret. |
-| `oauthUsername` | `FAF_MOCK_OAUTH_USERNAME` | `--oauth-username` | — | no¹ | OAuth username (local/test environments). |
-| `oauthPassword` | `FAF_MOCK_OAUTH_PASSWORD` | `--oauth-password` | — | no¹ | OAuth password (local/test environments). |
-| `oauthAccessToken` | `FAF_MOCK_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token. |
-| `oauthTokenFile` | `FAF_MOCK_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT. |
-| `uniqueId` | `FAF_MOCK_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
-| `iceAdapterBinaryPath` | `FAF_MOCK_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | — | yes | Path to the `faf-ice-adapter` executable. |
-| `mockGameBinaryPath` | `FAF_MOCK_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | — | yes | Path to the `mock-game` executable. |
-| `iceAdapterRpcPort` | `FAF_MOCK_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | yes | Local JSON-RPC port exposed by `faf-ice-adapter`. |
-| `iceAdapterGpgNetPort` | `FAF_MOCK_ICE_ADAPTER_GPG_NET_PORT` | `--ice-adapter-gpg-net-port` | `7237` | yes | Local GPGNet port exposed by `faf-ice-adapter`. |
-| `logLevel` | `FAF_MOCK_LOG_LEVEL` | `--log-level` | `INFO` | yes | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
-| `logFile` | `FAF_MOCK_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
+| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
+| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes | OAuth2 token endpoint used to acquire lobby access tokens. |
+| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 client identifier. |
+| `oauthClientSecret` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_SECRET` | `--oauth-client-secret` | — | no¹ | OAuth2 client secret. |
+| `oauthUsername` | `FAF_MOCK_CLIENT_OAUTH_USERNAME` | `--oauth-username` | — | no¹ | OAuth username (local/test environments). |
+| `oauthPassword` | `FAF_MOCK_CLIENT_OAUTH_PASSWORD` | `--oauth-password` | — | no¹ | OAuth password (local/test environments). |
+| `oauthAccessToken` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token. |
+| `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT. |
+| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
+| `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | — | yes | Path to the `faf-ice-adapter` executable. |
+| `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | — | yes | Path to the `mock-game` executable. |
+| `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | yes | Local JSON-RPC port exposed by `faf-ice-adapter`. |
+| `iceAdapterGpgNetPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_GPG_NET_PORT` | `--ice-adapter-gpg-net-port` | `7237` | yes | Local GPGNet port exposed by `faf-ice-adapter`. |
+| `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | yes | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
+| `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
 
 ¹ Each individual `oauth*` credential field is optional, but the loader requires
 either a token (`oauthAccessToken` or `oauthTokenFile`) **or** the password-grant
@@ -87,7 +91,7 @@ A typical setup:
 - Public values (`lobbyWebSocketUrl`, `oauthTokenUrl`, `oauthClientId`, ports,
   binary paths) → `mock-client.json`, tracked in version control.
 - Secrets (`oauthClientSecret`, `oauthAccessToken`, `oauthPassword`) → CI
-  secret store, injected as `FAF_MOCK_*` env vars at runtime.
+  secret store, injected as `FAF_MOCK_CLIENT_*` env vars at runtime.
 
 ## Example invocations
 
@@ -111,13 +115,13 @@ cp mock-client.example.json mock-client.json
 ### Environment variables only
 
 ```bash
-export FAF_MOCK_LOBBY_WEBSOCKET_URL=ws://localhost/ws
-export FAF_MOCK_OAUTH_TOKEN_URL=http://localhost:4444/oauth2/token
-export FAF_MOCK_OAUTH_CLIENT_ID=faf-client
-export FAF_MOCK_OAUTH_ACCESS_TOKEN=eyJhbGciOi...
-export FAF_MOCK_UNIQUE_ID=00000000-0000-0000-0000-000000000000
-export FAF_MOCK_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
-export FAF_MOCK_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
+export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=ws://localhost/ws
+export FAF_MOCK_CLIENT_OAUTH_TOKEN_URL=http://localhost:4444/oauth2/token
+export FAF_MOCK_CLIENT_OAUTH_CLIENT_ID=faf-client
+export FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN=eyJhbGciOi...
+export FAF_MOCK_CLIENT_UNIQUE_ID=00000000-0000-0000-0000-000000000000
+export FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
+export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
 
 ./gradlew :mock-client:run
 ```
@@ -143,7 +147,7 @@ export FAF_MOCK_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mo
   --config mock-client.json \
   --log-level DEBUG"
 # env adds secrets:
-#   FAF_MOCK_OAUTH_CLIENT_SECRET, FAF_MOCK_OAUTH_ACCESS_TOKEN
+#   FAF_MOCK_CLIENT_OAUTH_CLIENT_SECRET, FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN
 # the --log-level flag overrides whatever the file said
 ```
 

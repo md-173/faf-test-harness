@@ -29,7 +29,7 @@ import picocli.CommandLine.Model.OptionSpec;
  */
 final class LayeredDefaultProvider implements IDefaultValueProvider {
 
-    private static final String ENV_PREFIX = "FAF_MOCK_";
+    private static final String ENV_PREFIX = "FAF_MOCK_CLIENT_";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final Map<String, String> env;
