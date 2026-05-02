@@ -8,26 +8,48 @@ do not require a real game install or a human at the keyboard.
 ## Configuration
 
 Every Mock Client component reads from a single `MockClientConfig` object
-produced by `ConfigLoader`. No other code calls `System.getenv`,
-`System.getProperty`, or reads the filesystem to discover configuration.
+produced by `ConfigLoader`. The loader is built on [picocli][picocli], which
+parses CLI flags, then resolves any unset values via environment variables, an
+optional JSON config file, and built-in defaults. No other code calls
+`System.getenv`, `System.getProperty`, or reads the filesystem to discover
+configuration.
+
+[picocli]: https://picocli.info/
 
 ### Precedence
 
-Settings are merged from four sources, lowest to highest priority. Higher
-sources override lower ones on a per-field basis.
+Settings are resolved per field from four sources, lowest to highest priority.
+Higher sources override lower ones.
 
-1. **Built-in defaults** — compiled into `ConfigKey`.
+1. **Built-in defaults** — `@Option(defaultValue = ...)` on `MockClientCli`.
 2. **Config file** — JSON, supplied with `--config <path>`.
-3. **Environment variables** — `FAF_MOCK_*`, see table below.
-4. **CLI flags** — `--kebab-case`, see table below.
+3. **Environment variables** — `FAF_MOCK_*`, see convention below.
+4. **CLI flags** — `--kebab-case`, see `--help` output.
 
 ### Environment variable convention
 
-`FAF_MOCK_<UPPER_SNAKE_CASE>` of the JSON key. For example, JSON key
-`lobbyWebSocketUrl` → env var `FAF_MOCK_LOBBY_WEBSOCKET_URL` → CLI flag
-`--lobby-websocket-url`.
+`FAF_MOCK_<UPPER_SNAKE_CASE>` of the JSON / CLI key. Examples:
+
+| JSON key | Env var | CLI flag |
+|---|---|---|
+| `lobbyWebSocketUrl` | `FAF_MOCK_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` |
+| `oauthClientId` | `FAF_MOCK_OAUTH_CLIENT_ID` | `--oauth-client-id` |
+| `iceAdapterRpcPort` | `FAF_MOCK_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` |
+
+The mapping is mechanical: kebab-case → upper-snake-case for env vars,
+kebab-case → camelCase for the JSON file.
 
 ### Field reference
+
+The authoritative list of fields, defaults, env-var names, and CLI flags is
+the output of `--help`:
+
+```bash
+./gradlew :mock-client:run --args="--help"
+```
+
+The table below is a quick reference. If it ever drifts from `--help`,
+`--help` wins.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
@@ -51,7 +73,8 @@ sources override lower ones on a per-field basis.
 ¹ Each individual `oauth*` credential field is optional, but the loader requires
 either a token (`oauthAccessToken` or `oauthTokenFile`) **or** the password-grant
 trio (`oauthUsername` + `oauthPassword` + `oauthClientSecret`). Failing to supply
-at least one channel produces a `ConfigValidationException`.
+at least one channel produces a picocli `ParameterException` naming both
+options.
 
 ### Secrets
 
@@ -68,13 +91,20 @@ A typical setup:
 
 ## Example invocations
 
+### Discover the available options
+
+```bash
+./gradlew :mock-client:run --args="--help"
+```
+
+Prints every flag, its description, default value, and whether it is required.
+This is the source of truth that the field-reference table above mirrors.
+
 ### Config file only
 
 ```bash
 cp mock-client.example.json mock-client.json
 # edit mock-client.json with real values
-./gradlew :mock-client:run --args="--config mock-client.json"
-
 ./gradlew :mock-client:run --args="--config mock-client.json"
 ```
 
@@ -117,16 +147,41 @@ export FAF_MOCK_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mo
 # the --log-level flag overrides whatever the file said
 ```
 
+### Multiple clients on one box
+
+To simulate 2–4 players locally, give each instance its own ports, player ID,
+and log file. Public values come from the shared config file, per-client values
+come from CLI flags:
+
+```bash
+./gradlew :mock-client:run --args="\
+  --config mock-client.json \
+  --player-id-override 1 \
+  --ice-adapter-rpc-port 7236 \
+  --ice-adapter-gpg-net-port 7237 \
+  --log-file logs/client-1.jsonl" &
+
+./gradlew :mock-client:run --args="\
+  --config mock-client.json \
+  --player-id-override 2 \
+  --ice-adapter-rpc-port 7246 \
+  --ice-adapter-gpg-net-port 7247 \
+  --log-file logs/client-2.jsonl" &
+```
+
 ## Failure mode
 
-Running with nothing configured produces a single error listing every missing
-required field and how to set it:
+Running with nothing configured produces a usage block followed by a single
+error listing every missing required option:
 
 ```text
-Mock Client configuration is invalid:
-  - lobbyWebSocketUrl: required field is not set (set via --lobby-websocket-url or FAF_MOCK_LOBBY_WEBSOCKET_URL)
-  - oauthTokenUrl: required field is not set (set via --oauth-token-url or FAF_MOCK_OAUTH_TOKEN_URL)
-  ...
+Missing required options: '--lobby-websocket-url=<lobbyWebSocketUrl>',
+'--oauth-token-url=<oauthTokenUrl>', '--oauth-client-id=<oauthClientId>',
+'--unique-id=<uniqueId>', '--ice-adapter-binary-path=<iceAdapterBinaryPath>',
+'--mock-game-binary-path=<mockGameBinaryPath>'
+
+Usage: mock-client [-hV] [--config=<configFile>] ...
+       (full picocli usage block)
 ```
 
 The JVM exits with status `2` so CI can distinguish config errors from runtime
