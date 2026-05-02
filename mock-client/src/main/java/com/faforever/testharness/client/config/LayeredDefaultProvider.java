@@ -12,6 +12,7 @@ import java.util.Map;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
 import picocli.CommandLine.Model.OptionSpec;
+import java.lang.reflect.Field;
 
 /**
  * Bridges environment variables and a JSON config file into picocli's default-value
@@ -50,19 +51,19 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             return null;
         }
         String stem = cliFlag.substring(2);
-
         String envName = ENV_PREFIX + stem.replace('-', '_').toUpperCase(Locale.ROOT);
         String fromEnv = env.get(envName);
         if (fromEnv != null && !fromEnv.isBlank()) {
             return fromEnv;
         }
-
-        String jsonKey = camelCaseFromKebab(stem);
+        String jsonKey =
+                (opt.userObject() instanceof Field field)
+                        ? field.getName()
+                        : camelCaseFromKebab(stem);
         String fromFile = fileValues.get(jsonKey);
         if (fromFile != null && !fromFile.isBlank()) {
             return fromFile;
         }
-
         return null;
     }
 

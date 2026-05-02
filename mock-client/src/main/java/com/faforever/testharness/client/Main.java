@@ -3,6 +3,7 @@ package com.faforever.testharness.client;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -19,15 +20,20 @@ public class Main {
      * @param args command-line arguments
      */
     public static void main(final String[] args) {
-        MockClientConfig config;
+        Optional<MockClientConfig> maybeConfig;
         try {
-            config = ConfigLoader.load(args);
+            maybeConfig = ConfigLoader.load(args);
         } catch (CommandLine.ParameterException e) {
             System.err.println(e.getMessage());
             e.getCommandLine().usage(System.err);
             System.exit(EXIT_CONFIG_ERROR);
             return;
         }
+
+        if (maybeConfig.isEmpty()) {
+            return;
+        }
+        MockClientConfig config = maybeConfig.get();
 
         applyLoggingProperties(config);
         LoggingSetup.configure(COMPONENT_NAME);
