@@ -30,14 +30,20 @@ import picocli.CommandLine.Model.OptionSpec;
  */
 final class LayeredDefaultProvider implements IDefaultValueProvider {
 
+    /** Prefix applied to environment variables owned by the Mock Client. */
     private static final String ENV_PREFIX = "FAF_MOCK_CLIENT_";
+
+    /** Shared Jackson mapper used to read JSON config files. */
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /** Environment variables supplied by the caller. */
     private final Map<String, String> env;
+
+    /** Values loaded from the optional JSON config file. */
     private final Map<String, String> fileValues;
 
-    LayeredDefaultProvider(final Map<String, String> env, final Path configFile) {
-        this.env = env == null ? Map.of() : env;
+    LayeredDefaultProvider(final Map<String, String> environment, final Path configFile) {
+        this.env = environment == null ? Map.of() : environment;
         this.fileValues = configFile == null ? Map.of() : readJsonFile(configFile);
     }
 

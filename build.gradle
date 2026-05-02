@@ -6,4 +6,14 @@ subprojects {
             languageVersion = JavaLanguageVersion.of(21)
         }
     }
+
+    plugins.withId('checkstyle') {
+        checkstyle {
+            configFile = rootProject.file('config/checkstyle/checkstyle.xml')
+            configProperties = [
+                'org.checkstyle.sun.suppressionfilter.config':
+                    rootProject.file('config/checkstyle/checkstyle-suppressions.xml').absolutePath
+            ]
+        }
+    }
 }

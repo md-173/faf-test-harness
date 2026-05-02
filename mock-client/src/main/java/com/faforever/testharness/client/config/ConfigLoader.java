@@ -64,13 +64,20 @@ public final class ConfigLoader {
             return Optional.empty();
         }
 
-        return Optional.of(cli.toConfig());
+        try {
+            return Optional.of(cli.toConfig());
+        } catch (IllegalArgumentException e) {
+            throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
+        }
     }
 
     /**
      * Picocli's {@link picocli.CommandLine.IDefaultValueProvider} is consulted per-option during
      * parsing, so we need the config-file path resolved <em>before</em> picocli starts. Walk {@code
      * args} once and pull it out.
+     *
+     * @param args raw command-line arguments
+     * @return the path supplied to {@code --config}, or {@code null} if absent
      */
     private static Path preParseConfigFlag(final String[] args) {
         if (args == null) {

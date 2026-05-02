@@ -11,7 +11,10 @@ import picocli.CommandLine;
 @SuppressWarnings("checkstyle:hideutilityclassconstructor")
 public class Main {
 
+    /** Component label written to log records. */
     private static final String COMPONENT_NAME = "MockClient";
+
+    /** Exit code used when configuration parsing or validation fails. */
     private static final int EXIT_CONFIG_ERROR = 2;
 
     /**
