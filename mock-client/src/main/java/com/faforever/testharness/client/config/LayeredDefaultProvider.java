@@ -9,10 +9,11 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.lang.reflect.Field;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
 import picocli.CommandLine.Model.OptionSpec;
-import java.lang.reflect.Field;
+
 
 /**
  * Bridges environment variables and a JSON config file into picocli's default-value

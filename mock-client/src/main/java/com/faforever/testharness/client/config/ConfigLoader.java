@@ -13,7 +13,7 @@ import picocli.CommandLine.ParseResult;
  * {@link CommandLine.ParameterException} listing every issue picocli detected.
  *
  * <p>If {@code --help} or {@code --version} is supplied, the corresponding usage / version
- * text is printed to {@link System#out} and {@link #load} returns an empty {@link Optional}
+ * text is printed to to picocli's configured output stream (defaults to System.out) and {@link #load} returns an empty {@link Optional}
  * so the caller can exit cleanly with status {@code 0}.
  */
 public final class ConfigLoader {
