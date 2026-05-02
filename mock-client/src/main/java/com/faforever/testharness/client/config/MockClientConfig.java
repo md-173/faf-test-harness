@@ -5,6 +5,10 @@ import java.nio.file.Path;
 import java.util.Optional;
 import java.util.OptionalInt;
 
+/**
+ * Immutable, validated configuration for the Mock Client. Every other component reads
+ * from an instance of this record. Produced exclusively by {@link ConfigLoader}.
+ */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
         URI oauthTokenUrl,
