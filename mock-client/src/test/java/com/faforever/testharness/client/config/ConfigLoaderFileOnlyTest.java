@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Covers AC#2: a config file alone is sufficient to produce a valid {@link
- * MockClientConfig}, with built-in defaults still applying for fields the file omits.
+ * Covers AC#2: a config file alone is sufficient to produce a valid {@link MockClientConfig}, with
+ * built-in defaults still applying for fields the file omits.
  */
 final class ConfigLoaderFileOnlyTest {
 

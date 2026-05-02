@@ -9,13 +9,12 @@ import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
 /**
- * Picocli command holder for the Mock Client. Picocli populates the fields by merging
- * (in priority order): CLI flags, environment variables (via {@link
- * LayeredDefaultProvider}), the JSON config file (also via the provider), and built-in
- * {@code defaultValue} attributes.
+ * Picocli command holder for the Mock Client. Picocli populates the fields by merging (in priority
+ * order): CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON config
+ * file (also via the provider), and built-in {@code defaultValue} attributes.
  *
- * <p>{@link #toConfig()} performs cross-field validation and produces the immutable
- * {@link MockClientConfig} consumed by every other component.
+ * <p>{@link #toConfig()} performs cross-field validation and produces the immutable {@link
+ * MockClientConfig} consumed by every other component.
  */
 @Command(
         name = "mock-client",
@@ -42,10 +41,7 @@ public final class MockClientCli {
             description = "OAuth2 token endpoint used to acquire lobby access tokens.")
     URI oauthTokenUrl;
 
-    @Option(
-            names = "--oauth-client-id",
-            required = true,
-            description = "OAuth2 client identifier.")
+    @Option(names = "--oauth-client-id", required = true, description = "OAuth2 client identifier.")
     String oauthClientId;
 
     @Option(
@@ -53,9 +49,7 @@ public final class MockClientCli {
             description = "OAuth2 client secret. Prefer environment variables or CI secrets.")
     String oauthClientSecret;
 
-    @Option(
-            names = "--oauth-username",
-            description = "OAuth username for local/test environments.")
+    @Option(names = "--oauth-username", description = "OAuth username for local/test environments.")
     String oauthUsername;
 
     @Option(
@@ -150,8 +144,6 @@ public final class MockClientCli {
                 iceAdapterGpgNetPort,
                 logLevel,
                 Optional.ofNullable(logFile),
-                playerIdOverride == null
-                        ? OptionalInt.empty()
-                        : OptionalInt.of(playerIdOverride));
+                playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride));
     }
 }

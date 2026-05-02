@@ -11,22 +11,23 @@ import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
 /**
- * Verifies the cross-field auth-choice rule: every successful load must supply either
- * an OAuth token (access-token literal or token-file path) or the full password-grant
- * trio (username + password + client secret). Missing credentials produce a clear
- * {@link CommandLine.ParameterException}.
+ * Verifies the cross-field auth-choice rule: every successful load must supply either an OAuth
+ * token (access-token literal or token-file path) or the full password-grant trio (username +
+ * password + client secret). Missing credentials produce a clear {@link
+ * CommandLine.ParameterException}.
  */
 final class ConfigLoaderAuthChoiceTest {
 
     /** Required fields only, no OAuth credentials. */
-    private static final String[] REQUIRED_NO_CREDS = new String[] {
-        "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
-        "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
-        "--oauth-client-id=" + TestFixtures.OAUTH_CLIENT_ID,
-        "--unique-id=" + TestFixtures.UNIQUE_ID,
-        "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
-        "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN,
-    };
+    private static final String[] REQUIRED_NO_CREDS =
+            new String[] {
+                "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
+                "--oauth-client-id=" + TestFixtures.OAUTH_CLIENT_ID,
+                "--unique-id=" + TestFixtures.UNIQUE_ID,
+                "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
+                "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN,
+            };
 
     @Test
     void noCredentialsThrowsParameterException() {
@@ -78,9 +79,7 @@ final class ConfigLoaderAuthChoiceTest {
     void usernameOnlyDoesNotSatisfyAuthChoice() {
         String[] args = withExtra(REQUIRED_NO_CREDS, "--oauth-username=alice");
 
-        assertThrows(
-                CommandLine.ParameterException.class,
-                () -> ConfigLoader.load(args, Map.of()));
+        assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
     }
 
     @Test
@@ -89,13 +88,10 @@ final class ConfigLoaderAuthChoiceTest {
                 concat(
                         REQUIRED_NO_CREDS,
                         new String[] {
-                            "--oauth-username=alice",
-                            "--oauth-password=hunter2",
+                            "--oauth-username=alice", "--oauth-password=hunter2",
                         });
 
-        assertThrows(
-                CommandLine.ParameterException.class,
-                () -> ConfigLoader.load(args, Map.of()));
+        assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
     }
 
     private static String[] withExtra(final String[] base, final String extra) {

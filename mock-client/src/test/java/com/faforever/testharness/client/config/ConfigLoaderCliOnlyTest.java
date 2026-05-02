@@ -8,16 +8,15 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Confirms the CLI-flag layer alone produces a valid {@link MockClientConfig}. No env
- * vars, no config file, just {@code --kebab-case} flags.
+ * Confirms the CLI-flag layer alone produces a valid {@link MockClientConfig}. No env vars, no
+ * config file, just {@code --kebab-case} flags.
  */
 final class ConfigLoaderCliOnlyTest {
 
     @Test
     void cliSuppliesAllRequiredFieldsAndDefaultsApply() {
         MockClientConfig config =
-                ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of())
-                        .orElseThrow();
+                ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of()).orElseThrow();
 
         TestFixtures.assertMatchesMinimalRequired(config);
     }

@@ -9,9 +9,9 @@ import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
 /**
- * Covers AC#1: loading with nothing set fails with an error that names every missing
- * required field, and pairs with a positive case proving built-in {@code defaultValue}
- * annotations populate when the required fields are supplied.
+ * Covers AC#1: loading with nothing set fails with an error that names every missing required
+ * field, and pairs with a positive case proving built-in {@code defaultValue} annotations populate
+ * when the required fields are supplied.
  */
 final class ConfigLoaderDefaultsOnlyTest {
 
@@ -29,7 +29,8 @@ final class ConfigLoaderDefaultsOnlyTest {
         assertTrue(
                 message.contains("--lobby-websocket-url"),
                 "Missing-parameter message should name --lobby-websocket-url. "
-                        + "Got: " + message);
+                        + "Got: "
+                        + message);
         assertTrue(
                 message.contains("--oauth-token-url"),
                 "Missing-parameter message should name --oauth-token-url. Got: " + message);
@@ -42,11 +43,13 @@ final class ConfigLoaderDefaultsOnlyTest {
         assertTrue(
                 message.contains("--ice-adapter-binary-path"),
                 "Missing-parameter message should name --ice-adapter-binary-path. "
-                        + "Got: " + message);
+                        + "Got: "
+                        + message);
         assertTrue(
                 message.contains("--mock-game-binary-path"),
                 "Missing-parameter message should name --mock-game-binary-path. "
-                        + "Got: " + message);
+                        + "Got: "
+                        + message);
     }
 
     @Test
@@ -54,12 +57,9 @@ final class ConfigLoaderDefaultsOnlyTest {
         MockClientConfig config =
                 ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of()).orElseThrow();
 
+        assertEquals(7236, config.iceAdapterRpcPort(), "iceAdapterRpcPort default should be 7236");
         assertEquals(
-                7236, config.iceAdapterRpcPort(), "iceAdapterRpcPort default should be 7236");
-        assertEquals(
-                7237,
-                config.iceAdapterGpgNetPort(),
-                "iceAdapterGpgNetPort default should be 7237");
+                7237, config.iceAdapterGpgNetPort(), "iceAdapterGpgNetPort default should be 7237");
         assertEquals("INFO", config.logLevel(), "logLevel default should be INFO");
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty Optional");
         assertTrue(

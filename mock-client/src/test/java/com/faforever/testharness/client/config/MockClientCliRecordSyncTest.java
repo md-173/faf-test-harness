@@ -1,7 +1,6 @@
 package com.faforever.testharness.client.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -18,17 +17,17 @@ import org.junit.jupiter.api.Test;
 import picocli.CommandLine.Option;
 
 /**
- * Drift guard: every {@link MockClientConfig} record component must have a matching
- * {@link Option}-annotated field on {@link MockClientCli}, and vice versa. Names must
- * agree under the kebab-case ↔ camelCase mapping. Without this test, adding a new field
- * to one side and forgetting the other compiles fine but produces a {@code null} value
- * at runtime — the user sees a confusing NPE instead of a config error.
+ * Drift guard: every {@link MockClientConfig} record component must have a matching {@link
+ * Option}-annotated field on {@link MockClientCli}, and vice versa. Names must agree under the
+ * kebab-case ↔ camelCase mapping. Without this test, adding a new field to one side and forgetting
+ * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
+ * NPE instead of a config error.
  */
 final class MockClientCliRecordSyncTest {
 
     /** Names of CLI Field Names that don't correspond to record component names. */
     private static final Set<String> CLI_ONLY_FIELD_NAMES = Set.of("configFile");
-    
+
     @Test
     void everyRecordComponentHasAMatchingCliOption() {
         Set<String> cliOptionNames = collectCliOptionFieldNames();
@@ -74,12 +73,12 @@ final class MockClientCliRecordSyncTest {
             assertTrue(
                     firstFlag.startsWith("--"),
                     "Expected --kebab-case for option on field " + fieldName);
-    
+
             String derivedCamel = kebabToCamelCase(firstFlag.substring(2));
             if (CLI_ONLY_FIELD_NAMES.contains(fieldName)) {
                 continue;
             }
-    
+
             assertEquals(
                     fieldName.toLowerCase(Locale.ROOT),
                     derivedCamel.toLowerCase(Locale.ROOT),
@@ -99,10 +98,10 @@ final class MockClientCliRecordSyncTest {
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =
-        Arrays.stream(MockClientCli.class.getDeclaredFields())
-                        .filter(f -> f.isAnnotationPresent(Option.class))
-                        .count()
-                - CLI_ONLY_FIELD_NAMES.size();
+                Arrays.stream(MockClientCli.class.getDeclaredFields())
+                                .filter(f -> f.isAnnotationPresent(Option.class))
+                                .count()
+                        - CLI_ONLY_FIELD_NAMES.size();
 
         assertEquals(
                 expectedRecordComponents,

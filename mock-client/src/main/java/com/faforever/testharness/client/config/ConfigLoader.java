@@ -7,14 +7,14 @@ import picocli.CommandLine;
 import picocli.CommandLine.ParseResult;
 
 /**
- * Loads {@link MockClientConfig} from CLI flags, environment variables, and an optional
- * JSON config file. Precedence (lowest to highest): {@code @Option} built-in defaults,
- * config file, environment variables, CLI flags. Any validation failure surfaces as a
- * {@link CommandLine.ParameterException} listing every issue picocli detected.
+ * Loads {@link MockClientConfig} from CLI flags, environment variables, and an optional JSON config
+ * file. Precedence (lowest to highest): {@code @Option} built-in defaults, config file, environment
+ * variables, CLI flags. Any validation failure surfaces as a {@link CommandLine.ParameterException}
+ * listing every issue picocli detected.
  *
- * <p>If {@code --help} or {@code --version} is supplied, the corresponding usage / version
- * text is printed to to picocli's configured output stream (defaults to System.out) and {@link #load} returns an empty {@link Optional}
- * so the caller can exit cleanly with status {@code 0}.
+ * <p>If {@code --help} or {@code --version} is supplied, the corresponding usage / version text is
+ * printed to to picocli's configured output stream (defaults to System.out) and {@link #load}
+ * returns an empty {@link Optional} so the caller can exit cleanly with status {@code 0}.
  */
 public final class ConfigLoader {
 
@@ -24,27 +24,26 @@ public final class ConfigLoader {
     private ConfigLoader() {}
 
     /**
-     * Production entry point. Reads {@code System.getenv()} once and passes the rest
-     * through to {@link #load(String[], Map)}.
+     * Production entry point. Reads {@code System.getenv()} once and passes the rest through to
+     * {@link #load(String[], Map)}.
      *
      * @param args raw command-line arguments
-     * @return validated {@link MockClientConfig}, or empty if {@code --help} / {@code
-     *     --version} was requested
-     * @throws CommandLine.ParameterException if any required field is missing or any
-     *     value is malformed
+     * @return validated {@link MockClientConfig}, or empty if {@code --help} / {@code --version}
+     *     was requested
+     * @throws CommandLine.ParameterException if any required field is missing or any value is
+     *     malformed
      */
     public static Optional<MockClientConfig> load(final String[] args) {
         return load(args, System.getenv());
     }
 
     /**
-     * Test seam. Caller supplies the env map explicitly; nothing is read from the JVM
-     * environment.
+     * Test seam. Caller supplies the env map explicitly; nothing is read from the JVM environment.
      *
      * @param args raw command-line arguments
      * @param env environment map (caller-supplied to keep the loader pure)
-     * @return validated {@link MockClientConfig}, or empty if {@code --help} / {@code
-     *     --version} was requested
+     * @return validated {@link MockClientConfig}, or empty if {@code --help} / {@code --version}
+     *     was requested
      */
     public static Optional<MockClientConfig> load(
             final String[] args, final Map<String, String> env) {
@@ -69,9 +68,9 @@ public final class ConfigLoader {
     }
 
     /**
-     * Picocli's {@link picocli.CommandLine.IDefaultValueProvider} is consulted per-option
-     * during parsing, so we need the config-file path resolved <em>before</em> picocli
-     * starts. Walk {@code args} once and pull it out.
+     * Picocli's {@link picocli.CommandLine.IDefaultValueProvider} is consulted per-option during
+     * parsing, so we need the config-file path resolved <em>before</em> picocli starts. Walk {@code
+     * args} once and pull it out.
      */
     private static Path preParseConfigFlag(final String[] args) {
         if (args == null) {

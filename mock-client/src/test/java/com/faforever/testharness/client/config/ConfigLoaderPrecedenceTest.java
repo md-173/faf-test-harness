@@ -16,9 +16,9 @@ import org.junit.jupiter.api.io.TempDir;
  *   built-in defaults  &lt;  config file  &lt;  env vars  &lt;  CLI flags
  * </pre>
  *
- * <p>Each test seeds the same field ({@code lobbyWebSocketUrl} for URI fields,
- * {@code iceAdapterRpcPort} for the numeric default-bearing field) at multiple layers and
- * asserts that the highest-priority layer wins.
+ * <p>Each test seeds the same field ({@code lobbyWebSocketUrl} for URI fields, {@code
+ * iceAdapterRpcPort} for the numeric default-bearing field) at multiple layers and asserts that the
+ * highest-priority layer wins.
  */
 final class ConfigLoaderPrecedenceTest {
 
@@ -55,8 +55,7 @@ final class ConfigLoaderPrecedenceTest {
         env.put("FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT", String.valueOf(PORT_FROM_ENV));
 
         MockClientConfig config =
-                ConfigLoader.load(new String[] {"--config", file.toString()}, env)
-                        .orElseThrow();
+                ConfigLoader.load(new String[] {"--config", file.toString()}, env).orElseThrow();
 
         assertEquals(PORT_FROM_ENV, config.iceAdapterRpcPort());
     }
@@ -69,8 +68,7 @@ final class ConfigLoaderPrecedenceTest {
 
         String[] args =
                 new String[] {
-                    "--config", file.toString(),
-                    "--ice-adapter-rpc-port=" + PORT_FROM_CLI,
+                    "--config", file.toString(), "--ice-adapter-rpc-port=" + PORT_FROM_CLI,
                 };
 
         MockClientConfig config = ConfigLoader.load(args, env).orElseThrow();
@@ -107,8 +105,7 @@ final class ConfigLoaderPrecedenceTest {
 
         String[] args =
                 new String[] {
-                    "--config", file.toString(),
-                    "--lobby-websocket-url=" + URL_FROM_CLI,
+                    "--config", file.toString(), "--lobby-websocket-url=" + URL_FROM_CLI,
                 };
 
         MockClientConfig config = ConfigLoader.load(args, env).orElseThrow();
@@ -144,8 +141,7 @@ final class ConfigLoaderPrecedenceTest {
         env.put("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", URL_FROM_ENV.toString());
 
         MockClientConfig config =
-                ConfigLoader.load(new String[] {"--config", file.toString()}, env)
-                        .orElseThrow();
+                ConfigLoader.load(new String[] {"--config", file.toString()}, env).orElseThrow();
 
         assertEquals(URL_FROM_ENV, config.lobbyWebSocketUrl());
     }

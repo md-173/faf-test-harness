@@ -14,10 +14,10 @@ import picocli.CommandLine;
 import picocli.CommandLine.Model.OptionSpec;
 
 /**
- * Unit-level tests for {@link LayeredDefaultProvider}: env-var derivation, JSON-key
- * derivation via the underlying field, blank-string handling, JSON numeric round trips,
- * and constructor-time file validation. Bypasses the full {@link ConfigLoader} pipeline
- * so failures point at the provider rather than picocli.
+ * Unit-level tests for {@link LayeredDefaultProvider}: env-var derivation, JSON-key derivation via
+ * the underlying field, blank-string handling, JSON numeric round trips, and constructor-time file
+ * validation. Bypasses the full {@link ConfigLoader} pipeline so failures point at the provider
+ * rather than picocli.
  */
 final class LayeredDefaultProviderTest {
 
@@ -29,8 +29,7 @@ final class LayeredDefaultProviderTest {
         LayeredDefaultProvider provider = new LayeredDefaultProvider(env, null);
 
         assertEquals(
-                "ws://from-env/ws",
-                provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
+                "ws://from-env/ws", provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
     }
 
     @Test
@@ -60,7 +59,8 @@ final class LayeredDefaultProviderTest {
 
     @Test
     void jsonNumericValueRoundTripsAsString(@TempDir final Path tempDir) throws Exception {
-        String json = """
+        String json =
+                """
                 {
                   "iceAdapterRpcPort": 8765
                 }
@@ -92,8 +92,7 @@ final class LayeredDefaultProviderTest {
         LayeredDefaultProvider provider = new LayeredDefaultProvider(env, file);
 
         assertEquals(
-                "ws://from-env/ws",
-                provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
+                "ws://from-env/ws", provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
     }
 
     @Test
@@ -106,13 +105,12 @@ final class LayeredDefaultProviderTest {
     }
 
     /**
-     * Borrow a real {@link OptionSpec} from a {@link MockClientCli} so the provider
-     * sees the same option metadata picocli would supply at runtime — including the
-     * underlying {@code Field} reference used for JSON-key derivation.
+     * Borrow a real {@link OptionSpec} from a {@link MockClientCli} so the provider sees the same
+     * option metadata picocli would supply at runtime — including the underlying {@code Field}
+     * reference used for JSON-key derivation.
      */
     private static OptionSpec optionSpecFor(final String flag) {
-        OptionSpec opt =
-                new CommandLine(new MockClientCli()).getCommandSpec().findOption(flag);
+        OptionSpec opt = new CommandLine(new MockClientCli()).getCommandSpec().findOption(flag);
         if (opt == null) {
             throw new IllegalStateException("Unknown CLI flag in test: " + flag);
         }

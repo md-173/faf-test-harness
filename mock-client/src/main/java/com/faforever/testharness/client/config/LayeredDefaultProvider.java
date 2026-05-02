@@ -3,22 +3,21 @@ package com.faforever.testharness.client.config;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.lang.reflect.Field;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
 import picocli.CommandLine.Model.OptionSpec;
 
-
 /**
- * Bridges environment variables and a JSON config file into picocli's default-value
- * resolution. Picocli consults this provider once per option after CLI parsing and
- * before falling back to the option's built-in {@code defaultValue} attribute.
+ * Bridges environment variables and a JSON config file into picocli's default-value resolution.
+ * Picocli consults this provider once per option after CLI parsing and before falling back to the
+ * option's built-in {@code defaultValue} attribute.
  *
  * <p>Resolution order, highest to lowest:
  *
@@ -89,8 +88,7 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             }
             return out;
         } catch (IOException e) {
-            throw new IllegalArgumentException(
-                    "failed to parse config file: " + e.getMessage(), e);
+            throw new IllegalArgumentException("failed to parse config file: " + e.getMessage(), e);
         }
     }
 

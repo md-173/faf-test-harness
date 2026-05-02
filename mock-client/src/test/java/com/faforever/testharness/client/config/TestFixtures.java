@@ -74,9 +74,9 @@ final class TestFixtures {
     }
 
     /**
-     * Asserts {@code config} matches the "minimal required" fixture: every required
-     * field equals its fixture constant, every defaulted field equals its built-in
-     * default, every optional field is empty.
+     * Asserts {@code config} matches the "minimal required" fixture: every required field equals
+     * its fixture constant, every defaulted field equals its built-in default, every optional field
+     * is empty.
      */
     static void assertMatchesMinimalRequired(final MockClientConfig config) {
         assertEquals(URI.create(LOBBY_URL), config.lobbyWebSocketUrl());

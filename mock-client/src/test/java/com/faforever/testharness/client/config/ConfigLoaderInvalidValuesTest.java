@@ -14,9 +14,9 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 /**
- * Covers error paths: bad CLI values surface as picocli {@link
- * CommandLine.ParameterException}s; bad config-file inputs surface as {@link
- * IllegalArgumentException} from {@link LayeredDefaultProvider}.
+ * Covers error paths: bad CLI values surface as picocli {@link CommandLine.ParameterException}s;
+ * bad config-file inputs surface as {@link IllegalArgumentException} from {@link
+ * LayeredDefaultProvider}.
  */
 final class ConfigLoaderInvalidValuesTest {
 
@@ -47,9 +47,7 @@ final class ConfigLoaderInvalidValuesTest {
                         "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
                         "--lobby-websocket-url=not a uri");
 
-        assertThrows(
-                CommandLine.ParameterException.class,
-                () -> ConfigLoader.load(args, Map.of()));
+        assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
     }
 
     @Test
@@ -58,13 +56,11 @@ final class ConfigLoaderInvalidValuesTest {
 
         IllegalArgumentException ex =
                 assertThrows(
-                        IllegalArgumentException.class,
-                        () -> ConfigLoader.load(args, Map.of()));
+                        IllegalArgumentException.class, () -> ConfigLoader.load(args, Map.of()));
 
         assertTrue(
                 ex.getMessage().contains("not readable"),
-                "Error message should explain the file is unreadable. Got: "
-                        + ex.getMessage());
+                "Error message should explain the file is unreadable. Got: " + ex.getMessage());
     }
 
     @Test
@@ -78,18 +74,15 @@ final class ConfigLoaderInvalidValuesTest {
                         IllegalArgumentException.class,
                         () ->
                                 ConfigLoader.load(
-                                        new String[] {"--config", file.toString()},
-                                        Map.of()));
+                                        new String[] {"--config", file.toString()}, Map.of()));
 
         assertTrue(
                 ex.getMessage().contains("must be a JSON object"),
-                "Error message should explain the root must be an object. Got: "
-                        + ex.getMessage());
+                "Error message should explain the root must be an object. Got: " + ex.getMessage());
     }
 
     @Test
-    void malformedJsonThrowsIllegalArgumentException(@TempDir final Path tempDir)
-            throws Exception {
+    void malformedJsonThrowsIllegalArgumentException(@TempDir final Path tempDir) throws Exception {
         Path file = tempDir.resolve("malformed.json");
         Files.writeString(file, "{");
 
@@ -98,8 +91,7 @@ final class ConfigLoaderInvalidValuesTest {
                         IllegalArgumentException.class,
                         () ->
                                 ConfigLoader.load(
-                                        new String[] {"--config", file.toString()},
-                                        Map.of()));
+                                        new String[] {"--config", file.toString()}, Map.of()));
 
         assertTrue(
                 ex.getMessage().toLowerCase(Locale.ROOT).contains("parse"),
@@ -109,13 +101,9 @@ final class ConfigLoaderInvalidValuesTest {
     @Test
     void unknownCliFlagThrowsParameterException() {
         String[] args =
-                concat(
-                        TestFixtures.minimalRequiredCli(),
-                        new String[] {"--no-such-flag=whatever"});
+                concat(TestFixtures.minimalRequiredCli(), new String[] {"--no-such-flag=whatever"});
 
-        assertThrows(
-                CommandLine.ParameterException.class,
-                () -> ConfigLoader.load(args, Map.of()));
+        assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
     }
 
     private static String[] concat(final String[] a, final String[] b) {
