@@ -12,6 +12,7 @@ Refs: WBS 2.2.4 — FAF Component Overview Diagrams.
 |---|---|---|
 | Architecture & data flow | [`architecture.md`](./architecture.md) | Component boundaries, mock vs real, transport protocol on every edge. |
 | Sequence — full session | [`sequence-full-session.md`](./sequence-full-session.md) | Message-level timeline from authentication through teardown. Split into two parts with a small companion diagram for the game-setup variants. |
+| Sequence — ICE adapter JSON-RPC (2 players) | [`../research/json-rpc-spec.md` §11](../research/json-rpc-spec.md#11-sequence-diagram--json-rpc-traffic-for-a-two-player-custom-session) | Adapter-accurate JSON-RPC method names, two-player symmetry, GPGNet side-effects of `hostGame` / `joinGame` / `connectToPeer` / `disconnectFromPeer`, ICE relay via lobby. |
 
 ## Conventions
 

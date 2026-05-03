@@ -299,9 +299,9 @@ must implement.
 | Setup | 6 | IA → MC | `onConnectionStateChanged("Connected")` | Mock-game has connected to the adapter's GPGNet TCP server. |
 | Setup | 7 | IA → MC | `onGpgNetMessageReceived("GameState", ["Idle"])` | Mock-game emitted its first frame. Mock Client wraps and forwards to lobby. |
 | Setup | 8 | IA → MC | `onGpgNetMessageReceived("GameState", ["Lobby"])` | Same. |
-| Role | 9a | MC → IA | `hostGame(mapName)` | Host role only. Triggered by `HostGame` from lobby. |
-| Role | 9b | MC → IA | `joinGame(hostLogin, hostId)` | Joiner role only. Triggered by `JoinGame` from lobby. |
-| Role | 10 | MC → IA | `connectToPeer(login, id, offer)` | Once per peer, with `offer=true` for the host's call to a joiner, `false` for the joiner's call to the host. |
+| Role | 9a | MC → IA | `hostGame(mapName)` | Host role only. Triggered by HostGame from lobby. Adapter side-effect: emits GPGNet HostGame(map) to mock-game.|
+| Role | 9b | MC → IA | `joinGame(hostLogin, hostId)` | Joiner role only. Triggered by JoinGame from lobby. Adapter side-effects: creates an answer-mode PeerRelay and emits GPGNet JoinGame(login, id) to mock-game. |
+| Role | 10 | MC → IA | `connectToPeer(login, id, offer)` | Once per peer, with offer=true for the host's call to a joiner, false for the joiner's call to the host. Adapter side-effects: spins up a PeerRelay and emits GPGNet ConnectToPeer(name, id, offer) to mock-game. |
 | ICE | 11 | IA → MC | `onIceMsg(local, remote, msg)` | Repeated. Forward to lobby per §7. |
 | ICE | 12 | MC → IA | `iceMsg(remote, msg)` | Repeated. Triggered by `IceMsg` arriving from the lobby. |
 | ICE | 13 | IA → MC | `onIceConnectionStateChanged(local, remote, "connected" \| "completed")` | Per peer. Treat "connected" or "completed" as ready. |
@@ -309,7 +309,7 @@ must implement.
 | Live | 15 | IA → MC | `onGpgNetMessageReceived("GameState", ["Launching"])` | Mock-game has gone live. Mock Client wraps and forwards to lobby. |
 | Live | 16 | IA → MC | additional `onGpgNetMessageReceived(…)` | `GameOption`, `PlayerOption`, `GameMods`, `GameResult`, `JsonStats`, `GameEnded`. Forwarded verbatim. |
 | Health | * | MC → IA | `status` | Polled every 30 s with 2 s timeout (WBS 2.2.8). |
-| Teardown | 17 | MC → IA | `disconnectFromPeer(id)` | One per peer; optional but tidy. |
+| Teardown | 17 | MC → IA | `disconnectFromPeer(id)` | One per peer; optional but tidy. Adapter side-effects: tears down the PeerRelay and emits GPGNet DisconnectFromPeer(id) to mock-game. |
 | Teardown | 18 | MC → IA | `quit` | Graceful shutdown. |
 | Teardown | 19 | (proc) | wait for adapter exit ≤ 5 s, else `SIGTERM`/`SIGKILL` | See WBS 2.2.8. |
 
@@ -321,4 +321,127 @@ must implement.
 - [`downlords-faf-client/build.gradle`](https://github.com/FAForever/downlords-faf-client/blob/develop/build.gradle) — dependency confirmation (`com.github.micheljung:JJsonRpc:01a7fba5f4`).
 - `documentation/research/lobby-protocol-spec.md` §6 — GPGNet-over-WebSocket wrapping.
 - `documentation/research/project-briefing.md` "Communication Channels" — channel taxonomy.
+
+## 11. Sequence diagram — JSON-RPC traffic for a two-player custom session
+
+The diagram below traces every JSON-RPC message between a Mock Client and
+its `faf-ice-adapter` for one two-player custom-game session, from adapter
+launch to clean shutdown. It pairs a host (Alice, id 1) and a joiner (Bob,
+id 2) on opposite sides of the page so the symmetry between the two roles
+is visible at a glance.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant HMC as Host Mock Client
+    participant HIA as Host faf-ice-adapter
+    participant HMG as Host mock-game
+    participant LS as Lobby Server (context only)
+    participant JMG as Joiner mock-game
+    participant JIA as Joiner faf-ice-adapter
+    participant JMC as Joiner Mock Client
+
+    Note over HMC,JMC: Phase A — Adapter boot (mirror on each side)
+    HMC->>HIA: spawn faf-ice-adapter --id 1 --login Alice --rpc-port 7236 ...
+    HMC->>HIA: TCP connect 127.0.0.1:7236
+    JMC->>JIA: spawn faf-ice-adapter --id 2 --login Bob --rpc-port 7236 ...
+    JMC->>JIA: TCP connect 127.0.0.1:7236
+
+    Note over HMC,JMC: Phase B — Adapter configuration
+    HMC->>HIA: setLobbyInitMode("normal")
+    HIA-->>HMC: result null
+    HMC->>HIA: setIceServers([{urls,username,credential}, ...])
+    HIA-->>HMC: result null
+    JMC->>JIA: setLobbyInitMode("normal")
+    JIA-->>JMC: result null
+    JMC->>JIA: setIceServers([...])
+    JIA-->>JMC: result null
+
+    Note over HMC,JMC: Phase C — Game subprocess connects to adapter
+    HMC->>HMG: spawn mock-game --gpgnet-port 7237 --lobby-port 7238 ...
+    HMG->>HIA: TCP connect 127.0.0.1:7237 (GPGNet)
+    HIA-->>HMC: notify onConnectionStateChanged("Connected")
+    HMG->>HIA: GPGNet GameState("Idle")
+    HIA-->>HMC: notify onGpgNetMessageReceived("GameState", ["Idle"])
+    HMG->>HIA: GPGNet GameState("Lobby")
+    HIA-->>HMC: notify onGpgNetMessageReceived("GameState", ["Lobby"])
+    Note right of HMC: Mock Client wraps and forwards GameStates to lobby (out of scope here)
+
+    JMC->>JMG: spawn mock-game --gpgnet-port 7237 --lobby-port 7238 ...
+    JMG->>JIA: TCP connect 127.0.0.1:7237 (GPGNet)
+    JIA-->>JMC: notify onConnectionStateChanged("Connected")
+    JMG->>JIA: GPGNet GameState("Idle")
+    JIA-->>JMC: notify onGpgNetMessageReceived("GameState", ["Idle"])
+    JMG->>JIA: GPGNet GameState("Lobby")
+    JIA-->>JMC: notify onGpgNetMessageReceived("GameState", ["Lobby"])
+
+    Note over HMC,JMC: Phase D — Role assignment (driven by lobby)
+    HMC->>HIA: hostGame("scmp_007")
+    HIA-->>HMC: result null
+    HIA->>HMG: GPGNet HostGame("scmp_007")
+    JMC->>JIA: joinGame("Alice", 1)
+    JIA-->>JMC: result null
+    JIA->>JMG: GPGNet JoinGame("Alice", 1)
+
+    Note over HMC,JMC: Phase E — Mesh setup (one connectToPeer per peer)
+    HMC->>HIA: connectToPeer("Bob", 2, true)
+    HIA-->>HMC: result null
+    HIA->>HMG: GPGNet ConnectToPeer("Bob", 2, true)
+    JMC->>JIA: connectToPeer("Alice", 1, false)
+    JIA-->>JMC: result null
+    JIA->>JMG: GPGNet ConnectToPeer("Alice", 1, false)
+
+    Note over HMC,JMC: Phase F — ICE candidate exchange (relayed through the lobby)
+    loop until both sides reach "connected" / "completed"
+        HIA-->>HMC: notify onIceMsg(1, 2, msg)
+        HMC->>LS: IceMsg target:game args:[2, JSON(msg)]
+        LS-->>JMC: IceMsg target:game args:[1, JSON(msg)]
+        JMC->>JIA: iceMsg(1, msg)
+        JIA-->>JMC: result null
+
+        JIA-->>JMC: notify onIceMsg(2, 1, msg')
+        JMC->>LS: IceMsg target:game args:[1, JSON(msg')]
+        LS-->>HMC: IceMsg target:game args:[2, JSON(msg')]
+        HMC->>HIA: iceMsg(2, msg')
+        HIA-->>HMC: result null
+    end
+
+    Note over HMC,JMC: Phase G — ICE connectivity established
+    HIA-->>HMC: notify onIceConnectionStateChanged(1, 2, "connected")
+    HIA-->>HMC: notify onConnected(1, 2, true)
+    JIA-->>JMC: notify onIceConnectionStateChanged(2, 1, "connected")
+    JIA-->>JMC: notify onConnected(2, 1, true)
+
+    Note over HMC,JMC: Phase H — Game goes live, lifecycle messages flow
+    HMG->>HIA: GPGNet GameState("Launching")
+    HIA-->>HMC: notify onGpgNetMessageReceived("GameState", ["Launching"])
+    JMG->>JIA: GPGNet GameState("Launching")
+    JIA-->>JMC: notify onGpgNetMessageReceived("GameState", ["Launching"])
+    Note over HIA,JIA: UDP game traffic now flows IA<->IA, no more JSON-RPC needed for it
+
+    Note over HMC,JMC: Phase I — Health polling (every 30 s, optional)
+    HMC->>HIA: status
+    HIA-->>HMC: result Status{...}
+    JMC->>JIA: status
+    JIA-->>JMC: result Status{...}
+
+    Note over HMC,JMC: Phase J — End of game forwarding
+    HMG->>HIA: GPGNet GameResult / JsonStats / GameEnded
+    HIA-->>HMC: notify onGpgNetMessageReceived(...) per frame
+    JMG->>JIA: GPGNet GameResult / JsonStats / GameEnded
+    JIA-->>JMC: notify onGpgNetMessageReceived(...) per frame
+
+    Note over HMC,JMC: Phase K — Teardown
+    HMC->>HIA: disconnectFromPeer(2)
+    HIA-->>HMC: result null
+    HIA->>HMG: GPGNet DisconnectFromPeer(2)
+    HMC->>HIA: quit
+    HIA-->>HMC: result null
+    Note right of HMC: TCP closes, adapter process exits
+
+    JMC->>JIA: disconnectFromPeer(1)
+    JIA-->>JMC: result null
+    JIA->>JMG: GPGNet DisconnectFromPeer(1)
+    JMC->>JIA: quit
+    JIA-->>JMC: result null
 ```
