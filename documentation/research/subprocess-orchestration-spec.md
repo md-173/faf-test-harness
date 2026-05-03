@@ -29,6 +29,36 @@ The JSON-RPC traffic itself is out of scope here.
 Both children are started by the **Mock Client only**; no other component
 spawns subprocesses. The Mock Client is the sole supervisor of both.
 
+### 1.1 Target environment
+
+This spec **targets Linux** as the runtime substrate. The Java code itself
+is OS-portable, but the orphan-prevention layer (§6.3) relies on Linux
+primitives (`prctl(PR_SET_PDEATHSIG)` via `util-linux`'s `setpriv`, plus
+`setsid` for process-group cleanup) that have no Windows or macOS
+equivalent.
+
+The **Docker workspace is the supported delivery mechanism** for that Linux
+substrate. It is the canonical run target for three reasons:
+
+1. **Fault-injection parity.** WBS 3.x (Network Fault Injection) needs
+   `tc`/`netem`/`iptables`, which only exist on Linux. Docker gives every
+   contributor — including macOS and Windows developers — the same kernel
+   tooling without requiring WSL2 or per-developer VMs.
+2. **PID 1 + zombie reaping.** The orphan-prevention plan in §6.3 depends
+   on tini at PID 1 (`docker run --init` / compose `init: true`). The
+   container is the cleanest way to guarantee a known PID 1.
+3. **Reproducible topology.** Multi-peer simulation (2–4 players) needs
+   deterministic NAT/routing across nodes; a `docker-compose` user-defined
+   bridge supplies it identically to every developer.
+
+Implementation note: the Subprocess Execution Controller must not bake
+Docker-specific paths into the Java code. It depends on Linux primitives
+(`setpriv`, `setsid`, tini-style PID 1) that the Docker workspace provides
+by construction, but a Linux developer running bare-metal with the same
+tools installed should also be able to exercise it. Container-specific
+concerns (volume mounts, network bridges) belong in the Docker workspace
+configuration, not in the controller.
+
 ## 2. Launch strategy
 
 ### 2.1 API
@@ -278,14 +308,17 @@ this — when the JVM is killed by `SIGKILL`, the OOM-killer, or
 `Runtime.halt()`, **shutdown hooks do not run** and child processes survive
 as orphans (they are reparented to PID 1).
 
-The strategy combines four mechanisms:
+The strategy combines four mechanisms. Layers 1–2 are **Linux primitives
+the controller relies on directly**; layers 3–4 are **environmental
+guarantees the Docker workspace supplies** (and that any non-Docker Linux
+host would need to replicate).
 
-| Layer | Mechanism | Covers |
-|---|---|---|
-| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §6.1 → §6.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread |
-| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running |
-| 3. Container init | tini as PID 1 (`docker run --init` / compose `init: true`) — reaps zombies, forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) |
-| 4. Process-group cleanup | Children launched via `setsid` so they are in their own session/process group; tini broadcasts SIGTERM to the group on container stop | Container `docker stop` after grace period |
+| Layer | Mechanism | Covers | Provided by |
+|---|---|---|---|
+| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §6.1 → §6.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) |
+| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) |
+| 3. Init / PID 1 | tini as PID 1 (`docker run --init` / compose `init: true`) — reaps zombies, forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | Docker workspace |
+| 4. Process-group cleanup | Children launched via `setsid` so they are in their own session/process group; the init broadcasts SIGTERM to the group on container stop | Container `docker stop` after grace period | `util-linux` (`setsid`) + Docker workspace |
 
 For layer 2, the JDK does not expose `prctl`. Acceptable
 implementations (in order of preference):
