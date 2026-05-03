@@ -1,10 +1,9 @@
 # Subprocess Orchestration Spec
 
 This document is the Mock Client's contract for managing its two child
-processes — `faf-ice-adapter` (the real upstream Java JAR) and `mock-game`
+processes `faf-ice-adapter` (the real upstream Java JAR) and `mock-game`
 (our sibling Gradle module). It complements `json-rpc-spec.md` (which covers
-the IPC wire protocol on `127.0.0.1:7236`) and is the prerequisite for WBS
-3.1.2 _Subprocess Execution Controller_.
+the IPC wire protocol on `127.0.0.1:7236`).
 
 Scope: process lifecycle only — launch, output capture, health, teardown.
 The JSON-RPC traffic itself is out of scope here.
@@ -361,30 +360,18 @@ post-mortem.
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
 | Parent JVM SIGKILL'd | OOM, container kill | Out-of-process — handled by §6.3 | Children TERM'd by `setpriv` / tini |
 
-## 8. Acceptance / PoC validation
-
-The acceptance criteria from the issue map to four tests, all runnable in
-the Docker workspace:
-
-| Criterion | Test |
-|---|---|
-| Adapter and mock-game subprocess launch documented | This document, §2 |
-| Async stdout/stderr capture demonstrated | PoC: spawn the adapter; assert that lines from both streams reach the JSONL log tagged `component=ICEAdapter` within 1 s of being written |
-| Forceful parent kill terminates all children (no zombies) | PoC: spawn parent harness, list its descendants by PID, `kill -9` the parent, poll `ps` until either all PIDs are gone (pass) or 15 s elapses (fail). Run inside a container with `init: true`. |
-| Hung-child detection works | PoC: launch a stub adapter that accepts the RPC connection but never replies; assert the §5.2 timer escalates to teardown within ≤ 65 s |
-
-## 9. Open questions
+## 8. Open questions
 
 - **`mock-game` graceful shutdown signal.** §6.1 step 4 assumes EOF on the
-  GPGNet socket is the trigger. WBS 1.2 owns the mock-game CLI/lifecycle
-  and must confirm this; otherwise an explicit `--shutdown` admin port or
+  GPGNet socket is the trigger. The mock-game CLI/lifecycle must confirm
+   this; otherwise an explicit `--shutdown` admin port or
   a SIGTERM-on-stdin convention is needed.
 - **Per-host sessions vs per-container.** If a single container hosts
   multiple harness instances concurrently, port allocation in §3 needs a
   shared registry (or each instance gets its own container, which is the
   recommended path).
 
-## 10. Sources
+## 9. Sources
 
 - [java-ice-adapter README — Commandline invocation, Example usage sequence](https://github.com/FAForever/java-ice-adapter)
 - [`downlords-faf-client` — `IceAdapterImpl.java`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/java/com/faforever/client/fa/relay/ice/IceAdapterImpl.java)
@@ -395,7 +382,7 @@ the Docker workspace:
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
 - [tini](https://github.com/krallin/tini) — container PID 1 / zombie reaping
 
-## 11. Sequence diagram — one-session lifecycle
+## 10. Sequence diagram — one-session lifecycle
 
 ```mermaid
 sequenceDiagram
