@@ -14,9 +14,10 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 /**
- * Covers error paths: bad CLI values surface as picocli {@link CommandLine.ParameterException}s;
- * bad config-file inputs surface as {@link IllegalArgumentException} from {@link
- * LayeredDefaultProvider}.
+ * Covers error paths. Every loader-surfaced failure is wrapped as a {@link
+ * CommandLine.ParameterException} so callers (e.g. {@code Main}) can apply a single config-error
+ * exit policy. Bad config-file inputs originate as {@link IllegalArgumentException} inside {@link
+ * LayeredDefaultProvider} and are converted by {@link ConfigLoader}.
  */
 final class ConfigLoaderInvalidValuesTest {
 
@@ -51,27 +52,27 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     @Test
-    void unreadableConfigFileThrowsIllegalArgumentException() {
-        String[] args = new String[] {"--config", "/path/that/does/not/exist.json"};
+    void unreadableConfigFileThrowsParameterException() {
+        String[] args = {"--config", "/does/not/exist.json"};
 
-        IllegalArgumentException ex =
+        CommandLine.ParameterException ex =
                 assertThrows(
-                        IllegalArgumentException.class, () -> ConfigLoader.load(args, Map.of()));
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
 
         assertTrue(
-                ex.getMessage().contains("not readable"),
-                "Error message should explain the file is unreadable. Got: " + ex.getMessage());
+                ex.getMessage().contains("config file is not readable"),
+                "Unreadable file should be self-describing. Got: " + ex.getMessage());
     }
 
     @Test
-    void nonObjectRootJsonThrowsIllegalArgumentException(@TempDir final Path tempDir)
-            throws Exception {
+    void nonObjectRootJsonThrowsParameterException(@TempDir final Path tempDir) throws Exception {
         Path file = tempDir.resolve("bad.json");
         Files.writeString(file, "[]");
 
-        IllegalArgumentException ex =
+        CommandLine.ParameterException ex =
                 assertThrows(
-                        IllegalArgumentException.class,
+                        CommandLine.ParameterException.class,
                         () ->
                                 ConfigLoader.load(
                                         new String[] {"--config", file.toString()}, Map.of()));
@@ -82,13 +83,13 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     @Test
-    void malformedJsonThrowsIllegalArgumentException(@TempDir final Path tempDir) throws Exception {
+    void malformedJsonThrowsParameterException(@TempDir final Path tempDir) throws Exception {
         Path file = tempDir.resolve("malformed.json");
         Files.writeString(file, "{");
 
-        IllegalArgumentException ex =
+        CommandLine.ParameterException ex =
                 assertThrows(
-                        IllegalArgumentException.class,
+                        CommandLine.ParameterException.class,
                         () ->
                                 ConfigLoader.load(
                                         new String[] {"--config", file.toString()}, Map.of()));

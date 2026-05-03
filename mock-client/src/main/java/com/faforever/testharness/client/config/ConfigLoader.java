@@ -49,9 +49,13 @@ public final class ConfigLoader {
             final String[] args, final Map<String, String> env) {
         Path configFile = preParseConfigFlag(args);
         MockClientCli cli = new MockClientCli();
-        CommandLine commandLine =
-                new CommandLine(cli)
-                        .setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
+        CommandLine commandLine = new CommandLine(cli);
+
+        try {
+            commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
+        } catch (IllegalArgumentException e) {
+            throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
+        }
 
         ParseResult result = commandLine.parseArgs(args);
 

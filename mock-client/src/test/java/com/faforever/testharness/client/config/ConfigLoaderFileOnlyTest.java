@@ -1,8 +1,5 @@
 package com.faforever.testharness.client.config;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
-import java.net.URI;
 import java.nio.file.Path;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -33,6 +30,6 @@ final class ConfigLoaderFileOnlyTest {
         MockClientConfig config =
                 ConfigLoader.load(new String[] {"--config=" + file}, Map.of()).orElseThrow();
 
-        assertEquals(URI.create(TestFixtures.LOBBY_URL), config.lobbyWebSocketUrl());
+        TestFixtures.assertMatchesMinimalRequired(config);
     }
 }
