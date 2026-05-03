@@ -1,0 +1,18 @@
+{
+    "lobbyWebSocketUrl": "ws://localhost/ws",
+    "oauthTokenUrl": "http://localhost:4444/oauth2/token",
+    "oauthClientId": "faf-client",
+    "oauthClientSecret": "REPLACE_VIA_FAF_MOCK_OAUTH_CLIENT_SECRET",
+    "oauthUsername": "REPLACE_VIA_FAF_MOCK_OAUTH_USERNAME",
+    "oauthPassword": "REPLACE_VIA_FAF_MOCK_OAUTH_PASSWORD",
+    "oauthAccessToken": null,
+    "oauthTokenFile": null,
+    "uniqueId": "00000000-0000-0000-0000-000000000000",
+    "iceAdapterBinaryPath": "/usr/local/bin/faf-ice-adapter",
+    "mockGameBinaryPath": "./mock-game/build/install/mock-game/bin/mock-game",
+    "iceAdapterRpcPort": 7236,
+    "iceAdapterGpgNetPort": 7237,
+    "logLevel": "INFO",
+    "logFile": null,
+    "playerIdOverride": null
+}
