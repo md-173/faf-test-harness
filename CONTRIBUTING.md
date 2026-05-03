@@ -163,7 +163,69 @@ If you've already pushed your feature branch and need to rewrite its history (re
 git push --force-with-lease
 ```
 
-## 6. Logging
+## 6. JavaDocs Conventions
+
+Required on all public and protected types and members. Optional (but encouraged where non-obvious) on package-private and private members. Not required on @Override methods, trivial getters/setters, or test methods.
+
+Important: The first sentence of your JavaDoc (up to the first period followed by whitespace) is extracted by the compiler to create the summary tables. This first sentence must be a high-level overview.
+
+
+<b>Class Level Template</b>
+```java
+/**
+ * [Short, one-sentence summary of the class or interface's primary purpose].
+ *
+ * <p>[Detailed description of how the class works, its main responibilities,
+ * and any important concepts. Use multiple paragraphs if you need to 
+ * explain specific behaviours]
+ *
+ * <p>[Optional: Detail specific mechanics]
+ *
+ * <p><b>Usage:</b>
+ *
+ * <pre>{@code
+ * // Add a concise, realistic code example demonstrating the primary use case
+ * ExampleClass instance = new ExampleClass("arguments");
+ * instance.doSomething();
+ * }</pre>
+ *
+ * @author Name1
+ * @author Name2
+ * @see [RelatedClassOrInterface]
+ */
+public class ExampleClass {
+    // ...
+}
+```
+<b>Method Level Template</b>
+```java
+/**
+ * [Short, third-person, active-voice description of what the method does].
+ *
+ * <p>[Detailed explanation of the method's behavior, state changes, or specific 
+ * algorithms used. Mention if it runs synchronously or asynchronously.]
+ *
+ * @param paramName [Description of the parameter, including valid values or constraints]
+ * @param paramName  [Description of another parameter]
+ * @return [Description of the return value]
+ * @throws IllegalArgumentException if [Condition under which the exception is thrown]
+ * @throws IllegalStateException    if [Condition]
+ */
+public Object doSomething(String paramName, int paramName) {
+    // ...
+}
+```
+
+### Additional rules
+
+**Scope**: Applies to classes, interfaces, enums, records, and annotation types. For records, document each component with @param on the class-level Javadoc. package-info.java carries a package-level summary.  
+**Nullability**: Parameters and return values are non-null by default. Explicitly document any that may be null on @param / @return. Prefer a nullness annotation (e.g. JSpecify) when available.  
+**Exceptions**: Every checked exception in throws needs a matching @throws. Document unchecked exceptions that are part of the contract (e.g. IllegalArgumentException on bad input).  
+**Overrides**: Omit the Javadoc to inherit the parent's doc verbatim. Only write a block when supplementing it, and use {@inheritDoc} where the parent's text should appear.  
+**Void methods**: No @return tag.  
+**Linking**: Use {@link ClassName#method(ParamType)} to reference code (include param types for overloaded methods) and {@code ...} for inline code snippets.  
+
+## 7. Logging
 
 All components use a shared structured logging framework built on SLF4J + Logback.
 
@@ -225,6 +287,6 @@ Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and ta
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 
 
-## 7. When in doubt
+## 8. When in doubt
 
 Ask in the team channel before inventing a new convention. Amendments to this document go through a normal PR and must be approved by the team lead.
