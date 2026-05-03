@@ -20,6 +20,10 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
+tasks.withType(Checkstyle).configureEach {
+    ignoreFailures = false
+}
+
 test {
     useJUnitPlatform()
 }

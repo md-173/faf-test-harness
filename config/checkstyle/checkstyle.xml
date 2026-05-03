@@ -57,7 +57,7 @@
     <property name="optional" value="true"/>
   </module>
 
-  <!-- Checks that a package-info.java file exists for each package.     -->
+  <!-- Checks that a package-info.java file exists for each package.    -->
   <!-- See https://checkstyle.org/checks/javadoc/javadocpackage.html#JavadocPackage -->
   <module name="JavadocPackage"/>
 
@@ -176,7 +176,13 @@
     <module name="EmptyStatement"/>
     <module name="EqualsHashCode"/>
     <module name="FallThrough"/>
-    <module name="HiddenField"/>
+
+    <!-- Allow the this.x = x pattern without losing protection from shadowing bugs -->
+    <module name="HiddenField">
+      <property name="ignoreConstructorParameter" value="true"/>
+      <property name="ignoreSetter" value="true"/>
+    </module>
+
     <module name="IllegalInstantiation"/>
     <module name="InnerAssignment"/>
     <module name="MagicNumber"/>
@@ -188,7 +194,8 @@
 
     <!-- Checks for class design                         -->
     <!-- See https://checkstyle.org/checks/design/index.html -->
-    <module name="DesignForExtension"/>
+    <!-- Disabled: requires every non-final method to have an empty override hook, fights normal OOP -->
+    <!-- <module name="DesignForExtension"/> -->
     <module name="DeclarationOrder"/>
     <module name="FinalClass"/>
     <module name="HideUtilityClassConstructor"/>
@@ -198,8 +205,10 @@
     <!-- Miscellaneous other checks.                   -->
     <!-- See https://checkstyle.org/checks/misc/index.html -->
     <module name="ArrayTypeStyle"/>
-    <module name="FinalParameters"/>
-    <module name="TodoComment"/>
+    <!-- Disabled: requires every method parameter to be declared final -->
+    <!-- <module name="FinalParameters"/> -->
+    <!-- Disabled: TODO comments are tracked in GitHub issues, not treated as build errors -->
+    <!-- <module name="TodoComment"/> -->
     <module name="UpperEll"/>
 
     <!-- https://checkstyle.org/filters/suppressionxpathfilter.html -->

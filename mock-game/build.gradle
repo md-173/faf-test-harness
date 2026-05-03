@@ -22,6 +22,10 @@ test {
     useJUnitPlatform()
 }
 
+tasks.withType(Checkstyle).configureEach {
+    ignoreFailures = false
+}
+
 application {
     mainClass = 'com.faforever.testharness.game.Main'
 }
