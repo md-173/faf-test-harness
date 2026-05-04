@@ -13,16 +13,20 @@ The JSON-wrapped form of GPGNet (`{"target": "game", "command": ..., "args": [..
 | [faf-pioneer](https://github.com/FAForever/faf-pioneer) (`faf/stream_reader.go`, `faf/stream_writer.go`, `gpgnet/`) | Independent Go re-implementation; cross-checks the Java codec and is authoritative for typed argument signatures via its `cmd_*.go` registry. |
 | [faf-pioneer `docs/gpgnet.md`](https://github.com/FAForever/faf-pioneer/blob/master/docs/gpgnet.md) | The only existing prose-form GPGNet spec. Provides the BNF grammar reproduced in §2 below. |
 | [faf-api-specs `lobby-to-client/game-state-machine.md`](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md) | Authoritative for command catalog and lifecycle semantics. |
+| [FAForever/fa](https://github.com/FAForever/fa) (`lua/ui/lobby/autolobby.lua`, `lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua`, `lua/ui/lobby/lobby.lua`, `lua/ui/game/gamemain.lua`) | **Game-side ground truth** for command names and Lua-level arg shapes. The byte layer is below the Lua layer (Moho engine binding, closed-source) and is *not* visible here, so the FA repo confirms catalog and arg counts but not wire encoding. |
 | [anykey111/fa-mp-test](https://github.com/anykey111/fa-mp-test) | Game-side C struct offsets; consulted only for ground-truth tie-breaking. |
+| [FAForever/server](https://github.com/FAForever/server) (`server/gameconnection.py`) | Lobby server's GPGNet-over-WebSocket handlers — authoritative for arg *types* the server expects when commands are forwarded over the wrapper. Treated as secondary for the local TCP wire but useful where FA's Lua doesn't constrain a type. |
 
-When the Java codec and the Go codec disagree on the wire (see [§4.4](#section-4-4-known-issues)), this document treats the **Java codec as authoritative for what the Mock Game must produce and accept**, because the Mock Game pairs with the Java adapter in the test harness.
+A third reference codec — [FAForever/kotlin-ice-adapter](https://github.com/FAForever/kotlin-ice-adapter) — also implements GPGNet. Cross-referenced where it disagrees with the Java/Go codecs; otherwise omitted to avoid clutter.
+
+When the Java codec and the Go codec disagree on the wire (see [§4.4](#section-4-4-known-issues)), this document treats the **Java codec as authoritative for what the Mock Game must produce and accept**, because the Mock Game pairs with the Java adapter in the test harness. When the codecs and the FA Lua disagree on an *argument signature* (e.g. arg count for `JoinGame`, see [§7.3](#section-7-3-arg-discrepancy)), FA's Lua entry-point definition is authoritative for what the engine accepts.
 
 ---
 
 <a id="section-2-frame-grammar"></a>
 ## 2. Frame Grammar
 
-The Go codec's `docs/gpgnet.md` provides the only published BNF. Reproduced verbatim:
+The Go codec's `docs/gpgnet.md` provides the only published Backus-Naur-Form. Reproduced verbatim:
 
 ```
 <message>              ::= <command> <size> <chunks>
@@ -36,12 +40,12 @@ The Go codec's `docs/gpgnet.md` provides the only published BNF. Reproduced verb
 <type_followup_string> ::= byte = 0x02
 ```
 
-The grammar above is **internally inconsistent with both reference implementations** in two ways. The implementation behaviour, not the BNF, is normative (see [§4.4](#section-4-4-known-issues)):
+The grammar above is **internally inconsistent with both reference implementations** in two ways. The implementation behaviour is treated as the source of truth (see [§4.4](#section-4-4-known-issues)):
 
 - **Signedness.** The BNF declares `uint32` for the `size` and `int chunk` fields. Both Java (`LittleEndianDataInputStream.readInt()`, returning `int`) and Go (`binary.Read(..., &x int32, ...)`) actually treat these fields as **signed `int32`**. Java's `MAX_CHUNK_SIZE = 10` guard makes practical signedness moot, but the value is signed on the wire.
 - **Endianness scope.** The BNF says little-endian "affects only `uint32` fragments". In the implementations, **every multi-byte numeric field** (length prefixes, int chunks) is little-endian. The single byte type tag is endianness-irrelevant.
 
-### 2.1 Plain-English description
+### 2.1 Simplified description
 
 A frame is the concatenation of:
 
@@ -258,16 +262,19 @@ This catalog lists every GPGNet command observed crossing the local TCP socket. 
 | `IceMsg` | `receiver_id:int, ice_msg_json:string` | ICE | game-state-machine.md |
 | `Bottleneck` | `code:int, ...args` (see [§7.4](#section-7-4-bottleneck)) | **Fault** | game-state-machine.md |
 | `BottleneckCleared` | _(none)_ | **Fault** | game-state-machine.md |
-| `Disconnected` | `...args` (logged only by adapter) | LIVE | game-state-machine.md |
+| `Disconnected` | `uid:string` (FA Lua sends `string.format("%d", uid)` — wire chunk is type `0x01`, NOT `0x00`) | LIVE | [`lobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/lobby.lua) |
 | `Rehost` | `...args` (marked unused by spec) | Lobby | game-state-machine.md |
+| `EstablishedPeer` | `peer_id:int` | LIVE | [`AutolobbyServerCommunicationsComponent.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua) — emitted by FA, no server handler; consumed by ICE adapter only |
+| `DisconnectedPeer` | `peer_id:int` | LIVE | same file — adapter-only |
+| `BEAT` | `game_tick:int, game_speed:int` | LIVE | [`gamemain.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/game/gamemain.lua) — heartbeat; not handled by lobby server |
 
 ### 7.2 Adapter → Game (Mock Game receives)
 
 | Command | Args (ordered) | Class | Source |
 |---|---|---|---|
-| `CreateLobby` | `init_mode:int, port:int, login:string, player_id:int, unknown:int (= 1)` | **Lifecycle** | [`cmd_create_loby.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_create_loby.go), [`GPGNetServer.java#L111-L117`](https://github.com/FAForever/java-ice-adapter/blob/master/ice-adapter/src/main/java/com/faforever/iceadapter/gpgnet/GPGNetServer.java#L111-L117) |
-| `HostGame` | `map_name:string` | Lifecycle | [`cmd_host_game.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_host_game.go) |
-| `JoinGame` | `net_address:string, remote_player_login:string, remote_player_id:int` | Lifecycle | [`cmd_join_game.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_join_game.go) (see [§7.3](#section-7-3-arg-discrepancy)) |
+| `CreateLobby` | `init_mode:int, port:int, login:string, player_id:int, nat_traversal_provider:int (= 1)` — FA's Lua names the 5th arg `natTraversalProvider`; both adapters hardcode it to `1`. | **Lifecycle** | [`cmd_create_loby.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_create_loby.go), [`GPGNetServer.java#L111-L117`](https://github.com/FAForever/java-ice-adapter/blob/master/ice-adapter/src/main/java/com/faforever/iceadapter/gpgnet/GPGNetServer.java#L111-L117), [`autolobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby.lua) `function CreateLobby` |
+| `HostGame` | `map_name:string` (FA Lua's `function HostGame(gameName, scenarioFileName, singlePlayer)` accepts up to 3 args; both adapters send only 1, so the trailing two are `nil` in Lua) | Lifecycle | [`cmd_host_game.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_host_game.go), [`autolobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby.lua) `function HostGame` |
+| `JoinGame` | `net_address:string, remote_player_login:string, remote_player_id:int` (3 args on the wire — see [§7.3](#section-7-3-arg-discrepancy) for the FA Lua arity discrepancy) | Lifecycle | [`cmd_join_game.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_join_game.go), [`autolobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby.lua) `function JoinGame` |
 | `ConnectToPeer` | `net_address:string, remote_player_login:string, remote_player_id:int` | Lifecycle | [`cmd_connect_to_peer.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_connect_to_peer.go) (see [§7.3](#section-7-3-arg-discrepancy)) |
 | `DisconnectFromPeer` | `remote_player_id:int` | Lifecycle | [`cmd_disconnect_from_peer.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_disconnect_from_peer.go) |
 | `IceMsg` | `sender_id:int, ice_msg_json:string` | ICE | game-state-machine.md |
@@ -276,14 +283,18 @@ This catalog lists every GPGNet command observed crossing the local TCP socket. 
 
 ### 7.3 `JoinGame` / `ConnectToPeer` arg-count discrepancy <a id="section-7-3-arg-discrepancy"></a>
 
-The two reference docs disagree on argument count and types:
+Three references disagree on argument count and types:
 
 | Source | `JoinGame` | `ConnectToPeer` |
 |---|---|---|
-| [faf-pioneer `gpgnet/`](https://github.com/FAForever/faf-pioneer/tree/master/gpgnet) typed structs | 3 args: `net_address:string, remote_player_login:string, remote_player_id:int` | 3 args: `net_address:string, remote_player_login:string, remote_player_id:int` |
-| [faf-api-specs game-state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md) (Server → FA table) | 2 args: `player_name, player_uid` | 3 args: `player_name, player_uid, offer:bool` |
+| [faf-pioneer `gpgnet/`](https://github.com/FAForever/faf-pioneer/tree/master/gpgnet) typed structs (adapter→game wire) | **3 args**: `net_address:string, remote_player_login:string, remote_player_id:int` | **3 args**: `net_address:string, remote_player_login:string, remote_player_id:int` |
+| [`autolobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby.lua) (FA's Lua entry-points) | **4 args**: `function JoinGame(address, asObserver, playerName, uid)` | **3 args**: `function ConnectToPeer(addressAndPort, name, uid)` |
+| [faf-api-specs game-state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md) (server → adapter, JSON-wrapped) | 2 args: `player_name, player_uid` | 3 args: `player_name, player_uid, offer:bool` |
 
-**Resolution.** The api-specs table describes the **server → adapter** payload (what arrives over the lobby WebSocket inside `target: "game"`). The Go/Java codec structs describe the **adapter → game** payload (what the adapter rewrites and emits over the local GPGNet TCP socket). The adapter resolves the peer's `net_address` (the ICE-negotiated UDP endpoint) and substitutes it into the first arg before forwarding to FA. For `ConnectToPeer`, the `offer:bool` from the lobby is consumed by the adapter (used to decide ICE initiator role) and is **not passed through** to the game.
+**Resolution.**
+
+- **`ConnectToPeer`** — all three layers agree on 3 args. The api-specs `offer:bool` is consumed by the adapter (used to choose ICE initiator role) and **not passed through** to FA; the adapter resolves and substitutes `net_address` into arg[0] before forwarding.
+- **`JoinGame`** — FA's Lua entry expects **4 args** including `asObserver:bool`, but both reference adapters (Java + Go) emit only **3** on the wire. The result is that `asObserver` arrives in Lua as `nil`. This is a real adapter↔game arity mismatch in upstream code; FA's Lua tolerates it because `nil` evaluates as `false` for the observer check. **Mock Game policy:** match the upstream adapter behaviour — emit/accept 3 args matching pioneer's typed struct. Document this as an inherited quirk.
 
 This spec is authoritative for the **local TCP wire** form: **3 args, types as in the faf-pioneer Go structs**, for both commands.
 
@@ -293,10 +304,12 @@ Both commands flow exclusively **Game → Adapter**. Neither codec switches on t
 
 | Command | Direction | Args | Phase | Behaviour |
 |---|---|---|---|---|
-| `Bottleneck` | G→A→server | `code:int, ...args` (variadic; subsequent arg types not authoritatively typed anywhere — see below) | LIVE | FA reports a simulation-pipeline stall. |
+| `Bottleneck` | G→A→server | `code:string, ...args:string` (server treats as variadic strings — see below) | LIVE | FA reports a simulation-pipeline stall. |
 | `BottleneckCleared` | G→A→server | _(none)_ | LIVE | FA reports the stall has resolved. |
 
-**Inner arg types of `Bottleneck` are ambiguous.** The api-specs table lists the signature as `code, ...args` without naming the trailing args' types. Neither codec has a typed struct that pins them down. The C-side ground truth ([anykey111/fa-mp-test](https://github.com/anykey111/fa-mp-test)) does not enumerate them either. **Mock Game policy:** emit `Bottleneck` with only the `code:int` arg. Parser policy: surface the trailing chunks as raw chunk records (preserving tag + payload) without claiming to type them.
+**`Bottleneck` arg types come from the lobby server, not FA's Lua.** Neither FA's Lua paths nor the codecs typed-emit `Bottleneck`; the closed-source engine emits it directly. The lobby server's [`handle_bottleneck`](https://github.com/FAForever/server/blob/develop/server/gameconnection.py) handler signature is `code:str, *args:str`. A real-world payload logged by the server is `["data", "19508", "517268,516974,344419", "5980.1"]` — i.e. the engine sends `code` as a string (`"data"`), not an int as the faf-api-specs table loosely states. The trailing args are stringly-typed and the server logs them without parsing.
+
+**Mock Game policy:** emit `Bottleneck` with `code:string` (chunk tag `0x01`). Trailing args are optional and may be omitted. Parser policy: surface the trailing chunks as raw chunk records (preserving tag + payload) without claiming to type them.
 
 ### Sources
 
@@ -337,6 +350,8 @@ For a custom-game **joiner**, replace `HostGame` at `t3` with `JoinGame(net_addr
 For a **matchmaker** game, the `init_mode` arg of `CreateLobby` at `t1` is `1` (Auto) instead of `0` (Normal); the lobby phase skips manual `GameOption`/`PlayerOption` configuration because the server pre-sets the slot.
 
 The four `GameState` strings are exact: `"Idle"`, `"Lobby"`, `"Launching"`, `"Ended"`. There is no `"Hosted"` or `"Live"` value.
+
+**Engine vs Lua emit-site.** Of these four values, only `"Launching"` is emitted from FA's open-source Lua layer ([`AutolobbyServerCommunicationsComponent.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua) — there is an explicit guard `if value ~= 'Launching' then return end`). `"Idle"`, `"Lobby"`, and `"Ended"` originate from the closed-source Moho engine itself, before Lua sees them. The lobby server's [`handle_game_state`](https://github.com/FAForever/server/blob/develop/server/gameconnection.py) accepts all four. The Lua type alias `UILobbyState` also enumerates an internal `"None"` value, but it is never sent on the wire. **Mock Game policy:** emit all four values as required by the lifecycle in §8 — none of the engine-internal split affects the Mock Game, which simulates the engine's behaviour.
 
 ### Sources
 
@@ -380,5 +395,8 @@ On error:   close the socket. There is no resync.
 - Java ICE adapter codec: [`FaDataInputStream.java`](https://github.com/FAForever/java-ice-adapter/blob/master/ice-adapter/src/main/java/com/faforever/iceadapter/gpgnet/FaDataInputStream.java), [`FaDataOutputStream.java`](https://github.com/FAForever/java-ice-adapter/blob/master/ice-adapter/src/main/java/com/faforever/iceadapter/gpgnet/FaDataOutputStream.java), [`GPGNetServer.java`](https://github.com/FAForever/java-ice-adapter/blob/master/ice-adapter/src/main/java/com/faforever/iceadapter/gpgnet/GPGNetServer.java)
 - faf-pioneer Go codec: [`stream_reader.go`](https://github.com/FAForever/faf-pioneer/blob/master/faf/stream_reader.go), [`stream_writer.go`](https://github.com/FAForever/faf-pioneer/blob/master/faf/stream_writer.go), [`gpgnet/`](https://github.com/FAForever/faf-pioneer/tree/master/gpgnet), [`docs/gpgnet.md`](https://github.com/FAForever/faf-pioneer/blob/master/docs/gpgnet.md)
 - FAF API specs: [`lobby-to-client/game-state-machine.md`](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md)
+- Game-side ground truth (Lua emit/receive): [FAForever/fa](https://github.com/FAForever/fa) — [`autolobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby.lua), [`AutolobbyServerCommunicationsComponent.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua), [`lobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/lobby.lua), [`gamemain.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/game/gamemain.lua)
+- Lobby server handlers (arg-type cross-reference): [FAForever/server `gameconnection.py`](https://github.com/FAForever/server/blob/develop/server/gameconnection.py)
 - Game-side C struct offsets (consulted): [anykey111/fa-mp-test](https://github.com/anykey111/fa-mp-test)
+- Third reference codec (consulted): [FAForever/kotlin-ice-adapter](https://github.com/FAForever/kotlin-ice-adapter)
 - Sibling spec: [`lobby-protocol-spec.md`](lobby-protocol-spec.md) — JSON-wrapped GPGNet over the lobby WebSocket (out of scope here).
