@@ -5,6 +5,45 @@ launches `faf-ice-adapter` and `mock-game` as subprocesses, and proxies GPGNet
 traffic between them and the lobby. Used for end-to-end integration tests that
 do not require a real game install or a human at the keyboard.
 
+## Subcommands
+
+Mock Client is a Picocli command tree: a root `mock-client` command plus four
+subcommands that dispatch to the matching component.
+
+| Subcommand    | Purpose                                                                            |
+|---------------|------------------------------------------------------------------------------------|
+| `run`         | Run a full mock client session: authenticate, queue, play, teardown.               |
+| `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    |
+| `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
+| `ice-smoke`   | ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet handshake.|
+
+For WBS-3.1.5.2 (CLI scaffolding) every subcommand validates config, applies
+logging, logs a TODO line, and exits with code `64` (`NOT_IMPLEMENTED`). Real
+logic for each subcommand ships in sibling tracks.
+
+Invocation shape:
+
+```text
+mock-client [global flags] <subcommand> [subcommand flags]
+```
+
+Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 16
+config flags — are declared on the root and apply to every subcommand. Each
+subcommand also accepts its own `--help`.
+
+## Exit codes
+
+| Code | Constant          | When                                                                             |
+|------|-------------------|----------------------------------------------------------------------------------|
+| `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
+| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (current state of all four subcommand stubs). |
+| `70` | `RUNTIME`         | Reserved for future runtime failures (subprocess crash, lobby disconnect).       |
+
+`USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
+parameter-exception path needs no remap. Constants live in
+`com.faforever.testharness.client.cli.ExitCodes`.
+
 ## Configuration
 
 Every Mock Client component reads from a single `MockClientConfig` object
@@ -95,21 +134,47 @@ A typical setup:
 
 ## Example invocations
 
+Two launchers are equivalent: the Gradle `application` plugin's `:run` task
+(no build step required), and the install-dist binary built by
+`./gradlew :mock-client:installDist` and located at
+`mock-client/build/install/mock-client/bin/mock-client`. The first is convenient
+during development; the second is what CI and deployments use.
+
 ### Discover the available options
 
 ```bash
 ./gradlew :mock-client:run --args="--help"
+./gradlew :mock-client:run --args="run --help"
 ```
 
-Prints every flag, its description, default value, and whether it is required.
-This is the source of truth that the field-reference table above mirrors.
+Root help lists every global flag and the four subcommands. Per-subcommand
+help shows the same flag set (subcommands inherit the root's flags). This is
+the source of truth that the field-reference table above mirrors.
 
-### Config file only
+### `run` — full mock client session (config file)
 
 ```bash
 cp mock-client.example.json mock-client.json
 # edit mock-client.json with real values
-./gradlew :mock-client:run --args="--config mock-client.json"
+./gradlew :mock-client:run --args="run --config mock-client.json"
+```
+
+### `launch-ice` — spawn faf-ice-adapter only
+
+```bash
+./gradlew :mock-client:run --args="\
+  launch-ice \
+  --config mock-client.json \
+  --ice-adapter-rpc-port 7236 \
+  --ice-adapter-gpg-net-port 7237"
+```
+
+### `ice-smoke` — connectivity sanity check
+
+```bash
+./mock-client/build/install/mock-client/bin/mock-client \
+  ice-smoke \
+  --config mock-client.json
 ```
 
 ### Environment variables only
@@ -123,13 +188,14 @@ export FAF_MOCK_CLIENT_UNIQUE_ID=00000000-0000-0000-0000-000000000000
 export FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
 export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
 
-./gradlew :mock-client:run
+./gradlew :mock-client:run --args="run"
 ```
 
 ### CLI flags only
 
 ```bash
 ./gradlew :mock-client:run --args="\
+  run \
   --lobby-websocket-url ws://localhost/ws \
   --oauth-token-url http://localhost:4444/oauth2/token \
   --oauth-client-id faf-client \
@@ -144,6 +210,7 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ```bash
 # config file holds public values
 ./gradlew :mock-client:run --args="\
+  run \
   --config mock-client.json \
   --log-level DEBUG"
 # env adds secrets:
@@ -159,6 +226,7 @@ come from CLI flags:
 
 ```bash
 ./gradlew :mock-client:run --args="\
+  run \
   --config mock-client.json \
   --player-id-override 1 \
   --ice-adapter-rpc-port 7236 \
@@ -166,6 +234,7 @@ come from CLI flags:
   --log-file logs/client-1.jsonl" &
 
 ./gradlew :mock-client:run --args="\
+  run \
   --config mock-client.json \
   --player-id-override 2 \
   --ice-adapter-rpc-port 7246 \
