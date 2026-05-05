@@ -40,7 +40,7 @@ The Go codec's `docs/gpgnet.md` provides the only published Backus-Naur-Form. Re
 <type_followup_string> ::= byte = 0x02
 ```
 
-The grammar above is **internally inconsistent with both reference implementations** in two ways. The implementation behaviour is treated as the source of truth (see [§4.4](#section-4-4-known-issues)):
+The grammar above is **internally inconsistent with both reference implementations** in one way. The implementation behaviour is treated as the source of truth (see [§4.4](#section-4-4-known-issues)):
 
 - **Signedness.** The BNF declares `uint32` for the `size` and `int chunk` fields. Both Java (`LittleEndianDataInputStream.readInt()`, returning `int`) and Go (`binary.Read(..., &x int32, ...)`) actually treat these fields as **signed `int32`**. Java's `MAX_CHUNK_SIZE = 10` guard makes practical signedness moot, but the value is signed on the wire.
 
