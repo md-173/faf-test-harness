@@ -520,7 +520,7 @@ AsyncAPI: https://faforever.github.io/faf-api-specs
 <a id="section-6-gpgnet-wrapping"></a>
 ## 6. GPGNet-over-WebSocket Wrapping
 
-GPGNet is the protocol used between the Game Engine and the local ICE adapter (binary framing over local TCP — documented separately in the GPGNet Framing Format research task). Over the lobby WebSocket, GPGNet commands are carried as JSON inside the {"target": "game"} envelope.
+GPGNet is the protocol used between the Game Engine and the local ICE adapter (binary framing over local TCP — see [gpgnet-format-spec.md](gpgnet-format-spec.md) for the full byte-level wire format, type-tag table, and command catalog). Over the lobby WebSocket, GPGNet commands are carried as JSON inside the {"target": "game"} envelope.
 
 ### Wrapper Format
 
