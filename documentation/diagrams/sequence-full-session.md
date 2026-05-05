@@ -34,10 +34,16 @@ sequenceDiagram
     participant Hydra as Ory Hydra
     participant LS as Lobby Server
 
-    Note over Dev,Hydra: Phase 1 - Authentication
-    Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange
-    Hydra-->>Dev: access_token (JWT)
-    Dev->>MC: inject FAF_MOCK_ACCESS_TOKEN
+    Note over Dev,Hydra: Phase 1 - Authentication (one-time bootstrap)
+    Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange (manual, browser)
+    Hydra-->>Dev: access_token + refresh_token
+    Dev->>MC: persist FAF_MOCK_REFRESH_TOKEN (gitignored)
+
+    Note over MC,Hydra: Steady-state (every ~1h, or on startup)
+    MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
+    Hydra-->>MC: access_token + rotated refresh_token
+    MC->>MC: persist new refresh_token atomically
+
 
     MC->>LS: WebSocket handshake (WSS, JSON over TCP)
     MC->>LS: ask_session

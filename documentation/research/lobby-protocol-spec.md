@@ -54,17 +54,24 @@ Before connecting to the lobby WebSocket, the client must obtain a **JWT access 
 | Authorization | `https://hydra.faforever.com/oauth2/auth` |
 | Token | `https://hydra.faforever.com/oauth2/token` |
 
-### Local Development Endpoints
+### Test Environment Endpoints
+
+The FAF test environment mirrors production with anonymized data. The mock client targets this environment by default.
 
 | Endpoint | URL |
 |---|---|
-| OAuth2 Base (Hydra) | `http://localhost:4444` |
-| Authorization | `http://localhost:4444/oauth2/auth` |
-| Token | `http://localhost:4444/oauth2/token` |
+| OAuth2 Base (Hydra) | `https://hydra.faforever.xyz` |
+| Authorization | `https://hydra.faforever.xyz/oauth2/auth` |
+| Token | `https://hydra.faforever.xyz/oauth2/token` |
+| Lobby (paired) | `wss://lobby.faforever.xyz` |
 
-Local setup uses `docker compose up -d` from the [faf-user-service](https://github.com/FAForever/faf-user-service) repo, which automatically creates an OAuth client with client ID `faf-client` and redirect URL `http://127.0.0.1`.
+Test users share the password `foo`. Same OAuth client list as production (verified against `gitops-stack/apps/ory-hydra/values-test.yaml`, The test override only differs in CORS settings).
 
-### Client Configuration (Production)
+Note that the lobby WebSocket hostname is *not* a clean `.com ↔ .xyz` substitution: prod uses `wss://ws.faforever.com` while test uses `wss://lobby.faforever.xyz`. Other services (Hydra, API, replay) do follow the `.com ↔ .xyz` pattern. Configure per-environment rather than deriving by hostname swap.
+
+### Client Configuration (Reference: Desktop Client)
+
+The values below describe what the *production desktop client* (`downlords-faf-client`) uses. They are included here as a reference point for the OAuth flow shown in the next subsection. **The mock client does not use this UUID** — see [Mock Client Considerations](#mock-client-considerations) below for the seeded `FAF Classic Client (Python)` UUID (`95ecec08-...`) which the mock targets instead.
 
 From the [downlords-faf-client](https://github.com/FAForever/downlords-faf-client) production config:
 
@@ -120,23 +127,42 @@ The production FAF client uses the standard **OAuth2 Authorization Code** grant:
 
 ### Mock Client Considerations
 
-The Authorization Code flow requires a browser interaction, which is unsuitable for a headless 
-CLI mock. Possible approaches for the mock client:
+The Authorization Code flow requires a browser interaction, which is unsuitable for a headless CLI mock at runtime. The mock client uses a one-time browser bootstrap to obtain a refresh token, then runs headlessly until the refresh token expires.
 
-1. **Local dev with test credentials**: Run the faf-user-service Docker stack locally, which 
-   pre-seeds test users. Automate the browser flow programmatically (HTTP requests to the 
-   authorization and login endpoints, following redirects) to obtain a token without manual 
-   interaction. (Avoid if possible)
+**Resolved approach (verified end-to-end 2026-05-05):**
 
-2. **Pre-obtained token**: Obtain a token once manually and pass it to the mock client via 
-   environment variable or config file. Tokens expire (default ~12 hours / 43200 seconds), 
-   so this is only viable for short test sessions. (May be the best way to unblock developement initally)
+1. **Target environment.** `*.faforever.xyz` (see Test Environment Endpoints above). No local stack required.
 
-3. **Ask FAF developers**: The FAF team may be able to provide a test client configured with 
-   the `client_credentials` grant type, which allows direct token acquisition without browser 
-   interaction. The faf-stack configuration shows M2M client credentials are used for other 
-   services (e.g., `faf-website-public`). Contact the team at 
-   [FAF Zulip](https://faforever.zulipchat.com/). (Preferred, allows CI pipeline to run indefinitely)
+2. **OAuth client.** Use the seeded `FAF Classic Client (Python)` — `client_id = 95ecec08-29c1-4c48-ae0a-b000ff349cb8`. Public client, `tokenEndpointAuthMethod: none`, no secret. Grant types: `authorization_code, refresh_token`. Source: [`gitops-stack/apps/ory-hydra/values.yaml`](https://github.com/FAForever/gitops-stack/blob/develop/apps/ory-hydra/values.yaml).
+
+3. **Bootstrap (manual, one-time per refresh-token lifetime).**
+   - Visit `https://hydra.faforever.xyz/oauth2/auth?client_id=95ecec08-29c1-4c48-ae0a-b000ff349cb8&response_type=code&redirect_uri=http://127.0.0.1&scope=openid+offline+lobby&state=<≥8 chars>`
+   - Log in as a test user; grant consent.
+   - Capture the `code` from the failed `127.0.0.1` redirect.
+   - Exchange at `/oauth2/token` with `grant_type=authorization_code` to receive `access_token` and `refresh_token`.
+   - Persist the `refresh_token` to a gitignored config file.
+
+4. **Steady-state (headless).**
+   - On startup or when the access_token nears expiry (~1 hour), POST to `/oauth2/token` with `grant_type=refresh_token` + the saved refresh_token.
+   - Hydra rotates the refresh_token on each use — persist the new one atomically (write-then-rename) **before** treating the refresh as successful.
+   - On `invalid_grant`, surface the error and prompt the developer to re-run the bootstrap.
+
+**Verified facts:**
+
+| Fact | Value | Source |
+|---|---|---|
+| Required scope (lobby JWT `scp`) | `lobby` | `FAForever/server` auth handler |
+| Token format | JWT, RS256 | Empirical |
+| Access token TTL | ~1 hour (3599s) | Empirical |
+| Refresh token TTL | ~30 days (Hydra default; not overridden) | Inferred |
+
+**Why not the alternatives:**
+
+- **`password` (ROPC) grant:** not enabled on any seeded client.
+- **`client_credentials` grant:** three seeded clients use it (`faf-website-public`, `brackman-discord`, `faf-qai`), but none have `lobby` scope. Granting `lobby` to an M2M client would breach a deliberate security boundary in the FAF Hydra config. Out-of-pattern; rejected.
+- **Device Authorization grant:** advertised by Hydra discovery but not enabled on the seeded public clients (verified empirically — `invalid_grant`).
+- **Local `gitops-stack` / Tilt:** not currently needed — `.xyz` provides prod-parity data with zero local infra cost. **Revisit when** (a) testing against unreleased lobby/server changes, (b) developing offline, or (c) running isolated CI where shared `.xyz` state would cause flakes. Setup pointer: [FAForever/gitops-stack](https://github.com/FAForever/gitops-stack) (Tilt-based), not the archived `faf-stack`.
+
 
 ### Scope Relevance
 
@@ -156,22 +182,30 @@ The mock client ultimately needs a valid OAuth2 **access token** (JWT bearer tok
 
 ### Credential Handling
 
-The mock client must never hardcode or commit OAuth credentials. Tokens, client IDs, and client secrets must be supplied strictly via environment variables, for example:
+The mock client must never hardcode or commit OAuth credentials. Tokens, client IDs, and refresh tokens must be supplied strictly via environment variables, for example:
 
 | Variable | Purpose |
 |---|---|
-| `FAF_MOCK_CLIENT_ID` | OAuth client ID (public — may be tracked in `.env`) |
-| `FAF_MOCK_CLIENT_SECRET` | OAuth client secret (secret — must be gitignored) |
-| `FAF_MOCK_ACCESS_TOKEN` | Pre-obtained JWT for short test sessions (secret — must be gitignored) |
+| `FAF_MOCK_TOKEN_ENDPOINT` | Hydra token endpoint (public — tracked in `.env`) |
+| `FAF_MOCK_AUTH_ENDPOINT` | Hydra authorization endpoint, used by the bootstrap script (public — tracked in `.env`) |
+| `FAF_MOCK_CLIENT_ID` | OAuth client ID (public — tracked in `.env`) |
+| `FAF_MOCK_REDIRECT_URI` | Redirect URI registered on the OAuth client (public — tracked in `.env`) |
+| `FAF_MOCK_SCOPES` | Space-separated scopes, e.g. `openid offline lobby` (public — tracked in `.env`) |
+| `FAF_MOCK_REFRESH_TOKEN` | Long-lived refresh token from the bootstrap, rotated on each use (secret — must be gitignored, atomic write) |
 
-Non-secret values (hosts, ports, public client IDs, redirect URIs) may live in the tracked `.env` file. Secret values (client secrets, live tokens) must live in an untracked file such as `.env.local`, or be injected via CI secrets / the developer's shell. A `.env.example` file lists every variable so new contributors know what to set without exposing any real credentials.
+The chosen client (`95ecec08-...`) is a *public* client — no `FAF_MOCK_CLIENT_SECRET` is required or used. The mock client never holds a long-lived access token; access tokens are obtained at runtime by exchanging the refresh token.
+
+
+Non-secret values (hosts, ports, public client IDs, redirect URIs) may live in the tracked `.env` file. Secret values (client secrets, refresh tokens) must live in an untracked file such as `.env.local`, or be injected via CI secrets / the developer's shell. A `.env.example` file lists every variable so new contributors know what to set without exposing any real credentials.
 
 ### Sources
-- [downlords-faf-client production config](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/resources/application-prod.yml)
-- [faf-user-service](https://github.com/FAForever/faf-user-service) — local OAuth setup
+- [downlords-faf-client `application-test.yml`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/resources/application-test.yml) — `.xyz` client_id, scopes, endpoints
+- [downlords-faf-client `application-prod.yml`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/resources/application-prod.yml) — production parity
+- [gitops-stack `ory-hydra/values.yaml`](https://github.com/FAForever/gitops-stack/blob/develop/apps/ory-hydra/values.yaml) — authoritative list of every seeded OAuth2 client, their grant types and scopes
+- [FAForever/server auth handler](https://github.com/FAForever/server) — required `lobby` scope check on the JWT `scp` claim
 - [Hydra OAuth PR #2175](https://github.com/FAForever/downlords-faf-client/pull/2175) — original Hydra integration
 - [Hydra 2.x migration PR #3403](https://github.com/FAForever/downlords-faf-client/pull/3403) — UUID client IDs
-- [faf-stack .env](https://github.com/FAForever/website/blob/develop/.env.faf-stack) — M2M client config reference
+
 
 <a id="section-3-auth"></a>
 ## 3. Authentication Sequence Over WebSocket
