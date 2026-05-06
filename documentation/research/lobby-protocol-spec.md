@@ -665,6 +665,8 @@ The orchestrator (Mock Client) is therefore responsible for:
   `mock-game`), rather than blindly forwarding every `target: "game"` payload to the
   game subprocess.
 
+The JSON-RPC 2.0 control plane between the Mock Client and `faf-ice-adapter` (methods, notifications, TCP framing, and the end-to-end ICE relay with `IceMsg`) is specified in [`json-rpc-spec.md`](json-rpc-spec.md).
+
 ### Harness Note (Mock Client)
 
 In a production FAF client, GPGNet traffic and ICE signalling may appear as a single
