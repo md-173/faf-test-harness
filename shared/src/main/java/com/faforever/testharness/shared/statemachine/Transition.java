@@ -40,7 +40,7 @@ public class Transition {
      */
     public State transition() {
         try {
-            if (guard == null || !guard.call()) {
+            if (guard == null || guard.call()) {
                 if (action != null) {
                     action.run();
                 }
