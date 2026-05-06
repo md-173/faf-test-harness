@@ -12,9 +12,22 @@ import picocli.CommandLine.ParseResult;
  * variables, CLI flags. Any validation failure surfaces as a {@link CommandLine.ParameterException}
  * listing every issue picocli detected.
  *
+ * <p>This class exposes two layers:
+ *
+ * <ul>
+ *   <li>{@link #newCommandLine(String[], Map)} — builds the {@link CommandLine} with the {@link
+ *       LayeredDefaultProvider} attached. Used by {@code Main} to drive {@link
+ *       CommandLine#execute(String...)}, and by tests that want to exercise the subcommand tree.
+ *   <li>{@link #load(String[], Map)} — parses {@code args} and returns a validated config (or
+ *       {@link Optional#empty()} on {@code --help}/{@code --version}). The headless test seam used
+ *       by all existing {@code ConfigLoader*Test} classes — its contract is stable and must not
+ *       change.
+ * </ul>
+ *
  * <p>If {@code --help} or {@code --version} is supplied, the corresponding usage / version text is
- * printed to to picocli's configured output stream (defaults to System.out) and {@link #load}
- * returns an empty {@link Optional} so the caller can exit cleanly with status {@code 0}.
+ * printed to picocli's configured output stream (defaults to {@link System#out}) and {@link
+ * #load(String[], Map)} returns an empty {@link Optional} so the caller can exit cleanly with
+ * status {@code 0}.
  */
 public final class ConfigLoader {
 
@@ -47,16 +60,7 @@ public final class ConfigLoader {
      */
     public static Optional<MockClientConfig> load(
             final String[] args, final Map<String, String> env) {
-        Path configFile = preParseConfigFlag(args);
-        MockClientCli cli = new MockClientCli();
-        CommandLine commandLine = new CommandLine(cli);
-
-        try {
-            commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
-        } catch (IllegalArgumentException e) {
-            throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
-        }
-
+        CommandLine commandLine = newCommandLine(args, env);
         ParseResult result = commandLine.parseArgs(args);
 
         if (result.isUsageHelpRequested()) {
@@ -68,17 +72,42 @@ public final class ConfigLoader {
             return Optional.empty();
         }
 
+        MockClientCli cli = commandLine.getCommand();
+        return Optional.of(cli.toValidatedConfig(commandLine.getCommandSpec()));
+    }
+
+    /**
+     * Build a fresh {@link CommandLine} around a fresh {@link MockClientCli} root, with the layered
+     * env+file default-value provider attached. The returned instance is suitable both for {@link
+     * CommandLine#parseArgs(String...)} (the headless path used by {@link #load}) and for {@link
+     * CommandLine#execute(String...)} (the production path used by {@code Main}). Each call returns
+     * a new instance — picocli command instances carry parsed state.
+     *
+     * @param args raw command-line arguments (used only for the {@code --config} pre-parse)
+     * @param env environment map consulted by the default-value provider
+     * @return a configured {@link CommandLine} ready for {@code parseArgs} or {@code execute}
+     * @throws CommandLine.ParameterException if the {@code --config} file is supplied but cannot be
+     *     read or parsed
+     */
+    public static CommandLine newCommandLine(final String[] args, final Map<String, String> env) {
+        Path configFile = preParseConfigFlag(args);
+        MockClientCli cli = new MockClientCli();
+        CommandLine commandLine = new CommandLine(cli);
+
         try {
-            return Optional.of(cli.toConfig());
+            commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
         }
+
+        return commandLine;
     }
 
     /**
      * Picocli's {@link picocli.CommandLine.IDefaultValueProvider} is consulted per-option during
      * parsing, so we need the config-file path resolved <em>before</em> picocli starts. Walk {@code
-     * args} once and pull it out.
+     * args} once and pull it out. The pre-parser ignores subcommand boundaries, so {@code --config}
+     * may appear before or after a subcommand name on the command line.
      *
      * @param args raw command-line arguments
      * @return the path supplied to {@code --config}, or {@code null} if absent
