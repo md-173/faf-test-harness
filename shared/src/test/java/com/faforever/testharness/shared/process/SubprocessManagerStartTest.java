@@ -17,9 +17,11 @@ import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.slf4j.LoggerFactory;
 
 /** Exercises {@link SubprocessManager#start} and the read-only accessors it sets up. */
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
 class SubprocessManagerStartTest {
 
     private static final Duration GRACE = Duration.ofSeconds(5);

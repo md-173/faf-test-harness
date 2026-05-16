@@ -8,11 +8,13 @@ import java.time.Duration;
 import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * Exercises {@link SubprocessManager#terminate()} and {@link
  * SubprocessManager#terminate(Duration)}.
  */
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
 class SubprocessManagerTerminateTest {
 
     private static final Duration DEFAULT_GRACE = Duration.ofSeconds(2);
