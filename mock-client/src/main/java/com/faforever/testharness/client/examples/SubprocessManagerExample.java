@@ -59,6 +59,8 @@ public final class SubprocessManagerExample {
      * @throws Exception if subprocess wiring fails
      */
     public static void main(String[] args) throws Exception {
+        // Child mode: invoked by parent with --sleep,
+        // blocks until the parent’s SubprocessManager.terminate() kills this process.
         if (args.length > 0 && "--sleep".equals(args[0])) {
             Thread.sleep(CHILD_SLEEP_MS);
             return;
@@ -68,7 +70,10 @@ public final class SubprocessManagerExample {
 
         // 1. Build argv. Real launchers source the binary path from MockClientConfig and the
         //    remaining flags from lobby messages or runtime port allocation.
-        String javaBin = ProcessHandle.current().info().command().orElseThrow();
+        // command() is Optional — the OS can withhold it under strict security policies,
+        // so fall back to java.home rather than blowing up.
+        String javaBin = ProcessHandle.current().info().command()
+                .orElse(System.getProperty("java.home") + "/bin/java");
         String classpath = System.getProperty("java.class.path");
         ProcessBuilder pb =
                 new ProcessBuilder(

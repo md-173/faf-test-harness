@@ -77,10 +77,15 @@ We do not use `Runtime.exec`, no shell-out, no third-party process libraries.
 
 Mirroring `IceAdapterImpl`:
 
-- **`java` binary**: `ProcessHandle.current().info().command().orElse(...)`
-  → fall back to `${java.home}/bin/java`. Never rely on `PATH`. This
-  guarantees the child runs on the same JRE as the parent (matching what the
-  upstream library set chooses; see `libraries.md`).
+- **`java` binary**: `command()` returns `Optional<String>` because some
+  platforms withhold the path under strict security policies. Use:
+  ```java
+  String javaBin = ProcessHandle.current().info().command()
+          .orElse(System.getProperty("java.home") + "/bin/java");
+  ```
+  Never rely on `PATH` — this guarantees the child runs on the same JRE as
+  the parent (matching what the upstream library set chooses; see
+  `libraries.md`).
 - **Adapter JAR**: configurable via env var `ICE_ADAPTER_JAR` (preferred for
   Docker), falling back to `./faf-ice-adapter.jar` relative to the Mock
   Client's working directory. Path is canonicalised and existence-checked
