@@ -27,7 +27,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 16
+Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 18
 config flags — are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`.
 
