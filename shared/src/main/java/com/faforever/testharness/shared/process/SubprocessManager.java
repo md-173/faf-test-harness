@@ -17,9 +17,14 @@ import org.slf4j.LoggerFactory;
  * Reusable lifecycle wrapper around a started child {@link Process}.
  *
  * <p>Bundles a started process with its {@link ProcessOutputLogger} reader executor so that
- * subprocess launchers (ICE adapter, Mock Game) do not need to repeat output-capture wiring, reader
- * shutdown, and SIGTERM/SIGKILL escalation. Constructed via the static {@link #start} factory; the
- * constructor is private.
+ * subprocess launchers do not need to repeat output-capture wiring, reader shutdown, and
+ * SIGTERM/SIGKILL escalation. Constructed via the static {@link #start} factory; the constructor
+ * is private.
+ *
+ * <p>Intended consumers: the ICE adapter launcher (WBS 3.1.2.2), the Mock Game launcher (WBS
+ * 3.1.2.3), and the N-client test harness orchestrator that spawns multiple Mock Client instances
+ * for 2–4 player simulation (client spec §Advanced Extensions). This is why the class lives in
+ * {@code shared/} rather than {@code mock-client/}.
  *
  * <p>Continuations chained onto {@link #onExit()} run on the JDK's exit-completion thread.
  * Listeners that perform non-trivial work should hand it off to their own executor rather than
