@@ -1,5 +1,7 @@
 package com.faforever.testharness.shared.statemachine;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -9,7 +11,10 @@ public class StateMachine implements EventListener {
     private State state;
 
     /** Timer used for timeouts. */
-    private Timer timeoutTimer;
+    private final Timer timeoutTimer;
+
+    /** Collection of tasks scheduled, kept to cancel them later if necessary. */
+    private final List<TimerTask> timeouts;
 
     /**
      * Initializes the machine with its initial state.
@@ -19,6 +24,7 @@ public class StateMachine implements EventListener {
     public StateMachine(State initialState) {
         this.state = initialState;
         this.timeoutTimer = new Timer();
+        this.timeouts = new ArrayList<>();
     }
 
     /**
@@ -35,9 +41,12 @@ public class StateMachine implements EventListener {
     public synchronized void receiveEvent(Event event) {
         State newState = state.processEvent(event);
         if (newState != state) {
-            // State transition, so cancel any timeouts.
-            timeoutTimer.cancel();
             state = newState;
+            // State transition, so cancel any timeouts.
+            for (var timeout : timeouts) {
+                timeout.cancel();
+            }
+            timeouts.clear();
         }
     }
 
@@ -50,6 +59,7 @@ public class StateMachine implements EventListener {
      */
     public void setTimeout(long millis, State to) {
         UpdateStateTask task = new UpdateStateTask(to);
+        timeouts.add(task);
         timeoutTimer.schedule(task, millis);
     }
 
@@ -65,7 +75,10 @@ public class StateMachine implements EventListener {
         public synchronized void run() {
             state = to;
             // State transition occured, any other timeouts are cancelled.
-            timeoutTimer.cancel();
+            for (var timeout : timeouts) {
+                timeout.cancel();
+            }
+            timeouts.clear();
         }
     }
 }
