@@ -164,9 +164,10 @@ The example below mirrors json-rpc-spec §9 phases A–B.
    cwd   = <session scratch dir>
    redirectErrorStream(false)
 
-3. Process p = pb.start();
-4. ProcessOutputLogger.captureAsync(p, "ICEAdapter")  ← drains both streams.
-5. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
+3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
+   ← starts the process, drains both streams via ProcessOutputLogger,
+     registers in SubprocessRegistry (installs JVM shutdown hook once).
+4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
    max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop.
 6. Once connected: setLobbyInitMode(...) → setIceServers(...).
 7. Spawn mock-game with the same gpgnetPort and lobbyUdpPort.
@@ -238,7 +239,90 @@ mock-game out ──┤       ├─► SLF4J ─► logback CONSOLE  (human)
 mock-game err ──┘       │            logback FILE     (JSONL, per-component file)
 ```
 
-## 5. Health monitoring
+## 5. `SubprocessManager` — lifecycle wrapper (WBS 3.1.2.1)
+
+`SubprocessManager` is the implemented abstraction that bundles §2 (start),
+§4 (capture), §5.1 (exit hook), and §6.2 (forceful teardown) into a single
+object so individual launchers do not repeat the wiring.
+
+Source:
+[`shared/.../process/SubprocessManager.java`](../../shared/src/main/java/com/faforever/testharness/shared/process/SubprocessManager.java).
+
+### 5.1 API
+
+```java
+// Launch — replaces §2.7 steps 3–4
+SubprocessManager ice = SubprocessManager.start(
+        pb,                        // fully-configured ProcessBuilder (§2.7 steps 1–2)
+        "ICEAdapter",              // MDC component tag — appears in every log line
+        Duration.ofSeconds(5));    // grace between SIGTERM and SIGKILL
+
+// Accessors
+long        pid   = ice.pid();
+boolean     alive = ice.isAlive();
+OptionalInt code  = ice.exitCode();   // empty while running
+
+// Exit hook — §6.1 liveness signal
+ice.onExit().thenAccept(exitCode -> {
+    // Emit SubprocessExited FSM event here.
+    // If shuttingDown == false this exit was unexpected — alert the FSM.
+});
+
+// Teardown — §6.2
+ice.terminate();                        // uses the grace passed to start()
+ice.terminate(Duration.ofSeconds(2));   // per-call override
+```
+
+`onExit()` returns an independent copy each call; cancelling or completing one
+copy does not affect internal cleanup or other listeners.
+
+### 5.2 Mapping to spec sections
+
+| Spec concern | How `SubprocessManager` covers it |
+|---|---|
+| §2.5 stream wiring, §4 capture | `start()` calls `ProcessOutputLogger.captureAsync(p, tag)` — no manual wiring needed |
+| §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
+| §6.2 forceful teardown | `terminate([grace])` — SIGTERM → wait → SIGKILL |
+| §6.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
+
+### 5.3 Launcher pattern (ICE adapter and mock-game)
+
+Each launcher (WBS 3.1.2.2, 3.1.2.3) holds one `SubprocessManager` field and
+follows this sequence:
+
+```java
+// 1. Configure ProcessBuilder per §2.6 / §2.8
+ProcessBuilder pb = new ProcessBuilder(argv);
+pb.environment().put("LOG_DIR", "logs/ice-adapter/");
+pb.directory(sessionScratchDir);
+// Note: do NOT call redirectErrorStream — SubprocessManager keeps streams
+//       separate so stderr can be routed to WARN (§4 routing diagram).
+
+// 2. Start — one call replaces §2.7 steps 3–4
+iceAdapter = SubprocessManager.start(pb, "ICEAdapter", Duration.ofSeconds(5));
+LOG.info("ICE adapter started pid={}", iceAdapter.pid());
+
+// 3. Wire unexpected-exit reaction before any await
+AtomicBoolean shuttingDown = new AtomicBoolean();
+iceAdapter.onExit().thenAccept(code -> {
+    if (!shuttingDown.get()) {
+        fsm.post(new SubprocessExited("ICEAdapter", code));
+    }
+});
+
+// 4. Connect-retry loop (§2.7 steps 5–6) — JSON-RPC, out of scope here
+
+// 5. Graceful teardown (§6.1)
+shuttingDown.set(true);   // set BEFORE terminate so the callback sees it
+iceAdapter.terminate();
+iceAdapter.onExit().get(10, TimeUnit.SECONDS);
+```
+
+A runnable self-contained demonstration lives at
+`mock-client/.../examples/SubprocessManagerExample.java`
+(Gradle task `:mock-client:runSubprocessExample`).
+
+## 6. Health monitoring
 
 Two independent signals; either one transitioning to "unhealthy" triggers
 session teardown:
@@ -343,11 +427,12 @@ SIGTERM within milliseconds and have at least the container's grace period
 
 ### 6.4 Process tracking
 
-The controller maintains a registry: `Map<String, ProcessHandle>` keyed by
-component name. On each launch the handle is added; on each `onExit()` it
-is removed. The shutdown hook iterates this registry. It is also exposed
-to log inspection (component name, PID, start time, exit code) for
-post-mortem.
+Implemented as `SubprocessRegistry` (package-private, `shared/.../process/`).
+Internally a `ConcurrentHashMap`-backed `Set<SubprocessManager>`; managers are
+added by `SubprocessManager.start()` and removed automatically when their
+`onExit()` future completes. The JVM shutdown hook (§6.3 layer 1) iterates this
+set and calls `terminate()` on each manager **in parallel**, so total shutdown
+wall-clock time is bounded by the longest single grace rather than their sum.
 
 ## 7. Failure modes
 

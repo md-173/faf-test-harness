@@ -125,10 +125,13 @@ public final class SubprocessManager {
      * Returns a future that completes with the process exit code once the process exits. The reader
      * executor is shut down as part of the completion chain.
      *
+     * <p>Each call returns an independent copy; cancelling or externally completing the returned
+     * future does not affect the internal completion chain or other callers.
+     *
      * @return future resolving to the exit code
      */
     public CompletableFuture<Integer> onExit() {
-        return exitFuture;
+        return exitFuture.copy();
     }
 
     /**

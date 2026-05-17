@@ -2,6 +2,7 @@ package com.faforever.testharness.shared.process;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
@@ -34,6 +35,7 @@ class SubprocessManagerTerminateTest {
         long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
         assertFalse(m.isAlive());
         assertTrue(elapsedMs < TERMINATE_BUDGET_MS, "terminate took too long: " + elapsedMs + "ms");
+        assertNotEquals(0, m.exitCode().getAsInt(), "force-killed process should exit non-zero");
     }
 
     @Test

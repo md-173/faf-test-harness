@@ -1,5 +1,7 @@
 package com.faforever.testharness.shared.process;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,11 +66,26 @@ final class SubprocessRegistry {
     }
 
     private static void shutdownAll() {
+        List<Thread> threads = new ArrayList<>(ACTIVE.size());
         for (SubprocessManager m : ACTIVE) {
+            Thread t =
+                    new Thread(
+                            () -> {
+                                try {
+                                    m.terminate();
+                                } catch (RuntimeException e) {
+                                    LOG.warn("Error terminating child during JVM shutdown", e);
+                                }
+                            },
+                            "subprocess-shutdown-" + m.pid());
+            t.start();
+            threads.add(t);
+        }
+        for (Thread t : threads) {
             try {
-                m.terminate();
-            } catch (RuntimeException e) {
-                LOG.warn("Error terminating child during JVM shutdown", e);
+                t.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
         }
     }
