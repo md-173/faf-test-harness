@@ -88,47 +88,71 @@ public final class MockClientCli implements Callable<Integer> {
             description = "OAuth2 token endpoint used to acquire lobby access tokens.")
     private URI oauthTokenUrl;
 
-    /** OAuth2 client identifier. */
+    /** OAuth2 authorization endpoint used by the one-time refresh-token bootstrap. */
+    @Option(
+            names = "--oauth-auth-endpoint",
+            scope = ScopeType.INHERIT,
+            required = true,
+            description =
+                    "OAuth2 authorization endpoint used by the one-time refresh-token bootstrap.")
+    private URI oauthAuthEndpoint;
+
+    /** Redirect URI registered on the OAuth client. */
+    @Option(
+            names = "--oauth-redirect-uri",
+            scope = ScopeType.INHERIT,
+            required = true,
+            description = "Redirect URI registered on the OAuth client.")
+    private URI oauthRedirectUri;
+
+    /** Space-separated OAuth2 scopes (e.g. "openid offline lobby"). */
+    @Option(
+            names = "--oauth-scopes",
+            scope = ScopeType.INHERIT,
+            required = true,
+            description = "Space-separated OAuth2 scopes (e.g. \"openid offline lobby\").")
+    private String oauthScopes;
+
+    /** OAuth2 public client identifier. */
     @Option(
             names = "--oauth-client-id",
             scope = ScopeType.INHERIT,
             required = true,
-            description = "OAuth2 client identifier.")
+            description = "OAuth2 public client identifier.")
     private String oauthClientId;
 
-    /** OAuth2 client secret. Prefer environment variables or CI secrets. */
+    /** Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated by Hydra on use. */
     @Option(
-            names = "--oauth-client-secret",
+            names = "--oauth-refresh-token",
             scope = ScopeType.INHERIT,
-            description = "OAuth2 client secret. Prefer environment variables or CI secrets.")
-    private String oauthClientSecret;
+            description =
+                    "Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated on "
+                            + "use.")
+    private String oauthRefreshToken;
 
-    /** OAuth username for local/test environments. Prefer environment variables or CI secrets. */
+    /** Path to a file holding the refresh token; rewritten atomically on each rotation. */
     @Option(
-            names = "--oauth-username",
+            names = "--oauth-refresh-token-file",
             scope = ScopeType.INHERIT,
-            description = "OAuth username for local/test environments.")
-    private String oauthUsername;
+            description =
+                    "Path to a file holding the refresh token; rewritten atomically on each "
+                            + "rotation.")
+    private Path oauthRefreshTokenFile;
 
-    /** OAuth password for local/test environments. Prefer environment variables or CI secrets. */
-    @Option(
-            names = "--oauth-password",
-            scope = ScopeType.INHERIT,
-            description = "OAuth password for local/test environments. Prefer env or CI secrets.")
-    private String oauthPassword;
-
-    /** Pre-obtained OAuth access token. Prefer environment variables or CI secrets. */
+    /** Pre-obtained OAuth access token (auxiliary/bootstrap output). */
     @Option(
             names = "--oauth-access-token",
             scope = ScopeType.INHERIT,
-            description = "Pre-obtained OAuth access token. Prefer env or CI secrets.")
+            description = "Pre-obtained OAuth access token (auxiliary/bootstrap output).")
     private String oauthAccessToken;
 
-    /** Path to a file containing a pre-obtained OAuth access token. */
+    /** Path to a file containing a pre-obtained OAuth access token (auxiliary/bootstrap output). */
     @Option(
             names = "--oauth-token-file",
             scope = ScopeType.INHERIT,
-            description = "Path to a file containing a pre-obtained OAuth access token.")
+            description =
+                    "Path to a file containing a pre-obtained OAuth access token "
+                            + "(auxiliary/bootstrap output).")
     private Path oauthTokenFile;
 
     /** Stable hardware identifier sent in the lobby auth message. */
@@ -216,10 +240,12 @@ public final class MockClientCli implements Callable<Integer> {
         return new MockClientConfig(
                 lobbyWebSocketUrl,
                 oauthTokenUrl,
+                oauthAuthEndpoint,
+                oauthRedirectUri,
+                oauthScopes,
                 oauthClientId,
-                oauthClientSecret,
-                oauthUsername,
-                oauthPassword,
+                oauthRefreshToken,
+                oauthRefreshTokenFile,
                 oauthAccessToken,
                 oauthTokenFile,
                 uniqueId,

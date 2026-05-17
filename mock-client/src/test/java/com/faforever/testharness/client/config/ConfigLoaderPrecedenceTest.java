@@ -78,26 +78,7 @@ final class ConfigLoaderPrecedenceTest {
 
     @Test
     void cliBeatsAllOtherLayersForUriField(@TempDir final Path tempDir) throws Exception {
-        String json =
-                """
-                {
-                  "lobbyWebSocketUrl":     "%s",
-                  "oauthTokenUrl":         "%s",
-                  "oauthClientId":         "%s",
-                  "oauthAccessToken":      "%s",
-                  "uniqueId":              "%s",
-                  "iceAdapterBinaryPath":  "%s",
-                  "mockGameBinaryPath":    "%s"
-                }
-                """
-                        .formatted(
-                                URL_FROM_FILE,
-                                TestFixtures.OAUTH_TOKEN_URL,
-                                TestFixtures.OAUTH_CLIENT_ID,
-                                TestFixtures.OAUTH_ACCESS_TOKEN,
-                                TestFixtures.UNIQUE_ID,
-                                TestFixtures.ICE_ADAPTER_BIN,
-                                TestFixtures.MOCK_GAME_BIN);
+        String json = jsonWithLobbyUrl(URL_FROM_FILE.toString());
         Path file = TestFixtures.writeJson(tempDir, json);
 
         Map<String, String> env = new LinkedHashMap<>();
@@ -115,26 +96,7 @@ final class ConfigLoaderPrecedenceTest {
 
     @Test
     void envBeatsFileForUriField(@TempDir final Path tempDir) throws Exception {
-        String json =
-                """
-                {
-                  "lobbyWebSocketUrl":     "%s",
-                  "oauthTokenUrl":         "%s",
-                  "oauthClientId":         "%s",
-                  "oauthAccessToken":      "%s",
-                  "uniqueId":              "%s",
-                  "iceAdapterBinaryPath":  "%s",
-                  "mockGameBinaryPath":    "%s"
-                }
-                """
-                        .formatted(
-                                URL_FROM_FILE,
-                                TestFixtures.OAUTH_TOKEN_URL,
-                                TestFixtures.OAUTH_CLIENT_ID,
-                                TestFixtures.OAUTH_ACCESS_TOKEN,
-                                TestFixtures.UNIQUE_ID,
-                                TestFixtures.ICE_ADAPTER_BIN,
-                                TestFixtures.MOCK_GAME_BIN);
+        String json = jsonWithLobbyUrl(URL_FROM_FILE.toString());
         Path file = TestFixtures.writeJson(tempDir, json);
 
         Map<String, String> env = new LinkedHashMap<>();
@@ -152,8 +114,11 @@ final class ConfigLoaderPrecedenceTest {
                 {
                   "lobbyWebSocketUrl":     "%s",
                   "oauthTokenUrl":         "%s",
+                  "oauthAuthEndpoint":     "%s",
+                  "oauthRedirectUri":      "%s",
+                  "oauthScopes":           "%s",
                   "oauthClientId":         "%s",
-                  "oauthAccessToken":      "%s",
+                  "oauthRefreshToken":     "%s",
                   "uniqueId":              "%s",
                   "iceAdapterBinaryPath":  "%s",
                   "mockGameBinaryPath":    "%s",
@@ -163,12 +128,44 @@ final class ConfigLoaderPrecedenceTest {
                 .formatted(
                         TestFixtures.LOBBY_URL,
                         TestFixtures.OAUTH_TOKEN_URL,
+                        TestFixtures.OAUTH_AUTH_ENDPOINT,
+                        TestFixtures.OAUTH_REDIRECT_URI,
+                        TestFixtures.OAUTH_SCOPES,
                         TestFixtures.OAUTH_CLIENT_ID,
-                        TestFixtures.OAUTH_ACCESS_TOKEN,
+                        TestFixtures.OAUTH_REFRESH_TOKEN,
                         TestFixtures.UNIQUE_ID,
                         TestFixtures.ICE_ADAPTER_BIN,
                         TestFixtures.MOCK_GAME_BIN,
                         rpcPort);
+    }
+
+    /** Build a JSON config with every required field, varying only the lobby WebSocket URL. */
+    private static String jsonWithLobbyUrl(final String lobbyUrl) {
+        return """
+                {
+                  "lobbyWebSocketUrl":     "%s",
+                  "oauthTokenUrl":         "%s",
+                  "oauthAuthEndpoint":     "%s",
+                  "oauthRedirectUri":      "%s",
+                  "oauthScopes":           "%s",
+                  "oauthClientId":         "%s",
+                  "oauthRefreshToken":     "%s",
+                  "uniqueId":              "%s",
+                  "iceAdapterBinaryPath":  "%s",
+                  "mockGameBinaryPath":    "%s"
+                }
+                """
+                .formatted(
+                        lobbyUrl,
+                        TestFixtures.OAUTH_TOKEN_URL,
+                        TestFixtures.OAUTH_AUTH_ENDPOINT,
+                        TestFixtures.OAUTH_REDIRECT_URI,
+                        TestFixtures.OAUTH_SCOPES,
+                        TestFixtures.OAUTH_CLIENT_ID,
+                        TestFixtures.OAUTH_REFRESH_TOKEN,
+                        TestFixtures.UNIQUE_ID,
+                        TestFixtures.ICE_ADAPTER_BIN,
+                        TestFixtures.MOCK_GAME_BIN);
     }
 
     private static java.util.Optional<MockClientConfig> loadWithFile(final Path file) {
