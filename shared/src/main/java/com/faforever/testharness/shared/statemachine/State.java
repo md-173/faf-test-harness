@@ -1,6 +1,8 @@
 package com.faforever.testharness.shared.statemachine;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.Callable;
 
 /** Represents a state. */
@@ -9,7 +11,13 @@ public class State {
     private final String name;
 
     /** Each type of event drives one transition. */
-    private HashMap<Class<? extends Event>, Transition> transitions;
+    private final HashMap<Class<? extends Event>, Transition> transitions;
+
+    /** A set of hooks to run when this state is entered. */
+    private final List<Runnable> entryHooks;
+
+    /** A set of hooks to run when this state is exited. */
+    private final List<Runnable> exitHooks;
 
     /**
      * Initializes the state.
@@ -19,6 +27,8 @@ public class State {
     public State(String name) {
         this.name = name;
         this.transitions = new HashMap<>();
+        this.entryHooks = new ArrayList<>();
+        this.exitHooks = new ArrayList<>();
     }
 
     /**
@@ -28,6 +38,38 @@ public class State {
      */
     public String getName() {
         return name;
+    }
+
+    /**
+     * Register an action to run when this state is entered.
+     *
+     * @param action the action to run.
+     */
+    public void onEntry(Runnable action) {
+        entryHooks.add(action);
+    }
+
+    /**
+     * Register an action to run when this state is exited.
+     *
+     * @param action the action to run.
+     */
+    public void onExit(Runnable action) {
+        exitHooks.add(action);
+    }
+
+    /** Perform all entry actions. */
+    public void entry() {
+        for (var hook : entryHooks) {
+            hook.run();
+        }
+    }
+
+    /** Perform all exit actions. */
+    public void exit() {
+        for (var hook : exitHooks) {
+            hook.run();
+        }
     }
 
     /**

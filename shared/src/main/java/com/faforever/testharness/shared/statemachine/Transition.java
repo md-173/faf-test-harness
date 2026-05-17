@@ -44,6 +44,9 @@ public class Transition {
                 if (action != null) {
                     action.run();
                 }
+                // Run any registered hooks.
+                from.exit();
+                to.entry();
                 return to;
             }
             // No transition, returns old state.
