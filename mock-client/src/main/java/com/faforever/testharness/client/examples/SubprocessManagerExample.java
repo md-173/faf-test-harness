@@ -72,8 +72,11 @@ public final class SubprocessManagerExample {
         //    remaining flags from lobby messages or runtime port allocation.
         // command() is Optional — the OS can withhold it under strict security policies,
         // so fall back to java.home rather than blowing up.
-        String javaBin = ProcessHandle.current().info().command()
-                .orElse(System.getProperty("java.home") + "/bin/java");
+        String javaBin =
+                ProcessHandle.current()
+                        .info()
+                        .command()
+                        .orElse(System.getProperty("java.home") + "/bin/java");
         String classpath = System.getProperty("java.class.path");
         ProcessBuilder pb =
                 new ProcessBuilder(

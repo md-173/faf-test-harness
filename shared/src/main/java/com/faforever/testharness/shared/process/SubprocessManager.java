@@ -18,8 +18,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Bundles a started process with its {@link ProcessOutputLogger} reader executor so that
  * subprocess launchers do not need to repeat output-capture wiring, reader shutdown, and
- * SIGTERM/SIGKILL escalation. Constructed via the static {@link #start} factory; the constructor
- * is private.
+ * SIGTERM/SIGKILL escalation. Constructed via the static {@link #start} factory; the constructor is
+ * private.
  *
  * <p>Intended consumers: the ICE adapter launcher (WBS 3.1.2.2), the Mock Game launcher (WBS
  * 3.1.2.3), and the N-client test harness orchestrator that spawns multiple Mock Client instances
