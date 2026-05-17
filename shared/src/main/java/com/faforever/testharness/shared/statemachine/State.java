@@ -8,8 +8,8 @@ public class State {
     /** A unique name for this state. */
     private final String name;
 
-    /** Each event drives one transition. */
-    private HashMap<Event, Transition> transitions;
+    /** Each type of event drives one transition. */
+    private HashMap<Class<? extends Event>, Transition> transitions;
 
     /**
      * Initializes the state.
@@ -36,7 +36,7 @@ public class State {
      * @param event trigger for transition to start.
      * @param other new state to go to.
      */
-    public void registerTransition(Event event, State other) {
+    public void registerTransition(Class<? extends Event> event, State other) {
         registerTransition(event, other, null, null);
     }
 
@@ -50,7 +50,7 @@ public class State {
      * @param guard must be true for transition to happen.
      */
     public void registerTransition(
-            Event event, State other, Runnable action, Callable<Boolean> guard) {
+            Class<? extends Event> event, State other, Runnable action, Callable<Boolean> guard) {
         Transition t = new Transition(this, other, action, guard);
         transitions.put(event, t);
     }
@@ -62,7 +62,7 @@ public class State {
      * @return the new state, or potentially itself if no transition occurred.
      */
     public State processEvent(Event event) {
-        Transition t = transitions.get(event);
+        Transition t = transitions.get(event.getClass());
         if (t != null) {
             return t.transition();
         } else {

@@ -11,13 +11,13 @@ import org.junit.jupiter.api.Test;
  */
 @SuppressWarnings("WhitespaceAround")
 final class StateMachineTransitionsTest {
-    private final class IncomingCarDetected extends Event {}
+    private final class IncomingCarDetected implements Event {}
 
-    private final class IncomingCarLeft extends Event {}
+    private final class IncomingCarLeft implements Event {}
 
-    private final class CrossingCarDetected extends Event {}
+    private final class CrossingCarDetected implements Event {}
 
-    private final class CrossingCarLeft extends Event {}
+    private final class CrossingCarLeft implements Event {}
 
     private boolean actionHappened = false;
     private int carsCrossing;
@@ -30,8 +30,8 @@ final class StateMachineTransitionsTest {
         Event incomingCar = new IncomingCarDetected();
         Event carLeft = new CrossingCarLeft();
 
-        red.registerTransition(incomingCar, amber);
-        amber.registerTransition(carLeft, green);
+        red.registerTransition(IncomingCarDetected.class, amber);
+        amber.registerTransition(CrossingCarLeft.class, green);
         StateMachine machine = new StateMachine(red);
         assertTrue(machine.getState() == red);
 
@@ -60,7 +60,7 @@ final class StateMachineTransitionsTest {
 
         actionHappened = false;
 
-        red.registerTransition(event, green, () -> actionHappened = true, null);
+        red.registerTransition(IncomingCarDetected.class, green, () -> actionHappened = true, null);
         StateMachine machine = new StateMachine(red);
         assertTrue(machine.getState() == red);
         assertTrue(!actionHappened);
@@ -81,9 +81,9 @@ final class StateMachineTransitionsTest {
         Event incomingCarLeft = new IncomingCarLeft();
 
         // Light turns amber when a car comes from intersecting road.
-        green.registerTransition(crossingCarWaiting, amber);
+        green.registerTransition(CrossingCarDetected.class, amber);
         // Turn from amber to red only if there's no cars currently in the road.
-        amber.registerTransition(incomingCarLeft, red, null, () -> carsCrossing == 0);
+        amber.registerTransition(IncomingCarLeft.class, red, null, () -> carsCrossing == 0);
 
         StateMachine machine = new StateMachine(green);
 

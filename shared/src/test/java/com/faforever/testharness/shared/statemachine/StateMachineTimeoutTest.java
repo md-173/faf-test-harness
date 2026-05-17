@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  */
 @SuppressWarnings("WhitespaceAround")
 final class StateMachineTimeoutTest {
-    private final class AToB extends Event {}
+    private final class AToB implements Event {}
 
     @Test
     void timeoutWorks() {
@@ -19,7 +19,7 @@ final class StateMachineTimeoutTest {
         State c = new State("C");
         Event aToB = new AToB();
 
-        a.registerTransition(aToB, b);
+        a.registerTransition(AToB.class, b);
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
@@ -39,7 +39,7 @@ final class StateMachineTimeoutTest {
         State c = new State("C");
         Event aToB = new AToB();
 
-        a.registerTransition(aToB, b);
+        a.registerTransition(AToB.class, b);
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
@@ -73,7 +73,7 @@ final class StateMachineTimeoutTest {
         State c = new State("C");
         Event aToB = new AToB();
 
-        a.registerTransition(aToB, b);
+        a.registerTransition(AToB.class, b);
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
