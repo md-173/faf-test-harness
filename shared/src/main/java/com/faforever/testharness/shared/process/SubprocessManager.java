@@ -74,12 +74,18 @@ public final class SubprocessManager {
      * <p>The caller owns {@code pb}'s configuration (argv, working directory, environment,
      * redirection). This method does not modify {@code pb}.
      *
+     * <p><b>Side effects.</b> The first successful call across the JVM installs a shutdown hook
+     * that terminates all currently-active managers when the JVM exits. Every successful call also
+     * enrols the returned manager in a JVM-wide registry; the manager deregisters itself
+     * automatically when its process exits.
+     *
      * @param pb fully-configured ProcessBuilder for the child
      * @param componentTag MDC component label applied to every captured log line; must be non-blank
      * @param terminateGrace per-call default grace between SIGTERM and SIGKILL used by the no-arg
      *     {@link #terminate()}; must be positive
      * @return a manager wrapping the started process
      * @throws IOException if {@link ProcessBuilder#start()} fails
+     * @throws IllegalStateException if the JVM is already shutting down when this is called
      */
     public static SubprocessManager start(
             final ProcessBuilder pb, final String componentTag, final Duration terminateGrace)
@@ -102,6 +108,14 @@ public final class SubprocessManager {
         } catch (IllegalStateException e) {
             manager.terminate();
             throw e;
+        }
+        // The constructor's onExit chain calls deregister(this), but for a fast-exiting child
+        // that chain may fire before register() above (synchronously inside the constructor if
+        // the process already exited, or concurrently on the reaper thread). Either way the
+        // deregister becomes a no-op and the just-added entry stays in ACTIVE forever. Drop it
+        // now if the process is already gone; deregister is idempotent so a late lambda is fine.
+        if (!process.isAlive()) {
+            SubprocessRegistry.deregister(manager);
         }
         return manager;
     }

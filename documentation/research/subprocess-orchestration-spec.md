@@ -334,13 +334,18 @@ session teardown:
 
 ### 6.1 Process liveness
 
-`process.onExit()` is registered immediately after `start()`. The completion
-handler:
+`SubprocessManager.onExit()` exposes the JDK process-exit future. Each
+launcher chains a completion handler on it that:
 
 1. logs the exit code and elapsed runtime,
 2. emits a `SubprocessExited` event into the FSM,
 3. for the adapter: closes the JSON-RPC socket so the protocol layer
    surfaces a `ChannelClosed` rather than hanging.
+
+`SubprocessManager` itself performs none of these — they are launcher
+responsibilities. The manager only shuts down its reader executor and
+deregisters from `SubprocessRegistry` when the process exits; everything
+else is wired by the consuming launcher (see §5.3).
 
 Crashes are observed within milliseconds; no polling required for liveness.
 

@@ -60,7 +60,7 @@ public final class SubprocessManagerExample {
      */
     public static void main(String[] args) throws Exception {
         // Child mode: invoked by parent with --sleep,
-        // blocks until the parent’s SubprocessManager.terminate() kills this process.
+        // blocks until the parent's SubprocessManager.terminate() kills this process.
         if (args.length > 0 && "--sleep".equals(args[0])) {
             Thread.sleep(CHILD_SLEEP_MS);
             return;

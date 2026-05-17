@@ -50,6 +50,16 @@ final class SubprocessRegistry {
         ACTIVE.remove(manager);
     }
 
+    /**
+     * Visible for testing — returns whether {@code manager} is currently tracked.
+     *
+     * @param manager the manager to look up
+     * @return {@code true} if the manager is currently in the active set
+     */
+    static boolean contains(final SubprocessManager manager) {
+        return ACTIVE.contains(manager);
+    }
+
     private static void installHookOnce() {
         if (HOOK_INSTALLED.compareAndSet(false, true)) {
             try {

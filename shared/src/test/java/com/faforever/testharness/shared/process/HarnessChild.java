@@ -3,7 +3,7 @@ package com.faforever.testharness.shared.process;
 import java.time.Duration;
 
 /**
- * Fixture main class for {@link SubprocessManagerShutdownIT}. Spawns a long-running grandchild
+ * Fixture main class for {@link SubprocessManagerShutdownTest}. Spawns a long-running grandchild
  * through {@link SubprocessManager} (so the JVM shutdown hook is installed), prints the
  * grandchild's PID, and parks until killed.
  */

@@ -18,12 +18,14 @@ import org.junit.jupiter.api.condition.OS;
 
 /**
  * Verifies that the JVM shutdown hook installed by {@link SubprocessRegistry} reaps active children
- * when the parent JVM receives SIGTERM. Linux-only — relies on POSIX signal semantics for {@code
+ * when the parent JVM receives SIGTERM. Forks a JVM and polls {@code /proc} for the grandchild;
+ * slower than the surrounding unit tests (~5 s) but kept in the same source set rather than split
+ * into a separate integration-test task. Linux-only — relies on POSIX signal semantics for {@code
  * Process.destroy()}. On Windows {@code destroy()} is TerminateProcess, which bypasses Java
  * shutdown hooks entirely. Runs under WSL on Windows dev boxes.
  */
 @EnabledOnOs(OS.LINUX)
-class SubprocessManagerShutdownIT {
+class SubprocessManagerShutdownTest {
 
     private static final String PID_PREFIX = "GRANDCHILD_PID=";
     private static final long PID_WAIT_MS = 10_000;

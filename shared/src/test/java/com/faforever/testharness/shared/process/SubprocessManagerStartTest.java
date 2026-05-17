@@ -2,6 +2,7 @@ package com.faforever.testharness.shared.process;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -12,7 +13,10 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
 import java.util.OptionalInt;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -106,6 +110,81 @@ class SubprocessManagerStartTest {
                         "overlay-value".equals(e.getMessage())
                                 && TAG.equals(
                                         e.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY)));
+    }
+
+    /**
+     * Mirrors the launcher pattern documented in spec §5.3 and {@code SubprocessManagerExample}: an
+     * unexpected exit (no {@code shuttingDown} flag set) should reach the onExit callback with the
+     * real exit code so the launcher can post a {@code SubprocessExited} FSM event.
+     */
+    @Test
+    void unexpectedExitDeliversCodeToOnExitCallback() throws Exception {
+        AtomicBoolean shuttingDown = new AtomicBoolean();
+        AtomicReference<Integer> unexpectedCode = new AtomicReference<>();
+        CountDownLatch callbackRan = new CountDownLatch(1);
+
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.testChild("exit", "7"), TAG, GRACE);
+        m.onExit()
+                .thenAccept(
+                        code -> {
+                            if (!shuttingDown.get()) {
+                                unexpectedCode.set(code);
+                            }
+                            callbackRan.countDown();
+                        });
+
+        assertTrue(
+                callbackRan.await(AWAIT_SECONDS, TimeUnit.SECONDS), "onExit callback never fired");
+        assertEquals(Integer.valueOf(7), unexpectedCode.get());
+    }
+
+    /**
+     * Counterpart to {@link #unexpectedExitDeliversCodeToOnExitCallback()}: when the launcher sets
+     * {@code shuttingDown} before {@link SubprocessManager#terminate()}, the callback runs but the
+     * exit is treated as expected, so the FSM is not notified.
+     */
+    @Test
+    void expectedShutdownSuppressesUnexpectedHandling() throws Exception {
+        AtomicBoolean shuttingDown = new AtomicBoolean();
+        AtomicReference<Integer> unexpectedCode = new AtomicReference<>();
+        CountDownLatch callbackRan = new CountDownLatch(1);
+
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.testChild("sleep", "60000"), TAG, GRACE);
+        m.onExit()
+                .thenAccept(
+                        code -> {
+                            if (!shuttingDown.get()) {
+                                unexpectedCode.set(code);
+                            }
+                            callbackRan.countDown();
+                        });
+
+        shuttingDown.set(true);
+        m.terminate();
+        assertTrue(
+                callbackRan.await(AWAIT_SECONDS, TimeUnit.SECONDS), "onExit callback never fired");
+        assertNull(unexpectedCode.get(), "expected shutdown should not be flagged as unexpected");
+    }
+
+    /**
+     * Regression for the race where a fast-exiting child's deregister callback fires before {@link
+     * SubprocessManager#start} adds the manager to {@link SubprocessRegistry}, leaving the manager
+     * pinned in the active set for the JVM lifetime. {@code /bin/true} is the most-aggressive
+     * trigger and is always present on the supported Linux substrate (spec §1.1); the assertion
+     * remains valid on any platform that ships the binary.
+     */
+    @Test
+    void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
+        ProcessBuilder pb = new ProcessBuilder("/bin/true");
+        SubprocessManager m = SubprocessManager.start(pb, TAG, GRACE);
+        m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
+        // Give any racing deregister on the reaper thread time to settle.
+        Thread.sleep(50);
+        assertFalse(
+                SubprocessRegistry.contains(m),
+                "manager leaked into SubprocessRegistry.ACTIVE after process exited");
     }
 
     private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {

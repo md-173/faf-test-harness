@@ -19,7 +19,13 @@ final class TestSupport {
 
     /** Builds a ProcessBuilder that re-invokes the current JVM running {@code mainClass}. */
     static ProcessBuilder forMain(Class<?> mainClass, String... mainArgs) {
-        String javaBin = ProcessHandle.current().info().command().orElseThrow();
+        // Mirror spec §2.2: command() can be empty on locked-down platforms; fall back to
+        // ${java.home}/bin/java so the spec's canonical pattern is the one example everywhere.
+        String javaBin =
+                ProcessHandle.current()
+                        .info()
+                        .command()
+                        .orElse(System.getProperty("java.home") + "/bin/java");
         String classpath = System.getProperty("java.class.path");
         List<String> cmd = new ArrayList<>();
         cmd.add(javaBin);
