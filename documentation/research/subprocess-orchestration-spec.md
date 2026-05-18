@@ -31,7 +31,7 @@ spawns subprocesses. The Mock Client is the sole supervisor of both.
 ### 1.1 Target environment
 
 This spec **targets Linux** as the runtime substrate. The Java code itself
-is OS-portable, but the orphan-prevention layer (§6.3) relies on Linux
+is OS-portable, but the orphan-prevention layer (§7.3) relies on Linux
 primitives (`prctl(PR_SET_PDEATHSIG)` via `util-linux`'s `setpriv`, plus
 `setsid` for process-group cleanup) that have no Windows or macOS
 equivalent.
@@ -43,7 +43,7 @@ substrate. It is the canonical run target for three reasons:
    `tc`/`netem`/`iptables`, which only exist on Linux. Docker gives every
    contributor — including macOS and Windows developers — the same kernel
    tooling without requiring WSL2 or per-developer VMs.
-2. **PID 1 + zombie reaping.** The orphan-prevention plan in §6.3 depends
+2. **PID 1 + zombie reaping.** The orphan-prevention plan in §7.3 depends
    on tini at PID 1 (`docker run --init` / compose `init: true`). The
    container is the cleanest way to guarantee a known PID 1.
 3. **Reproducible topology.** Multi-peer simulation (2–4 players) needs
@@ -77,10 +77,15 @@ We do not use `Runtime.exec`, no shell-out, no third-party process libraries.
 
 Mirroring `IceAdapterImpl`:
 
-- **`java` binary**: `ProcessHandle.current().info().command().orElse(...)`
-  → fall back to `${java.home}/bin/java`. Never rely on `PATH`. This
-  guarantees the child runs on the same JRE as the parent (matching what the
-  upstream library set chooses; see `libraries.md`).
+- **`java` binary**: `command()` returns `Optional<String>` because some
+  platforms withhold the path under strict security policies. Use:
+  ```java
+  String javaBin = ProcessHandle.current().info().command()
+          .orElse(System.getProperty("java.home") + "/bin/java");
+  ```
+  Never rely on `PATH` — this guarantees the child runs on the same JRE as
+  the parent (matching what the upstream library set chooses; see
+  `libraries.md`).
 - **Adapter JAR**: configurable via env var `ICE_ADAPTER_JAR` (preferred for
   Docker), falling back to `./faf-ice-adapter.jar` relative to the Mock
   Client's working directory. Path is canonicalised and existence-checked
@@ -164,9 +169,10 @@ The example below mirrors json-rpc-spec §9 phases A–B.
    cwd   = <session scratch dir>
    redirectErrorStream(false)
 
-3. Process p = pb.start();
-4. ProcessOutputLogger.captureAsync(p, "ICEAdapter")  ← drains both streams.
-5. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
+3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
+   ← starts the process, drains both streams via ProcessOutputLogger,
+     registers in SubprocessRegistry (installs JVM shutdown hook once).
+4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
    max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop.
 6. Once connected: setLobbyInitMode(...) → setIceServers(...).
 7. Spawn mock-game with the same gpgnetPort and lobbyUdpPort.
@@ -238,24 +244,112 @@ mock-game out ──┤       ├─► SLF4J ─► logback CONSOLE  (human)
 mock-game err ──┘       │            logback FILE     (JSONL, per-component file)
 ```
 
-## 5. Health monitoring
+## 5. `SubprocessManager` — lifecycle wrapper (WBS 3.1.2.1)
+
+`SubprocessManager` is the implemented abstraction that bundles §2 (start),
+§4 (capture), §6.1 (exit hook), and §7.2 (forceful teardown) into a single
+object so individual launchers do not repeat the wiring.
+
+Source:
+[`shared/.../process/SubprocessManager.java`](../../shared/src/main/java/com/faforever/testharness/shared/process/SubprocessManager.java).
+
+### 5.1 API
+
+```java
+// Launch — replaces §2.7 steps 3–4
+SubprocessManager ice = SubprocessManager.start(
+        pb,                        // fully-configured ProcessBuilder (§2.7 steps 1–2)
+        "ICEAdapter",              // MDC component tag — appears in every log line
+        Duration.ofSeconds(5));    // grace between SIGTERM and SIGKILL
+
+// Accessors
+long        pid   = ice.pid();
+boolean     alive = ice.isAlive();
+OptionalInt code  = ice.exitCode();   // empty while running
+
+// Exit hook — §6.1 liveness signal
+ice.onExit().thenAccept(exitCode -> {
+    // Emit SubprocessExited FSM event here.
+    // If shuttingDown == false this exit was unexpected — alert the FSM.
+});
+
+// Teardown — §7.2
+ice.terminate();                        // uses the grace passed to start()
+ice.terminate(Duration.ofSeconds(2));   // per-call override
+```
+
+`onExit()` returns an independent copy each call; cancelling or completing one
+copy does not affect internal cleanup or other listeners.
+
+### 5.2 Mapping to spec sections
+
+| Spec concern | How `SubprocessManager` covers it |
+|---|---|
+| §2.5 stream wiring, §4 capture | `start()` calls `ProcessOutputLogger.captureAsync(p, tag)` — no manual wiring needed |
+| §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
+| §7.2 forceful teardown | `terminate([grace])` — SIGTERM → wait → SIGKILL |
+| §7.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
+
+### 5.3 Launcher pattern (ICE adapter and mock-game)
+
+Each launcher (WBS 3.1.2.2, 3.1.2.3) holds one `SubprocessManager` field and
+follows this sequence:
+
+```java
+// 1. Configure ProcessBuilder per §2.6 / §2.8
+ProcessBuilder pb = new ProcessBuilder(argv);
+pb.environment().put("LOG_DIR", "logs/ice-adapter/");
+pb.directory(sessionScratchDir);
+// Note: do NOT call redirectErrorStream — SubprocessManager keeps streams
+//       separate so stderr can be routed to WARN (§4 routing diagram).
+
+// 2. Start — one call replaces §2.7 steps 3–4
+iceAdapter = SubprocessManager.start(pb, "ICEAdapter", Duration.ofSeconds(5));
+LOG.info("ICE adapter started pid={}", iceAdapter.pid());
+
+// 3. Wire unexpected-exit reaction before any await
+AtomicBoolean shuttingDown = new AtomicBoolean();
+iceAdapter.onExit().thenAccept(code -> {
+    if (!shuttingDown.get()) {
+        fsm.post(new SubprocessExited("ICEAdapter", code));
+    }
+});
+
+// 4. Connect-retry loop (§2.7 steps 5–6) — JSON-RPC, out of scope here
+
+// 5. Graceful teardown (§7.1)
+shuttingDown.set(true);   // set BEFORE terminate so the callback sees it
+iceAdapter.terminate();
+iceAdapter.onExit().get(10, TimeUnit.SECONDS);
+```
+
+A runnable self-contained demonstration lives at
+`mock-client/.../examples/SubprocessManagerExample.java`
+(Gradle task `:mock-client:runSubprocessExample`).
+
+## 6. Health monitoring
 
 Two independent signals; either one transitioning to "unhealthy" triggers
 session teardown:
 
-### 5.1 Process liveness
+### 6.1 Process liveness
 
-`process.onExit()` is registered immediately after `start()`. The completion
-handler:
+`SubprocessManager.onExit()` exposes the JDK process-exit future. Each
+launcher chains a completion handler on it that:
 
 1. logs the exit code and elapsed runtime,
 2. emits a `SubprocessExited` event into the FSM,
 3. for the adapter: closes the JSON-RPC socket so the protocol layer
    surfaces a `ChannelClosed` rather than hanging.
 
+`SubprocessManager` itself performs none of these — they are launcher
+responsibilities. The manager only shuts down its reader executor and
+deregisters from `SubprocessRegistry` when the process exits; everything
+else is wired by the consuming launcher (see §5.3).
+
 Crashes are observed within milliseconds; no polling required for liveness.
 
-### 5.2 Hung-process detection (RPC-level health check)
+### 6.2 Hung-process detection (RPC-level health check)
 
 A pure liveness check is insufficient — the adapter can be alive but stuck
 (e.g. internal STUN call deadlock). The Mock Client polls
@@ -266,18 +360,18 @@ A pure liveness check is insufficient — the adapter can be alive but stuck
 | Response ≤ 2 s | OK, log Status at DEBUG. |
 | Timeout | First miss: log WARN. Second consecutive miss: declare adapter hung, escalate to teardown. |
 | RPC error | Log WARN with code; treat as miss. |
-| Socket EOF | Adapter is dead — handled by §5.1 path. |
+| Socket EOF | Adapter is dead — handled by §6.1 path. |
 
 `mock-game` has no equivalent introspection RPC; its health is inferred
 from (a) liveness via `onExit()`, and (b) GPGNet `GameState` frames
 arriving via the adapter at expected cadence (FSM-driven, not implemented
 in the controller).
 
-## 6. Teardown strategy
+## 7. Teardown strategy
 
 The teardown sequence has three layers, each a fallback for the previous.
 
-### 6.1 Graceful (preferred path, json-rpc-spec §9 phase K)
+### 7.1 Graceful (preferred path, json-rpc-spec §9 phase K)
 
 ```text
 1. MC → adapter: disconnectFromPeer(id) per peer  (best-effort)
@@ -288,7 +382,7 @@ The teardown sequence has three layers, each a fallback for the previous.
 5. Wait up to 5 s for mock-game onExit().
 ```
 
-### 6.2 Forceful (any graceful step fails or times out)
+### 7.2 Forceful (any graceful step fails or times out)
 
 ```text
 6. process.destroy()  — POSIX SIGTERM. Wait up to 3 s.
@@ -298,7 +392,7 @@ The teardown sequence has three layers, each a fallback for the previous.
 
 Total bounded teardown ≤ ~15 s per child.
 
-### 6.3 Catastrophic (parent dying)
+### 7.3 Catastrophic (parent dying)
 
 This is the orphan-prevention layer. It is the failure mode the acceptance
 criterion specifically calls out: **"forcefully killing the parent process
@@ -314,7 +408,7 @@ host would need to replicate).
 
 | Layer | Mechanism | Covers | Provided by |
 |---|---|---|---|
-| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §6.1 → §6.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) |
+| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §7.1 → §7.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) |
 | 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) |
 | 3. Init / PID 1 | tini as PID 1 (`docker run --init` / compose `init: true`) — reaps zombies, forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | Docker workspace |
 | 4. Process-group cleanup | Children launched via `setsid` so they are in their own session/process group; the init broadcasts SIGTERM to the group on container stop | Container `docker stop` after grace period | `util-linux` (`setsid`) + Docker workspace |
@@ -341,37 +435,43 @@ Net effect: regardless of how the harness JVM dies, the children receive
 SIGTERM within milliseconds and have at least the container's grace period
 (default 10 s, configurable) to exit cleanly before SIGKILL.
 
-### 6.4 Process tracking
+### 7.4 Process tracking
 
-The controller maintains a registry: `Map<String, ProcessHandle>` keyed by
-component name. On each launch the handle is added; on each `onExit()` it
-is removed. The shutdown hook iterates this registry. It is also exposed
-to log inspection (component name, PID, start time, exit code) for
-post-mortem.
+Implemented as `SubprocessRegistry` (package-private, `shared/.../process/`).
+Internally a `ConcurrentHashMap`-backed `Set<SubprocessManager>`; managers are
+added by `SubprocessManager.start()` and removed automatically when their
+`onExit()` future completes. The JVM shutdown hook (§7.3 layer 1) iterates this
+set and calls `terminate()` on each manager **in parallel**, so total shutdown
+wall-clock time is bounded by the longest single grace rather than their sum.
 
-## 7. Failure modes
+## 8. Failure modes
 
 | Symptom | Source | Detection | Response |
 |---|---|---|---|
 | Adapter exits non-zero immediately | bad CLI args, port in use, missing JAR | `onExit()` < 1 s after `start()` | Log args, abort session, surface to FSM as launch failure |
 | Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 5 exhausts | `destroyForcibly()`, abort session |
-| Adapter hangs mid-session | internal deadlock | `status` poll (§5.2) | §6.1 → §6.2 |
+| Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM, container kill | Out-of-process — handled by §6.3 | Children TERM'd by `setpriv` / tini |
+| Parent JVM SIGKILL'd | OOM, container kill | Out-of-process — handled by §7.3 | Children TERM'd by `setpriv` / tini |
 
-## 8. Open questions
+## 9. Open questions
 
-- **`mock-game` graceful shutdown signal.** §6.1 step 4 assumes EOF on the
+- **`mock-game` graceful shutdown signal.** §7.1 step 4 assumes EOF on the
   GPGNet socket is the trigger. The mock-game CLI/lifecycle must confirm
    this; otherwise an explicit `--shutdown` admin port or
   a SIGTERM-on-stdin convention is needed.
-- **Per-host sessions vs per-container.** If a single container hosts
-  multiple harness instances concurrently, port allocation in §3 needs a
-  shared registry (or each instance gets its own container, which is the
-  recommended path).
+- ~~**Per-host sessions vs per-container.**~~ **Resolved — Java orchestrator is
+  the target, not Docker-compose.** The client spec (`project-spec.md`) lists
+  "Create test harness that spawns N clients automatically" as an explicit goal,
+  and requires "simulate 2–4 players locally" with no mention of containers.
+  Docker-compose multi-peer was our extrapolation, not a client requirement. The
+  intended topology is a JVM-based orchestrator module that spawns N Mock Client
+  instances via `SubprocessManager` (which is therefore correctly placed in
+  `shared/`). Port allocation in §3 applies per-instance; no shared registry is
+  needed as long as each Mock Client binds its own ports independently.
 
-## 9. Sources
+## 10. Sources
 
 - [java-ice-adapter README — Commandline invocation, Example usage sequence](https://github.com/FAForever/java-ice-adapter)
 - [`downlords-faf-client` — `IceAdapterImpl.java`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/java/com/faforever/client/fa/relay/ice/IceAdapterImpl.java)
@@ -382,7 +482,7 @@ post-mortem.
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
 - [tini](https://github.com/krallin/tini) — container PID 1 / zombie reaping
 
-## 10. Sequence diagram — one-session lifecycle
+## 11. Sequence diagram — one-session lifecycle
 
 ```mermaid
 sequenceDiagram

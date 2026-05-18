@@ -32,6 +32,13 @@ application {
     mainClass = 'com.faforever.testharness.client.Main'
 }
 
+tasks.register('runSubprocessExample', JavaExec) {
+    group = 'application'
+    description = 'Runs the SubprocessManager API example.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.faforever.testharness.client.examples.SubprocessManagerExample'
+}
+
 spotless {
     java {
         // Use Google AOSP formatting
