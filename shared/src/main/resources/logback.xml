@@ -1,5 +1,7 @@
 <configuration>
 
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
     <!--
       Custom pattern word %component — resolves MDC, then LoggerContext, then "Unknown".
       Both the MDC key and the LoggerContext property are set by LoggingSetup.configure(),
