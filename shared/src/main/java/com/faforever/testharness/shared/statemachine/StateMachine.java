@@ -64,21 +64,27 @@ public class StateMachine implements EventListener {
     }
 
     private class UpdateStateTask extends TimerTask {
-        /** State to transition to. */
-        private State to;
+        /** Transition to fire when the timeout finishes. */
+        private final Transition transition;
 
         UpdateStateTask(State to) {
-            this.to = to;
+            // Wrap state in a transition so that entry and exit hooks are performed correctly.
+            // Safe to give current `state` as `from` parameter as the task will be cancelled if
+            // state changes.
+            this.transition = new Transition(state, to, null, null);
         }
 
         @Override
-        public synchronized void run() {
-            state = to;
-            // State transition occured, any other timeouts are cancelled.
-            for (var timeout : timeouts) {
-                timeout.cancel();
+        public void run() {
+            // Synchronize with receiveEvent by using the outer class instance as monitor.
+            synchronized (StateMachine.this) {
+                state = transition.transition();
+                // State transition occured, any other timeouts are cancelled.
+                for (var timeout : timeouts) {
+                    timeout.cancel();
+                }
+                timeouts.clear();
             }
-            timeouts.clear();
         }
     }
 }
