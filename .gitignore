@@ -48,3 +48,4 @@ bin/
 /.idea
 /mock-client/logs
 /mock-game/logs
+/shared/logs
