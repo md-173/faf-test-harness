@@ -103,8 +103,18 @@ final class ConfigLoaderHelpTest {
                 output.contains("--oauth-token-url"),
                 "Help output should mention --oauth-token-url.");
         assertTrue(
+                output.contains("--oauth-auth-endpoint"),
+                "Help output should mention --oauth-auth-endpoint.");
+        assertTrue(
+                output.contains("--oauth-redirect-uri"),
+                "Help output should mention --oauth-redirect-uri.");
+        assertTrue(output.contains("--oauth-scopes"), "Help output should mention --oauth-scopes.");
+        assertTrue(
                 output.contains("--oauth-client-id"),
                 "Help output should mention --oauth-client-id.");
+        assertTrue(
+                output.contains("--oauth-refresh-token"),
+                "Help output should mention --oauth-refresh-token.");
         assertTrue(output.contains("--unique-id"), "Help output should mention --unique-id.");
         assertTrue(
                 output.contains("--ice-adapter-binary-path"),

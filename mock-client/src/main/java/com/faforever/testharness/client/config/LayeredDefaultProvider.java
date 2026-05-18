@@ -10,6 +10,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
 import picocli.CommandLine.Model.OptionSpec;
@@ -23,10 +24,15 @@ import picocli.CommandLine.Model.OptionSpec;
  *
  * <ol>
  *   <li>CLI flag (handled by picocli before this provider runs)
- *   <li>Environment variable {@code FAF_MOCK_<UPPER_SNAKE>}
+ *   <li>Environment variable {@code FAF_MOCK_CLIENT_<UPPER_SNAKE>}
  *   <li>JSON config file (camelCase key)
  *   <li>{@code @Option(defaultValue = ...)} (handled by picocli after this provider returns null)
  * </ol>
+ *
+ * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
+ * oauthClientSecret}) are rejected at construction time with a deprecation error pointing at the
+ * lobby spec — the de-risking in WBS-2.2.10 confirmed neither ROPC nor client_credentials are
+ * viable against FAF Hydra (see {@code documentation/research/lobby-protocol-spec.md} §2).
  */
 final class LayeredDefaultProvider implements IDefaultValueProvider {
 
@@ -35,6 +41,30 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
 
     /** Shared Jackson mapper used to read JSON config files. */
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * JSON keys that belonged to the removed password-grant schema. Listed here so the loader
+     * surfaces a deprecation error rather than silently ignoring them.
+     */
+    private static final Set<String> STALE_JSON_KEYS =
+            Set.of("oauthUsername", "oauthPassword", "oauthClientSecret");
+
+    /**
+     * Environment-variable names that belonged to the removed password-grant schema, mirroring
+     * {@link #STALE_JSON_KEYS} under the {@code FAF_MOCK_CLIENT_*} convention.
+     */
+    private static final Set<String> STALE_ENV_KEYS =
+            Set.of(
+                    ENV_PREFIX + "OAUTH_USERNAME",
+                    ENV_PREFIX + "OAUTH_PASSWORD",
+                    ENV_PREFIX + "OAUTH_CLIENT_SECRET");
+
+    /** Pointer included in every deprecation message so users can self-serve the migration. */
+    private static final String DEPRECATION_POINTER =
+            "Password-grant and client_credentials are not enabled on any seeded FAF Hydra "
+                    + "client with `lobby` scope (WBS-2.2.10). Migrate to refresh-token auth: "
+                    + "see documentation/research/lobby-protocol-spec.md §2 for the bootstrap "
+                    + "procedure.";
 
     /** Environment variables supplied by the caller. */
     private final Map<String, String> env;
@@ -45,6 +75,8 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
     LayeredDefaultProvider(final Map<String, String> environment, final Path configFile) {
         this.env = environment == null ? Map.of() : environment;
         this.fileValues = configFile == null ? Map.of() : readJsonFile(configFile);
+        rejectStaleEnv(this.env);
+        rejectStaleFileKeys(this.fileValues);
     }
 
     @Override
@@ -95,6 +127,43 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             return out;
         } catch (IOException e) {
             throw new IllegalArgumentException("failed to parse config file: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Reject stale password-grant env vars with a deprecation error. Blank values are tolerated
+     * (some CI systems set "empty" env vars as part of secret hygiene) — only a non-blank stale
+     * variable signals a misconfigured caller.
+     *
+     * @param envMap the caller-supplied environment map to scan
+     */
+    private static void rejectStaleEnv(final Map<String, String> envMap) {
+        for (String key : STALE_ENV_KEYS) {
+            String value = envMap.get(key);
+            if (value != null && !value.isBlank()) {
+                throw new IllegalArgumentException(
+                        "deprecated env var "
+                                + key
+                                + " is no longer accepted. "
+                                + DEPRECATION_POINTER);
+            }
+        }
+    }
+
+    /**
+     * Reject stale password-grant JSON keys with a deprecation error.
+     *
+     * @param fileMap key/value pairs loaded from the JSON config file
+     */
+    private static void rejectStaleFileKeys(final Map<String, String> fileMap) {
+        for (String key : STALE_JSON_KEYS) {
+            if (fileMap.containsKey(key)) {
+                throw new IllegalArgumentException(
+                        "deprecated config key \""
+                                + key
+                                + "\" is no longer accepted. "
+                                + DEPRECATION_POINTER);
+            }
         }
     }
 

@@ -9,23 +9,29 @@ import java.util.stream.Stream;
  */
 final class CliTestFixtures {
 
-    static final String LOBBY_URL = "ws://localhost/ws";
-    static final String OAUTH_TOKEN_URL = "http://localhost:4444/oauth2/token";
-    static final String OAUTH_CLIENT_ID = "faf-client";
-    static final String OAUTH_ACCESS_TOKEN = "test-token";
+    static final String LOBBY_URL = "wss://lobby.faforever.xyz";
+    static final String OAUTH_TOKEN_URL = "https://hydra.faforever.xyz/oauth2/token";
+    static final String OAUTH_AUTH_ENDPOINT = "https://hydra.faforever.xyz/oauth2/auth";
+    static final String OAUTH_REDIRECT_URI = "http://127.0.0.1";
+    static final String OAUTH_SCOPES = "openid offline lobby";
+    static final String OAUTH_CLIENT_ID = "95ecec08-29c1-4c48-ae0a-b000ff349cb8";
+    static final String OAUTH_REFRESH_TOKEN = "test-refresh-token";
     static final String UNIQUE_ID = "00000000-0000-0000-0000-000000000000";
     static final String ICE_ADAPTER_BIN = "/bin/faf-ice-adapter";
     static final String MOCK_GAME_BIN = "/bin/mock-game";
 
     private CliTestFixtures() {}
 
-    /** The seven required flags that satisfy {@link MockClientCli}'s required-check. */
+    /** Required flags that satisfy {@link MockClientCli}'s required-check plus the auth-channel. */
     static String[] minimalRequiredFlags() {
         return new String[] {
             "--lobby-websocket-url=" + LOBBY_URL,
             "--oauth-token-url=" + OAUTH_TOKEN_URL,
+            "--oauth-auth-endpoint=" + OAUTH_AUTH_ENDPOINT,
+            "--oauth-redirect-uri=" + OAUTH_REDIRECT_URI,
+            "--oauth-scopes=" + OAUTH_SCOPES,
             "--oauth-client-id=" + OAUTH_CLIENT_ID,
-            "--oauth-access-token=" + OAUTH_ACCESS_TOKEN,
+            "--oauth-refresh-token=" + OAUTH_REFRESH_TOKEN,
             "--unique-id=" + UNIQUE_ID,
             "--ice-adapter-binary-path=" + ICE_ADAPTER_BIN,
             "--mock-game-binary-path=" + MOCK_GAME_BIN,

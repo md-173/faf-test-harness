@@ -35,6 +35,15 @@ final class ConfigLoaderDefaultsOnlyTest {
                 message.contains("--oauth-token-url"),
                 "Missing-parameter message should name --oauth-token-url. Got: " + message);
         assertTrue(
+                message.contains("--oauth-auth-endpoint"),
+                "Missing-parameter message should name --oauth-auth-endpoint. Got: " + message);
+        assertTrue(
+                message.contains("--oauth-redirect-uri"),
+                "Missing-parameter message should name --oauth-redirect-uri. Got: " + message);
+        assertTrue(
+                message.contains("--oauth-scopes"),
+                "Missing-parameter message should name --oauth-scopes. Got: " + message);
+        assertTrue(
                 message.contains("--oauth-client-id"),
                 "Missing-parameter message should name --oauth-client-id. Got: " + message);
         assertTrue(
