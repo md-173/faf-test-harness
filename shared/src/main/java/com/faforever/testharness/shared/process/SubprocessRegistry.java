@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,19 +23,20 @@ final class SubprocessRegistry {
     /** Active managers; strong references so losing the launcher handle doesn't leak children. */
     private static final Set<SubprocessManager> ACTIVE = ConcurrentHashMap.newKeySet();
 
-    /** True once the JVM shutdown hook has been installed. */
-    private static final AtomicBoolean HOOK_INSTALLED = new AtomicBoolean();
+    static {
+        Runtime.getRuntime()
+                .addShutdownHook(
+                        new Thread(SubprocessRegistry::shutdownAll, "subprocess-shutdown-hook"));
+    }
 
     private SubprocessRegistry() {}
 
     /**
-     * Adds {@code manager} to the active set and installs the JVM shutdown hook on first call.
+     * Adds {@code manager} to the active set.
      *
      * @param manager the manager to track
-     * @throws IllegalStateException if the JVM is already shutting down
      */
     static void register(final SubprocessManager manager) {
-        installHookOnce();
         ACTIVE.add(manager);
     }
 
@@ -58,21 +58,6 @@ final class SubprocessRegistry {
      */
     static boolean contains(final SubprocessManager manager) {
         return ACTIVE.contains(manager);
-    }
-
-    private static void installHookOnce() {
-        if (HOOK_INSTALLED.compareAndSet(false, true)) {
-            try {
-                Runtime.getRuntime()
-                        .addShutdownHook(
-                                new Thread(
-                                        SubprocessRegistry::shutdownAll,
-                                        "subprocess-shutdown-hook"));
-            } catch (IllegalStateException e) {
-                HOOK_INSTALLED.set(false);
-                throw e;
-            }
-        }
     }
 
     private static void shutdownAll() {
