@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Tests get progressively more complicated to show additional features.
  */
-@SuppressWarnings("WhitespaceAround")
 final class StateMachineTransitionsTest {
     private final class IncomingCarDetected implements Event {}
 
