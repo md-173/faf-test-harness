@@ -22,9 +22,9 @@ final class StateMachineTimeoutTest {
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
-        machine.setTimeout(2000, c);
+        machine.setTimeout(200, c);
         try {
-            Thread.sleep(3000); // 3 seconds to ensure timeout has time to trigger.
+            Thread.sleep(300); // 0.3 seconds to ensure timeout has time to trigger.
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
         }
@@ -42,9 +42,9 @@ final class StateMachineTimeoutTest {
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
-        machine.setTimeout(2000, c);
+        machine.setTimeout(200, c);
         try {
-            Thread.sleep(1000); // 1 second, not enough time for timeout.
+            Thread.sleep(100); // 0.1 second, not enough time for timeout.
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
         }
@@ -53,7 +53,7 @@ final class StateMachineTimeoutTest {
         machine.receiveEvent(aToB);
 
         try {
-            Thread.sleep(3000); // 3 second to ensure timeout would have triggered.
+            Thread.sleep(300); // 0.3 second to ensure timeout would have triggered.
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
         }
@@ -76,21 +76,21 @@ final class StateMachineTimeoutTest {
         StateMachine machine = new StateMachine(a);
         assertTrue(machine.getState() == a);
 
-        machine.setTimeout(2000, c);
+        machine.setTimeout(200, c);
 
         // Timeout gets cancelled here, as shown by the previous test.
         machine.receiveEvent(aToB);
         assertTrue(machine.getState() == b);
 
-        machine.setTimeout(2000, c);
+        machine.setTimeout(200, a);
         try {
-            Thread.sleep(3000); // 3 seconds to ensure timeout has time to trigger.
+            Thread.sleep(300); // 0.3 seconds to ensure timeout has time to trigger.
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
         }
 
         // Second timeout should have occured.
-        assertTrue(machine.getState() == c);
+        assertTrue(machine.getState() == a);
     }
 
     @Test
@@ -103,11 +103,11 @@ final class StateMachineTimeoutTest {
         assertTrue(machine.getState() == a);
 
         // Two timeouts, the one to b should execute first and cancel the one to c.
-        machine.setTimeout(1000, b);
-        machine.setTimeout(2000, c);
+        machine.setTimeout(100, b);
+        machine.setTimeout(200, c);
 
         try {
-            Thread.sleep(3000); // 3 seconds to ensure timeout has time to trigger.
+            Thread.sleep(300); // 0.3 seconds to ensure timeout has time to trigger.
         } catch (InterruptedException e) {
             System.out.println(e.getMessage());
         }
