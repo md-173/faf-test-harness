@@ -1,5 +1,6 @@
 package com.faforever.testharness.shared.statemachine;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -92,6 +93,64 @@ final class StateMachineTransitionsTest {
         assertTrue(machine.getState() == amber);
 
         // Still amber. carsCrossing > 0
+        machine.receiveEvent(incomingCarLeft);
+        assertTrue(machine.getState() == amber);
+
+        // Now red.
+        carsCrossing = 0;
+        machine.receiveEvent(incomingCarLeft);
+        assertTrue(machine.getState() == red);
+    }
+
+    @Test
+    void ignoreInvalidTransition() {
+        State red = new State("RED");
+        State amber = new State("AMBER");
+        State green = new State("GREEN");
+
+        red.registerTransition(IncomingCarDetected.class, amber);
+        amber.registerTransition(CrossingCarLeft.class, green);
+
+        Event incomingCar = new IncomingCarDetected();
+        Event carLeft = new CrossingCarLeft();
+
+        // By default, policy is ignore
+        StateMachine machine = new StateMachine(red);
+        assertTrue(machine.getState() == red);
+
+        // Invalid transition
+        machine.receiveEvent(carLeft);
+        // Transition ignored, still red
+        assertTrue(machine.getState() == red);
+    }
+
+    @Test
+    void throwOnInvalidTransition() {
+        State green = new State("GREEN");
+        State amber = new State("AMBER");
+        State red = new State("RED");
+
+        // Light turns amber when a car comes from intersecting road.
+        green.registerTransition(CrossingCarDetected.class, amber);
+        // Turn from amber to red only if there's no cars currently in the road.
+        amber.registerTransition(IncomingCarLeft.class, red, null, () -> carsCrossing == 0);
+
+        Event crossingCarWaiting = new CrossingCarDetected();
+        Event incomingCarLeft = new IncomingCarLeft();
+
+        StateMachine machine = new StateMachine(green, InvalidTransitionPolicy.THROW);
+
+        assertThrows(
+                InvalidTransitionException.class,
+                () -> machine.receiveEvent(incomingCarLeft),
+                "Expected exception to be thrown");
+
+        machine.receiveEvent(crossingCarWaiting);
+        assertTrue(machine.getState() == amber);
+
+        carsCrossing = 2;
+        // Still amber. carsCrossing > 0
+        // No exception thrown here, transition is stopped by a guard
         machine.receiveEvent(incomingCarLeft);
         assertTrue(machine.getState() == amber);
 
