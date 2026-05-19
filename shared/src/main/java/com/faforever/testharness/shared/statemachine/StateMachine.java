@@ -10,6 +10,9 @@ public class StateMachine implements EventListener {
     /** The current state of the machine. */
     private State state;
 
+    /** The policy to use when an event is received and no matching transition is found. */
+    private final InvalidTransitionPolicy transitionPolicy;
+
     /** Timer used for timeouts. */
     private final Timer timeoutTimer;
 
@@ -17,14 +20,25 @@ public class StateMachine implements EventListener {
     private final List<TimerTask> timeouts;
 
     /**
+     * Initializes the machine with its initial state and policy.
+     *
+     * @param initialState the initial state of the machine.
+     * @param policy the policy to use when an event is received and no transition is found.
+     */
+    public StateMachine(State initialState, InvalidTransitionPolicy policy) {
+        this.state = initialState;
+        this.transitionPolicy = policy;
+        this.timeoutTimer = new Timer();
+        this.timeouts = new ArrayList<>();
+    }
+
+    /**
      * Initializes the machine with its initial state.
      *
      * @param initialState the initial state of the machine.
      */
     public StateMachine(State initialState) {
-        this.state = initialState;
-        this.timeoutTimer = new Timer();
-        this.timeouts = new ArrayList<>();
+        this(initialState, InvalidTransitionPolicy.IGNORE);
     }
 
     /**
@@ -36,17 +50,27 @@ public class StateMachine implements EventListener {
         return state;
     }
 
-    /** Forwards event to its current state, then updates state. */
+    /**
+     * Forwards event to its current state, then updates state.
+     *
+     * @throws InvalidTransitionException if the {@link StateMachine} policy was set to {@link
+     *     InvalidTransitionPolicy.THROW} and the transition is invalid/non-existent.
+     */
     @Override
     public synchronized void receiveEvent(Event event) {
-        State newState = state.processEvent(event);
-        if (newState != state) {
-            state = newState;
-            // State transition, so cancel any timeouts.
-            for (var timeout : timeouts) {
-                timeout.cancel();
+        Transition t = state.getTransition(event.getClass());
+        if (t != null) {
+            State newState = t.transition();
+            if (newState != state) {
+                state = newState;
+                for (var timeout : timeouts) {
+                    timeout.cancel();
+                }
+                timeouts.clear();
             }
-            timeouts.clear();
+        } else if (transitionPolicy == InvalidTransitionPolicy.THROW) {
+            throw new InvalidTransitionException(
+                    String.format("No valid transitions for {}", event.toString()));
         }
     }
 

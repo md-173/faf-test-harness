@@ -98,17 +98,12 @@ public class State {
     }
 
     /**
-     * Processes an event and potentially changes state.
+     * Obtains the corresponding transition for the event type.
      *
-     * @param event the trigger event.
-     * @return the new state, or potentially itself if no transition occurred.
+     * @param event the event type
+     * @return a matching transition, if found. Otherwise {@code null}
      */
-    public State processEvent(Event event) {
-        Transition t = transitions.get(event.getClass());
-        if (t != null) {
-            return t.transition();
-        } else {
-            return this;
-        }
+    public Transition getTransition(Class<? extends Event> event) {
+        return transitions.get(event);
     }
 }
