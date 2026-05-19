@@ -83,7 +83,7 @@ final class StateMachineTransitionsTest {
         // Light turns amber when a car comes from intersecting road.
         green.registerTransition(CrossingCarDetected.class, amber);
         // Turn from amber to red only if there's no cars currently in the road.
-        amber.registerTransition(IncomingCarLeft.class, red, null, () -> carsCrossing == 0);
+        amber.registerTransition(IncomingCarLeft.class, red, null, (e) -> carsCrossing == 0);
 
         StateMachine machine = new StateMachine(green);
 
@@ -133,7 +133,7 @@ final class StateMachineTransitionsTest {
         // Light turns amber when a car comes from intersecting road.
         green.registerTransition(CrossingCarDetected.class, amber);
         // Turn from amber to red only if there's no cars currently in the road.
-        amber.registerTransition(IncomingCarLeft.class, red, null, () -> carsCrossing == 0);
+        amber.registerTransition(IncomingCarLeft.class, red, null, (e) -> carsCrossing == 0);
 
         Event crossingCarWaiting = new CrossingCarDetected();
         Event incomingCarLeft = new IncomingCarLeft();

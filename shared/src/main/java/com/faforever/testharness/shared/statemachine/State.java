@@ -3,7 +3,7 @@ package com.faforever.testharness.shared.statemachine;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.Callable;
+import java.util.function.Predicate;
 
 /** Represents a state. */
 public class State {
@@ -92,7 +92,7 @@ public class State {
      * @param guard must be true for transition to happen.
      */
     public void registerTransition(
-            Class<? extends Event> event, State other, Runnable action, Callable<Boolean> guard) {
+            Class<? extends Event> event, State other, Runnable action, Predicate<Event> guard) {
         Transition t = new Transition(this, other, action, guard);
         transitions.put(event, t);
     }

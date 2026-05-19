@@ -60,7 +60,7 @@ public class StateMachine implements EventListener {
     public synchronized void receiveEvent(Event event) {
         Transition t = state.getTransition(event.getClass());
         if (t != null) {
-            State newState = t.transition();
+            State newState = t.transition(event);
             if (newState != state) {
                 state = newState;
                 for (var timeout : timeouts) {
@@ -102,7 +102,10 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
-                state = transition.transition();
+                // No event triggered this transition, so pass null.
+                // event is used for the guard, and since this dummy transition has no guard, it
+                // works fine.
+                state = transition.transition(null);
                 // State transition occured, any other timeouts are cancelled.
                 for (var timeout : timeouts) {
                     timeout.cancel();

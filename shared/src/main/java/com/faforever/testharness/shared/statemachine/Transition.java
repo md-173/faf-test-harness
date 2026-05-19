@@ -1,6 +1,6 @@
 package com.faforever.testharness.shared.statemachine;
 
-import java.util.concurrent.Callable;
+import java.util.function.Predicate;
 
 /** Represents a transition to another state. */
 public class Transition {
@@ -14,7 +14,7 @@ public class Transition {
     private Runnable action;
 
     /** Condition that must be met for a transition to happen. */
-    private Callable<Boolean> guard;
+    private Predicate<Event> guard;
 
     /**
      * Initializes a transition.
@@ -26,7 +26,7 @@ public class Transition {
      * @param guard Condition that must be met for a transition to happen. Or {@code null} if the
      *     transition always happens.
      */
-    public Transition(State from, State to, Runnable action, Callable<Boolean> guard) {
+    public Transition(State from, State to, Runnable action, Predicate<Event> guard) {
         this.from = from;
         this.to = to;
         this.action = action;
@@ -36,25 +36,20 @@ public class Transition {
     /**
      * Attempts a transition.
      *
+     * @param event the event that triggered this transition.
      * @return the new state, which might be the old state (i.e. if the guard fails).
      */
-    public State transition() {
-        try {
-            if (guard == null || guard.call()) {
-                if (action != null) {
-                    action.run();
-                }
-                // Run any registered hooks.
-                from.exit();
-                to.entry();
-                return to;
+    public State transition(Event event) {
+        if (guard == null || guard.test(event)) {
+            if (action != null) {
+                action.run();
             }
-            // No transition, returns old state.
-            return from;
-        } catch (Exception e) {
-            // Exception is thrown by guard.call() if the result couldn't be computed.
-            // In this case, simply return previous state.
-            return from;
+            // Run any registered hooks.
+            from.exit();
+            to.entry();
+            return to;
         }
+        // No transition, returns old state.
+        return from;
     }
 }
