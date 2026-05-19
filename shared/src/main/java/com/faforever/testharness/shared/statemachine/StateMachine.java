@@ -4,9 +4,15 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** State machine, which drives transitions and keeps current state. */
 public class StateMachine implements EventListener {
+
+    /** Logger instance for this class. */
+    private static final Logger LOG = LoggerFactory.getLogger(StateMachine.class);
+
     /** The current state of the machine. */
     private State state;
 
@@ -30,6 +36,11 @@ public class StateMachine implements EventListener {
         this.transitionPolicy = policy;
         this.timeoutTimer = new Timer();
         this.timeouts = new ArrayList<>();
+
+        LOG.info(
+                "Created StateMachine with initial state {} and policy {}",
+                this.state.getName(),
+                this.transitionPolicy);
     }
 
     /**
@@ -58,19 +69,32 @@ public class StateMachine implements EventListener {
      */
     @Override
     public synchronized void receiveEvent(Event event) {
+        LOG.debug("Received event {}", event);
         Transition t = state.getTransition(event.getClass());
-        if (t != null) {
+        if (t == null) {
+            LOG.warn("No matching transition for {}", event.getClass().getSimpleName());
+            if (transitionPolicy == InvalidTransitionPolicy.THROW) {
+                throw new InvalidTransitionException(
+                        String.format(
+                                "No valid transitions for events of type {}",
+                                event.getClass().getSimpleName()));
+            }
+        } else {
+            LOG.debug(
+                    "Obtained transition for {}, attempting now", event.getClass().getSimpleName());
             State newState = t.transition(event);
             if (newState != state) {
+                LOG.debug(
+                        "Transition from {} to {} caused by {} successful",
+                        state.getName(),
+                        newState.getName(),
+                        event);
                 state = newState;
                 for (var timeout : timeouts) {
                     timeout.cancel();
                 }
                 timeouts.clear();
             }
-        } else if (transitionPolicy == InvalidTransitionPolicy.THROW) {
-            throw new InvalidTransitionException(
-                    String.format("No valid transitions for {}", event.toString()));
         }
     }
 
@@ -82,6 +106,7 @@ public class StateMachine implements EventListener {
      * @param to the new state to go to.
      */
     public void setTimeout(long millis, State to) {
+        LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
         UpdateStateTask task = new UpdateStateTask(to);
         timeouts.add(task);
         timeoutTimer.schedule(task, millis);
@@ -106,6 +131,7 @@ public class StateMachine implements EventListener {
                 // event is used for the guard, and since this dummy transition has no guard, it
                 // works fine.
                 state = transition.transition(null);
+                LOG.debug("Timeout fired, new state is {}", state.getName());
                 // State transition occured, any other timeouts are cancelled.
                 for (var timeout : timeouts) {
                     timeout.cancel();
