@@ -17,11 +17,25 @@ dependencies {
     implementation 'info.picocli:picocli:4.7.6'
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.java-websocket:Java-WebSocket:1.5.7'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Runs JUnit tests tagged "integration" (hits live FAF .xyz endpoints).'
+    group = 'verification'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter test
 }
 
 tasks.withType(Checkstyle).configureEach {
