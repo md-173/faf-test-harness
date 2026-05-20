@@ -73,7 +73,7 @@ public class State {
     }
 
     /**
-     * Create a simple transition from this state to {@link other}, any time {@link event} happens.
+     * Create a simple transition from this state to {@code other}, any time {@code event} happens.
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.
@@ -83,8 +83,8 @@ public class State {
     }
 
     /**
-     * Create a transition from this state to {@link other} any time {@link event} and also {@link
-     * guard} evaluates to {@code true}. This transition calls {@link action}
+     * Create a transition from this state to {@code other} any time {@code event} and also {@code
+     * guard} evaluates to {@code true}. This transition calls {@code action}
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.

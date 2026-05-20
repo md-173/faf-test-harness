@@ -65,7 +65,7 @@ public class StateMachine implements EventListener {
      * Forwards event to its current state, then updates state.
      *
      * @throws InvalidTransitionException if the {@link StateMachine} policy was set to {@link
-     *     InvalidTransitionPolicy.THROW} and the transition is invalid/non-existent.
+     *     InvalidTransitionPolicy#THROW} and the transition is invalid/non-existent.
      */
     @Override
     public synchronized void receiveEvent(Event event) {
@@ -76,7 +76,7 @@ public class StateMachine implements EventListener {
             if (transitionPolicy == InvalidTransitionPolicy.THROW) {
                 throw new InvalidTransitionException(
                         String.format(
-                                "No valid transitions for events of type {}",
+                                "No valid transitions for events of type %s",
                                 event.getClass().getSimpleName()));
             }
         } else {
@@ -99,8 +99,8 @@ public class StateMachine implements EventListener {
     }
 
     /**
-     * Sets up a timeout that will cause a transition to state {@link to} if no other transition
-     * after {@link millis} elapses.
+     * Sets up a timeout that will cause a transition to state {@code to} if no other transition
+     * after {@code millis} elapses.
      *
      * @param millis the time in milliseconds to wait before changing states.
      * @param to the new state to go to.

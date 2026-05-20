@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>Tests get progressively more complicated to show additional features.
  */
-final class StateMachineTransitionsTest {
+final class StateMachineTransitionTest {
     private final class IncomingCarDetected implements Event {}
 
     private final class IncomingCarLeft implements Event {}

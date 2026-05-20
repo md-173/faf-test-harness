@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test the timeout feature in the {@ref StateMachine} class. This feature allows the creation of
+ * Test the timeout feature in the {@link StateMachine} class. This feature allows the creation of
  * timeouts that automatically change the state if no other changes occur within a given timeframe.
  */
 final class StateMachineTimeoutTest {
