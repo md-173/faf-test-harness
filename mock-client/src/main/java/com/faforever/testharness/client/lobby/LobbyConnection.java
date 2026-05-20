@@ -87,8 +87,7 @@ public final class LobbyConnection {
             DisconnectReason reason, int statusCode, String closeMessage, Throwable error) {}
 
     /** Default listener installed before {@link #onDisconnect(Consumer)} replaces it. */
-    private static final Consumer<DisconnectEvent> NOOP_LISTENER =
-            LobbyConnection::ignoreDisconnect;
+    private static final Consumer<DisconnectEvent> NOOP_LISTENER = ignored -> {};
 
     /** Lobby endpoint this connection is bound to. */
     private final URI endpoint;
@@ -187,16 +186,6 @@ public final class LobbyConnection {
     }
 
     /**
-     * No-op disconnect handler used as the default before {@link #onDisconnect(Consumer)} installs
-     * a real listener. Static so it can be shared across instances.
-     *
-     * @param ignored disconnect event — deliberately unused
-     */
-    private static void ignoreDisconnect(final DisconnectEvent ignored) {
-        // intentional no-op
-    }
-
-    /**
      * Open the WebSocket. The returned future completes when the WebSocket handshake is done.
      *
      * <p>If the handshake fails, the future completes exceptionally <em>and</em> the disconnect
@@ -280,17 +269,7 @@ public final class LobbyConnection {
                     new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, statusCode, reason, null));
             return CompletableFuture.completedFuture(null);
         }
-        return socket.sendClose(statusCode, reason).thenAccept(LobbyConnection::discardSocket);
-    }
-
-    /**
-     * Discards the {@link WebSocket} returned by {@code sendClose} so the {@code close()} future
-     * can be typed as {@code CompletableFuture<Void>}.
-     *
-     * @param ignored the socket — intentionally unused
-     */
-    private static void discardSocket(final WebSocket ignored) {
-        // intentional discard
+        return socket.sendClose(statusCode, reason).thenAccept(ignored -> {});
     }
 
     /**
@@ -328,6 +307,7 @@ public final class LobbyConnection {
             LOG.warn("dropping malformed lobby frame: {}", e.getOriginalMessage());
             return;
         }
+        LOG.debug("lobby received frame: {}", trimmed);
         JsonNode commandNode = node.get("command");
         if (commandNode == null || !commandNode.isTextual()) {
             LOG.warn("dropping lobby frame without textual 'command' field");
