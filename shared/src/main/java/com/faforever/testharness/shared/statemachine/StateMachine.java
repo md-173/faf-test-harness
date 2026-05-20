@@ -14,7 +14,7 @@ public class StateMachine implements EventListener {
     private static final Logger LOG = LoggerFactory.getLogger(StateMachine.class);
 
     /** The current state of the machine. */
-    private State state;
+    private volatile State state;
 
     /** The policy to use when an event is received and no matching transition is found. */
     private final InvalidTransitionPolicy transitionPolicy;
@@ -34,7 +34,7 @@ public class StateMachine implements EventListener {
     public StateMachine(State initialState, InvalidTransitionPolicy policy) {
         this.state = initialState;
         this.transitionPolicy = policy;
-        this.timeoutTimer = new Timer();
+        this.timeoutTimer = new Timer(true);
         this.timeouts = new ArrayList<>();
 
         LOG.info(
@@ -105,7 +105,7 @@ public class StateMachine implements EventListener {
      * @param millis the time in milliseconds to wait before changing states.
      * @param to the new state to go to.
      */
-    public void setTimeout(long millis, State to) {
+    public synchronized void setTimeout(long millis, State to) {
         LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
         UpdateStateTask task = new UpdateStateTask(to);
         timeouts.add(task);
