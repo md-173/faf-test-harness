@@ -199,19 +199,17 @@ final class LobbyConnectionLiveSmokeTest {
     /** {@code @EnabledIf} probe — skips the auth test cleanly when no refresh token is present. */
     @SuppressWarnings("unused")
     static boolean hasRefreshToken() {
-        boolean present = false;
         Path p = findRefreshTokenFile();
-        if (p != null) {
-            try {
-                present = Files.size(p) > 0;
-            } catch (Exception e) {
-                present = false;
-            }
+        boolean present = false;
+        try {
+            present = p != null && Files.size(p) > 0;
+        } catch (Exception e) {
+            // unreadable file counts as absent
         }
         if (!present) {
             System.out.println(
                     "[live smoke] skipping authHandshakeYieldsTerminalReply: no readable "
-                            + ".secrets/refresh_token.txt found — see this class's javadoc to "
+                            + ".secrets/refresh_token.txt found. See this class's javadoc to "
                             + "bootstrap one.");
         }
         return present;
