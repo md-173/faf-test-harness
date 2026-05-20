@@ -1,8 +1,11 @@
 package com.faforever.testharness.shared.statemachine;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -56,7 +59,6 @@ final class StateMachineTransitionTest {
     void withAction() {
         State red = new State("RED");
         State green = new State("GREEN");
-        Event event = new IncomingCarDetected();
 
         actionHappened = false;
 
@@ -66,7 +68,7 @@ final class StateMachineTransitionTest {
         assertTrue(!actionHappened);
 
         // Changes to green and performs action with side-effect.
-        machine.receiveEvent(event);
+        machine.receiveEvent(new IncomingCarDetected());
         assertTrue(machine.getState() == green);
         assertTrue(actionHappened);
     }
@@ -100,6 +102,27 @@ final class StateMachineTransitionTest {
         carsCrossing = 0;
         machine.receiveEvent(incomingCarLeft);
         assertTrue(machine.getState() == red);
+    }
+
+    @Test
+    void withHooks() {
+        State red = new State("RED");
+        State green = new State("GREEN");
+        // Messages get pushed here to confirm order of different runnables.
+        List<String> processLog = new ArrayList<>();
+
+        red.registerTransition(
+                IncomingCarDetected.class, green, () -> processLog.add("action"), null);
+        red.onExit(() -> processLog.add("red exit"));
+        green.onEntry(() -> processLog.add("green entry"));
+
+        StateMachine machine = new StateMachine(red);
+        assertTrue(machine.getState() == red);
+
+        // Changes to green and performs action and hooks with side-effect.
+        machine.receiveEvent(new IncomingCarDetected());
+        assertTrue(machine.getState() == green);
+        assertEquals(List.of("action", "red exit", "green entry"), processLog);
     }
 
     @Test
@@ -140,10 +163,13 @@ final class StateMachineTransitionTest {
 
         StateMachine machine = new StateMachine(green, InvalidTransitionPolicy.THROW);
 
-        assertThrows(
-                InvalidTransitionException.class,
-                () -> machine.receiveEvent(incomingCarLeft),
-                "Expected exception to be thrown");
+        InvalidTransitionException e =
+                assertThrows(
+                        InvalidTransitionException.class,
+                        () -> machine.receiveEvent(incomingCarLeft),
+                        "Expected exception to be thrown");
+
+        assertTrue(e.getMessage().contains("IncomingCarLeft"));
 
         machine.receiveEvent(crossingCarWaiting);
         assertTrue(machine.getState() == amber);
