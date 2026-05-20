@@ -34,22 +34,27 @@ public class Transition {
     }
 
     /**
-     * Attempts a transition.
+     * Performs a transition, and all actions that occur due to it.
      *
-     * @param event the event that triggered this transition.
-     * @return the new state, which might be the old state (i.e. if the guard fails).
+     * @return the new state.
      */
-    public State transition(Event event) {
-        if (guard == null || guard.test(event)) {
-            if (action != null) {
-                action.run();
-            }
-            // Run any registered hooks.
-            from.exit();
-            to.entry();
-            return to;
+    public State transition() {
+        if (action != null) {
+            action.run();
         }
-        // No transition, returns old state.
-        return from;
+        // Run any registered hooks.
+        from.exit();
+        to.entry();
+        return to;
+    }
+
+    /**
+     * Run the {@code Transition}'s guard against the given event.
+     *
+     * @param event the event that is triggering the potential transition.
+     * @return the value the guard evaluates to. If no guard exists, it is {@code true} by default.
+     */
+    public boolean guard(Event event) {
+        return guard == null || guard.test(event);
     }
 }

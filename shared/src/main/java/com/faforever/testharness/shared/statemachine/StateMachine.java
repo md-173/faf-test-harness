@@ -70,9 +70,9 @@ public class StateMachine implements EventListener {
     @Override
     public synchronized void receiveEvent(Event event) {
         LOG.debug("Received event {}", event);
-        Transition t = state.getTransition(event.getClass());
-        if (t == null) {
-            LOG.warn("No matching transition for {}", event.getClass().getSimpleName());
+        List<Transition> transitions = state.getTransitions(event.getClass());
+        if (transitions.isEmpty()) {
+            LOG.warn("No matching transitions for {}", event.getClass().getSimpleName());
             if (transitionPolicy == InvalidTransitionPolicy.THROW) {
                 throw new InvalidTransitionException(
                         String.format(
@@ -81,20 +81,28 @@ public class StateMachine implements EventListener {
             }
         } else {
             LOG.debug(
-                    "Obtained transition for {}, attempting now", event.getClass().getSimpleName());
-            State newState = t.transition(event);
-            if (newState != state) {
-                LOG.debug(
-                        "Transition from {} to {} caused by {} successful",
-                        state.getName(),
-                        newState.getName(),
-                        event);
-                state = newState;
-                for (var timeout : timeouts) {
-                    timeout.cancel();
+                    "Obtained a set of transitions for {}, attempting now",
+                    event.getClass().getSimpleName());
+            for (var t : transitions) {
+                if (t.guard(event)) {
+                    State newState = t.transition();
+                    LOG.debug(
+                            "Transition from {} to {} caused by {} successful",
+                            state.getName(),
+                            newState.getName(),
+                            event);
+                    state = newState;
+                    for (var timeout : timeouts) {
+                        timeout.cancel();
+                    }
+                    timeouts.clear();
+                    // Stop trying more transitions.
+                    return;
                 }
-                timeouts.clear();
             }
+            LOG.debug(
+                    "All transitions for {} failed due to guards",
+                    event.getClass().getSimpleName());
         }
     }
 
@@ -127,10 +135,8 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
-                // No event triggered this transition, so pass null.
-                // event is used for the guard, and since this dummy transition has no guard, it
-                // works fine.
-                state = transition.transition(null);
+                // No need to check guard.
+                state = transition.transition();
                 LOG.debug("Timeout fired, new state is {}", state.getName());
                 // State transition occured, any other timeouts are cancelled.
                 for (var timeout : timeouts) {

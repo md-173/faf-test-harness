@@ -10,8 +10,8 @@ public class State {
     /** A unique name for this state. */
     private final String name;
 
-    /** Each type of event drives one transition. */
-    private final HashMap<Class<? extends Event>, Transition> transitions;
+    /** Each type of event drives a set of potential transition. */
+    private final HashMap<Class<? extends Event>, List<Transition>> transitions;
 
     /** A set of hooks to run when this state is entered. */
     private final List<Runnable> entryHooks;
@@ -74,6 +74,8 @@ public class State {
 
     /**
      * Create a simple transition from this state to {@code other}, any time {@code event} happens.
+     * Transitions are tried in the order they were registered and the first one to succeed will be
+     * the only one to occur.
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.
@@ -84,7 +86,8 @@ public class State {
 
     /**
      * Create a transition from this state to {@code other} any time {@code event} and also {@code
-     * guard} evaluates to {@code true}. This transition calls {@code action}
+     * guard} evaluates to {@code true}. This transition calls {@code action}. Transitions are tried
+     * in the order they were registered and the first one to succeed will be the only one to occur.
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.
@@ -94,16 +97,17 @@ public class State {
     public void registerTransition(
             Class<? extends Event> event, State other, Runnable action, Predicate<Event> guard) {
         Transition t = new Transition(this, other, action, guard);
-        transitions.put(event, t);
+        transitions.computeIfAbsent(event, k -> new ArrayList<>()).add(t);
     }
 
     /**
      * Obtains the corresponding transition for the event type.
      *
      * @param event the event type
-     * @return a matching transition, if found. Otherwise {@code null}
+     * @return a list of all matching transitions. Will be empty if no transitions were registered
+     *     for this event type.
      */
-    public Transition getTransition(Class<? extends Event> event) {
-        return transitions.get(event);
+    public List<Transition> getTransitions(Class<? extends Event> event) {
+        return transitions.getOrDefault(event, List.of());
     }
 }
