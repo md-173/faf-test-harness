@@ -51,11 +51,6 @@ final class ConfigLoaderDefaultsOnlyTest {
         assertTrue(
                 message.contains("--unique-id"),
                 "Missing-parameter message should name --unique-id. Got: " + message);
-        assertTrue(
-                message.contains("--mock-game-binary-path"),
-                "Missing-parameter message should name --mock-game-binary-path. "
-                        + "Got: "
-                        + message);
     }
 
     @Test
@@ -70,6 +65,23 @@ final class ConfigLoaderDefaultsOnlyTest {
         MockClientConfig config = ConfigLoader.load(withoutIceBinary, Map.of()).orElseThrow();
 
         assertEquals(Path.of("faf-ice-adapter.jar"), config.iceAdapterBinaryPath());
+    }
+
+    @Test
+    void mockGameBinaryPathDefaultsToGradleInstallLayoutWhenUnset() {
+        // --mock-game-binary-path is optional (WBS-3.1.2.3): when unset it resolves to the
+        // application-plugin install layout, so the harness works from the repo root after
+        // ./gradlew :mock-game:installDist.
+        String[] withoutGameBinary =
+                Arrays.stream(TestFixtures.minimalRequiredCli())
+                        .filter(arg -> !arg.startsWith("--mock-game-binary-path"))
+                        .toArray(String[]::new);
+
+        MockClientConfig config = ConfigLoader.load(withoutGameBinary, Map.of()).orElseThrow();
+
+        assertEquals(
+                Path.of("mock-game/build/install/mock-game/bin/mock-game"),
+                config.mockGameBinaryPath());
     }
 
     @Test

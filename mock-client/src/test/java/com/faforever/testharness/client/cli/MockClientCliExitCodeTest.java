@@ -76,13 +76,18 @@ final class MockClientCliExitCodeTest {
         String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
         assertEquals(
                 ExitCodes.RUNTIME,
-                execute(CliTestFixtures.withSubcommand("launch-ice", absentBinary)));
+                execute(CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary)));
     }
 
     @Test
-    void validLaunchGameInvocationExitsNotImplemented() {
+    void launchGameWithMissingBinaryExitsRuntime() {
+        // launch-game is implemented (WBS-3.1.2.3). Same pattern as launch-ice: point at a
+        // guaranteed-absent path in the temp dir so the test does not silently depend on the
+        // Gradle install layout being present.
+        String absentBinary = tempDir.resolve("no-such-mock-game").toString();
         assertEquals(
-                ExitCodes.NOT_IMPLEMENTED, execute(CliTestFixtures.withSubcommand("launch-game")));
+                ExitCodes.RUNTIME,
+                execute(CliTestFixtures.withSubcommandAndGameBinary("launch-game", absentBinary)));
     }
 
     @Test

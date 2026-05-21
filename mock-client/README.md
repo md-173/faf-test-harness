@@ -17,10 +17,10 @@ subcommands that dispatch to the matching component.
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
 | `ice-smoke`   | ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet handshake.|
 
-`launch-ice` is implemented (WBS-3.1.2.2): it spawns `faf-ice-adapter`, runs it
-for `--duration-seconds`, terminates it, and logs the exit code. The remaining
-subcommands (`run`, `launch-game`, `ice-smoke`) are still CLI scaffolding — they
-validate config, apply logging, log a TODO line, and exit with code `64`
+`launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) are implemented:
+each spawns its respective binary, runs it for `--duration-seconds`, terminates
+it, and logs the exit code. `run` and `ice-smoke` are still CLI scaffolding —
+they validate config, apply logging, log a TODO line, and exit with code `64`
 (`NOT_IMPLEMENTED`). Real logic for each ships in sibling tracks.
 
 Invocation shape:
@@ -31,8 +31,8 @@ mock-client [global flags] <subcommand> [subcommand flags]
 
 Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 20
 config flags — are declared on the root and apply to every subcommand. Each
-subcommand also accepts its own `--help`. `launch-ice` additionally takes a
-subcommand-local `--duration-seconds` flag.
+subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
+additionally take a subcommand-local `--duration-seconds` flag.
 
 ## Exit codes
 
@@ -40,8 +40,8 @@ subcommand-local `--duration-seconds` flag.
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`run`, `launch-game`, `ice-smoke` stubs). |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `launch-ice` could not find/start the ICE adapter binary, or the adapter exited before its run window. |
+| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`run`, `ice-smoke` stubs). |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `launch-ice` / `launch-game` could not find/start its binary, or the child exited before its run window. |
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
@@ -111,7 +111,7 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT (auxiliary/bootstrap output). |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
 | `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | `faf-ice-adapter.jar` | no | Path to the `faf-ice-adapter` binary; a `.jar` runs via `java -jar`, any other file is executed directly. Relative paths resolve against the working directory. |
-| `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | — | yes | Path to the `mock-game` executable. |
+| `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | `mock-game/build/install/mock-game/bin/mock-game` | no | Path to the `mock-game` binary; a `.jar` runs via `java -jar`, any other file is executed directly. The default is the Gradle `application` plugin install layout (resolved against the working directory), so the harness "just works" from the repo root after `./gradlew :mock-game:installDist`. |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | no | Local JSON-RPC port exposed by `faf-ice-adapter`. |
 | `iceAdapterGpgNetPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_GPG_NET_PORT` | `--ice-adapter-gpg-net-port` | `7237` | no | Local GPGNet port exposed by `faf-ice-adapter`. |
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
@@ -220,6 +220,22 @@ as `faf-ice-adapter.jar` (the default) or point the config at it. In the Docker
 workspace the image is expected to bake it in (`subprocess-orchestration-spec`
 §2.2).
 
+### Providing the mock-game binary
+
+`launch-game` (and later `run`) needs the in-repo `mock-game` binary. The path
+is set via `--mock-game-binary-path` / `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` /
+`mockGameBinaryPath`, and **defaults to
+`mock-game/build/install/mock-game/bin/mock-game`** — the layout produced by the
+Gradle `application` plugin — resolved against the Mock Client's working
+directory. The same JAR-vs-native dispatch applies (`.jar` → `java -jar`, any
+other file executed directly), and a missing file fails fast with a single-line
+error and exit code `70`.
+
+Build the binary from the repo root with `./gradlew :mock-game:installDist`;
+the harness then "just works" when invoked from the repo root with the default.
+Override the path only when the layout differs (e.g. a Docker image baking the
+binary in at a fixed location).
+
 ### `launch-ice` — spawn faf-ice-adapter only
 
 Spawns the adapter, runs it for `--duration-seconds` (default `10`), terminates
@@ -238,6 +254,25 @@ it, and logs the exit code. The adapter's output appears in the logs tagged
 
 A missing or invalid `--ice-adapter-binary-path` produces a single-line error
 and exits `70` (`RUNTIME`) — no stack trace.
+
+### `launch-game` — spawn mock-game only
+
+Spawns `mock-game`, runs it for `--duration-seconds` (default `10`), terminates
+it, and logs the exit code. The game's output appears in the logs tagged
+`[MockGame]`. The argv is the config-derivable subset of
+`subprocess-orchestration-spec` §2.8 (`--gpgnet-port`, `--lobby-port`,
+`--player-id`, `--player-login`); the `game_launch`-derived flags (uid, mod,
+map, faction, team) are FSM scope and arrive with orchestration.
+
+```bash
+./gradlew :mock-client:run --args="\
+  launch-game \
+  --config mock-client.json \
+  --duration-seconds 30"
+```
+
+A missing or invalid `--mock-game-binary-path` produces a single-line error and
+exits `70` (`RUNTIME`) — no stack trace.
 
 ### `ice-smoke` — connectivity sanity check
 
@@ -327,8 +362,7 @@ error listing every missing required option:
 Missing required options: '--lobby-websocket-url=<lobbyWebSocketUrl>',
 '--oauth-token-url=<oauthTokenUrl>', '--oauth-auth-endpoint=<oauthAuthEndpoint>',
 '--oauth-redirect-uri=<oauthRedirectUri>', '--oauth-scopes=<oauthScopes>',
-'--oauth-client-id=<oauthClientId>', '--unique-id=<uniqueId>',
-'--mock-game-binary-path=<mockGameBinaryPath>'
+'--oauth-client-id=<oauthClientId>', '--unique-id=<uniqueId>'
 
 Usage: mock-client [-hV] [--config=<configFile>] ...
        (full picocli usage block)

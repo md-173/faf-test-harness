@@ -174,12 +174,20 @@ public final class MockClientCli implements Callable<Integer> {
                             + "'java -jar'; any other file is executed directly.")
     private Path iceAdapterBinaryPath;
 
-    /** Path to the mock-game executable. */
+    /**
+     * Path to the {@code mock-game} binary; defaults to the {@code application} plugin's install
+     * layout ({@code mock-game/build/install/mock-game/bin/mock-game}) so the harness "just works"
+     * when run from the repo root after {@code ./gradlew :mock-game:installDist}.
+     */
     @Option(
             names = "--mock-game-binary-path",
             scope = ScopeType.INHERIT,
-            required = true,
-            description = "Path to the mock-game executable.")
+            defaultValue = "mock-game/build/install/mock-game/bin/mock-game",
+            description =
+                    "Path to the mock-game binary (default: ${DEFAULT-VALUE}, the Gradle "
+                            + "'application' plugin install layout, resolved against the working "
+                            + "directory). A .jar is launched via 'java -jar'; any other file is "
+                            + "executed directly.")
     private Path mockGameBinaryPath;
 
     /** Local JSON-RPC port exposed by faf-ice-adapter. */
