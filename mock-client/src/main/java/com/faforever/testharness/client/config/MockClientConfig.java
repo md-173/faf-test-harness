@@ -33,9 +33,15 @@ import java.util.OptionalInt;
  * @param mockGameBinaryPath path to the mock-game executable
  * @param iceAdapterRpcPort local JSON-RPC port exposed by faf-ice-adapter
  * @param iceAdapterGpgNetPort local GPGNet port exposed by faf-ice-adapter
+ * @param iceAdapterLobbyPort local UDP port the game lobby uses for game traffic; passed to
+ *     faf-ice-adapter as {@code --lobby-port}
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
  * @param playerIdOverride optional player ID override for deterministic local testing
+ * @param playerLogin local player login passed to faf-ice-adapter as {@code --login}. Used directly
+ *     by the standalone {@code launch-ice} / {@code ice-smoke} diagnostics; during a full {@code
+ *     run} session the lobby {@code welcome.me.login} is the authoritative identity (json-rpc-spec
+ *     §8.1), so this value is a default that orchestration may override.
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -53,9 +59,11 @@ public record MockClientConfig(
         Path mockGameBinaryPath,
         int iceAdapterRpcPort,
         int iceAdapterGpgNetPort,
+        int iceAdapterLobbyPort,
         String logLevel,
         Optional<Path> logFile,
-        OptionalInt playerIdOverride) {
+        OptionalInt playerIdOverride,
+        String playerLogin) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports two channels:

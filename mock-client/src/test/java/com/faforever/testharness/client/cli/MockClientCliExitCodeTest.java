@@ -65,9 +65,10 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
-    void validLaunchIceInvocationExitsNotImplemented() {
-        assertEquals(
-                ExitCodes.NOT_IMPLEMENTED, execute(CliTestFixtures.withSubcommand("launch-ice")));
+    void launchIceWithMissingBinaryExitsRuntime() {
+        // launch-ice is implemented (WBS-3.1.2.2); the fixture's --ice-adapter-binary-path does
+        // not exist, so the launcher reports "binary not found" and the command exits RUNTIME.
+        assertEquals(ExitCodes.RUNTIME, execute(CliTestFixtures.withSubcommand("launch-ice")));
     }
 
     @Test

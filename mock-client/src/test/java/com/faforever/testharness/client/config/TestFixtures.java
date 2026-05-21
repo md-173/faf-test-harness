@@ -107,7 +107,9 @@ final class TestFixtures {
         assertEquals(Path.of(MOCK_GAME_BIN), config.mockGameBinaryPath());
         assertEquals(7236, config.iceAdapterRpcPort());
         assertEquals(7237, config.iceAdapterGpgNetPort());
+        assertEquals(7238, config.iceAdapterLobbyPort());
         assertEquals("INFO", config.logLevel());
+        assertEquals("mock-client", config.playerLogin());
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
         assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
     }

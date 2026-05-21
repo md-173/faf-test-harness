@@ -10,10 +10,11 @@ import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
 /**
- * Verifies that picocli routes {@code mock-client <subcommand> ...} to the matching stub and that
- * each stub returns {@link ExitCodes#NOT_IMPLEMENTED}. If the wrong dispatch happened, the exit
- * code would differ (parse error → {@link ExitCodes#USAGE}, or some unrelated failure), so the exit
- * code is a sufficient signal for the scaffolding pass.
+ * Verifies that picocli routes {@code mock-client <subcommand> ...} to the matching command. The
+ * not-yet-implemented stubs return {@link ExitCodes#NOT_IMPLEMENTED}; {@code launch-ice} is
+ * implemented and exits {@link ExitCodes#RUNTIME} on the fixture's missing binary. Either way the
+ * exit code differs from a parse error ({@link ExitCodes#USAGE}), so it is a sufficient dispatch
+ * signal.
  */
 final class MockClientCliDispatchTest {
 
@@ -32,7 +33,10 @@ final class MockClientCliDispatchTest {
 
     @Test
     void launchIceDispatchesToLaunchIceCommand() {
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, dispatch("launch-ice"));
+        // launch-ice is implemented (WBS-3.1.2.2). The fixture's binary path does not exist, so
+        // the command routes through, fails to find the binary, and exits RUNTIME — still a
+        // dispatch signal distinct from a parse error (USAGE).
+        assertEquals(ExitCodes.RUNTIME, dispatch("launch-ice"));
     }
 
     @Test

@@ -14,7 +14,9 @@
     "mockGameBinaryPath": "./mock-game/build/install/mock-game/bin/mock-game",
     "iceAdapterRpcPort": 7236,
     "iceAdapterGpgNetPort": 7237,
+    "iceAdapterLobbyPort": 7238,
     "logLevel": "INFO",
     "logFile": null,
-    "playerIdOverride": null
+    "playerIdOverride": null,
+    "playerLogin": "mock-client"
 }
