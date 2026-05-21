@@ -44,6 +44,14 @@ import org.slf4j.LoggerFactory;
  * the child via the {@code LOG_LEVEL} environment variable so {@code mock-game}'s {@link
  * LoggingSetup} observes the same level as the harness.
  *
+ * <p>No {@code LOG_FILE} / {@code LOG_DIR} is set on the child. mock-game's stdout and stderr are
+ * captured by {@code ProcessOutputLogger} tagged {@link #COMPONENT_TAG} and merged into the parent
+ * log stream, so giving the child its own log file would duplicate that capture (or worse, pit two
+ * writers against one file). This is intentionally asymmetric with {@link IceAdapterLauncher},
+ * which sets {@code LOG_DIR} only because faf-ice-adapter is an external binary with its own
+ * logging conventions; mock-game uses our {@link LoggingSetup} and inherits the parent's stream by
+ * design.
+ *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
 public final class MockGameLauncher {
@@ -104,7 +112,12 @@ public final class MockGameLauncher {
             return manager;
         } catch (IOException e) {
             throw new MockGameLaunchException(
-                    "mock-game binary failed to start: " + binary + " (" + e.getMessage() + ")", e);
+                    "mock-game binary failed to start: "
+                            + binary.toAbsolutePath()
+                            + " ("
+                            + e.getMessage()
+                            + ")",
+                    e);
         }
     }
 

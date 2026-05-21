@@ -102,7 +102,7 @@ public final class IceAdapterLauncher {
         } catch (IOException e) {
             throw new IceAdapterLaunchException(
                     "faf-ice-adapter binary failed to start: "
-                            + binary
+                            + binary.toAbsolutePath()
                             + " ("
                             + e.getMessage()
                             + ")",
