@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.ParameterException;
 import picocli.CommandLine.ParentCommand;
 import picocli.CommandLine.Spec;
 
@@ -59,9 +60,19 @@ public final class LaunchIceCommand implements Callable<Integer> {
      *
      * @return {@link ExitCodes#OK} on a clean spawn-and-terminate cycle, otherwise {@link
      *     ExitCodes#RUNTIME}
+     * @throws ParameterException if {@code --duration-seconds} is not a positive integer; picocli
+     *     renders this as a usage error and exits {@link ExitCodes#USAGE}
      */
     @Override
     public Integer call() {
+        if (durationSeconds <= 0) {
+            // A non-positive timeout makes CompletableFuture.get expire immediately; reject it up
+            // front so the user sees a clean usage error rather than a bogus "0s window elapsed".
+            throw new ParameterException(
+                    spec.commandLine(),
+                    "--duration-seconds must be a positive integer; got " + durationSeconds);
+        }
+
         MockClientConfig config = parent.toValidatedConfig(spec);
         MockClientCli.applyLoggingProperties(config);
         LoggingSetup.configure(MockClientCli.COMPONENT_NAME);

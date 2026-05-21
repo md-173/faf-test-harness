@@ -75,6 +75,17 @@ final class LaunchIceCommandTest {
     }
 
     @Test
+    void nonPositiveDurationExitsUsage() {
+        // The duration guard runs before the launcher, so the binary path is irrelevant here.
+        int exit = execute(launchIceArgs(tempDir.resolve("unused"), "--duration-seconds=0"));
+
+        assertEquals(
+                ExitCodes.USAGE,
+                exit,
+                "a non-positive --duration-seconds must be rejected as a usage error");
+    }
+
+    @Test
     void stubAdapterRunsForTheWindowThenTerminatesAndLogsExitCode() throws Exception {
         Path stub =
                 createStub(

@@ -81,7 +81,8 @@ public record MockClientConfig(
      * earlier by {@link LayeredDefaultProvider} so the user sees a deprecation error pointing at
      * the spec rather than a generic missing-creds error.
      *
-     * @throws IllegalArgumentException if neither credential channel is satisfied
+     * @throws IllegalArgumentException if neither credential channel is satisfied, or if {@code
+     *     playerLogin} is {@code null} or blank
      */
     public MockClientConfig {
         boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
@@ -94,6 +95,14 @@ public record MockClientConfig(
                             + "pre-obtained bootstrap token. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
+        }
+        // playerLogin is passed verbatim to faf-ice-adapter as --login; a blank value (reachable
+        // via a JSON config file even though the CLI flag has a default) would otherwise surface
+        // as an opaque ProcessBuilder failure once the launcher builds the argument list.
+        if (playerLogin == null || playerLogin.isBlank()) {
+            throw new IllegalArgumentException(
+                    "playerLogin must not be blank: it is passed to faf-ice-adapter as --login. "
+                            + "Set --player-login or remove the empty value from the config file.");
         }
     }
 }

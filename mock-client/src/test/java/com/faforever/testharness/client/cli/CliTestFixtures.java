@@ -47,4 +47,20 @@ final class CliTestFixtures {
         return Stream.concat(Stream.of(subcommand), Stream.of(minimalRequiredFlags()))
                 .toArray(String[]::new);
     }
+
+    /**
+     * Like {@link #withSubcommand(String)} but replaces {@code --ice-adapter-binary-path} with
+     * {@code iceBinaryPath}. Tests that exercise {@code launch-ice}'s "binary not found" path pass
+     * a guaranteed-absent path (e.g. one under a JUnit {@code @TempDir}) so the assertion does not
+     * silently depend on {@link #ICE_ADAPTER_BIN} being absent on the host filesystem.
+     */
+    static String[] withSubcommand(final String subcommand, final String iceBinaryPath) {
+        return Stream.concat(Stream.of(subcommand), Stream.of(minimalRequiredFlags()))
+                .map(
+                        arg ->
+                                arg.startsWith("--ice-adapter-binary-path=")
+                                        ? "--ice-adapter-binary-path=" + iceBinaryPath
+                                        : arg)
+                .toArray(String[]::new);
+    }
 }
