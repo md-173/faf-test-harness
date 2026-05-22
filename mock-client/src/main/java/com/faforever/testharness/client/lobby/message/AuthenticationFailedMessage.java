@@ -11,4 +11,12 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  */
 @LobbyCommand("authentication_failed")
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record AuthenticationFailedMessage(String text) implements InboundMessage {}
+public record AuthenticationFailedMessage(String text) implements InboundMessage {
+
+    /** Compact canonical constructor — rejects a frame missing the {@code text} reason. */
+    public AuthenticationFailedMessage {
+        if (text == null || text.isBlank()) {
+            throw new IllegalArgumentException("authentication_failed.text is required");
+        }
+    }
+}

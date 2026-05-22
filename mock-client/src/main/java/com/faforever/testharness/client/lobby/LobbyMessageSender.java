@@ -3,7 +3,6 @@ package com.faforever.testharness.client.lobby;
 import com.faforever.testharness.client.lobby.message.OutboundMessage;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.net.http.WebSocket;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -55,14 +54,14 @@ public final class LobbyMessageSender {
      * @param message typed outbound message
      * @return future that completes when the frame has been handed to the OS socket
      * @throws IllegalStateException if {@link LobbyConnection#connect()} has not completed, or the
-     *     record class is missing {@link LobbyCommand}, or the serialised payload is not a JSON
-     *     object
+     *     record class is missing {@link
+     *     com.faforever.testharness.client.lobby.message.LobbyCommand}, or the serialised payload
+     *     is not a JSON object
      */
-    public CompletableFuture<WebSocket> send(final OutboundMessage message) {
+    public CompletableFuture<Void> send(final OutboundMessage message) {
         String command = LobbyMessageDispatcher.commandOf(message.getClass());
-        ObjectNode envelope;
         Object serialised = mapper.valueToTree(message);
-        if (!(serialised instanceof ObjectNode)) {
+        if (!(serialised instanceof ObjectNode envelope)) {
             throw new IllegalStateException(
                     "outbound payload "
                             + message.getClass().getSimpleName()
@@ -70,10 +69,11 @@ public final class LobbyMessageSender {
                             + (serialised == null ? "null" : serialised.getClass().getSimpleName())
                             + "); every lobby frame must be a JSON object");
         }
-        envelope = (ObjectNode) serialised;
-        // Splice command in at the front. Jackson preserves insertion order on ObjectNode, but
-        // the spec doesn't pin field order — we set command after for simplicity.
+        // Jackson preserves insertion order on ObjectNode, but the spec doesn't pin field order —
+        // we set command after the record fields for simplicity.
         envelope.put("command", command);
-        return connection.send(envelope);
+        // Map the transport's CompletableFuture<WebSocket> to Void: the raw socket handle is an
+        // implementation detail callers of this typed API should not see.
+        return connection.send(envelope).thenApply(socket -> null);
     }
 }

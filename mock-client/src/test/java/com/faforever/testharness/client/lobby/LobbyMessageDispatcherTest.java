@@ -130,6 +130,26 @@ final class LobbyMessageDispatcherTest {
     }
 
     @Test
+    void gameLaunchMissingRequiredFieldIsDropped() throws Exception {
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        AtomicReference<GameLaunchMessage> seen = new AtomicReference<>();
+        dispatcher.register(GameLaunchMessage.class, seen::set);
+
+        // 'uid' omitted — the boxed Integer decodes to null and the canonical constructor rejects
+        // it, rather than a primitive int silently masking a missing game id as 0.
+        server.broadcastText(
+                "{\"command\":\"game_launch\",\"mod\":\"faf\",\"name\":\"x\","
+                        + "\"game_type\":\"custom\",\"rating_type\":\"global\"}");
+
+        assertTrue(
+                awaitWarn("game_launch", "shape validation"),
+                "expected a WARN log for game_launch missing its required 'uid'");
+        assertEquals(null, seen.get(), "consumer must not fire for game_launch missing 'uid'");
+    }
+
+    @Test
     void multipleConsumersForSameCommandAllFire() throws Exception {
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
@@ -170,18 +190,32 @@ final class LobbyMessageDispatcherTest {
         // 'session' is required to be a number; sending a string should make Jackson fail decode.
         server.broadcastText("{\"command\":\"session\",\"session\":\"not-a-number\"}");
 
-        // Give the dispatcher time to process and log.
-        Thread.sleep(300);
-
-        assertEquals(null, seen.get(), "consumer must not be invoked on a malformed payload");
         assertTrue(
-                logAppender.list.stream()
-                        .anyMatch(
-                                e ->
-                                        e.getLevel() == Level.WARN
-                                                && e.getFormattedMessage().contains("session")
-                                                && e.getFormattedMessage().contains("malformed")),
+                awaitWarn("session", "malformed"),
                 "expected a WARN log mentioning the malformed 'session' frame");
+        // The WARN is logged at the end of the drop path, so by the time awaitWarn returns the
+        // dispatcher has finished processing this frame — the consumer must not have been invoked.
+        assertEquals(null, seen.get(), "consumer must not be invoked on a malformed payload");
+    }
+
+    @Test
+    void missingRequiredFieldIsLoggedAsShapeValidationAndDropped() throws Exception {
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        AtomicReference<SessionMessage> seen = new AtomicReference<>();
+        dispatcher.register(SessionMessage.class, seen::set);
+
+        // 'session' omitted entirely — the boxed Long decodes to null and the record's canonical
+        // constructor rejects it. Jackson surfaces that as a ValueInstantiationException, which the
+        // dispatcher labels distinctly from a plain type mismatch.
+        server.broadcastText("{\"command\":\"session\"}");
+
+        assertTrue(
+                awaitWarn("session", "shape validation"),
+                "expected a WARN log for the frame missing its required 'session' field");
+        assertEquals(
+                null, seen.get(), "consumer must not fire for a frame missing a required field");
     }
 
     @Test
@@ -270,6 +304,35 @@ final class LobbyMessageDispatcherTest {
                                 .getResource(classpathPath)
                                 .toURI());
         return Files.readString(p);
+    }
+
+    /**
+     * Poll the captured log for a WARN event whose message contains every given substring, up to
+     * {@link #AWAIT_SECS}. Polling (rather than a fixed sleep) returns as soon as the log lands and
+     * keeps the negative-path tests deterministic under load.
+     */
+    private boolean awaitWarn(final String... substrings) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + AWAIT_SECS * 1000L;
+        while (System.currentTimeMillis() < deadline) {
+            boolean found =
+                    logAppender.list.stream()
+                            .filter(e -> e.getLevel() == Level.WARN)
+                            .map(ILoggingEvent::getFormattedMessage)
+                            .anyMatch(
+                                    msg -> {
+                                        for (String s : substrings) {
+                                            if (!msg.contains(s)) {
+                                                return false;
+                                            }
+                                        }
+                                        return true;
+                                    });
+            if (found) {
+                return true;
+            }
+            Thread.sleep(20);
+        }
+        return false;
     }
 
     /**
