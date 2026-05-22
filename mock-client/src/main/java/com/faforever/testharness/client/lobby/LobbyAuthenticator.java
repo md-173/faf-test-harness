@@ -21,6 +21,9 @@ import java.nio.file.StandardCopyOption;
  */
 public class LobbyAuthenticator {
 
+    /** Factor for converting from seconds to milis. */
+    private static final long SECONDS_TO_MILLIS = 1000L;
+
     /** The refresh token. */
     private String refreshToken;
 
@@ -32,6 +35,9 @@ public class LobbyAuthenticator {
 
     /** The UUID of the client. */
     private final String clientID;
+
+    /** Mapper for converting to and from JSON. */
+    private final ObjectMapper mapper = new ObjectMapper();
 
     /**
      * Enum for holding status codes. Mainly used to prevent MagicNumber errors, so might be worth
@@ -103,7 +109,7 @@ public class LobbyAuthenticator {
      *
      * @return the new access token.
      */
-    public String getAccessToken() {
+    public AccessToken getAccessToken() {
         HttpClient client = HttpClient.newHttpClient();
         String body =
                 "grant_type=refresh_token"
@@ -124,11 +130,14 @@ public class LobbyAuthenticator {
                 throw new RuntimeException("Blah");
             }
 
-            ObjectMapper mapper = new ObjectMapper();
             JsonNode parsed = mapper.readTree(response.body());
             refreshToken = parsed.get("refresh_token").asText();
             writeToken();
-            return parsed.get("access_token").asText();
+            // Get expiry date in Unix time.
+            long expiryDate =
+                    (System.currentTimeMillis() / SECONDS_TO_MILLIS)
+                            + parsed.get("expires_in").asLong();
+            return new AccessToken(parsed.get("access_token").asText(), expiryDate);
         } catch (JsonProcessingException e) {
             // TODO
             return null;

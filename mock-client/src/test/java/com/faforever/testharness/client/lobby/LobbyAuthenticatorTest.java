@@ -28,6 +28,8 @@ public final class LobbyAuthenticatorTest {
     private String requestMethod;
     private String requestBody;
 
+    private final ObjectMapper mapper = new ObjectMapper();
+
     @BeforeEach
     private void setupServer() throws IOException {
         try {
@@ -52,7 +54,6 @@ public final class LobbyAuthenticatorTest {
                     }
                     requestBody = new String(buf, 0, read);
                     input.close();
-                    ObjectMapper mapper = new ObjectMapper();
                     ObjectNode response = mapper.createObjectNode();
                     response.put("access_token", "7777");
                     response.put("token_type", "bearer");
@@ -90,6 +91,11 @@ public final class LobbyAuthenticatorTest {
         }
     }
 
+    @AfterEach
+    private void destroyTokenFile() throws IOException {
+        Files.delete(tokenFile);
+    }
+
     @Test
     void initialReadWorks() throws IOException {
         try {
@@ -109,7 +115,7 @@ public final class LobbyAuthenticatorTest {
                             tokenFile,
                             URI.create("http://127.0.0.1:8080/token/"),
                             "0001-0002-0003-0004");
-            String access = authenticator.getAccessToken();
+            AccessToken access = authenticator.getAccessToken();
             assertEquals("POST", requestMethod);
 
             // Old refresh token given in request
@@ -118,7 +124,7 @@ public final class LobbyAuthenticatorTest {
             assertTrue(requestBody.contains("client_id=0001-0002-0003-0004"));
 
             // Should have received this value for access token.
-            assertEquals("7777", access);
+            assertEquals("7777", access.token());
 
             try {
                 String refresh = Files.readString(tokenFile);
