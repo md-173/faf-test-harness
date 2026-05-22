@@ -1,11 +1,7 @@
 package com.faforever.testharness.client.lobby;
 
-import com.faforever.testharness.client.lobby.message.AuthenticationFailedMessage;
-import com.faforever.testharness.client.lobby.message.GameLaunchMessage;
 import com.faforever.testharness.client.lobby.message.InboundMessage;
 import com.faforever.testharness.client.lobby.message.LobbyCommand;
-import com.faforever.testharness.client.lobby.message.SessionMessage;
-import com.faforever.testharness.client.lobby.message.WelcomeMessage;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -26,39 +22,42 @@ import org.slf4j.LoggerFactory;
  * <h2>Composability</h2>
  *
  * Multiple consumers can register independently for the same record class — for example, the auth
- * FSM and a debug observer can both subscribe to {@link SessionMessage}. Consumers are invoked in
+ * FSM and a debug observer can both subscribe to {@link
+ * com.faforever.testharness.client.lobby.message.SessionMessage}. Consumers are invoked in
  * registration order on the WebSocket listener thread, so they must not block.
  *
  * <h2>Malformed / unknown frames</h2>
  *
- * Per the issue's acceptance criteria and spec §1.3-equivalent (the input-validation guidance
- * actually lives in §5 step 3), malformed JSON, missing {@code command}, decode failures, and
- * unhandled commands are logged at WARN and dropped. No exception escapes back to the transport.
+ * Per the issue's acceptance criteria, malformed JSON, missing {@code command}, decode failures,
+ * and unhandled commands are logged at WARN and dropped. No exception escapes back to the
+ * transport.
  *
  * <h2>Validation scope</h2>
  *
- * Records' canonical constructors perform shape validation (required fields non-null/non-blank); a
- * {@link RuntimeException} from a record constructor is caught here and treated as "malformed
- * payload — drop". Deeper value-level validation (allow-listed mapnames, identifier patterns) is
- * deferred to the downstream consumer per the issue's "no business logic" rule.
+ * The dispatcher's only validation is structural. Each inbound record's canonical constructor
+ * presence-checks its required fields (required primitives are boxed so an omitted field decodes to
+ * {@code null} rather than silently to {@code 0}); Jackson wraps the resulting {@link
+ * IllegalArgumentException} in a {@link
+ * com.fasterxml.jackson.databind.exc.ValueInstantiationException}, which {@link #dispatch} catches
+ * and drops at WARN alongside plain malformed-JSON failures. Deeper value-level validation
+ * (allow-listed mapnames, identifier patterns) is the downstream consumer's job per the issue's "no
+ * business logic" rule — see spec §5 step 3 and {@link
+ * com.faforever.testharness.client.lobby.message.GameLaunchMessage}'s javadoc.
  */
 public final class LobbyMessageDispatcher {
 
     /** SLF4J logger for the dispatcher. */
     private static final Logger LOG = LoggerFactory.getLogger(LobbyMessageDispatcher.class);
 
-    /**
-     * Authoritative registry of {@code command} string → record class. Update this when a new
-     * {@link InboundMessage} record is added. Listed explicitly (rather than reflectively
-     * enumerating {@code InboundMessage.getPermittedSubclasses()}) so missing-annotation bugs fail
-     * loudly at startup, not at first message.
-     */
-    private static final Map<String, Class<? extends InboundMessage>> KNOWN_COMMANDS =
-            Map.of(
-                    commandOf(SessionMessage.class), SessionMessage.class,
-                    commandOf(WelcomeMessage.class), WelcomeMessage.class,
-                    commandOf(AuthenticationFailedMessage.class), AuthenticationFailedMessage.class,
-                    commandOf(GameLaunchMessage.class), GameLaunchMessage.class);
+    static {
+        // Fail loudly at class-load if any inbound record forgot its @LobbyCommand annotation,
+        // rather than discovering it on the first matching frame. commandOf throws for a missing
+        // annotation; iterating the sealed permits clause keeps this in lockstep with the catalog
+        // without a hand-maintained parallel table.
+        for (Class<?> permitted : InboundMessage.class.getPermittedSubclasses()) {
+            commandOf(permitted);
+        }
+    }
 
     /** Raw-frame transport this dispatcher sits on top of. */
     private final LobbyConnection connection;
@@ -99,31 +98,26 @@ public final class LobbyMessageDispatcher {
      * Register a typed consumer for inbound messages of the given record class. Multiple
      * registrations against the same class fan out in registration order.
      *
+     * <p>Synchronised so the "first registration installs the connection-level handler" guard is
+     * atomic against a concurrent {@code register} for the same class — registration is a
+     * startup-time activity, so the lock is uncontended in practice.
+     *
      * @param <T> record type
-     * @param messageType record class — must be annotated with {@link LobbyCommand} and listed in
-     *     {@link #KNOWN_COMMANDS}
+     * @param messageType record class — must be annotated with {@link LobbyCommand} (guaranteed for
+     *     every {@link InboundMessage} by the class-load check above)
      * @param consumer callback invoked once per matching inbound frame
-     * @throws IllegalArgumentException if the record class is not registered as a known command
      */
-    public <T extends InboundMessage> void register(
+    public synchronized <T extends InboundMessage> void register(
             final Class<T> messageType, final Consumer<T> consumer) {
         String command = commandOf(messageType);
-        if (!KNOWN_COMMANDS.containsKey(command)) {
-            throw new IllegalArgumentException(
-                    "record class "
-                            + messageType.getSimpleName()
-                            + " is not in the dispatcher's known-commands registry; add it to "
-                            + "LobbyMessageDispatcher.KNOWN_COMMANDS");
-        }
-        // Compute-if-absent the per-class consumer list, then install the connection-level handler
-        // exactly once. The handler is keyed on the command string at the connection layer, so
-        // any second registerHandler call would silently replace the first — guard with a sentinel
-        // on the consumer list to skip re-installation.
         List<Consumer<? extends InboundMessage>> existing =
                 consumers.computeIfAbsent(messageType, ignored -> new CopyOnWriteArrayList<>());
         boolean firstForThisType = existing.isEmpty();
         existing.add(consumer);
         if (firstForThisType) {
+            // First consumer for this command — install the single connection-level handler that
+            // decodes and fans out. The connection keys handlers by command string, so installing
+            // it more than once would just replace an identical lambda; the guard avoids that.
             connection.registerHandler(command, node -> dispatch(messageType, node));
         }
     }
@@ -138,25 +132,22 @@ public final class LobbyMessageDispatcher {
      */
     private <T extends InboundMessage> void dispatch(
             final Class<T> messageType, final JsonNode node) {
+        String command = commandOf(messageType);
         T decoded;
         try {
             decoded = mapper.treeToValue(node, messageType);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            LOG.warn(
-                    "dropping malformed '{}' frame: {}",
-                    KNOWN_COMMANDS.entrySet().stream()
-                            .filter(entry -> entry.getValue().equals(messageType))
-                            .findFirst()
-                            .map(Map.Entry::getKey)
-                            .orElse("?"),
-                    e.getOriginalMessage());
-            return;
-        } catch (IllegalArgumentException e) {
-            // Thrown by a record's canonical constructor on null/blank required fields.
+        } catch (com.fasterxml.jackson.databind.exc.ValueInstantiationException e) {
+            // Thrown specifically when a record's canonical constructor rejects the decoded
+            // values — i.e. a missing required field. Distinct from a plain type mismatch below.
+            Throwable cause = e.getCause();
             LOG.warn(
                     "dropping '{}' frame failing shape validation: {}",
-                    commandOf(messageType),
-                    e.getMessage());
+                    command,
+                    cause != null ? cause.getMessage() : e.getOriginalMessage());
+            return;
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            // Wrong JSON shape for the target type (e.g. a string where a number is expected).
+            LOG.warn("dropping malformed '{}' frame: {}", command, e.getOriginalMessage());
             return;
         }
         List<Consumer<? extends InboundMessage>> handlers = consumers.get(messageType);

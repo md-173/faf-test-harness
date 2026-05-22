@@ -15,16 +15,36 @@ import java.util.Map;
  * {@code matchmaker_info}) are deliberately not modelled here — they will land in 3.1.1.3 when the
  * welcome state-sync consumer is implemented.
  *
- * @param me nested identity block; same id/login as the top-level fields
- * @param currentTime server time in ISO 8601 (string, not parsed here)
- * @param id authenticated player ID (also present as {@code me.id})
- * @param login authenticated player login (also present as {@code me.login})
+ * <p>Required fields are presence-checked in the canonical constructor; {@code id} is a boxed
+ * {@link Integer} so an omitted field decodes to {@code null} and is dropped rather than silently
+ * defaulting to {@code 0}.
+ *
+ * @param me nested identity block; same id/login as the top-level fields; required
+ * @param currentTime server time in ISO 8601 (string, not parsed here); required
+ * @param id authenticated player ID (also present as {@code me.id}); required
+ * @param login authenticated player login (also present as {@code me.login}); required
  */
 @LobbyCommand("welcome")
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record WelcomeMessage(
-        Me me, @JsonProperty("current_time") String currentTime, int id, String login)
+        Me me, @JsonProperty("current_time") String currentTime, Integer id, String login)
         implements InboundMessage {
+
+    /** Compact canonical constructor — rejects a frame missing any required field. */
+    public WelcomeMessage {
+        if (me == null) {
+            throw new IllegalArgumentException("welcome.me is required");
+        }
+        if (currentTime == null || currentTime.isBlank()) {
+            throw new IllegalArgumentException("welcome.current_time is required");
+        }
+        if (id == null) {
+            throw new IllegalArgumentException("welcome.id is required");
+        }
+        if (login == null || login.isBlank()) {
+            throw new IllegalArgumentException("welcome.login is required");
+        }
+    }
 
     /**
      * Nested identity block from a {@code welcome} payload. Ratings are intentionally left as raw
