@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
@@ -50,15 +52,24 @@ final class ConfigLoaderDefaultsOnlyTest {
                 message.contains("--unique-id"),
                 "Missing-parameter message should name --unique-id. Got: " + message);
         assertTrue(
-                message.contains("--ice-adapter-binary-path"),
-                "Missing-parameter message should name --ice-adapter-binary-path. "
-                        + "Got: "
-                        + message);
-        assertTrue(
                 message.contains("--mock-game-binary-path"),
                 "Missing-parameter message should name --mock-game-binary-path. "
                         + "Got: "
                         + message);
+    }
+
+    @Test
+    void iceAdapterBinaryPathDefaultsToFafIceAdapterJarWhenUnset() {
+        // --ice-adapter-binary-path is optional (subprocess-orchestration-spec §2.2): when unset
+        // it resolves to faf-ice-adapter.jar in the working directory.
+        String[] withoutIceBinary =
+                Arrays.stream(TestFixtures.minimalRequiredCli())
+                        .filter(arg -> !arg.startsWith("--ice-adapter-binary-path"))
+                        .toArray(String[]::new);
+
+        MockClientConfig config = ConfigLoader.load(withoutIceBinary, Map.of()).orElseThrow();
+
+        assertEquals(Path.of("faf-ice-adapter.jar"), config.iceAdapterBinaryPath());
     }
 
     @Test
@@ -69,6 +80,10 @@ final class ConfigLoaderDefaultsOnlyTest {
         assertEquals(7236, config.iceAdapterRpcPort(), "iceAdapterRpcPort default should be 7236");
         assertEquals(
                 7237, config.iceAdapterGpgNetPort(), "iceAdapterGpgNetPort default should be 7237");
+        assertEquals(
+                7238, config.iceAdapterLobbyPort(), "iceAdapterLobbyPort default should be 7238");
+        assertEquals(
+                "mock-client", config.playerLogin(), "playerLogin default should be mock-client");
         assertEquals("INFO", config.logLevel(), "logLevel default should be INFO");
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty Optional");
         assertTrue(

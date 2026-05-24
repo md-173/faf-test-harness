@@ -163,12 +163,15 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Stable hardware identifier sent in the lobby auth message.")
     private String uniqueId;
 
-    /** Path to the faf-ice-adapter executable. */
+    /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
     @Option(
             names = "--ice-adapter-binary-path",
             scope = ScopeType.INHERIT,
-            required = true,
-            description = "Path to the faf-ice-adapter executable.")
+            defaultValue = "faf-ice-adapter.jar",
+            description =
+                    "Path to the faf-ice-adapter binary (default: ${DEFAULT-VALUE}, resolved "
+                            + "against the working directory). A .jar is launched via "
+                            + "'java -jar'; any other file is executed directly.")
     private Path iceAdapterBinaryPath;
 
     /** Path to the mock-game executable. */
@@ -195,6 +198,16 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Local GPGNet port exposed by faf-ice-adapter.")
     private int iceAdapterGpgNetPort;
 
+    /** Local UDP lobby port passed to faf-ice-adapter as {@code --lobby-port}. */
+    @Option(
+            names = "--ice-adapter-lobby-port",
+            scope = ScopeType.INHERIT,
+            defaultValue = "7238",
+            description =
+                    "Local UDP lobby port the game lobby uses for game traffic; passed to "
+                            + "faf-ice-adapter as --lobby-port.")
+    private int iceAdapterLobbyPort;
+
     /** Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR). */
     @Option(
             names = "--log-level",
@@ -216,6 +229,17 @@ public final class MockClientCli implements Callable<Integer> {
             scope = ScopeType.INHERIT,
             description = "Optional player ID override for deterministic local testing.")
     private Integer playerIdOverride;
+
+    /** Local player login passed to faf-ice-adapter as {@code --login}. */
+    @Option(
+            names = "--player-login",
+            scope = ScopeType.INHERIT,
+            defaultValue = "mock-client",
+            description =
+                    "Local player login passed to faf-ice-adapter as --login. Used by the "
+                            + "launch-ice / ice-smoke diagnostics; a full 'run' session uses the "
+                            + "lobby welcome identity instead.")
+    private String playerLogin;
 
     /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
@@ -253,9 +277,11 @@ public final class MockClientCli implements Callable<Integer> {
                 mockGameBinaryPath,
                 iceAdapterRpcPort,
                 iceAdapterGpgNetPort,
+                iceAdapterLobbyPort,
                 logLevel,
                 Optional.ofNullable(logFile),
-                playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride));
+                playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
+                playerLogin);
     }
 
     /**

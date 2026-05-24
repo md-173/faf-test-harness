@@ -5,9 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.faforever.testharness.client.config.ConfigLoader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 /**
@@ -16,6 +18,8 @@ import picocli.CommandLine;
  * wrong, or both.
  */
 final class MockClientCliExitCodeTest {
+
+    @TempDir private Path tempDir;
 
     private static int execute(final String[] args) {
         CommandLine cmd = ConfigLoader.newCommandLine(args, Map.of());
@@ -65,9 +69,14 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
-    void validLaunchIceInvocationExitsNotImplemented() {
+    void launchIceWithMissingBinaryExitsRuntime() {
+        // launch-ice is implemented (WBS-3.1.2.2). Point --ice-adapter-binary-path at a
+        // guaranteed-absent path under the test's temp dir, so the launcher reports "binary not
+        // found" and the command exits RUNTIME — no reliance on a host path being absent.
+        String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
         assertEquals(
-                ExitCodes.NOT_IMPLEMENTED, execute(CliTestFixtures.withSubcommand("launch-ice")));
+                ExitCodes.RUNTIME,
+                execute(CliTestFixtures.withSubcommand("launch-ice", absentBinary)));
     }
 
     @Test
