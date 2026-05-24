@@ -13,9 +13,10 @@ import picocli.CommandLine;
 
 /**
  * Verifies that picocli routes {@code mock-client <subcommand> ...} to the matching command. The
- * not-yet-implemented stubs return {@link ExitCodes#NOT_IMPLEMENTED}; {@code launch-ice} is
- * implemented and exits {@link ExitCodes#RUNTIME} on a missing binary. Either way the exit code
- * differs from a parse error ({@link ExitCodes#USAGE}), so it is a sufficient dispatch signal.
+ * not-yet-implemented stubs return {@link ExitCodes#NOT_IMPLEMENTED}; {@code launch-ice} and {@code
+ * launch-game} are implemented and exit {@link ExitCodes#RUNTIME} on a missing binary. Either way
+ * the exit code differs from a parse error ({@link ExitCodes#USAGE}), so it is a sufficient
+ * dispatch signal.
  */
 final class MockClientCliDispatchTest {
 
@@ -46,12 +47,18 @@ final class MockClientCliDispatchTest {
         String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
         assertEquals(
                 ExitCodes.RUNTIME,
-                execute(CliTestFixtures.withSubcommand("launch-ice", absentBinary)));
+                execute(CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary)));
     }
 
     @Test
     void launchGameDispatchesToLaunchGameCommand() {
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, dispatch("launch-game"));
+        // launch-game is implemented (WBS-3.1.2.3). Same pattern as launch-ice: point at a
+        // guaranteed-absent path under the temp dir so the dispatch assertion does not silently
+        // depend on the Gradle install layout being present.
+        String absentBinary = tempDir.resolve("no-such-mock-game").toString();
+        assertEquals(
+                ExitCodes.RUNTIME,
+                execute(CliTestFixtures.withSubcommandAndGameBinary("launch-game", absentBinary)));
     }
 
     @Test

@@ -9,7 +9,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,7 +102,7 @@ public final class IceAdapterLauncher {
         } catch (IOException e) {
             throw new IceAdapterLaunchException(
                     "faf-ice-adapter binary failed to start: "
-                            + binary
+                            + binary.toAbsolutePath()
                             + " ("
                             + e.getMessage()
                             + ")",
@@ -134,13 +133,8 @@ public final class IceAdapterLauncher {
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
-        List<String> argv = new ArrayList<>();
-        if (isJar(binary)) {
-            // Spec §2.2: run the JAR on the same JRE as the parent; never rely on PATH.
-            argv.add(javaBinary());
-            argv.add("-jar");
-        }
-        argv.add(binary.toString());
+        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly.
+        List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary));
 
         int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
         // Spec §2.6: --id and --login must precede every other flag.
@@ -155,29 +149,6 @@ public final class IceAdapterLauncher {
         argv.add("--lobby-port");
         argv.add(Integer.toString(config.iceAdapterLobbyPort()));
         return argv;
-    }
-
-    /**
-     * Returns whether {@code binary} is a Java archive that must be launched via {@code java -jar}.
-     *
-     * @param binary the binary path
-     * @return {@code true} if the file name ends in {@code .jar} (case-insensitive)
-     */
-    private static boolean isJar(final Path binary) {
-        return binary.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar");
-    }
-
-    /**
-     * Resolves the {@code java} executable, mirroring spec §2.2: prefer the JRE running the parent,
-     * fall back to {@code ${java.home}/bin/java} when the OS withholds the command path.
-     *
-     * @return an absolute path to a {@code java} binary
-     */
-    private static String javaBinary() {
-        return ProcessHandle.current()
-                .info()
-                .command()
-                .orElse(System.getProperty("java.home") + "/bin/java");
     }
 
     /** Best-effort creation of the per-child log directory; a failure here is not fatal. */
