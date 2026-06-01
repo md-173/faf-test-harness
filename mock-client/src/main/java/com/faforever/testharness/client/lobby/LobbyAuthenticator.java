@@ -14,6 +14,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Class responsible for handing out access tokens and managing control and safe-keeping of refresh
@@ -84,23 +85,18 @@ public class LobbyAuthenticator {
      * Write the new refresh token to the file atomically (i.e. by writing it to a temp file and
      * then moving the file in an atomic operation).
      */
-    private void writeToken() {
+    private void writeToken() throws IOException {
         Path tempFile = backupFile.resolveSibling(backupFile.getFileName() + ".tmp");
         try {
-            try {
-                Files.writeString(tempFile, refreshToken);
-                Files.move(
-                        tempFile,
-                        backupFile,
-                        StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                // As a fallback when atomic move is not supported.
-                Files.move(tempFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } catch (IOException e) {
-            // TODO
-            System.out.println("ERROR");
+            Files.writeString(tempFile, refreshToken);
+            Files.move(
+                    tempFile,
+                    backupFile,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            // As a fallback when atomic move is not supported.
+            Files.move(tempFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -109,7 +105,7 @@ public class LobbyAuthenticator {
      *
      * @return the new access token.
      */
-    public AccessToken getAccessToken() {
+    public CompletableFuture<AccessToken> getAccessToken() {
         HttpClient client = HttpClient.newHttpClient();
         String body =
                 "grant_type=refresh_token"
@@ -122,31 +118,53 @@ public class LobbyAuthenticator {
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build();
-        try {
-            HttpResponse<String> response =
-                    client.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != HttpStatusCodes.OK.value) {
-                // TODO
-                throw new RuntimeException("Blah");
-            }
+        CompletableFuture<HttpResponse<String>> responseFuture =
+                client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+        return responseFuture.handle(this::obtainToken);
+    }
 
+    private AccessToken obtainToken(HttpResponse<String> response, Throwable thrown) {
+        if (thrown != null) {
+            throw new AuthenticationException("Did not get response from the server", thrown);
+        }
+
+        if (response.statusCode() != HttpStatusCodes.OK.value) {
+            // TODO: Better information
+            throw new AuthenticationException(response.body());
+        }
+
+        try {
             JsonNode parsed = mapper.readTree(response.body());
-            refreshToken = parsed.get("refresh_token").asText();
-            writeToken();
-            // Get expiry date in Unix time.
-            long expiryDate =
-                    (System.currentTimeMillis() / SECONDS_TO_MILLIS)
-                            + parsed.get("expires_in").asLong();
-            return new AccessToken(parsed.get("access_token").asText(), expiryDate);
+            if (parsed.has("refresh_token")) {
+                // Correct response path.
+                refreshToken = parsed.get("refresh_token").asText();
+                try {
+                    writeToken();
+                } catch (IOException e) {
+                    throw new AuthenticationException("Could not write token to file", e);
+                }
+                // Get expiry date in Unix time.
+                long expiryDate =
+                        (System.currentTimeMillis() / SECONDS_TO_MILLIS)
+                                + parsed.get("expires_in").asLong();
+                return new AccessToken(parsed.get("access_token").asText(), expiryDate);
+            } else if (parsed.has("error")) {
+                // Incorrect response path.
+
+                // Default message.
+                String message = "Failed to authenticate with no error message from server";
+                JsonNode messageNode = parsed.get("error_description");
+                if (messageNode != null) {
+                    message = messageNode.asText();
+                }
+                throw new AuthenticationException(message);
+            } else {
+                // Something else, an unexpected failure.
+                throw new AuthenticationException(
+                        String.format("Unsupported response: %s", response.body()));
+            }
         } catch (JsonProcessingException e) {
-            // TODO
-            return null;
-        } catch (IOException e) {
-            // TODO
-            return null;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
+            throw new AuthenticationException("Couldn't process the JSON response", e);
         }
     }
 }
