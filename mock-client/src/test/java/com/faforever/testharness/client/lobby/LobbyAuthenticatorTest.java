@@ -3,7 +3,6 @@ package com.faforever.testharness.client.lobby;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -22,235 +21,223 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public final class LobbyAuthenticatorTest {
+/**
+ * Unit tests for {@link LobbyAuthenticator} running against an in-process {@link HttpServer} bound
+ * to an OS-chosen port. The server is rescripted per-test via {@link #setHandler}.
+ */
+final class LobbyAuthenticatorTest {
 
-    private final URI serverAddress = URI.create("http://127.0.0.1");
+    private static final String CLIENT_ID = "0001-0002-0003-0004";
+
     private HttpServer server;
+    private URI tokenEndpoint;
     private Path tokenFile;
-
-    // Variables used to store server request info for later assertions.
-    private String requestMethod;
-    private String requestBody;
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    // Last captured request — populated by {@link CapturingHandler}.
+    private volatile String requestMethod;
+    private volatile String requestBody;
+
     @BeforeEach
-    private void setupServer() throws IOException {
-        try {
-            // Backlog set to 1. Only one connection at a time.
-            server = HttpServer.create(new InetSocketAddress(serverAddress.getPath(), 8080), 1);
-        } catch (IOException e) {
-            System.out.println(
-                    "Error with creating the necessary http server, cannot proceed with test.");
-            throw e;
-        }
+    void setupServer() throws IOException {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 1);
         server.start();
-    }
-
-    private class CustomHandler implements HttpHandler {
-        // Variable used for tests to dictate what server should return next.
-        private ObjectNode response;
-
-        CustomHandler(ObjectNode response) {
-            this.response = response;
-        }
-
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            // Write request method for testing
-            requestMethod = exchange.getRequestMethod();
-            InputStream input = exchange.getRequestBody();
-            byte[] buf = new byte[256];
-            int read = input.read(buf);
-            if (input.available() > 0) {
-                // TODO: Likely freezes the test
-                fail("Input too large");
-            }
-            requestBody = new String(buf, 0, read);
-            input.close();
-            String responseBody = mapper.writeValueAsString(response);
-            exchange.sendResponseHeaders(200, responseBody.length());
-            OutputStream os = exchange.getResponseBody();
-            os.write(responseBody.getBytes());
-            exchange.close();
-        }
+        tokenEndpoint = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/token/");
     }
 
     @AfterEach
-    private void teardownServer() {
+    void teardownServer() {
         if (server != null) {
-            server.stop(1000);
+            server.stop(0);
             server = null;
         }
     }
 
     @BeforeEach
-    private void setupTokenFile() throws IOException {
-        try {
-            tokenFile = Files.createTempFile("refresh_token", "");
-            Files.writeString(tokenFile, "0123");
-        } catch (IOException e) {
-            System.out.println(
-                    "Error with writing the necessary token file, cannot proceed with test.");
-            throw e;
-        }
+    void setupTokenFile() throws IOException {
+        tokenFile = Files.createTempFile("refresh_token", "");
+        Files.writeString(tokenFile, "0123");
     }
 
     @AfterEach
-    private void destroyTokenFile() {
-        try {
+    void destroyTokenFile() throws IOException {
+        if (tokenFile != null) {
             Files.deleteIfExists(tokenFile);
-        } catch (IOException e) {
-            System.out.println("Error erasing dummy token file. Noncritical");
         }
+    }
+
+    private LobbyAuthenticator newAuthenticator() throws IOException {
+        return new LobbyAuthenticator(tokenFile, tokenEndpoint, CLIENT_ID);
+    }
+
+    /** Replace the handler at {@code /token/}. Safe to call multiple times within one test. */
+    private void setHandler(final HttpHandler handler) {
+        try {
+            server.removeContext("/token/");
+        } catch (IllegalArgumentException ignored) {
+            // No context with that name set yet.
+        }
+        server.createContext("/token/", new CapturingHandler(handler));
     }
 
     @Test
     void initialReadWorks() throws IOException {
-        try {
-            LobbyAuthenticator authenticator =
-                    new LobbyAuthenticator(
-                            tokenFile, serverAddress.resolve("/token/"), "0001-0002-0003-0004");
-        } catch (IOException e) {
-            fail(String.format("Initial read did not work due to %s", e.getMessage()));
-        }
+        newAuthenticator();
     }
 
     @Test
-    void tokenExchange() throws IOException {
-        try {
-            LobbyAuthenticator authenticator =
-                    new LobbyAuthenticator(
-                            tokenFile,
-                            URI.create("http://127.0.0.1:8080/token/"),
-                            "0001-0002-0003-0004");
+    void tokenExchangeSucceedsAndRotatesRefreshToken() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
 
-            try {
-                generateSuccessfulResponse("7777", "4567");
-                AccessToken access = authenticator.getAccessToken().get();
-                // Should have received this value for access token.
-                assertEquals("7777", access.token());
-                String refresh = Files.readString(tokenFile);
-                assertEquals("4567", refresh);
+        setHandler(successResponse("7777", "4567"));
+        AccessToken first = authenticator.obtain().get();
+        assertEquals("7777", first.token());
+        assertEquals("4567", Files.readString(tokenFile));
+        assertTrue(requestBody.contains("refresh_token=0123"));
 
-                // Old refresh token given in request
-                assertTrue(requestBody.contains("refresh_token=0123"));
+        setHandler(successResponse("8888", "8901"));
+        AccessToken second = authenticator.obtain().get();
+        assertEquals("8888", second.token());
+        assertEquals("8901", Files.readString(tokenFile));
+        assertTrue(requestBody.contains("refresh_token=4567"));
 
-                generateSuccessfulResponse("8888", "8901");
-                access = authenticator.getAccessToken().get();
-                // Should have received new values for tokens.
-                assertEquals("8888", access.token());
-                refresh = Files.readString(tokenFile);
-                assertEquals("8901", refresh);
-
-                // Old refresh token given in request
-                assertTrue(requestBody.contains("refresh_token=4567"));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                fail("Got interrupted");
-            } catch (ExecutionException e) {
-                fail(String.format("Could not get access token due to %s", e.getMessage()));
-            } catch (IOException e) {
-                fail("Could not read refresh file again. Likely broken by LobbyAuthenticator.");
-            }
-
-            assertEquals("POST", requestMethod);
-            // Correct client id
-            assertTrue(requestBody.contains("client_id=0001-0002-0003-0004"));
-
-        } catch (IOException e) {
-            fail(String.format("Initial read did not work due to %s", e.getMessage()));
-        }
+        assertEquals("POST", requestMethod);
+        assertTrue(requestBody.contains("client_id=" + CLIENT_ID));
     }
 
     @Test
-    void serverDisconnectFails() throws IOException {
-        // Stop the server now.
+    void networkFailureSurfacesAsAuthenticationException() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        // Stop the server so the connect attempt fails immediately.
         teardownServer();
 
-        try {
-            LobbyAuthenticator authenticator =
-                    new LobbyAuthenticator(
-                            tokenFile,
-                            URI.create("http://127.0.0.1:8080/token/"),
-                            "0001-0002-0003-0004");
-
-            ExecutionException e =
-                    assertThrows(
-                            ExecutionException.class, () -> authenticator.getAccessToken().get());
-            assertEquals(AuthenticationException.class, e.getCause().getClass());
-        } catch (IOException e) {
-            fail(String.format("Initial read did not work due to %s", e.getMessage()));
-        }
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
     }
 
     @Test
-    void fileReadFails() {
-        // Delete file now.
-        destroyTokenFile();
-
-        IOException e =
-                assertThrows(
-                        IOException.class,
-                        () ->
-                                new LobbyAuthenticator(
-                                        tokenFile,
-                                        URI.create("http://127.0.0.1:8080/token/"),
-                                        "0001-0002-0003-0004"));
+    void missingTokenFileSurfacesAsIOException() throws IOException {
+        Files.deleteIfExists(tokenFile);
+        assertThrows(IOException.class, this::newAuthenticator);
     }
 
     @Test
-    void unsuccessfulResponse() {
-        try {
-            LobbyAuthenticator authenticator =
-                    new LobbyAuthenticator(
-                            tokenFile,
-                            URI.create("http://127.0.0.1:8080/token/"),
-                            "0001-0002-0003-0004");
+    void badCredentialsSurfaceErrorDescription() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        setHandler(errorResponse(400, "invalid_grant", "Invalid grant message"));
 
-            generateUnsuccessfulResponse();
-            ExecutionException e =
-                    assertThrows(
-                            ExecutionException.class, () -> authenticator.getAccessToken().get());
-            assertEquals(AuthenticationException.class, e.getCause().getClass());
-            assertEquals("Invalid grant message", e.getCause().getMessage());
-
-            assertEquals("POST", requestMethod);
-            // Correct client id
-            assertTrue(requestBody.contains("client_id=0001-0002-0003-0004"));
-
-        } catch (IOException e) {
-            fail(String.format("Initial read did not work due to %s", e.getMessage()));
-        }
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+        assertEquals("Invalid grant message", e.getCause().getMessage());
     }
 
-    // Tell the server to respond with a successful response with the given tokens.
-    private void generateSuccessfulResponse(String accessToken, String refreshToken) {
+    @Test
+    void malformedResponseSurfacesAsAuthenticationException() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        setHandler(rawResponse(200, "not json at all"));
+
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+        // Message must not echo the body verbatim (could carry a token in malformed real cases).
+        assertTrue(
+                e.getCause().getMessage().contains("non-JSON"),
+                "expected 'non-JSON' in message, got: " + e.getCause().getMessage());
+    }
+
+    @Test
+    void unexpectedJsonShapeSurfacesAsAuthenticationException() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        setHandler(rawResponse(200, "{\"something_else\": true}"));
+
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+        assertTrue(e.getCause().getMessage().contains("unexpected payload"));
+    }
+
+    private HttpHandler successResponse(final String accessToken, final String refreshToken) {
         ObjectNode response = mapper.createObjectNode();
         response.put("token_type", "bearer");
-        // An hour
         response.put("expires_in", 3600);
         response.put("access_token", accessToken);
         response.put("refresh_token", refreshToken);
         response.put("scope", "openid offline lobby");
-        try {
-            server.removeContext("/token/");
-        } catch (IllegalArgumentException e) {
-            // No context with that name as been set, continue as normal
-        }
-        server.createContext("/token/", new CustomHandler(response));
+        return exchange -> writeJson(exchange, 200, response);
     }
 
-    // Tell the server to respond with an error.
-    private void generateUnsuccessfulResponse() {
+    private HttpHandler errorResponse(
+            final int status, final String error, final String description) {
         ObjectNode response = mapper.createObjectNode();
-        response.put("error", "invalid_grant");
-        response.put("error_description", "Invalid grant message");
-        try {
-            server.removeContext("/token/");
-        } catch (IllegalArgumentException e) {
-            // No context with that name as been set, continue as normal
+        response.put("error", error);
+        response.put("error_description", description);
+        return exchange -> writeJson(exchange, status, response);
+    }
+
+    private HttpHandler rawResponse(final int status, final String body) {
+        return exchange -> {
+            byte[] bytes = body.getBytes();
+            exchange.sendResponseHeaders(status, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        };
+    }
+
+    private void writeJson(final HttpExchange exchange, final int status, final ObjectNode payload)
+            throws IOException {
+        byte[] body = mapper.writeValueAsBytes(payload);
+        exchange.sendResponseHeaders(status, body.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(body);
         }
-        server.createContext("/token/", new CustomHandler(response));
+    }
+
+    /** Wraps the per-test handler so the request method and body are captured for assertions. */
+    private final class CapturingHandler implements HttpHandler {
+        private final HttpHandler delegate;
+
+        CapturingHandler(final HttpHandler delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public void handle(final HttpExchange exchange) throws IOException {
+            requestMethod = exchange.getRequestMethod();
+            try (InputStream in = exchange.getRequestBody()) {
+                requestBody = new String(in.readAllBytes());
+            }
+            delegate.handle(exchange);
+            exchange.close();
+        }
+    }
+
+    /**
+     * Demonstrates a tiny end-to-end roundtrip via the {@link TokenSource} interface — confirms
+     * {@link LobbyAuthenticator} is reachable through the supertype the handshake actually depends
+     * on.
+     */
+    @Test
+    void exposesTokenSourceInterface() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        TokenSource asSource = authenticator;
+        setHandler(successResponse("via-iface", "rot-1"));
+        AccessToken token = asSource.obtain().get();
+        assertEquals("via-iface", token.token());
+    }
+
+    @Test
+    void exceptionMessageOnBadCredsDoesNotLeakRefreshToken() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        setHandler(errorResponse(400, "invalid_grant", "token expired"));
+
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+        String msg = e.getCause().getMessage();
+        assertTrue(msg.contains("token expired"), msg);
+        assertTrue(!msg.contains("0123"), "exception message must not echo the refresh token");
     }
 }

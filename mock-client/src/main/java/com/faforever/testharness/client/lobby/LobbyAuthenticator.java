@@ -17,64 +17,76 @@ import java.nio.file.StandardCopyOption;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Class responsible for handing out access tokens and managing control and safe-keeping of refresh
- * tokens.
+ * {@link TokenSource} that exchanges a long-lived refresh token for short-lived JWT access tokens
+ * against the configured OAuth2 token endpoint (Hydra in production; see {@code
+ * documentation/research/lobby-protocol-spec.md} §2). Hydra rotates the refresh token on every
+ * successful exchange, and the rotated value is persisted atomically (temp-file write + rename) to
+ * the configured backup file before the new access token is returned.
+ *
+ * <p>No part of this class logs the refresh token, the access token, or any HTTP response body that
+ * could carry them — error messages surface a status code or the OAuth {@code error_description}
+ * field only.
  */
-public class LobbyAuthenticator {
+public final class LobbyAuthenticator implements TokenSource {
 
-    /** Factor for converting from seconds to milis. */
+    /** Conversion factor for seconds → milliseconds. */
     private static final long SECONDS_TO_MILLIS = 1000L;
 
-    /** The refresh token. */
+    /** The most recent refresh token. Rotated atomically on every successful exchange. */
     private String refreshToken;
 
-    /** The file where the refresh token is written to, so that it persists across runs. */
+    /** The file the refresh token is persisted to so it survives a restart. */
     private final Path backupFile;
 
-    /** The URL of the source for obtaining more OAuth2 tokens. */
+    /** The OAuth2 token endpoint to POST refresh-token exchanges to. */
     private final URI tokenSource;
 
-    /** The UUID of the client. */
-    private final String clientID;
+    /** The OAuth2 public client identifier (UUID) registered on Hydra. */
+    private final String clientId;
 
-    /** Mapper for converting to and from JSON. */
+    /** Jackson mapper for parsing token responses. */
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** HTTP client reused across every exchange. */
+    private final HttpClient http;
+
     /**
-     * Enum for holding status codes. Mainly used to prevent MagicNumber errors, so might be worth
-     * reconsidering.
+     * Construct an authenticator that reads its initial refresh token from {@code fromFile} and
+     * sends future exchanges to {@code tokenSourceUrl}.
+     *
+     * @param fromFile file holding the refresh token; rewritten atomically on each successful
+     *     rotation
+     * @param tokenSourceUrl Hydra token endpoint (e.g. {@code
+     *     https://hydra.faforever.xyz/oauth2/token})
+     * @param clientId the public OAuth2 client UUID
+     * @throws IOException if {@code fromFile} cannot be read
      */
-    private enum HttpStatusCodes {
-        /** Successful request. */
-        OK(200);
-
-        /** Numeric value of status code. */
-        private final int value;
-
-        HttpStatusCodes(int value) {
-            this.value = value;
-        }
-
-        public int value() {
-            return value;
-        }
+    public LobbyAuthenticator(final Path fromFile, final URI tokenSourceUrl, final String clientId)
+            throws IOException {
+        this(fromFile, tokenSourceUrl, clientId, HttpClient.newHttpClient());
     }
 
     /**
-     * Creates a new object for holding refresh tokens and requesting access tokens.
+     * Test seam allowing a custom {@link HttpClient}; production callers use the public
+     * constructor.
      *
-     * @param fromFile file to read (and write) the refresh token.
-     * @param tokenSourceUrl when new tokens are needed, they are requested from this url.
-     * @param clientID the UUID of the client, passed to {@code tokenSourceUrl} when requesting new
-     *     tokens.
-     * @throws IOException if {@code fromFile} cannot be read for any reason.
+     * @param fromFile file holding the refresh token
+     * @param tokenSourceUrl Hydra token endpoint
+     * @param clientId the public OAuth2 client UUID
+     * @param httpClient HTTP client used for every exchange
+     * @throws IOException if {@code fromFile} cannot be read
      */
-    public LobbyAuthenticator(Path fromFile, URI tokenSourceUrl, String clientID)
+    public LobbyAuthenticator(
+            final Path fromFile,
+            final URI tokenSourceUrl,
+            final String clientId,
+            final HttpClient httpClient)
             throws IOException {
         this.backupFile = fromFile;
         this.refreshToken = readToken();
         this.tokenSource = tokenSourceUrl;
-        this.clientID = clientID;
+        this.clientId = clientId;
+        this.http = httpClient;
     }
 
     private String readToken() throws IOException {
@@ -82,89 +94,102 @@ public class LobbyAuthenticator {
     }
 
     /**
-     * Write the new refresh token to the file atomically (i.e. by writing it to a temp file and
-     * then moving the file in an atomic operation).
+     * Write the new refresh token to the backup file atomically (temp file + rename). Falls back to
+     * a non-atomic move on filesystems that don't support atomic moves.
      */
     private void writeToken() throws IOException {
         Path tempFile = backupFile.resolveSibling(backupFile.getFileName() + ".tmp");
+        Files.writeString(tempFile, refreshToken);
         try {
-            Files.writeString(tempFile, refreshToken);
             Files.move(
                     tempFile,
                     backupFile,
                     StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException e) {
-            // As a fallback when atomic move is not supported.
             Files.move(tempFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
     /**
-     * Obtain a new access token.
+     * Exchange the current refresh token for a fresh access token. On success the rotated refresh
+     * token is persisted to the backup file before the future completes — callers can treat the
+     * returned {@link AccessToken} as the source of truth without separately committing the
+     * rotation.
      *
-     * @return the new access token.
+     * @return future that completes with the new {@link AccessToken}, or completes exceptionally
+     *     with {@link AuthenticationException}
      */
-    public CompletableFuture<AccessToken> getAccessToken() {
-        HttpClient client = HttpClient.newHttpClient();
+    @Override
+    public CompletableFuture<AccessToken> obtain() {
         String body =
                 "grant_type=refresh_token"
                         + "&refresh_token="
                         + URLEncoder.encode(refreshToken, StandardCharsets.UTF_8)
                         + "&client_id="
-                        + URLEncoder.encode(clientID, StandardCharsets.UTF_8);
+                        + URLEncoder.encode(clientId, StandardCharsets.UTF_8);
         HttpRequest request =
                 HttpRequest.newBuilder(tokenSource)
                         .header("Content-Type", "application/x-www-form-urlencoded")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build();
-        CompletableFuture<HttpResponse<String>> responseFuture =
-                client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
-        return responseFuture.handle(this::obtainToken);
+        return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
+                .handle(this::obtainToken);
     }
 
-    private AccessToken obtainToken(HttpResponse<String> response, Throwable thrown) {
+    /**
+     * Backwards-compatible alias for {@link #obtain()}.
+     *
+     * @return future that completes with the new {@link AccessToken}, or completes exceptionally
+     *     with {@link AuthenticationException}
+     */
+    public CompletableFuture<AccessToken> getAccessToken() {
+        return obtain();
+    }
+
+    private AccessToken obtainToken(final HttpResponse<String> response, final Throwable thrown) {
         if (thrown != null) {
-            throw new AuthenticationException("Did not get response from the server", thrown);
+            throw new AuthenticationException(
+                    "OAuth token endpoint unreachable: " + thrown.getClass().getSimpleName(),
+                    thrown);
         }
 
-        if (response.statusCode() != HttpStatusCodes.OK.value) {
-            // TODO: Better information
-            throw new AuthenticationException(response.body());
-        }
-
+        JsonNode parsed;
         try {
-            JsonNode parsed = mapper.readTree(response.body());
-            if (parsed.has("refresh_token")) {
-                // Correct response path.
-                refreshToken = parsed.get("refresh_token").asText();
-                try {
-                    writeToken();
-                } catch (IOException e) {
-                    throw new AuthenticationException("Could not write token to file", e);
-                }
-                // Get expiry date in Unix time.
-                long expiryDate =
-                        (System.currentTimeMillis() / SECONDS_TO_MILLIS)
-                                + parsed.get("expires_in").asLong();
-                return new AccessToken(parsed.get("access_token").asText(), expiryDate);
-            } else if (parsed.has("error")) {
-                // Incorrect response path.
-
-                // Default message.
-                String message = "Failed to authenticate with no error message from server";
-                JsonNode messageNode = parsed.get("error_description");
-                if (messageNode != null) {
-                    message = messageNode.asText();
-                }
-                throw new AuthenticationException(message);
-            } else {
-                // Something else, an unexpected failure.
-                throw new AuthenticationException(
-                        String.format("Unsupported response: %s", response.body()));
-            }
+            parsed = mapper.readTree(response.body());
         } catch (JsonProcessingException e) {
-            throw new AuthenticationException("Couldn't process the JSON response", e);
+            // Don't echo the body — it might contain tokens if a proxy mangled the response.
+            throw new AuthenticationException(
+                    "OAuth token endpoint returned non-JSON response (status="
+                            + response.statusCode()
+                            + ")",
+                    e);
         }
+
+        if (parsed.has("access_token") && parsed.has("refresh_token")) {
+            refreshToken = parsed.get("refresh_token").asText();
+            try {
+                writeToken();
+            } catch (IOException e) {
+                throw new AuthenticationException("could not persist rotated refresh token", e);
+            }
+            long expiryDate =
+                    (System.currentTimeMillis() / SECONDS_TO_MILLIS)
+                            + parsed.get("expires_in").asLong(0);
+            return new AccessToken(parsed.get("access_token").asText(), expiryDate);
+        }
+
+        if (parsed.has("error")) {
+            String description =
+                    parsed.has("error_description")
+                            ? parsed.get("error_description").asText()
+                            : parsed.get("error").asText();
+            throw new AuthenticationException(description);
+        }
+
+        throw new AuthenticationException(
+                "OAuth token endpoint returned unexpected payload (status="
+                        + response.statusCode()
+                        + ")");
     }
 }
