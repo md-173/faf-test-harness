@@ -20,10 +20,7 @@ final class TokenSourcesTest {
      * placeholder values that pass record validation.
      */
     private static MockClientConfig configWith(
-            final String oauthAccessToken,
-            final Path oauthTokenFile,
-            final String oauthRefreshToken,
-            final Path oauthRefreshTokenFile) {
+            final String oauthRefreshToken, final Path oauthRefreshTokenFile) {
         return new MockClientConfig(
                 URI.create("wss://lobby.faforever.xyz"),
                 URI.create("https://hydra.faforever.xyz/oauth2/token"),
@@ -33,8 +30,6 @@ final class TokenSourcesTest {
                 "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
                 oauthRefreshToken,
                 oauthRefreshTokenFile,
-                oauthAccessToken,
-                oauthTokenFile,
                 "00000000-0000-0000-0000-000000000000",
                 Path.of("/bin/faf-ice-adapter"),
                 Path.of("/bin/mock-game"),
@@ -52,7 +47,7 @@ final class TokenSourcesTest {
         Path refreshFile = dir.resolve("refresh.txt");
         Files.writeString(refreshFile, "refresh-token");
 
-        MockClientConfig config = configWith(null, null, null, refreshFile);
+        MockClientConfig config = configWith(null, refreshFile);
         TokenSource source = TokenSources.fromConfig(config);
         assertInstanceOf(LobbyAuthenticator.class, source);
     }
@@ -64,7 +59,7 @@ final class TokenSourcesTest {
         // the validator does accept (literal refresh token, then we null it out by reflection-free
         // means is hard — instead, instantiate with the only-literal-refresh case which fromConfig
         // explicitly rejects).
-        MockClientConfig config = configWith(null, null, "literal-only-refresh", null);
+        MockClientConfig config = configWith("literal-only-refresh", null);
         assertThrows(AuthenticationException.class, () -> TokenSources.fromConfig(config));
     }
 }
