@@ -2,7 +2,7 @@
   "command": "welcome",
   "me": {
     "id": 3,
-    "login": "Rhiza",
+    "login": "test_user",
     "clan": "123",
     "country": "",
     "ratings": {
@@ -12,5 +12,5 @@
   },
   "current_time": "1970-01-01T00:00:00+00:00",
   "id": 3,
-  "login": "Rhiza"
+  "login": "test_user"
 }

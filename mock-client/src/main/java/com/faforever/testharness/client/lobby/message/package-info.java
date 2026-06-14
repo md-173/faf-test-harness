@@ -22,8 +22,7 @@
  *
  * <p>Smaller payloads (ask_session, session, auth, authentication_failed, the matchmaker /
  * game_host / game_join shapes) are read straight off the {@link
- * com.fasterxml.jackson.databind.JsonNode} using {@link
- * com.faforever.testharness.client.lobby.JsonRequire}, or written by hand with {@code
+ * com.fasterxml.jackson.databind.JsonNode}, or written by hand with {@code
  * ObjectMapper.createObjectNode()}. Adding a record for those would be more boilerplate than the
  * field-access saves.
  *
