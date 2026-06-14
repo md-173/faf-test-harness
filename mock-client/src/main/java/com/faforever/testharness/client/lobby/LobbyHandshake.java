@@ -114,7 +114,19 @@ public final class LobbyHandshake {
         connection.registerHandler(
                 "session",
                 msg -> {
-                    long session = msg.get("session").asLong();
+                    if (result.isDone()) {
+                        return;
+                    }
+                    final long session;
+                    try {
+                        session = JsonRequire.longField(msg, "session");
+                    } catch (IllegalArgumentException e) {
+                        result.completeExceptionally(
+                                new AuthenticationException(
+                                        "malformed session message from lobby: " + e.getMessage(),
+                                        e));
+                        return;
+                    }
                     sendAuth(token, session);
                 });
         ObjectNode ask = mapper.createObjectNode();

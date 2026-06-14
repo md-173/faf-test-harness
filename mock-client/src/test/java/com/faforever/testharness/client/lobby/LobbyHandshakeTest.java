@@ -131,4 +131,24 @@ final class LobbyHandshakeTest {
         handshake.perform(fixedToken("first"));
         assertThrows(IllegalStateException.class, () -> handshake.perform(fixedToken("second")));
     }
+
+    @Test
+    void handshakeFailsOnMalformedSession() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
+
+        // Drain ask_session, then reply with a session frame missing the 'session' field — the
+        // handshake must fail cleanly rather than NPE on the listener thread and hang.
+        server.pollReceived(2, TimeUnit.SECONDS);
+        server.broadcastText("{\"command\":\"session\"}");
+
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+    }
 }
