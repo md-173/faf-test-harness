@@ -6,29 +6,28 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.util.Map;
 
 /**
- * Inbound {@code welcome} payload (lobby-protocol-spec.md §3, §10.1) — the terminal positive
- * response to {@link AuthMessage}. Includes the authenticated player's identity and ratings, which
- * are duplicated at the top level (legacy of the AsyncAPI shape — both forms are present in
- * production traffic).
+ * Inbound {@code welcome} payload (lobby-protocol-spec.md §3, §10.1) — the server's terminal
+ * positive response to a successful {@code auth} request. Includes the authenticated player's
+ * identity and ratings, which are duplicated at the top level (legacy of the AsyncAPI shape — both
+ * forms are present in production traffic).
  *
- * <p>The post-welcome world-state messages ({@code player_info}, {@code game_info}, {@code social},
- * {@code matchmaker_info}) are deliberately not modelled here — they will land in 3.1.1.3 when the
- * welcome state-sync consumer is implemented.
+ * <p>Decoded via Jackson directly by the consumer: {@code mapper.treeToValue(node,
+ * WelcomeMessage.class)}. The post-welcome world-state messages ({@code player_info}, {@code
+ * game_info}, {@code social}, {@code matchmaker_info}) are deliberately not modelled here — they
+ * will land in 3.1.1.3 when the welcome state-sync consumer is implemented.
  *
  * <p>Required fields are presence-checked in the canonical constructor; {@code id} is a boxed
- * {@link Integer} so an omitted field decodes to {@code null} and is dropped rather than silently
- * defaulting to {@code 0}.
+ * {@link Integer} so an omitted field decodes to {@code null} and the constructor throws rather
+ * than silently defaulting to {@code 0}.
  *
  * @param me nested identity block; same id/login as the top-level fields; required
  * @param currentTime server time in ISO 8601 (string, not parsed here); required
  * @param id authenticated player ID (also present as {@code me.id}); required
  * @param login authenticated player login (also present as {@code me.login}); required
  */
-@LobbyCommand("welcome")
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record WelcomeMessage(
-        Me me, @JsonProperty("current_time") String currentTime, Integer id, String login)
-        implements InboundMessage {
+        Me me, @JsonProperty("current_time") String currentTime, Integer id, String login) {
 
     /** Compact canonical constructor — rejects a frame missing any required field. */
     public WelcomeMessage {

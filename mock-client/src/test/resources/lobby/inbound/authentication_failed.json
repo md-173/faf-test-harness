@@ -1,4 +1,0 @@
-{
-  "command": "authentication_failed",
-  "text": "Login not found or password incorrect. They are case sensitive."
-}

@@ -44,7 +44,6 @@ import java.util.List;
  * @param mapPoolMapVersionId matchmaker only — map pool version reference
  * @param gameOptions matchmaker only — additional game options, opaque to this layer
  */
-@LobbyCommand("game_launch")
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record GameLaunchMessage(
         Integer uid,
@@ -60,8 +59,7 @@ public record GameLaunchMessage(
         @JsonProperty("map_position") Integer mapPosition,
         @JsonProperty("expected_players") Integer expectedPlayers,
         @JsonProperty("map_pool_map_version_id") Integer mapPoolMapVersionId,
-        @JsonProperty("game_options") JsonNode gameOptions)
-        implements InboundMessage {
+        @JsonProperty("game_options") JsonNode gameOptions) {
 
     /**
      * Compact canonical constructor — rejects a frame missing any required header field. This is

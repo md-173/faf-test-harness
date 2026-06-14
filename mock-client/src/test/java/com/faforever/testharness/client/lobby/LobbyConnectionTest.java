@@ -232,6 +232,34 @@ final class LobbyConnectionTest {
     }
 
     @Test
+    void multipleHandlersForSameCommandAllFire() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        CountDownLatch both = new CountDownLatch(2);
+        AtomicReference<JsonNode> firstSaw = new AtomicReference<>();
+        AtomicReference<JsonNode> secondSaw = new AtomicReference<>();
+        lobby.registerHandler(
+                "session",
+                node -> {
+                    firstSaw.set(node);
+                    both.countDown();
+                });
+        lobby.registerHandler(
+                "session",
+                node -> {
+                    secondSaw.set(node);
+                    both.countDown();
+                });
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        server.broadcastText("{\"command\":\"session\",\"session\":42}");
+
+        assertTrue(both.await(2, TimeUnit.SECONDS), "both handlers should fire");
+        assertEquals(42, firstSaw.get().get("session").asInt());
+        assertEquals(42, secondSaw.get().get("session").asInt());
+    }
+
+    @Test
     void registeringPingHandlerIsRejected() throws Exception {
         lobby = new LobbyConnection(server.uri());
         LobbyMessageHandler noop =
