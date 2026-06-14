@@ -7,14 +7,16 @@ The FAF Lobby Server uses a **WebSocket-based bidirectional messaging protocol**
 ### Server Endpoints
 | Environment | URL | Protocol |
 |---|---|---|
-| Production | `wss://ws.faforever.com/ws` | WSS (TLS) |
-| Test | `wss://ws.faforever.xyz/ws` | WSS (TLS) |
-| Local | `ws://localhost/ws` | WS |
+| Production | `wss://ws.faforever.com` | WSS (TLS) |
+| Test | `wss://lobby.faforever.xyz` | WSS (TLS) |
+| Local | `ws://localhost` | WS |
+
+> All environments serve the lobby WebSocket at the **host root (`/`)** — see the aiohttp route `add_get("/")` in [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). The earlier `/ws` suffix was the retired `ws_bridge_rs` path and no longer applies (`GET /ws` now 404s). Note the **test** host is `lobby.faforever.xyz`, **not** `ws.faforever.xyz`, and it is **not** a `.com↔.xyz` swap of prod — configure per environment (see §2).
 
 ### Wire Format
 Each message is a single JSON object terminated by a newline character (`\n`). There is no additional framing beyond WebSocket frames themselves.
 
-> **Implementation note:** FAF's internal server protocol is newline-terminated JSON, and the Rust ws_bridge_rs service translates between WebSocket and that TCP protocol. Over WebSocket, framing is handled natively, each send/receive is a discrete frame, so clients using java.net.http.WebSocket can rely on onText(CharSequence data, boolean last) to deliver complete messages without raw newline-delimitation logic. A trailing \n may still appear as a pass-through artifact from the bridge; incoming messages should be parsed using WebSocket frame boundaries rather than that delimiter. Appending \n on outgoing messages is a conservative compatibility choice, but whether the bridge actually requires it should be verified against its source rather than assumed.
+> **Implementation note:** Over WebSocket, framing is handled natively — each send/receive is a discrete frame — so clients using java.net.http.WebSocket can rely on onText(CharSequence data, boolean last) to deliver complete messages without raw newline-delimitation logic. The server nonetheless appends a trailing `\n` to every frame on purpose: its `encode_message` (see [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py)) keeps the delimiter for the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n` regardless of frame boundaries. Incoming messages should therefore be parsed by WebSocket frame boundary with the trailing `\n` tolerated (stripped); appending `\n` on outgoing frames matches the server's own behaviour and is safe.
 
 ```json
 {"command": "ping"}\n
@@ -23,10 +25,9 @@ Each message is a single JSON object terminated by a newline character (`\n`). T
 Every message contains a `command` field that identifies the message type. Direction is implicit: some commands are only sent by the client, some only by the server, and some (like `ping`/`pong`) are sent by both.
 
 ### Architecture Note
-The WebSocket endpoint is not served directly by the lobby server. The lobby server uses a raw TCP protocol internally ([SimpleJsonProtocol](https://faforever.github.io/server/protocol/simple_json.html)). A separate bridge service, [ws_bridge_rs](https://github.com/FAForever/ws_bridge_rs), translates between WebSocket and the server's internal TCP protocol.
+The lobby server serves WebSocket **natively** (aiohttp) — see `WebSocketProtocol` in [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py), mounted at path `/` by [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). One JSON object per text frame; the server appends a trailing `\n` to each frame for compatibility with the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n`.
 
-The Mock Client connects via **WebSocket only** and does not need to implement the raw TCP protocol. This ensures the test harness accurately mimics real production 
-client behaviour and validates the bridge layer alongside the server.
+Historically (the raw-TCP era) a separate Rust bridge, [ws_bridge_rs](https://github.com/FAForever/ws_bridge_rs), translated WebSocket ↔ the internal [SimpleJsonProtocol](https://faforever.github.io/server/protocol/simple_json.html) TCP stream. That bridge is now **unmaintained/retired** — native WS support landed in [FAForever/server#1093](https://github.com/FAForever/server/pull/1093). The Mock Client connects via **WebSocket only**, so it needs no raw-TCP handling regardless.
 
 ### Connection Lifecycle
 1. Client opens a WebSocket connection to one of the server endpoints
@@ -37,8 +38,11 @@ client behaviour and validates the bridge layer alongside the server.
 
 ### Sources
 - [FAForever Lobby Server AsyncAPI Spec](https://faforever.github.io/faf-api-specs)
-- [SimpleJsonProtocol (internal server protocol)](https://faforever.github.io/server/protocol/simple_json.html)
-- [ws_bridge_rs (WebSocket bridge)](https://github.com/FAForever/ws_bridge_rs)
+- [`server/protocol/websocket.py` — native WebSocket protocol (`encode_message` keeps trailing `\n`)](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py)
+- [`server/servercontext.py` — aiohttp WS route mounted at `/` (`add_get("/")`)](https://github.com/FAForever/server/blob/develop/server/servercontext.py)
+- [FAForever/server#1093 — native WS support (retires ws_bridge_rs)](https://github.com/FAForever/server/pull/1093)
+- [SimpleJsonProtocol (internal server TCP protocol — historical bridge target)](https://faforever.github.io/server/protocol/simple_json.html)
+- [ws_bridge_rs (WebSocket bridge — unmaintained/retired)](https://github.com/FAForever/ws_bridge_rs)
 
 <a id="section-2-oauth"></a>
 ## 2. OAuth Token Acquisition
