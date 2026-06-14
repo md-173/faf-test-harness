@@ -63,30 +63,11 @@ public final class LobbyAuthenticator implements TokenSource {
      */
     public LobbyAuthenticator(final Path fromFile, final URI tokenSourceUrl, final String clientId)
             throws IOException {
-        this(fromFile, tokenSourceUrl, clientId, HttpClient.newHttpClient());
-    }
-
-    /**
-     * Test seam allowing a custom {@link HttpClient}; production callers use the public
-     * constructor.
-     *
-     * @param fromFile file holding the refresh token
-     * @param tokenSourceUrl Hydra token endpoint
-     * @param clientId the public OAuth2 client UUID
-     * @param httpClient HTTP client used for every exchange
-     * @throws IOException if {@code fromFile} cannot be read
-     */
-    public LobbyAuthenticator(
-            final Path fromFile,
-            final URI tokenSourceUrl,
-            final String clientId,
-            final HttpClient httpClient)
-            throws IOException {
         this.backupFile = fromFile;
         this.refreshToken = readToken();
         this.tokenSource = tokenSourceUrl;
         this.clientId = clientId;
-        this.http = httpClient;
+        this.http = HttpClient.newHttpClient();
     }
 
     private String readToken() throws IOException {
@@ -135,16 +116,6 @@ public final class LobbyAuthenticator implements TokenSource {
                         .build();
         return http.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .handle(this::obtainToken);
-    }
-
-    /**
-     * Backwards-compatible alias for {@link #obtain()}.
-     *
-     * @return future that completes with the new {@link AccessToken}, or completes exceptionally
-     *     with {@link AuthenticationException}
-     */
-    public CompletableFuture<AccessToken> getAccessToken() {
-        return obtain();
     }
 
     private AccessToken obtainToken(final HttpResponse<String> response, final Throwable thrown) {

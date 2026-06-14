@@ -34,10 +34,10 @@ public final class LobbyHandshake {
     /** Hardware identifier hash sent in the {@code auth} message. Never logged. */
     private final String uniqueId;
 
-    /** Client version string sent in {@code ask_session}. Cosmetic; not auth material. */
+    /** Client version string sent in {@code ask_session}; a required argument of that command. */
     private final String clientVersion;
 
-    /** User-agent string sent in {@code ask_session}. Cosmetic; not auth material. */
+    /** User-agent string sent in {@code ask_session}; a required argument of that command. */
     private final String userAgent;
 
     /** Jackson mapper for building outgoing frames. */

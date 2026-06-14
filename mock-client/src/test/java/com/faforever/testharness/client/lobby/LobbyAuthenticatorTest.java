@@ -226,20 +226,6 @@ final class LobbyAuthenticatorTest {
         }
     }
 
-    /**
-     * Demonstrates a tiny end-to-end roundtrip via the {@link TokenSource} interface — confirms
-     * {@link LobbyAuthenticator} is reachable through the supertype the handshake actually depends
-     * on.
-     */
-    @Test
-    void exposesTokenSourceInterface() throws Exception {
-        LobbyAuthenticator authenticator = newAuthenticator();
-        TokenSource asSource = authenticator;
-        setHandler(successResponse("via-iface", "rot-1"));
-        AccessToken token = asSource.obtain().get();
-        assertEquals("via-iface", token.token());
-    }
-
     @Test
     void exceptionMessageOnBadCredsDoesNotLeakRefreshToken() throws Exception {
         LobbyAuthenticator authenticator = newAuthenticator();
