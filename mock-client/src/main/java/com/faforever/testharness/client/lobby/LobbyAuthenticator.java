@@ -175,7 +175,7 @@ public final class LobbyAuthenticator implements TokenSource {
             }
             long expiryDate =
                     (System.currentTimeMillis() / SECONDS_TO_MILLIS)
-                            + parsed.get("expires_in").asLong(0);
+                            + parsed.path("expires_in").asLong(0);
             return new AccessToken(parsed.get("access_token").asText(), expiryDate);
         }
 

@@ -159,6 +159,17 @@ final class LobbyAuthenticatorTest {
         assertTrue(e.getCause().getMessage().contains("unexpected payload"));
     }
 
+    @Test
+    void missingExpiresInDoesNotFail() throws Exception {
+        LobbyAuthenticator authenticator = newAuthenticator();
+        // A token response that omits expires_in must not NPE — the access token is still usable;
+        // expiry simply defaults to "now" (the lobby enforces its own expiry).
+        setHandler(rawResponse(200, "{\"access_token\":\"a\",\"refresh_token\":\"r\"}"));
+
+        AccessToken token = authenticator.obtain().get();
+        assertEquals("a", token.token());
+    }
+
     private HttpHandler successResponse(final String accessToken, final String refreshToken) {
         ObjectNode response = mapper.createObjectNode();
         response.put("token_type", "bearer");
