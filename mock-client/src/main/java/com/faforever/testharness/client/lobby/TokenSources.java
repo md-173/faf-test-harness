@@ -19,13 +19,22 @@ public final class TokenSources {
      *
      * @param config the validated mock-client configuration
      * @return a {@link TokenSource} ready to use against the handshake
-     * @throws AuthenticationException if no usable credential channel is configured
-     * @throws IOException if the refresh-token file cannot be read
+     * @throws AuthenticationException if no usable credential channel is configured, or if the
+     *     refresh-token file cannot be read
      */
-    public static TokenSource fromConfig(final MockClientConfig config) throws IOException {
+    public static TokenSource fromConfig(final MockClientConfig config) {
         if (config.oauthRefreshTokenFile() != null) {
-            return new LobbyAuthenticator(
-                    config.oauthRefreshTokenFile(), config.oauthTokenUrl(), config.oauthClientId());
+            try {
+                return new LobbyAuthenticator(
+                        config.oauthRefreshTokenFile(),
+                        config.oauthTokenUrl(),
+                        config.oauthClientId());
+            } catch (IOException e) {
+                throw new AuthenticationException(
+                        "could not read OAuth refresh-token file: "
+                                + config.oauthRefreshTokenFile(),
+                        e);
+            }
         }
         throw new AuthenticationException(
                 "no usable OAuth credential channel: supply --oauth-refresh-token-file");

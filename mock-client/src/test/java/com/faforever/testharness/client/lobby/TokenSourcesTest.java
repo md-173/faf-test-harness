@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.faforever.testharness.client.config.MockClientConfig;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +51,18 @@ final class TokenSourcesTest {
         MockClientConfig config = configWith(null, refreshFile);
         TokenSource source = TokenSources.fromConfig(config);
         assertInstanceOf(LobbyAuthenticator.class, source);
+    }
+
+    @Test
+    void unreadableRefreshTokenFileFailsWithAuthenticationException(@TempDir final Path dir) {
+        // A configured-but-unreadable refresh-token file is surfaced as AuthenticationException
+        // (wrapping the underlying IOException) so callers handle a single failure type.
+        Path missing = dir.resolve("does-not-exist.txt");
+        MockClientConfig config = configWith(null, missing);
+
+        AuthenticationException e =
+                assertThrows(AuthenticationException.class, () -> TokenSources.fromConfig(config));
+        assertInstanceOf(IOException.class, e.getCause());
     }
 
     @Test
