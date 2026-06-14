@@ -1,6 +1,5 @@
 package com.faforever.testharness.client.lobby;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -46,27 +45,6 @@ final class TokenSourcesTest {
                 Optional.empty(),
                 OptionalInt.empty(),
                 "mock-client");
-    }
-
-    @Test
-    void preObtainedAccessTokenWins() throws Exception {
-        MockClientConfig config = configWith("literal-jwt", null, "refresh-stale", null);
-        TokenSource source = TokenSources.fromConfig(config);
-        assertInstanceOf(PreObtainedAccessTokenSource.class, source);
-        assertEquals("literal-jwt", source.obtain().get().token());
-    }
-
-    @Test
-    void tokenFileBeatsRefreshTokenFile(@TempDir final Path dir) throws Exception {
-        Path tokenFile = dir.resolve("access.txt");
-        Files.writeString(tokenFile, "from-file-jwt\n");
-        Path refreshFile = dir.resolve("refresh.txt");
-        Files.writeString(refreshFile, "refresh-token");
-
-        MockClientConfig config = configWith(null, tokenFile, null, refreshFile);
-        TokenSource source = TokenSources.fromConfig(config);
-        assertInstanceOf(PreObtainedAccessTokenSource.class, source);
-        assertEquals("from-file-jwt", source.obtain().get().token());
     }
 
     @Test

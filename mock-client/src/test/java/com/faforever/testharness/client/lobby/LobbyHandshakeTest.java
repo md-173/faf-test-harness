@@ -2,7 +2,6 @@ package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -131,20 +130,5 @@ final class LobbyHandshakeTest {
                 new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         handshake.perform(fixedToken("first"));
         assertThrows(IllegalStateException.class, () -> handshake.perform(fixedToken("second")));
-    }
-
-    @Test
-    void preObtainedTokenSourceReturnsLiteralToken() throws Exception {
-        TokenSource src = new PreObtainedAccessTokenSource("the-jwt");
-        AccessToken token = src.obtain().get(2, TimeUnit.SECONDS);
-        assertEquals("the-jwt", token.token());
-        assertTrue(token.expiryDate() == Long.MAX_VALUE);
-    }
-
-    @Test
-    void preObtainedTokenSourceRejectsBlank() {
-        assertThrows(IllegalArgumentException.class, () -> new PreObtainedAccessTokenSource(""));
-        assertThrows(IllegalArgumentException.class, () -> new PreObtainedAccessTokenSource("  "));
-        assertThrows(IllegalArgumentException.class, () -> new PreObtainedAccessTokenSource(null));
     }
 }

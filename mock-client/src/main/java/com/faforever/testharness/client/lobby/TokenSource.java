@@ -3,9 +3,8 @@ package com.faforever.testharness.client.lobby;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Supplier of OAuth access tokens for the lobby auth handshake. Implementations either return a
- * pre-obtained token verbatim (see {@link PreObtainedAccessTokenSource}) or perform a token
- * exchange against the configured Hydra endpoint (see {@link LobbyAuthenticator}).
+ * Supplier of OAuth access tokens for the lobby auth handshake. The production implementation
+ * exchanges a refresh token against the configured Hydra endpoint (see {@link LobbyAuthenticator}).
  *
  * <p>The result is always a {@link CompletableFuture} so that callers can chain network I/O without
  * blocking the WebSocket listener thread. Failures are surfaced as {@link AuthenticationException}
