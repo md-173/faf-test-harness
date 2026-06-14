@@ -6,8 +6,8 @@
  *       authenticated-user reply; nested {@code Me} block + ratings map (consumed by 3.1.1.3
  *       welcome state sync).
  *   <li>{@link com.faforever.testharness.client.lobby.message.GameLaunchMessage} — server's
- *       game-launch trigger; 14 fields across custom and matchmaker shapes (consumed by R24 game
- *       configuration handling).
+ *       game-launch trigger; 14 fields across custom and matchmaker shapes (consumed by 3.1.1.6
+ *       game configuration handling).
  * </ul>
  *
  * <p>Both records are presence-validated in their canonical constructors. Required primitives are

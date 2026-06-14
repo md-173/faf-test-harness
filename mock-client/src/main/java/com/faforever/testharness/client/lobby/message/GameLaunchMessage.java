@@ -11,13 +11,13 @@ import java.util.List;
  *
  * <p>The payload has two shapes — custom and matchmaker — that share a required common header and
  * differ in optional fields. Both shapes are represented by a single record with matchmaker-only
- * fields as nullable boxed types; the consumer (R24) inspects {@code gameType} to decide which
+ * fields as nullable boxed types; the consumer (3.1.1.6) inspects {@code gameType} to decide which
  * fields to require.
  *
  * <p><b>Validation scope at this layer.</b> Per the issue (3.1.1.5), validation here is type and
  * required-field correctness only. The deeper argument-injection / unexpected-path / type-confusion
- * checks described in spec §5 step 3 are R24's responsibility — they belong adjacent to the {@code
- * ProcessBuilder} call where the values cross the trust boundary into a launched process.
+ * checks described in spec §5 step 3 are 3.1.1.6's responsibility — they belong adjacent to the
+ * {@code ProcessBuilder} call where the values cross the trust boundary into a launched process.
  *
  * <p>{@code args} is heterogeneous on the wire ({@code ["/numgames", 5]} — strings and ints
  * interleaved), so it is exposed as {@code List<JsonNode>} rather than a typed list.
@@ -63,7 +63,7 @@ public record GameLaunchMessage(
 
     /**
      * Compact canonical constructor — rejects a frame missing any required header field. This is
-     * structural (presence) validation only; the value-level checks in spec §5 step 3 are R24's
+     * structural (presence) validation only; the value-level checks in spec §5 step 3 are 3.1.1.6's
      * responsibility (see the class javadoc).
      */
     public GameLaunchMessage {
