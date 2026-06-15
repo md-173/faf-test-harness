@@ -50,3 +50,6 @@ bin/
 /mock-game/logs
 /shared/logs
 /logs/
+
+# Operations
+/documentation/operations/backlog.csv

@@ -1,0 +1,10 @@
+{
+  "command": "game_launch",
+  "args": ["/numgames", 5],
+  "uid": 42,
+  "mod": "faf",
+  "name": "Test Game Name",
+  "init_mode": 0,
+  "game_type": "custom",
+  "rating_type": "global"
+}

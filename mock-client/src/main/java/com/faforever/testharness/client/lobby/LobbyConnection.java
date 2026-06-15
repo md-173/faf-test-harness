@@ -7,12 +7,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -101,8 +103,11 @@ public final class LobbyConnection {
     /** Initial handshake timeout. */
     private final Duration connectTimeout;
 
-    /** Command-to-handler registry; lookups are concurrent-safe. */
-    private final Map<String, LobbyMessageHandler> handlers = new ConcurrentHashMap<>();
+    /**
+     * Command-to-handlers registry; lookups are concurrent-safe and each command's list iterates
+     * lock-free on the listener thread.
+     */
+    private final Map<String, List<LobbyMessageHandler>> handlers = new ConcurrentHashMap<>();
 
     /** Commands we've already warned about; suppresses unhandled-command log spam. */
     private final Set<String> warnedUnknownCommands = ConcurrentHashMap.newKeySet();
@@ -155,10 +160,11 @@ public final class LobbyConnection {
     }
 
     /**
-     * Register a handler for messages with the given {@code command} value. Replaces any handler
-     * previously registered under the same command.
+     * Register a handler for messages with the given {@code command} value. Multiple handlers may
+     * register against the same command; each is invoked in registration order on the listener
+     * thread when a matching frame arrives.
      *
-     * <p>Reserved commands: {@code ping} cannot be overridden — the connection always replies with
+     * <p>Reserved commands: {@code ping} cannot be registered — the connection always replies with
      * {@code pong} on its own. Attempting to register a {@code ping} handler throws.
      *
      * @param command value of the JSON {@code command} field this handler should receive
@@ -171,7 +177,7 @@ public final class LobbyConnection {
                     "'ping' is handled internally — register for 'pong' if you need the "
                             + "round-trip echo, not 'ping'");
         }
-        handlers.put(command, handler);
+        handlers.computeIfAbsent(command, ignored -> new CopyOnWriteArrayList<>()).add(handler);
     }
 
     /**
@@ -320,8 +326,8 @@ public final class LobbyConnection {
             return;
         }
 
-        LobbyMessageHandler handler = handlers.get(command);
-        if (handler == null) {
+        List<LobbyMessageHandler> handlerList = handlers.get(command);
+        if (handlerList == null || handlerList.isEmpty()) {
             if (warnedUnknownCommands.add(command)) {
                 LOG.warn(
                         "unhandled lobby command '{}' (will be silent for subsequent occurrences)",
@@ -329,14 +335,16 @@ public final class LobbyConnection {
             }
             return;
         }
-        try {
-            handler.onMessage(node);
-        } catch (RuntimeException e) {
-            LOG.warn(
-                    "handler for '{}' threw {}: {}",
-                    command,
-                    e.getClass().getSimpleName(),
-                    e.getMessage());
+        for (LobbyMessageHandler handler : handlerList) {
+            try {
+                handler.onMessage(node);
+            } catch (RuntimeException e) {
+                LOG.warn(
+                        "handler for '{}' threw {}: {}",
+                        command,
+                        e.getClass().getSimpleName(),
+                        e.getMessage());
+            }
         }
     }
 

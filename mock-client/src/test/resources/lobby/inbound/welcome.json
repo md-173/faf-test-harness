@@ -1,0 +1,16 @@
+{
+  "command": "welcome",
+  "me": {
+    "id": 3,
+    "login": "test_user",
+    "clan": "123",
+    "country": "",
+    "ratings": {
+      "global":     { "rating": [1650, 62.52], "number_of_games": 2 },
+      "ladder_1v1": { "rating": [1650, 62.52], "number_of_games": 2 }
+    }
+  },
+  "current_time": "1970-01-01T00:00:00+00:00",
+  "id": 3,
+  "login": "test_user"
+}

@@ -1,0 +1,16 @@
+{
+  "command": "game_launch",
+  "args": ["/numgames", 0],
+  "uid": 41956,
+  "mod": "ladder1v1",
+  "name": "ladder1 Vs ladder2",
+  "init_mode": 1,
+  "game_type": "matchmaker",
+  "rating_type": "ladder_1v1",
+  "team": 2,
+  "faction": 1,
+  "expected_players": 2,
+  "map_position": 1,
+  "mapname": "scmp_015",
+  "map_pool_map_version_id": 1
+}
