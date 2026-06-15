@@ -1,8 +1,10 @@
 package com.faforever.testharness.client.lobby.message;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
@@ -87,6 +89,18 @@ final class GameLaunchMessageTest {
                         + "\"rating_type\":\"global\"}";
         GameLaunchMessage launch = MAPPER.readValue(json, GameLaunchMessage.class);
         assertNull(launch.initMode());
+    }
+
+    @Test
+    void missingArgsDecodesToEmptyList() throws Exception {
+        // args is optional; the canonical constructor normalises a missing field to an empty list
+        // so consumers never have to null-check before iterating.
+        String json =
+                "{\"uid\":1,\"mod\":\"faf\",\"name\":\"x\",\"game_type\":\"custom\","
+                        + "\"rating_type\":\"global\"}";
+        GameLaunchMessage launch = MAPPER.readValue(json, GameLaunchMessage.class);
+        assertNotNull(launch.args());
+        assertTrue(launch.args().isEmpty());
     }
 
     private static String loadFixture(final String classpathPath) throws Exception {

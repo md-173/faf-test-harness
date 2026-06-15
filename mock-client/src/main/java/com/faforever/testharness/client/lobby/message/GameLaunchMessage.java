@@ -35,7 +35,8 @@ import java.util.List;
  *     {@code null} if the server omitted it
  * @param gameType {@code "coop"} / {@code "custom"} / {@code "matchmaker"}; required
  * @param ratingType e.g. {@code "global"}, {@code "ladder_1v1"}; required
- * @param args optional extra CLI args passed to the game executable
+ * @param args extra CLI args passed to the game executable; never {@code null} — empty when the
+ *     server omits it
  * @param mapname matchmaker only — map folder name
  * @param team matchmaker only — team assignment
  * @param faction matchmaker only — 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim
@@ -82,5 +83,8 @@ public record GameLaunchMessage(
         if (ratingType == null || ratingType.isBlank()) {
             throw new IllegalArgumentException("game_launch.rating_type is required");
         }
+        // args is optional on the wire; normalise null -> empty so consumers never null-check,
+        // and copy defensively (immutable) since this record crosses into subprocess launch.
+        args = args == null ? List.of() : List.copyOf(args);
     }
 }

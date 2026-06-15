@@ -232,21 +232,22 @@ final class LobbyConnectionTest {
     }
 
     @Test
-    void multipleHandlersForSameCommandAllFire() throws Exception {
+    void multipleHandlersForSameCommandFireInRegistrationOrder() throws Exception {
         lobby = new LobbyConnection(server.uri());
         CountDownLatch both = new CountDownLatch(2);
+        List<String> order = new CopyOnWriteArrayList<>();
         AtomicReference<JsonNode> firstSaw = new AtomicReference<>();
-        AtomicReference<JsonNode> secondSaw = new AtomicReference<>();
         lobby.registerHandler(
                 "session",
                 node -> {
                     firstSaw.set(node);
+                    order.add("first");
                     both.countDown();
                 });
         lobby.registerHandler(
                 "session",
                 node -> {
-                    secondSaw.set(node);
+                    order.add("second");
                     both.countDown();
                 });
         lobby.connect().get(5, TimeUnit.SECONDS);
@@ -255,8 +256,8 @@ final class LobbyConnectionTest {
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
         assertTrue(both.await(2, TimeUnit.SECONDS), "both handlers should fire");
+        assertEquals(List.of("first", "second"), order, "handlers fire in registration order");
         assertEquals(42, firstSaw.get().get("session").asInt());
-        assertEquals(42, secondSaw.get().get("session").asInt());
     }
 
     @Test
