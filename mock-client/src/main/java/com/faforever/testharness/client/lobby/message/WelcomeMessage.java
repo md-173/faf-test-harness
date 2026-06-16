@@ -17,9 +17,10 @@ import java.util.Map;
  * the top-level duplicates are optional.
  *
  * <p>Decoded via Jackson directly by the consumer: {@code mapper.treeToValue(node,
- * WelcomeMessage.class)}. The post-welcome world-state messages ({@code player_info}, {@code
- * game_info}, {@code social}, {@code matchmaker_info}) are deliberately not modelled here — they
- * will land in 3.1.1.3 when the welcome state-sync consumer is implemented.
+ * WelcomeMessage.class)}. 3.1.1.3 consumes this record to hydrate the app-facing {@code
+ * SessionState}. The post-welcome world-state messages ({@code player_info}, {@code game_info},
+ * {@code social}, {@code matchmaker_info}) are deliberately not modelled here — they are a separate
+ * follow-on (out of scope for 3.1.1.3, which is welcome → {@code SessionState} only).
  *
  * @param me nested identity block (canonical id/login + ratings); required, and its id/login are
  *     presence-checked
