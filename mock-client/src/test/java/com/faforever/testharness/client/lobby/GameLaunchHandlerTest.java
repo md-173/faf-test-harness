@@ -217,4 +217,3 @@ public class GameLaunchHandlerTest {
         Assertions.assertEquals(Integer.valueOf(0), sink.get().initMode());
     }
 }
-

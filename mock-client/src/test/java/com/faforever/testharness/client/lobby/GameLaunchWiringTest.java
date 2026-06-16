@@ -40,17 +40,28 @@ final class GameLaunchWiringTest {
         CountDownLatch fired = new CountDownLatch(1);
 
         lobby = new LobbyConnection(server.uri());
-        GameLaunchHandler handler = new GameLaunchHandler(MAPPER, cfg -> {
-            sink.set(cfg);
-            fired.countDown();
-        });
+        GameLaunchHandler handler =
+                new GameLaunchHandler(
+                        MAPPER,
+                        cfg -> {
+                            sink.set(cfg);
+                            fired.countDown();
+                        });
         lobby.registerHandler("game_launch", handler);
 
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         server.broadcastText(
-                "{\"command\":\"game_launch\",\"uid\":11,\"mod\":\"faf\",\"name\":\"Wired\",\"game_type\":\"custom\",\"rating_type\":\"global\",\"args\":[\"/numgames\",1]}\n");
+                "{"
+                        + "\"command\":\"game_launch\","
+                        + "\"uid\":11,"
+                        + "\"mod\":\"faf\","
+                        + "\"name\":\"Wired\","
+                        + "\"game_type\":\"custom\","
+                        + "\"rating_type\":\"global\","
+                        + "\"args\":[\"/numgames\",1]"
+                        + "}\n");
 
         assertTrue(fired.await(3, TimeUnit.SECONDS), "handler sink never fired");
         GameConfig cfg = sink.get();

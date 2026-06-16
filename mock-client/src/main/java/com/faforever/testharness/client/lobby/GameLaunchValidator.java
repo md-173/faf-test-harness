@@ -145,7 +145,9 @@ public final class GameLaunchValidator {
                     return null;
                 }
                 if (mapPoolMapVersionId != null && mapPoolMapVersionId < 0) {
-                    LOG.warn("game_launch.map_pool_map_version_id invalid for matchmaker: {}", mapPoolMapVersionId);
+                    LOG.warn(
+                            "game_launch.map_pool_map_version_id invalid for matchmaker: {}",
+                            mapPoolMapVersionId);
                     return null;
                 }
             } else if (mapPoolMapVersionId != null && mapPoolMapVersionId < 0) {
@@ -153,7 +155,8 @@ public final class GameLaunchValidator {
                 return null;
             }
 
-            JsonNode gameOptionsCopy = msg.gameOptions() == null ? null : msg.gameOptions().deepCopy();
+            JsonNode gameOptionsCopy =
+                    msg.gameOptions() == null ? null : msg.gameOptions().deepCopy();
 
             return new GameConfig(
                     msg.uid(),
