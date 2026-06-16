@@ -18,8 +18,7 @@ import picocli.CommandLine;
  * Verifies the cross-field auth-choice rule after the WBS-2.2.10 / spec §2 migration:
  *
  * <ul>
- *   <li>Either a refresh token (literal or file) <em>or</em> a pre-obtained access token (literal
- *       or file) must be supplied.
+ *   <li>A refresh token (literal or file) must be supplied.
  *   <li>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
  *       oauthClientSecret}) are rejected with a deprecation error pointing at the spec.
  * </ul>
@@ -70,24 +69,6 @@ final class ConfigLoaderAuthChoiceTest {
     void refreshTokenFileSatisfiesAuthChoice() {
         String[] args =
                 withExtra(REQUIRED_NO_CREDS, "--oauth-refresh-token-file=/tmp/refresh-token");
-
-        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
-
-        assertNotNull(config);
-    }
-
-    @Test
-    void accessTokenSatisfiesAuthChoiceForBootstrapUse() {
-        String[] args = withExtra(REQUIRED_NO_CREDS, "--oauth-access-token=at-value");
-
-        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
-
-        assertNotNull(config);
-    }
-
-    @Test
-    void accessTokenFileSatisfiesAuthChoiceForBootstrapUse() {
-        String[] args = withExtra(REQUIRED_NO_CREDS, "--oauth-token-file=/tmp/access-token.jwt");
 
         MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
 

@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -21,7 +24,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -30,20 +32,20 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Live smoke tests against the FAF public test environment, tagged {@code integration} so they
  * don't run under the default {@code ./gradlew test} task.
  *
- * <p>Two scenarios:
+ * <p>Two scenarios, both targeting the canonical {@code wss://lobby.faforever.xyz} (served at the
+ * host root {@code /}) and both reachability-gated so they self-skip when the FAF test env is
+ * unreachable from the current network:
  *
  * <ul>
- *   <li>{@link #connectSucceeds()} — connect to the canonical {@code wss://lobby.faforever.xyz} and
- *       verify the WS upgrade. Currently {@code @Disabled} because that host's TCP packets are
- *       silently dropped from typical developer networks (we saw {@code ETIMEDOUT} from WSL, native
- *       Windows, curl, and wscat — not a code issue).
- *   <li>{@link #authHandshakeYieldsTerminalReply()} — the same end-to-end path the production
- *       client uses: refresh-token → Hydra → JWT → {@code ask_session} → {@code session} → {@code
- *       auth} → {@code welcome} or {@code authentication_failed}. Aimed at {@code
- *       wss://ws.faforever.xyz/ws} (the only currently responsive WS endpoint), gated on a local
- *       {@code .secrets/refresh_token.txt} being present. Either {@code welcome} or {@code
- *       authentication_failed} counts as a pass — both prove the transport works bidirectionally;
- *       only silence/timeout means the bridge is broken.
+ *   <li>{@link #connectSucceeds()} — connect and verify the WS upgrade. Self-skips when {@code
+ *       lobby.faforever.xyz:443} is unreachable (TCP timeout — observed from WSL, native Windows,
+ *       curl, wscat, and an independent cloud egress: a destination-side allowlist/VPN gate, not a
+ *       code issue).
+ *   <li>{@link #authHandshakeYieldsTerminalReply()} — the full production path: refresh-token →
+ *       Hydra → JWT → {@code ask_session} → {@code session} → {@code auth} → {@code welcome} or
+ *       {@code authentication_failed}. Additionally gated on a local {@code
+ *       .secrets/refresh_token.txt}. Either terminal reply is a pass — both prove the transport
+ *       works bidirectionally; only silence/timeout once connected is a failure.
  * </ul>
  *
  * <p>This test mutates {@code .secrets/refresh_token.txt} — Hydra rotates the refresh token on
@@ -65,14 +67,15 @@ import org.junit.jupiter.api.condition.EnabledIf;
 @Tag("integration")
 final class LobbyConnectionLiveSmokeTest {
 
-    /** Canonical FAF test-env lobby endpoint — see class javadoc for the reachability caveat. */
-    private static final URI FAF_TEST_LOBBY = URI.create("wss://lobby.faforever.xyz");
-
     /**
-     * Alternate WS endpoint per spec §1's transport table; currently the only FAF WS endpoint that
-     * completes the TCP handshake from external networks.
+     * Canonical FAF test-env lobby endpoint, served natively at the host root ({@code /}) by the
+     * lobby server. Authoritative sources: downlords-faf-client {@code application-test.yml}
+     * ({@code server.url: wss://lobby.faforever.xyz}) and {@code server/servercontext.py} ({@code
+     * add_get("/")}). It is <em>not</em> {@code ws.faforever.xyz} and there is no {@code /ws} path
+     * (a {@code GET /ws} 404s — that was the retired {@code ws_bridge_rs} path). Reachable only
+     * from FAF-allowlisted hosts/VPN; both live tests self-skip elsewhere.
      */
-    private static final URI FAF_WS_BRIDGE = URI.create("wss://ws.faforever.xyz/ws");
+    private static final URI FAF_TEST_LOBBY = URI.create("wss://lobby.faforever.xyz");
 
     /** FAF Hydra test-env token endpoint. */
     private static final URI HYDRA_TOKEN = URI.create("https://hydra.faforever.xyz/oauth2/token");
@@ -89,10 +92,13 @@ final class LobbyConnectionLiveSmokeTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    @Disabled(
-            "FAF .xyz test env not reachable from typical dev networks (TCP timeout on "
-                    + "lobby.faforever.xyz:443). Remove @Disabled when env access is sorted.")
     void connectSucceeds() throws Exception {
+        assumeTrue(
+                lobbyReachable(),
+                "FAF test lobby "
+                        + FAF_TEST_LOBBY
+                        + " unreachable from this network (TCP timeout on :443). Self-skips "
+                        + "off-net; runs on a FAF-allowlisted host/VPN.");
         LobbyConnection lobby = new LobbyConnection(FAF_TEST_LOBBY);
         List<LobbyConnection.DisconnectEvent> disconnects = new CopyOnWriteArrayList<>();
         CountDownLatch disconnected = new CountDownLatch(1);
@@ -114,10 +120,19 @@ final class LobbyConnectionLiveSmokeTest {
     @Test
     @EnabledIf("hasRefreshToken")
     void authHandshakeYieldsTerminalReply() throws Exception {
+        // Probe reachability BEFORE the token exchange so an off-network run skips cleanly
+        // without burning (rotating) the refresh token.
+        assumeTrue(
+                lobbyReachable(),
+                "FAF test lobby "
+                        + FAF_TEST_LOBBY
+                        + " unreachable (TCP timeout on :443 — destination-side allowlist/VPN "
+                        + "gate). Run from an allowlisted FAF host.");
+
         Path refreshFile = findRefreshTokenFile();
         String accessToken = exchangeRefreshTokenForJwt(refreshFile);
 
-        LobbyConnection lobby = new LobbyConnection(FAF_WS_BRIDGE);
+        LobbyConnection lobby = new LobbyConnection(FAF_TEST_LOBBY);
 
         AtomicReference<JsonNode> sessionMsg = new AtomicReference<>();
         AtomicReference<JsonNode> welcomeMsg = new AtomicReference<>();
@@ -213,6 +228,20 @@ final class LobbyConnectionLiveSmokeTest {
                             + "bootstrap one.");
         }
         return present;
+    }
+
+    /**
+     * True iff the lobby host accepts a TCP connection on its port within a short timeout. Lets the
+     * live tests self-skip (not fail) when the FAF test env is unreachable from this network.
+     */
+    private static boolean lobbyReachable() {
+        int port = FAF_TEST_LOBBY.getPort() == -1 ? 443 : FAF_TEST_LOBBY.getPort();
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(FAF_TEST_LOBBY.getHost(), port), 3000);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /**

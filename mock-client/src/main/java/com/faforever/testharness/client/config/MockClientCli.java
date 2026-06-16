@@ -139,22 +139,6 @@ public final class MockClientCli implements Callable<Integer> {
                             + "rotation.")
     private Path oauthRefreshTokenFile;
 
-    /** Pre-obtained OAuth access token (auxiliary/bootstrap output). */
-    @Option(
-            names = "--oauth-access-token",
-            scope = ScopeType.INHERIT,
-            description = "Pre-obtained OAuth access token (auxiliary/bootstrap output).")
-    private String oauthAccessToken;
-
-    /** Path to a file containing a pre-obtained OAuth access token (auxiliary/bootstrap output). */
-    @Option(
-            names = "--oauth-token-file",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Path to a file containing a pre-obtained OAuth access token "
-                            + "(auxiliary/bootstrap output).")
-    private Path oauthTokenFile;
-
     /** Stable hardware identifier sent in the lobby auth message. */
     @Option(
             names = "--unique-id",
@@ -278,8 +262,6 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthClientId,
                 oauthRefreshToken,
                 oauthRefreshTokenFile,
-                oauthAccessToken,
-                oauthTokenFile,
                 uniqueId,
                 iceAdapterBinaryPath,
                 mockGameBinaryPath,

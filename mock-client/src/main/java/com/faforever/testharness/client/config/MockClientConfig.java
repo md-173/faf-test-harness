@@ -25,9 +25,6 @@ import java.util.OptionalInt;
  * @param oauthRefreshToken long-lived refresh token (sensitive — rotated by Hydra on every use)
  * @param oauthRefreshTokenFile path to a file holding the refresh token; rewritten atomically on
  *     each rotation
- * @param oauthAccessToken auxiliary pre-obtained access token (bootstrap output)
- * @param oauthTokenFile auxiliary path to a file containing a pre-obtained access token (bootstrap
- *     output)
  * @param uniqueId stable hardware identifier sent in the lobby auth message
  * @param iceAdapterBinaryPath path to the faf-ice-adapter executable
  * @param mockGameBinaryPath path to the mock-game executable
@@ -52,8 +49,6 @@ public record MockClientConfig(
         String oauthClientId,
         String oauthRefreshToken,
         Path oauthRefreshTokenFile,
-        String oauthAccessToken,
-        Path oauthTokenFile,
         String uniqueId,
         Path iceAdapterBinaryPath,
         Path mockGameBinaryPath,
@@ -66,14 +61,9 @@ public record MockClientConfig(
         String playerLogin) {
 
     /**
-     * Validates that an OAuth credential channel is present. The mock client supports two channels:
-     *
-     * <ul>
-     *   <li>Refresh token ({@code oauthRefreshToken} or {@code oauthRefreshTokenFile}) — the
-     *       steady-state, headless path. Exchanged at {@code oauthTokenUrl} for short-lived JWTs.
-     *   <li>Pre-obtained access token ({@code oauthAccessToken} or {@code oauthTokenFile}) —
-     *       auxiliary bootstrap-output path, useful for one-shot smoke tests.
-     * </ul>
+     * Validates that an OAuth credential channel is present. The mock client supports one channel:
+     * a refresh token ({@code oauthRefreshToken} or {@code oauthRefreshTokenFile}) — the
+     * steady-state, headless path, exchanged at {@code oauthTokenUrl} for short-lived JWTs.
      *
      * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
      * oauthClientSecret}) are not accepted on this record — the de-risking work in WBS-2.2.10
@@ -86,13 +76,10 @@ public record MockClientConfig(
      */
     public MockClientConfig {
         boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
-        boolean hasAccessToken = oauthAccessToken != null || oauthTokenFile != null;
-        if (!hasRefreshToken && !hasAccessToken) {
+        if (!hasRefreshToken) {
             throw new IllegalArgumentException(
-                    "no OAuth credentials supplied: set --oauth-refresh-token / "
-                            + "--oauth-refresh-token-file for headless refresh-token rotation, "
-                            + "or --oauth-access-token / --oauth-token-file to use a "
-                            + "pre-obtained bootstrap token. See "
+                    "no OAuth credentials supplied: set --oauth-refresh-token or "
+                            + "--oauth-refresh-token-file for headless refresh-token rotation. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
         }
