@@ -234,6 +234,48 @@ final class IceAdapterConnectionTest {
         assertEquals(1, fireCount.get(), "disconnect listener should fire exactly once");
     }
 
+    @Test
+    void closeFiresLocalCloseDisconnect() throws Exception {
+        conn = connect();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        conn.onDisconnect(
+                e -> {
+                    event.set(e);
+                    disconnected.countDown();
+                });
+
+        conn.close();
+
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire on close");
+        assertEquals(DisconnectReason.LOCAL_CLOSE, event.get().reason());
+    }
+
+    @Test
+    void inboundRequestIsIgnored() throws Exception {
+        conn = connect();
+
+        // A method+id frame is an inbound request; the adapter never sends one, so ignore it.
+        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"someMethod\",\"params\":[],\"id\":99}");
+
+        // The connection still works afterward.
+        CompletableFuture<JsonNode> result = conn.call("status");
+        JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        server.send(jsonResult(request.get("id").asLong(), "true"));
+        assertTrue(result.get(2, TimeUnit.SECONDS).asBoolean());
+    }
+
+    @Test
+    void noArgCallEmitsEmptyParamsArray() throws Exception {
+        conn = connect();
+
+        conn.call("status");
+
+        JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertTrue(request.get("params").isArray());
+        assertEquals(0, request.get("params").size());
+    }
+
     private static String jsonResult(final long id, final String resultJson) {
         return "{\"jsonrpc\":\"2.0\",\"result\":" + resultJson + ",\"id\":" + id + "}";
     }

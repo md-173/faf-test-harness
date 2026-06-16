@@ -191,6 +191,16 @@ public final class IceAdapterConnection {
             return;
         }
         this.socket = opened;
+        if (closeRequested.get()) {
+            // close() raced the connect while we were still retrying — honour it.
+            try {
+                opened.close();
+            } catch (IOException ignored) {
+                // best effort
+            }
+            connected.completeExceptionally(new IOException("connection closed during connect"));
+            return;
+        }
         LOG.info("connected to ICE adapter JSON-RPC at {}:{}", LOOPBACK, port);
         connected.complete(null);
         readLoop(opened);
@@ -233,6 +243,9 @@ public final class IceAdapterConnection {
                 route(frames.nextValue());
             }
         } catch (IOException e) {
+            // Also catches Jackson parse errors from a desynced stream: a brace-framed JSON-RPC
+            // reader can't reliably resync mid-stream, and spec §1 treats a dead socket as a dead
+            // adapter — so end the connection rather than skip one frame (unlike LobbyConnection).
             error = e;
         } finally {
             DisconnectReason reason =
@@ -245,6 +258,7 @@ public final class IceAdapterConnection {
     }
 
     private void route(final JsonNode msg) {
+        LOG.debug("ICE adapter received frame: {}", msg);
         JsonNode idNode = msg.get("id");
         boolean hasId = idNode != null && !idNode.isNull();
         boolean hasMethod = msg.hasNonNull("method");
@@ -284,8 +298,9 @@ public final class IceAdapterConnection {
         if (handler == null) {
             if (warnedUnknown.add(method)) {
                 LOG.warn(
-                        "no handler for ICE adapter notification '{}' (repeats suppressed)",
-                        method);
+                        "unhandled ICE adapter notification '{}': {} (repeats suppressed)",
+                        method,
+                        msg);
             }
             return;
         }
@@ -306,6 +321,10 @@ public final class IceAdapterConnection {
      * (possibly a JSON null), or completes exceptionally with {@link IceRpcException} (error
      * response), a {@link java.util.concurrent.TimeoutException} (no response within the call
      * timeout), or an {@link IOException} (send failure / disconnect).
+     *
+     * <p>Each {@code params} argument becomes one element of the JSON-RPC {@code params} array, so
+     * a method taking a single array parameter (e.g. {@code setIceServers}) must be passed that
+     * array as one argument, not its elements spread across the varargs.
      *
      * @param method JSON-RPC method name
      * @param params positional parameters (each converted to JSON); may be empty
