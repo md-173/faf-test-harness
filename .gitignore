@@ -53,3 +53,6 @@ bin/
 
 # Operations
 /documentation/operations/backlog.csv
+
+# Provisioned faf-ice-adapter binary (fetch via ./gradlew downloadIceAdapter)
+/faf-ice-adapter.jar

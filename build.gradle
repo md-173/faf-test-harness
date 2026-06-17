@@ -17,3 +17,73 @@ subprojects {
         }
     }
 }
+
+// --- faf-ice-adapter provisioning (WBS 3.1.4.4) ---
+// Fetches the pinned, headless (-nojfx) adapter jar that IceAdapterLauncher spawns. Deliberately
+// NOT wired into `build`/`check` so CI stays offline; run it explicitly on a fresh checkout:
+//   ./gradlew downloadIceAdapter
+// The jar lands at ./faf-ice-adapter.jar — the launcher's default --ice-adapter-binary-path — and
+// is gitignored. See documentation/operations/ice-adapter-setup.md.
+def iceAdapterVersion = providers.gradleProperty('iceAdapterVersion').get()
+def iceAdapterSha256 = '5d1348f57d29e51c92e5a80380e4cf0dec85f867bdc6f58d8c4e5b5fc01d8281'
+def iceAdapterJar = layout.projectDirectory.file('faf-ice-adapter.jar')
+
+tasks.register('downloadIceAdapter') {
+    description = "Downloads the pinned faf-ice-adapter ${iceAdapterVersion} (-nojfx) to ./faf-ice-adapter.jar."
+    group = 'build setup'
+    def target = iceAdapterJar.asFile
+    def url = "https://github.com/FAForever/java-ice-adapter/releases/download/" +
+            "${iceAdapterVersion}/faf-ice-adapter-${iceAdapterVersion}-nojfx.jar"
+    inputs.property('version', iceAdapterVersion)
+    inputs.property('sha256', iceAdapterSha256)
+    outputs.file(iceAdapterJar)
+    doLast {
+        if (target.exists() && sha256Hex(target) == iceAdapterSha256) {
+            logger.lifecycle("faf-ice-adapter ${iceAdapterVersion} already present (sha256 verified): ${target}")
+            return
+        }
+        logger.lifecycle("Downloading faf-ice-adapter ${iceAdapterVersion} from ${url}")
+        downloadFollowingRedirects(url, target)
+        def actual = sha256Hex(target)
+        if (actual != iceAdapterSha256) {
+            target.delete()
+            throw new GradleException(
+                    "Checksum mismatch for ${url}\n  expected ${iceAdapterSha256}\n  actual   ${actual}")
+        }
+        logger.lifecycle("Verified faf-ice-adapter ${iceAdapterVersion} (sha256 ${actual}) -> ${target}")
+    }
+}
+
+// Streams a URL to a file, following GitHub's cross-host release redirects (HttpURLConnection does
+// not auto-follow all of them). Dependency-free and portable; no curl/wget required.
+def downloadFollowingRedirects(String urlStr, File dest) {
+    def current = new URL(urlStr)
+    for (int hop = 0; hop < 5; hop++) {
+        def conn = (HttpURLConnection) current.openConnection()
+        conn.instanceFollowRedirects = false
+        conn.connectTimeout = 30000
+        conn.readTimeout = 180000
+        conn.setRequestProperty('User-Agent', 'faf-test-harness-gradle')
+        int code = conn.responseCode
+        if (code in [301, 302, 303, 307, 308]) {
+            current = new URL(current, conn.getHeaderField('Location'))
+            conn.disconnect()
+            continue
+        }
+        if (code != 200) {
+            conn.disconnect()
+            throw new GradleException("HTTP ${code} downloading ${urlStr}")
+        }
+        dest.parentFile?.mkdirs()
+        dest.withOutputStream { out -> conn.inputStream.withCloseable { input -> out << input } }
+        conn.disconnect()
+        return
+    }
+    throw new GradleException("Too many redirects downloading ${urlStr}")
+}
+
+def sha256Hex(File file) {
+    def digest = java.security.MessageDigest.getInstance('SHA-256')
+    file.eachByte(65536) { buf, len -> digest.update(buf, 0, len) }
+    digest.digest().collect { String.format('%02x', it & 0xff) }.join()
+}

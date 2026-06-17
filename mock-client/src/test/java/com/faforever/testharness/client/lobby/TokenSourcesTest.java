@@ -37,6 +37,7 @@ final class TokenSourcesTest {
                 7236,
                 7237,
                 7238,
+                0,
                 "INFO",
                 Optional.empty(),
                 OptionalInt.empty(),

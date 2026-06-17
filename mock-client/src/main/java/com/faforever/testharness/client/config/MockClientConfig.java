@@ -32,6 +32,9 @@ import java.util.OptionalInt;
  * @param iceAdapterGpgNetPort local GPGNet port exposed by faf-ice-adapter
  * @param iceAdapterLobbyPort local UDP port the game lobby uses for game traffic; passed to
  *     faf-ice-adapter as {@code --lobby-port}
+ * @param iceAdapterGameId game ID passed to faf-ice-adapter as {@code --game-id} (required by the
+ *     adapter); a default for the {@code launch-ice}/{@code ice-smoke} diagnostics, overridden by
+ *     the lobby {@code game_launch.uid} during a full {@code run} session
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
  * @param playerIdOverride optional player ID override for deterministic local testing
@@ -55,6 +58,7 @@ public record MockClientConfig(
         int iceAdapterRpcPort,
         int iceAdapterGpgNetPort,
         int iceAdapterLobbyPort,
+        int iceAdapterGameId,
         String logLevel,
         Optional<Path> logFile,
         OptionalInt playerIdOverride,

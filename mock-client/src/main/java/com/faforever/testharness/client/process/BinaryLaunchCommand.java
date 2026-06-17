@@ -36,7 +36,7 @@ final class BinaryLaunchCommand {
      * @param binary the binary path
      * @return {@code true} if the file name ends in {@code .jar} (case-insensitive)
      */
-    private static boolean isJar(final Path binary) {
+    static boolean isJar(final Path binary) {
         return binary.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar");
     }
 
