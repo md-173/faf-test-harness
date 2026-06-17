@@ -6,7 +6,7 @@ a real environment, captured by hand and committed here.
 
 | Demo | WBS | Proves | Artifact |
 |------|-----|--------|----------|
-| `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | _to be captured on an allowlisted host — see below_ |
+| `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | _to be captured once the lobby is reachable — see below_ |
 
 ---
 
@@ -18,21 +18,23 @@ ping/pong heartbeat until interrupted.
 
 ### ⚠️ Network requirement
 
-The public test lobby `lobby.faforever.xyz:443` is reachable **only from a
-FAF-allowlisted host or VPN** — from an ordinary dev network the TCP connect
-times out (this is a destination-side gate, not a client bug). The OAuth/Hydra
-token exchange works from anywhere; only the WebSocket transport is gated. So
-this demo must be captured from an on-network machine. Confirm reachability
-first:
+We have so far been **unable to reach `lobby.faforever.xyz:443`** from several
+dev machines/networks — the TCP connect just times out (no refusal, no TLS, no
+HTTP response). The OAuth/Hydra token exchange to `hydra.faforever.xyz` works
+from the same machines, which suggests the cause is on the network/lobby side
+rather than our client, but **we have not confirmed why** (allowlist, VPN,
+outage, or a different endpoint are all still possible — pending confirmation
+from the FAF team). Until that's resolved, capture this demo from a machine that
+can reach the lobby. Confirm reachability first:
 
 ```bash
-# expect: succeeds within a second on an allowlisted host; hangs/fails otherwise
+# expect: succeeds within a second where the lobby is reachable; hangs otherwise
 timeout 5 bash -c 'cat < /dev/null > /dev/tcp/lobby.faforever.xyz/443' \
   && echo REACHABLE || echo UNREACHABLE
 ```
 
-If this prints `UNREACHABLE`, stop and run from an allowlisted host — do not
-spin on it.
+If this prints `UNREACHABLE`, don't spin on it — check the access path with the
+FAF team (or use the local stack) before retrying.
 
 ### Prerequisites
 
@@ -119,8 +121,8 @@ are never logged — but double-check any pasted shell history for tokens).
 
 ### Illustrative transcript (not a real capture)
 
-Shows the expected console shape; replace with a real capture from an
-allowlisted host.
+Shows the expected console shape; replace with a real capture once the lobby is
+reachable.
 
 ```text
 [2026-06-17 12:00:00.000] [MockClient] [INFO ] lobby WebSocket connected: wss://lobby.faforever.xyz
