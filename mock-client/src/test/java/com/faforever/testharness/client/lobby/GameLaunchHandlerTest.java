@@ -269,7 +269,12 @@ public class GameLaunchHandlerTest {
     @Test
     void frameMissingRequiredFieldIsSwallowed() throws Exception {
         String json =
-                "{\"mod\":\"faf\",\"name\":\"x\",\"game_type\":\"custom\",\"rating_type\":\"global\"}";
+                "{"
+                        + "\"mod\":\"faf\","
+                        + "\"name\":\"x\","
+                        + "\"game_type\":\"custom\","
+                        + "\"rating_type\":\"global\""
+                        + "}";
 
         AtomicReference<GameConfig> sink = new AtomicReference<>();
         new GameLaunchHandler(mapper, sink::set)
