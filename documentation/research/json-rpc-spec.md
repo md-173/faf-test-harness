@@ -209,6 +209,13 @@ Returned by the `status` method. Shape from the README:
 }
 ```
 
+> **Wire reality (verified 3.3.14).** The actual `status` response differs from the logical shape
+> above in two ways a parser must handle: (1) the JSON-RPC `result` is a **double-encoded JSON
+> string**, not a nested object — it must be parsed again; and (2) the gpgnet block is spelled
+> **`gpgpnet`** (an upstream typo), not `gpgnet`. Example:
+> `{"result":"{\"version\":\"SNAPSHOT\",…,\"gpgpnet\":{…},\"relays\":[]}","id":1,"jsonrpc":"2.0"}`.
+> The R35 status DTO and the §6.2 health poller (subprocess-orchestration-spec) must account for both.
+
 ## 7. ICE candidate relay loop (end-to-end)
 
 The ICE candidate relay spans **two protocols**: JSON-RPC locally, lobby
@@ -265,6 +272,7 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 |---|---|---|
 | **`--id <int>`** | required | Local player id. Sourced from `welcome.me.id` cached at lobby auth time, OR `game_launch.uid` if we want per-game ids — see §8.1. |
 | **`--login <string>`** | required | Local player login. Sourced from `welcome.me.login`. |
+| **`--game-id <int>`** | required | Game id. **Required by 3.3.x — the adapter prints usage and exits without it.** Sourced from `game_launch.uid`; a placeholder for the standalone diagnostics. |
 | **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client allocates a free port and passes it explicitly so multiple harness instances do not collide. |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
@@ -273,7 +281,13 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 | `--debug-window` | off | Requires JavaFX; never set in headless Docker. |
 | `--info-window` | off | Same. |
 | `--delay-ui <ms>` | 0 | Same. |
+| `--telemetry-server <url>` | FAF telemetry | On launch the adapter opens a websocket to `ice-telemetry.faforever.com`. **No clean disable in 3.3.14** — an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. |
 | `--help` | — | Print usage and exit. |
+
+> **Headless runtime caveat (verified 3.3.14).** Even the `-nojfx` jar's bundled `logback.xml`
+> wires in a JavaFX log appender, so on a JavaFX-less JRE it crashes on its first log line unless
+> launched with `-Dlogback.configurationFile=<console-only config>`. `IceAdapterLauncher` does
+> this automatically; see `documentation/operations/ice-adapter-setup.md`.
 
 ### 8.1 Identity sourcing
 

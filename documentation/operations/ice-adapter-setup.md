@@ -118,8 +118,11 @@ below):
 - **The status field is misspelled `gpgpnet`** (extra `p`) in 3.3.14, not `gpgnet` as in
   `json-rpc-spec.md` §6. Parse the real key.
 - **Telemetry phone-home:** on launch the adapter opens a websocket to
-  `ice-telemetry.faforever.com` and logs `https://ice-telemetry.faforever.com/app.html?gameId=…`.
-  Pin `--telemetry-server` (not yet plumbed) to suppress it in CI/offline runs.
+  `ice-telemetry.faforever.com`. 3.3.14 has **no clean disable** — `--telemetry-server=""` just
+  fails with `unknown scheme: null`, and an unreachable host errors too; either way telemetry
+  failure is **non-blocking** (the adapter still binds and answers `status`). In offline CI it
+  logs an error and continues. Left as-is — a flag that only changes which error is logged isn't
+  worth plumbing.
 - Runtime reports `Version: SNAPSHOT` — a cosmetic upstream build-stamp quirk; the artifact is the
   `3.3.14` release.
 
