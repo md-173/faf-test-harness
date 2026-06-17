@@ -12,9 +12,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Tracks the mock client's lifecycle, from connection to the lobby server until termination. */
 public final class MockClientLifecycle {
+
+    /** Logger for this class. */
+    private static final Logger LOG = LoggerFactory.getLogger(MockClientLifecycle.class);
+
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
 
@@ -109,11 +115,15 @@ public final class MockClientLifecycle {
                         .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
                         .thenApply(SessionState::from)
                         .whenComplete(
-                                (state, err) ->
-                                        machine.receiveEvent(
-                                                err == null
-                                                        ? new WelcomeReceived(state)
-                                                        : new AuthFailed(err.getCause())));
+                                (state, err) -> {
+                                    if (err == null) {
+                                        LOG.info("Handshake complete, transitioning to IDLE");
+                                        machine.receiveEvent(new WelcomeReceived(state));
+                                    } else {
+                                        LOG.warn("Handshake could not be completed");
+                                        machine.receiveEvent(new AuthFailed(err.getCause()));
+                                    }
+                                });
 
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         lobby.registerHandler(
@@ -124,6 +134,7 @@ public final class MockClientLifecycle {
 
     /** Wait on the handshake to finish. */
     public void performHandshake() throws Exception {
+        LOG.info("Waiting on lobby handshake to complete");
         welcomeFuture.get();
     }
 
@@ -138,6 +149,7 @@ public final class MockClientLifecycle {
 
     /** Performs the full shutdown of the lifecycle. Valid to call on any state. */
     public void shutdown() {
+        LOG.info("Manual shutdown requested");
         machine.receiveEvent(new ShutdownRequested());
     }
 }
