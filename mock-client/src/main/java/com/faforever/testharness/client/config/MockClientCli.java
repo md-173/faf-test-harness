@@ -147,6 +147,26 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Stable hardware identifier sent in the lobby auth message.")
     private String uniqueId;
 
+    /** Client version string sent in the lobby {@code ask_session} message. */
+    @Option(
+            names = "--client-version",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0.0.0-mock",
+            description =
+                    "Client version string sent in the lobby ask_session message "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private String clientVersion;
+
+    /** Client identifier string sent in the lobby {@code ask_session} message. */
+    @Option(
+            names = "--user-agent",
+            scope = ScopeType.INHERIT,
+            defaultValue = "faf-test-harness",
+            description =
+                    "Client identifier string sent in the lobby ask_session message "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private String userAgent;
+
     /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
     @Option(
             names = "--ice-adapter-binary-path",
@@ -363,6 +383,8 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthRefreshToken,
                 oauthRefreshTokenFile,
                 uniqueId,
+                clientVersion,
+                userAgent,
                 iceAdapterBinaryPath,
                 mockGameBinaryPath,
                 iceAdapterRpcPort,

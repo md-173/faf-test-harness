@@ -108,6 +108,8 @@ final class TestFixtures {
         assertEquals(7236, config.iceAdapterRpcPort());
         assertEquals(7237, config.iceAdapterGpgNetPort());
         assertEquals(7238, config.iceAdapterLobbyPort());
+        assertEquals("0.0.0-mock", config.clientVersion());
+        assertEquals("faf-test-harness", config.userAgent());
         assertEquals("INFO", config.logLevel());
         assertEquals("mock-client", config.playerLogin());
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty");

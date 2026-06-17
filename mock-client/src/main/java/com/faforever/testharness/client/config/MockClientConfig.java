@@ -26,6 +26,10 @@ import java.util.OptionalInt;
  * @param oauthRefreshTokenFile path to a file holding the refresh token; rewritten atomically on
  *     each rotation
  * @param uniqueId stable hardware identifier sent in the lobby auth message
+ * @param clientVersion client version string sent in the {@code ask_session} message (a required
+ *     field of that command; lobby-protocol-spec.md §3)
+ * @param userAgent client identifier string sent in the {@code ask_session} message (a required
+ *     field of that command; lobby-protocol-spec.md §3)
  * @param iceAdapterBinaryPath path to the faf-ice-adapter executable
  * @param mockGameBinaryPath path to the mock-game executable
  * @param iceAdapterRpcPort local JSON-RPC port exposed by faf-ice-adapter
@@ -59,6 +63,8 @@ public record MockClientConfig(
         String oauthRefreshToken,
         Path oauthRefreshTokenFile,
         String uniqueId,
+        String clientVersion,
+        String userAgent,
         Path iceAdapterBinaryPath,
         Path mockGameBinaryPath,
         int iceAdapterRpcPort,
@@ -83,8 +89,9 @@ public record MockClientConfig(
      * earlier by {@link LayeredDefaultProvider} so the user sees a deprecation error pointing at
      * the spec rather than a generic missing-creds error.
      *
-     * @throws IllegalArgumentException if neither credential channel is satisfied, or if {@code
-     *     playerLogin} is {@code null} or blank
+     * @throws IllegalArgumentException if neither credential channel is satisfied, if {@code
+     *     clientVersion} or {@code userAgent} is {@code null} or blank, or if {@code playerLogin}
+     *     is {@code null} or blank
      */
     public MockClientConfig {
         boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
@@ -94,6 +101,21 @@ public record MockClientConfig(
                             + "--oauth-refresh-token-file for headless refresh-token rotation. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
+        }
+        // clientVersion and userAgent are required arguments of the lobby ask_session command; a
+        // blank value (reachable via a JSON config file even though the CLI flags have defaults)
+        // would otherwise be sent verbatim and rejected by the lobby mid-handshake.
+        if (clientVersion == null || clientVersion.isBlank()) {
+            throw new IllegalArgumentException(
+                    "clientVersion must not be blank: it is sent as the ask_session 'version' "
+                            + "field. Set --client-version or remove the empty value from the "
+                            + "config file.");
+        }
+        if (userAgent == null || userAgent.isBlank()) {
+            throw new IllegalArgumentException(
+                    "userAgent must not be blank: it is sent as the ask_session 'user_agent' "
+                            + "field. Set --user-agent or remove the empty value from the config "
+                            + "file.");
         }
         // playerLogin is passed verbatim to faf-ice-adapter as --login; a blank value (reachable
         // via a JSON config file even though the CLI flag has a default) would otherwise surface

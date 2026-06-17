@@ -32,6 +32,8 @@ final class TokenSourcesTest {
                 oauthRefreshToken,
                 oauthRefreshTokenFile,
                 "00000000-0000-0000-0000-000000000000",
+                "0.0.0-mock",
+                "faf-test-harness",
                 Path.of("/bin/faf-ice-adapter"),
                 Path.of("/bin/mock-game"),
                 7236,
