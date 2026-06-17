@@ -2,6 +2,8 @@ package com.faforever.testharness.client.config;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -89,11 +91,48 @@ public record MockClientConfig(
      * earlier by {@link LayeredDefaultProvider} so the user sees a deprecation error pointing at
      * the spec rather than a generic missing-creds error.
      *
-     * @throws IllegalArgumentException if neither credential channel is satisfied, if {@code
-     *     clientVersion} or {@code userAgent} is {@code null} or blank, or if {@code playerLogin}
-     *     is {@code null} or blank
+     * @throws IllegalArgumentException if any mandatory endpoint/identity field is missing, if
+     *     neither credential channel is satisfied, if {@code clientVersion} or {@code userAgent} is
+     *     {@code null} or blank, or if {@code playerLogin} is {@code null} or blank
      */
     public MockClientConfig {
+        // Mandatory endpoint/identity fields. These are intentionally NOT marked required = true on
+        // the picocli options: picocli enforces required on INHERIT-scoped options at the
+        // subcommand
+        // level before consulting the default-value provider, which would make env-var and
+        // config-file values unreachable for every subcommand. Validating here lets those layers
+        // populate the fields first, while a genuinely missing value still surfaces as a clean
+        // usage error (toValidatedConfig wraps this as a picocli ParameterException).
+        List<String> missing = new ArrayList<>();
+        if (lobbyWebSocketUrl == null) {
+            missing.add("--lobby-websocket-url");
+        }
+        if (oauthTokenUrl == null) {
+            missing.add("--oauth-token-url");
+        }
+        if (oauthAuthEndpoint == null) {
+            missing.add("--oauth-auth-endpoint");
+        }
+        if (oauthRedirectUri == null) {
+            missing.add("--oauth-redirect-uri");
+        }
+        if (oauthScopes == null || oauthScopes.isBlank()) {
+            missing.add("--oauth-scopes");
+        }
+        if (oauthClientId == null || oauthClientId.isBlank()) {
+            missing.add("--oauth-client-id");
+        }
+        if (uniqueId == null || uniqueId.isBlank()) {
+            missing.add("--unique-id");
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "missing required configuration: "
+                            + String.join(", ", missing)
+                            + ". Supply each via its CLI flag, the matching FAF_MOCK_CLIENT_* "
+                            + "environment variable, or a --config file.");
+        }
+
         boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
         if (!hasRefreshToken) {
             throw new IllegalArgumentException(

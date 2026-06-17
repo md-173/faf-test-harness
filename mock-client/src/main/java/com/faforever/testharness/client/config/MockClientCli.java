@@ -36,6 +36,14 @@ import picocli.CommandLine.Spec;
  * the record's compact constructor into a {@link CommandLine.ParameterException} scoped to the
  * calling subcommand, so picocli renders a clean usage-style error rather than a stack trace.
  *
+ * <p>Mandatory fields are <em>not</em> marked {@code required = true} on these options. picocli
+ * enforces {@code required} on {@code INHERIT}-scoped options at the subcommand level
+ * <em>before</em> consulting the default-value provider, which would make env-var and config-file
+ * values unreachable for every subcommand (only explicit CLI flags would satisfy them). Instead,
+ * presence is validated by the {@link MockClientConfig} compact constructor, so the env/file layers
+ * populate the inherited options first and a genuinely missing value still surfaces as a clean
+ * usage error.
+ *
  * <p>When the root is invoked with no subcommand, {@link #call()} prints usage and exits with
  * {@link ExitCodes#USAGE}.
  */
@@ -76,7 +84,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--lobby-websocket-url",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "WebSocket endpoint of the FAF lobby server.")
     private URI lobbyWebSocketUrl;
 
@@ -84,7 +91,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-token-url",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "OAuth2 token endpoint used to acquire lobby access tokens.")
     private URI oauthTokenUrl;
 
@@ -92,7 +98,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-auth-endpoint",
             scope = ScopeType.INHERIT,
-            required = true,
             description =
                     "OAuth2 authorization endpoint used by the one-time refresh-token bootstrap.")
     private URI oauthAuthEndpoint;
@@ -101,7 +106,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-redirect-uri",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Redirect URI registered on the OAuth client.")
     private URI oauthRedirectUri;
 
@@ -109,7 +113,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-scopes",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Space-separated OAuth2 scopes (e.g. \"openid offline lobby\").")
     private String oauthScopes;
 
@@ -117,7 +120,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-client-id",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "OAuth2 public client identifier.")
     private String oauthClientId;
 
@@ -143,7 +145,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--unique-id",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Stable hardware identifier sent in the lobby auth message.")
     private String uniqueId;
 
