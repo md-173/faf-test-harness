@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.process;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -17,15 +18,37 @@ final class BinaryLaunchCommand {
     private BinaryLaunchCommand() {}
 
     /**
-     * Returns the OS-command prefix that invokes {@code binary}.
+     * Returns the OS-command prefix that invokes {@code binary}, with no extra JVM arguments.
      *
      * @param binary the path to the binary to launch
      * @return an immutable list: {@code [binary]} for a native executable, or {@code [java, "-jar",
      *     binary]} for a {@code .jar} (case-insensitive extension match)
      */
     static List<String> commandPrefix(final Path binary) {
+        return commandPrefix(binary, List.of());
+    }
+
+    /**
+     * Returns the OS-command prefix that invokes {@code binary}, inserting {@code jvmArgs}
+     * immediately after the resolved {@code java} token for a {@code .jar} so they reach the child
+     * JVM rather than whatever may eventually wrap the launch (e.g. a {@code setpriv}/{@code
+     * setsid} prefix per {@code subprocess-orchestration-spec.md} §7.3). For a native binary {@code
+     * jvmArgs} do not apply and are ignored.
+     *
+     * @param binary the path to the binary to launch
+     * @param jvmArgs JVM arguments (e.g. {@code -D...}) for a {@code .jar} launch; ignored for
+     *     native
+     * @return an immutable list: {@code [binary]} for a native executable, or {@code [java,
+     *     jvmArgs..., "-jar", binary]} for a {@code .jar}
+     */
+    static List<String> commandPrefix(final Path binary, final List<String> jvmArgs) {
         if (isJar(binary)) {
-            return List.of(javaBinary(), "-jar", binary.toString());
+            List<String> prefix = new ArrayList<>();
+            prefix.add(javaBinary());
+            prefix.addAll(jvmArgs);
+            prefix.add("-jar");
+            prefix.add(binary.toString());
+            return List.copyOf(prefix);
         }
         return List.of(binary.toString());
     }

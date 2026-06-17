@@ -103,8 +103,9 @@ final class IceAdapterLauncherTest {
         assertEquals(jar.toString(), argv.get(jarFlag + 1), "the jar path must follow -jar");
         assertEquals("--id", argv.get(jarFlag + 2), "--id must follow the jar path");
         assertTrue(
-                argv.stream().anyMatch(a -> a.startsWith("-Dlogback.configurationFile=")),
-                "a .jar adapter needs the headless logback override: " + argv);
+                argv.subList(0, jarFlag).stream()
+                        .anyMatch(a -> a.startsWith("-Dlogback.configurationFile=")),
+                "the headless logback override must precede -jar so it reaches the JVM: " + argv);
     }
 
     @Test

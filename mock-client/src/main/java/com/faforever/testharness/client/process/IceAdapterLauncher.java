@@ -175,14 +175,14 @@ public final class IceAdapterLauncher {
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
-        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly.
-        List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary));
-
-        if (BinaryLaunchCommand.isJar(binary)) {
-            // Override the jar's bundled JavaFX logback so the -nojfx adapter runs headless;
-            // inserted right after "java", before "-jar".
-            argv.add(1, "-Dlogback.configurationFile=" + headlessLogbackPath());
-        }
+        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly. The headless
+        // logback override is handed to commandPrefix so it lands right after the `java` token —
+        // robust against a future setpriv/setsid launch prefix (spec §7.3) that shifts argv[0].
+        List<String> jvmArgs =
+                BinaryLaunchCommand.isJar(binary)
+                        ? List.of("-Dlogback.configurationFile=" + headlessLogbackPath())
+                        : List.of();
+        List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary, jvmArgs));
 
         int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
         // Spec §2.6: --id and --login must precede every other flag.
