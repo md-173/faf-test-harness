@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 public class GameLaunchHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -215,5 +217,57 @@ public class GameLaunchHandlerTest {
 
         Assertions.assertNotNull(sink.get());
         Assertions.assertEquals(Integer.valueOf(0), sink.get().initMode());
+    }
+
+    @Test
+    public void customNullsMatchmakerFields() throws Exception {
+        String json =
+                "{"
+                        + "\"uid\": 42,"
+                        + "\"mod\": \"faf\","
+                        + "\"name\": \"Custom\","
+                        + "\"game_type\": \"custom\","
+                        + "\"rating_type\": \"global\","
+                        + "\"faction\": 99,"
+                        + "\"mapname\": \"whatever\""
+                        + "}";
+
+        AtomicReference<GameConfig> sink = new AtomicReference<>();
+        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
+
+        handler.onMessage(mapper.readTree(json));
+
+        GameConfig cfg = sink.get();
+
+        Assertions.assertNotNull(cfg);
+        Assertions.assertNull(cfg.faction());
+        Assertions.assertNull(cfg.mapname());
+    }
+
+    private GameConfig handle(String json) throws Exception {
+        AtomicReference<GameConfig> sink = new AtomicReference<>();
+        new GameLaunchHandler(mapper, sink::set).onMessage(mapper.readTree(json));
+        return sink.get();
+    }
+
+    private static String loadFixture(String path) throws Exception {
+        return Files.readString(
+                Path.of(
+                        GameLaunchHandlerTest.class
+                                .getClassLoader()
+                                .getResource(path)
+                                .toURI()));                           
+    }
+
+    @Test
+    public void matchmakerKeepsAllFields() throws Exception {
+        GameConfig cfg =
+                handle(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
+
+        Assertions.assertNotNull(cfg);
+        Assertions.assertEquals("scmp_015", cfg.mapname());
+        Assertions.assertEquals(Integer.valueOf(1), cfg.faction());
+        Assertions.assertEquals(Integer.valueOf(1), cfg.mapPoolMapVersionId());
+        Assertions.assertEquals(Integer.valueOf(1), cfg.initMode());
     }
 }

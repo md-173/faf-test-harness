@@ -114,14 +114,21 @@ public final class GameLaunchValidator {
             }
 
             // Matchmaker-specific checks
-            String mapname = msg.mapname();
-            Integer team = msg.team();
-            Integer faction = msg.faction();
-            Integer mapPosition = msg.mapPosition();
-            Integer expectedPlayers = msg.expectedPlayers();
-            Integer mapPoolMapVersionId = msg.mapPoolMapVersionId();
+            String mapname = null;
+            Integer team = null;
+            Integer faction = null;
+            Integer mapPosition = null;
+            Integer expectedPlayers = null;
+            Integer mapPoolMapVersionId = null;
 
             if ("matchmaker".equals(msg.gameType())) {
+                mapname = msg.mapname();
+                team = msg.team();
+                faction = msg.faction();
+                mapPosition = msg.mapPosition();
+                expectedPlayers = msg.expectedPlayers();
+                mapPoolMapVersionId = msg.mapPoolMapVersionId();
+
                 if (mapname == null || !MAP_PATTERN.matcher(mapname).matches()) {
                     LOG.warn("game_launch.mapname invalid for matchmaker: {}", mapname);
                     return null;
@@ -150,9 +157,6 @@ public final class GameLaunchValidator {
                             mapPoolMapVersionId);
                     return null;
                 }
-            } else if (mapPoolMapVersionId != null && mapPoolMapVersionId < 0) {
-                LOG.warn("game_launch.map_pool_map_version_id invalid: {}", mapPoolMapVersionId);
-                return null;
             }
 
             JsonNode gameOptionsCopy =
@@ -173,9 +177,9 @@ public final class GameLaunchValidator {
                     expectedPlayers,
                     mapPoolMapVersionId,
                     gameOptionsCopy);
-        } catch (Exception e) {
-            LOG.warn("Unexpected validation error: {}", e.toString());
-            return null;
+            } catch (Exception e) {
+                LOG.warn("Unexpected validation error: {}", e.toString());
+                return null;
         }
     }
 }
