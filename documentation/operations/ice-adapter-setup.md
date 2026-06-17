@@ -24,6 +24,25 @@ and its build downloads `faf-ice-adapter-${version}-nojfx.jar`. The **`-nojfx`**
 the headless artifact; the `-linux`/`-win` jars only add a bundled JavaFX runtime for the optional
 debug window, which we never use. Pin — do not track "latest".
 
+## Upgrading the pin
+
+The version **does not auto-update** — the pin + checksum are deliberate (reproducible builds,
+supply-chain safety). To move to a new release:
+
+1. Bump `iceAdapterVersion` in [`gradle.properties`](../../gradle.properties).
+2. Update `iceAdapterSha256` in [`build.gradle`](../../build.gradle) to match the new jar. Get the
+   hash by running the task once (a mismatch prints `expected … / actual …`), or compute it:
+   `curl -sL https://github.com/FAForever/java-ice-adapter/releases/download/<ver>/faf-ice-adapter-<ver>-nojfx.jar | sha256sum`.
+3. `./gradlew downloadIceAdapter` (the checksum must verify), then re-run the `launch-ice` smoke
+   check below and skim the `[ICEAdapter]` output for new or changed CLI behaviour.
+4. Update the version / SHA-256 table above, and cross-check
+   [`downlords-faf-client/gradle.properties`](https://github.com/FAForever/downlords-faf-client/blob/develop/gradle.properties)
+   so the harness stays matched to the version real FAF clients deploy.
+
+There is no automatic notification of new releases; track the
+[java-ice-adapter releases](https://github.com/FAForever/java-ice-adapter/releases) page or
+downlords' `gradle.properties`.
+
 ## Quick start (clean checkout)
 
 ```bash
