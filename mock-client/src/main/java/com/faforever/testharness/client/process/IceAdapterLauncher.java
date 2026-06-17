@@ -42,6 +42,12 @@ import org.slf4j.LoggerFactory;
  * log line; the override keeps the adapter fully headless. The adapter is also passed {@code
  * --game-id} (required by faf-ice-adapter 3.3.x and later, which otherwise prints usage and exits).
  *
+ * <p>Side effect of the override: under a {@code .jar} launch the adapter no longer writes its own
+ * {@code <LOG_DIR>/ice-adapter.log} (the console-only config has no file appender); its output is
+ * preserved only via the harness {@code ProcessOutputLogger} capture. The config path and {@link
+ * #LOG_DIR} are fixed, so concurrent harness instances share them — the contents are identical, so
+ * the shared write is benign; per-session isolation is future work (spec §2.4).
+ *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
 public final class IceAdapterLauncher {

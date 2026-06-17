@@ -25,7 +25,7 @@ subprojects {
 // The jar lands at ./faf-ice-adapter.jar — the launcher's default --ice-adapter-binary-path — and
 // is gitignored. See documentation/operations/ice-adapter-setup.md.
 def iceAdapterVersion = providers.gradleProperty('iceAdapterVersion').get()
-def iceAdapterSha256 = '5d1348f57d29e51c92e5a80380e4cf0dec85f867bdc6f58d8c4e5b5fc01d8281'
+def iceAdapterSha256 = providers.gradleProperty('iceAdapterSha256').get()
 def iceAdapterJar = layout.projectDirectory.file('faf-ice-adapter.jar')
 
 tasks.register('downloadIceAdapter') {

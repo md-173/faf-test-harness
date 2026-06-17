@@ -15,7 +15,7 @@ spawns. See also `documentation/research/json-rpc-spec.md` §1/§6/§8 and
 | Implementation | [`FAForever/java-ice-adapter`](https://github.com/FAForever/java-ice-adapter) |
 | **Pinned version** | **`3.3.14`** (set in [`gradle.properties`](../../gradle.properties) as `iceAdapterVersion`) |
 | Artifact | `faf-ice-adapter-3.3.14-nojfx.jar` (18,291,350 bytes) |
-| SHA-256 | `5d1348f57d29e51c92e5a80380e4cf0dec85f867bdc6f58d8c4e5b5fc01d8281` |
+| SHA-256 | `5d1348f57d29e51c92e5a80380e4cf0dec85f867bdc6f58d8c4e5b5fc01d8281` (in [`gradle.properties`](../../gradle.properties) as `iceAdapterSha256`) |
 | Runtime | **Java 21** (matches the repo toolchain) |
 
 **Why this version / artifact.** `3.3.14` is the current latest release and is exactly what the
@@ -30,11 +30,13 @@ The version **does not auto-update** — the pin + checksum are deliberate (repr
 supply-chain safety). To move to a new release:
 
 1. Bump `iceAdapterVersion` in [`gradle.properties`](../../gradle.properties).
-2. Update `iceAdapterSha256` in [`build.gradle`](../../build.gradle) to match the new jar. Get the
-   hash by running the task once (a mismatch prints `expected … / actual …`), or compute it:
+2. Update `iceAdapterSha256` in [`gradle.properties`](../../gradle.properties) (it sits right next
+   to `iceAdapterVersion`, so the pin is a single edit). Get the hash by running the task once (a
+   mismatch prints `expected … / actual …`), or compute it:
    `curl -sL https://github.com/FAForever/java-ice-adapter/releases/download/<ver>/faf-ice-adapter-<ver>-nojfx.jar | sha256sum`.
 3. `./gradlew downloadIceAdapter` (the checksum must verify), then re-run the `launch-ice` smoke
-   check below and skim the `[ICEAdapter]` output for new or changed CLI behaviour.
+   check below, probe `status` (see Quick start), and skim the `[ICEAdapter]` output for new or
+   changed CLI behaviour.
 4. Update the version / SHA-256 table above, and cross-check
    [`downlords-faf-client/gradle.properties`](https://github.com/FAForever/downlords-faf-client/blob/develop/gradle.properties)
    so the harness stays matched to the version real FAF clients deploy.
@@ -60,6 +62,19 @@ mock-client/build/install/mock-client/bin/mock-client launch-ice --duration-seco
   --unique-id=00000000-0000-0000-0000-000000000000 \
   --oauth-refresh-token=dummy-unused-by-launch-ice
 # (build the launcher first if needed: ./gradlew :mock-client:installDist)
+```
+
+**Verify the JSON-RPC `status` socket (AC #2).** While the adapter is up — in a second shell during
+the `--duration-seconds` window, or against a manually-started adapter — probe `127.0.0.1:7236`:
+
+```bash
+python3 - <<'EOF'
+import socket
+s = socket.create_connection(("127.0.0.1", 7236), timeout=3)
+s.sendall(b'{"jsonrpc":"2.0","method":"status","id":1}\n')
+print(s.recv(65536).decode())
+EOF
+# Reply: {"result":"{...\"gpgpnet\":{...}...}","id":1,"jsonrpc":"2.0"} — result is a JSON *string*.
 ```
 
 `downloadIceAdapter` is idempotent: a re-run verifies the existing jar's SHA-256 and skips the
@@ -129,6 +144,11 @@ below):
   \"connected\":false,\"game_state\":\"\",\"task_string\":\"-\"},\"relays\":[]}",
  "id":1,"jsonrpc":"2.0"}
 ```
+
+> **AC #2 is verified manually and recorded here.** The durable, re-runnable connect+`status` check
+> is owned by **WBS 3.1.4.3 (ice-smoke, #151)**, which drives it through the 3.1.4.1
+> `IceAdapterConnection` (#155); it is gated on this task (the real binary) plus #155 (the
+> transport). Re-run the probe (Quick start) after any version bump.
 
 ### Notes / gotchas (relevant to downstream ICE tasks, not this task)
 
