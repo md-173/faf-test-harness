@@ -277,8 +277,7 @@ public class GameLaunchHandlerTest {
                         + "}";
 
         AtomicReference<GameConfig> sink = new AtomicReference<>();
-        new GameLaunchHandler(mapper, sink::set)
-                .onMessage(mapper.readTree(json));
+        new GameLaunchHandler(mapper, sink::set).onMessage(mapper.readTree(json));
 
         Assertions.assertNull(sink.get());
     }
