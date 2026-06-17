@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -23,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * Unit tests for {@link IceAdapterConnection} against the in-process {@link ScriptedJsonRpcServer}.
@@ -193,25 +199,49 @@ final class IceAdapterConnectionTest {
     @Test
     void throwingConsumerDoesNotStopOthers() throws Exception {
         conn = connect();
-        CountDownLatch goodFired = new CountDownLatch(1);
-        conn.registerNotification(
-                "onConnectionStateChanged",
-                msg -> {
-                    throw new RuntimeException("boom");
-                });
-        conn.registerNotification("onConnectionStateChanged", msg -> goodFired.countDown());
+        LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger connLogger = ctx.getLogger(IceAdapterConnection.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.setContext(ctx);
+        appender.start();
+        connLogger.addAppender(appender);
+        try {
+            CountDownLatch goodFired = new CountDownLatch(1);
+            conn.registerNotification(
+                    "onConnectionStateChanged",
+                    msg -> {
+                        throw new RuntimeException("boom");
+                    });
+            conn.registerNotification("onConnectionStateChanged", msg -> goodFired.countDown());
 
-        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"onConnectionStateChanged\",\"params\":[]}");
+            server.send(
+                    "{\"jsonrpc\":\"2.0\",\"method\":\"onConnectionStateChanged\",\"params\":[]}");
 
-        assertTrue(
-                goodFired.await(2, TimeUnit.SECONDS),
-                "a throwing consumer must not stop the next one from firing");
+            assertTrue(
+                    goodFired.await(2, TimeUnit.SECONDS),
+                    "a throwing consumer must not stop the next one from firing");
 
-        // The reader thread survived the throw: a follow-up call still round-trips.
-        CompletableFuture<JsonNode> result = conn.call("status");
-        JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
-        server.send(jsonResult(request.get("id").asLong(), "true"));
-        assertTrue(result.get(2, TimeUnit.SECONDS).asBoolean());
+            // The throwing consumer is logged at WARN (AC #2). It runs before the good one on the
+            // single reader thread, so by the time goodFired releases the event is already there.
+            assertTrue(
+                    appender.list.stream()
+                            .anyMatch(
+                                    e ->
+                                            e.getLevel() == Level.WARN
+                                                    && e.getFormattedMessage()
+                                                            .contains("onConnectionStateChanged")
+                                                    && e.getFormattedMessage().contains("threw")),
+                    "a throwing consumer should be logged at WARN; events: " + appender.list);
+
+            // The reader thread survived the throw: a follow-up call still round-trips.
+            CompletableFuture<JsonNode> result = conn.call("status");
+            JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+            server.send(jsonResult(request.get("id").asLong(), "true"));
+            assertTrue(result.get(2, TimeUnit.SECONDS).asBoolean());
+        } finally {
+            connLogger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test
