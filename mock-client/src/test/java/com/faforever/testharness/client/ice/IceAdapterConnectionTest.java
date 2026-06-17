@@ -5,13 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -21,6 +28,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * Unit tests for {@link IceAdapterConnection} against the in-process {@link ScriptedJsonRpcServer}.
@@ -159,6 +167,81 @@ final class IceAdapterConnectionTest {
                         + "{\"jsonrpc\":\"2.0\",\"method\":\"onConnected\",\"params\":[2]}");
 
         assertTrue(both.await(2, TimeUnit.SECONDS), "both back-to-back frames should dispatch");
+    }
+
+    @Test
+    void multipleConsumersForSameNotificationAllFire() throws Exception {
+        conn = connect();
+        CountDownLatch both = new CountDownLatch(2);
+        List<String> order = new CopyOnWriteArrayList<>();
+        AtomicReference<JsonNode> firstSaw = new AtomicReference<>();
+        conn.registerNotification(
+                "onIceMsg",
+                msg -> {
+                    firstSaw.set(msg);
+                    order.add("first");
+                    both.countDown();
+                });
+        conn.registerNotification(
+                "onIceMsg",
+                msg -> {
+                    order.add("second");
+                    both.countDown();
+                });
+
+        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,2,\"x\"]}");
+
+        assertTrue(both.await(2, TimeUnit.SECONDS), "both consumers should fire");
+        assertEquals(List.of("first", "second"), order, "consumers fire in registration order");
+        assertEquals("x", firstSaw.get().get("params").get(2).asText());
+    }
+
+    @Test
+    void throwingConsumerDoesNotStopOthers() throws Exception {
+        conn = connect();
+        LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger connLogger = ctx.getLogger(IceAdapterConnection.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.setContext(ctx);
+        appender.start();
+        connLogger.addAppender(appender);
+        try {
+            CountDownLatch goodFired = new CountDownLatch(1);
+            conn.registerNotification(
+                    "onConnectionStateChanged",
+                    msg -> {
+                        throw new RuntimeException("boom");
+                    });
+            conn.registerNotification("onConnectionStateChanged", msg -> goodFired.countDown());
+
+            server.send(
+                    "{\"jsonrpc\":\"2.0\",\"method\":\"onConnectionStateChanged\",\"params\":[]}");
+
+            assertTrue(
+                    goodFired.await(2, TimeUnit.SECONDS),
+                    "a throwing consumer must not stop the next one from firing");
+
+            // The throwing consumer is logged at WARN (AC #2). It runs before the good one on the
+            // single reader thread, so by the time goodFired releases the event is already there.
+            assertTrue(
+                    appender.list.stream()
+                            .anyMatch(
+                                    e ->
+                                            e.getLevel() == Level.WARN
+                                                    && e.getFormattedMessage()
+                                                            .contains("onConnectionStateChanged")
+                                                    && e.getFormattedMessage().contains("threw")),
+                    "a throwing consumer should be logged at WARN; events: " + appender.list);
+
+            // The reader thread survived the throw: a follow-up call still round-trips.
+            CompletableFuture<JsonNode> result = conn.call("status");
+            JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+            server.send(jsonResult(request.get("id").asLong(), "true"));
+            assertTrue(result.get(2, TimeUnit.SECONDS).asBoolean());
+        } finally {
+            connLogger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     @Test
