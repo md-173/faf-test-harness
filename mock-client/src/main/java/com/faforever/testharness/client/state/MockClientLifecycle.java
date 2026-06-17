@@ -11,6 +11,7 @@ import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 /** Tracks the mock client's lifecycle, from connection to the lobby server until termination. */
 public final class MockClientLifecycle {
@@ -31,6 +32,9 @@ public final class MockClientLifecycle {
      * from CONNECTING to IDLE.
      */
     private final LobbyHandshake handshake;
+
+    /** Future from LobbyHandshake with the welcome message. */
+    private final CompletableFuture<SessionState> welcomeFuture;
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -99,22 +103,28 @@ public final class MockClientLifecycle {
         }
 
         // Adapt handshake/lobby events to state events.
-        handshake
-                .perform(source)
-                .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
-                .thenApply(SessionState::from)
-                .whenComplete(
-                        (state, err) ->
-                                machine.receiveEvent(
-                                        err == null
-                                                ? new WelcomeReceived(state)
-                                                : new AuthFailed(err.getCause())));
+        welcomeFuture =
+                handshake
+                        .perform(source)
+                        .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
+                        .thenApply(SessionState::from)
+                        .whenComplete(
+                                (state, err) ->
+                                        machine.receiveEvent(
+                                                err == null
+                                                        ? new WelcomeReceived(state)
+                                                        : new AuthFailed(err.getCause())));
 
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         lobby.registerHandler(
                 "game_launch", message -> machine.receiveEvent(new LaunchGame(message)));
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+    }
+
+    /** Wait on the handshake to finish. */
+    public void performHandshake() throws Exception {
+        welcomeFuture.get();
     }
 
     /**
