@@ -11,10 +11,12 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -98,8 +100,12 @@ public final class IceAdapterConnection {
     /** Monotonic request id; starts at 1 (spec §3.1 reserves 0). */
     private final AtomicLong nextId = new AtomicLong(1);
 
-    /** Notification name → handler (one per name). */
-    private final Map<String, Consumer<JsonNode>> notificationHandlers = new ConcurrentHashMap<>();
+    /**
+     * Notification name → handlers; multiple may register against the same name, and each name's
+     * list iterates lock-free on the reader thread.
+     */
+    private final Map<String, List<Consumer<JsonNode>>> notificationHandlers =
+            new ConcurrentHashMap<>();
 
     /** Notification names already warned about, to suppress unhandled-notification log spam. */
     private final Set<String> warnedUnknown = ConcurrentHashMap.newKeySet();
@@ -294,8 +300,8 @@ public final class IceAdapterConnection {
     }
 
     private void dispatchNotification(final String method, final JsonNode msg) {
-        Consumer<JsonNode> handler = notificationHandlers.get(method);
-        if (handler == null) {
+        List<Consumer<JsonNode>> handlers = notificationHandlers.get(method);
+        if (handlers == null || handlers.isEmpty()) {
             if (warnedUnknown.add(method)) {
                 LOG.warn(
                         "unhandled ICE adapter notification '{}': {} (repeats suppressed)",
@@ -304,14 +310,18 @@ public final class IceAdapterConnection {
             }
             return;
         }
-        try {
-            handler.accept(msg);
-        } catch (RuntimeException e) {
-            LOG.warn(
-                    "notification handler for '{}' threw {}: {}",
-                    method,
-                    e.getClass().getSimpleName(),
-                    e.getMessage());
+        // Each consumer in its own try/catch: a throwing one must not stop the others or kill the
+        // reader thread.
+        for (Consumer<JsonNode> handler : handlers) {
+            try {
+                handler.accept(msg);
+            } catch (RuntimeException e) {
+                LOG.warn(
+                        "notification handler for '{}' threw {}: {}",
+                        method,
+                        e.getClass().getSimpleName(),
+                        e.getMessage());
+            }
         }
     }
 
@@ -359,14 +369,18 @@ public final class IceAdapterConnection {
     }
 
     /**
-     * Register the handler for an inbound notification (e.g. {@code onIceMsg}). One handler per
-     * name; re-registering replaces. Unknown notifications are logged once and dropped.
+     * Register a handler for an inbound notification (e.g. {@code onIceMsg}). Multiple handlers may
+     * register against the same name; each is invoked in registration order on the reader thread
+     * when a matching notification arrives. Notifications with no registered handler are logged
+     * once and dropped.
      *
      * @param name the notification {@code method} name
      * @param handler invoked with the full notification node on the reader thread (must not block)
      */
     public void registerNotification(final String name, final Consumer<JsonNode> handler) {
-        notificationHandlers.put(name, handler);
+        notificationHandlers
+                .computeIfAbsent(name, ignored -> new CopyOnWriteArrayList<>())
+                .add(handler);
     }
 
     /**

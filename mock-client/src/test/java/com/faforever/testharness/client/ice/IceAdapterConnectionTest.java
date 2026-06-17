@@ -11,7 +11,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -159,6 +161,57 @@ final class IceAdapterConnectionTest {
                         + "{\"jsonrpc\":\"2.0\",\"method\":\"onConnected\",\"params\":[2]}");
 
         assertTrue(both.await(2, TimeUnit.SECONDS), "both back-to-back frames should dispatch");
+    }
+
+    @Test
+    void multipleConsumersForSameNotificationAllFire() throws Exception {
+        conn = connect();
+        CountDownLatch both = new CountDownLatch(2);
+        List<String> order = new CopyOnWriteArrayList<>();
+        AtomicReference<JsonNode> firstSaw = new AtomicReference<>();
+        conn.registerNotification(
+                "onIceMsg",
+                msg -> {
+                    firstSaw.set(msg);
+                    order.add("first");
+                    both.countDown();
+                });
+        conn.registerNotification(
+                "onIceMsg",
+                msg -> {
+                    order.add("second");
+                    both.countDown();
+                });
+
+        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,2,\"x\"]}");
+
+        assertTrue(both.await(2, TimeUnit.SECONDS), "both consumers should fire");
+        assertEquals(List.of("first", "second"), order, "consumers fire in registration order");
+        assertEquals("x", firstSaw.get().get("params").get(2).asText());
+    }
+
+    @Test
+    void throwingConsumerDoesNotStopOthers() throws Exception {
+        conn = connect();
+        CountDownLatch goodFired = new CountDownLatch(1);
+        conn.registerNotification(
+                "onConnectionStateChanged",
+                msg -> {
+                    throw new RuntimeException("boom");
+                });
+        conn.registerNotification("onConnectionStateChanged", msg -> goodFired.countDown());
+
+        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"onConnectionStateChanged\",\"params\":[]}");
+
+        assertTrue(
+                goodFired.await(2, TimeUnit.SECONDS),
+                "a throwing consumer must not stop the next one from firing");
+
+        // The reader thread survived the throw: a follow-up call still round-trips.
+        CompletableFuture<JsonNode> result = conn.call("status");
+        JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        server.send(jsonResult(request.get("id").asLong(), "true"));
+        assertTrue(result.get(2, TimeUnit.SECONDS).asBoolean());
     }
 
     @Test
