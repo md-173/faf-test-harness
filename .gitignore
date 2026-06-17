@@ -51,5 +51,8 @@ bin/
 /shared/logs
 /logs/
 
-# Operations
-/documentation/operations/backlog.csv
+# Operations (local planning doc; case-robust so Backlog.csv / backlog.csv both match)
+/documentation/operations/[Bb]acklog.csv
+
+# Provisioned faf-ice-adapter binary (fetch via ./gradlew downloadIceAdapter)
+/faf-ice-adapter.jar

@@ -35,6 +35,19 @@ import org.slf4j.LoggerFactory;
  * child through the {@code LOG_LEVEL} environment variable, not a CLI flag — the adapter has no
  * log-level flag and reads {@code LOG_LEVEL} per its upstream README (spec §2.3).
  *
+ * <p>For a {@code .jar} adapter the launcher also injects {@code -Dlogback.configurationFile}
+ * pointing at a console-only config it writes under {@link #LOG_DIR}. The upstream {@code -nojfx}
+ * jar's bundled {@code logback.xml} wires in a JavaFX {@code TextAreaLogAppender}, which crashes a
+ * JavaFX-less JRE with {@code NoClassDefFoundError: javafx/application/Application} on the first
+ * log line; the override keeps the adapter fully headless. The adapter is also passed {@code
+ * --game-id} (required by faf-ice-adapter 3.3.x and later, which otherwise prints usage and exits).
+ *
+ * <p>Side effect of the override: under a {@code .jar} launch the adapter no longer writes its own
+ * {@code <LOG_DIR>/ice-adapter.log} (the console-only config has no file appender); its output is
+ * preserved only via the harness {@code ProcessOutputLogger} capture. The config path and {@link
+ * #LOG_DIR} are fixed, so concurrent harness instances share them — the contents are identical, so
+ * the shared write is benign; per-session isolation is future work (spec §2.4).
+ *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
 public final class IceAdapterLauncher {
@@ -55,6 +68,32 @@ public final class IceAdapterLauncher {
 
     /** Per-child log directory handed to the adapter via {@code LOG_DIR} (spec §2.3). */
     private static final Path LOG_DIR = Path.of("logs", "ice-adapter");
+
+    /** File name of the headless logback config materialised under {@link #LOG_DIR}. */
+    private static final String HEADLESS_LOGBACK_FILE = "logback-headless.xml";
+
+    /**
+     * Console-only logback config written for the adapter child JVM. The upstream {@code -nojfx}
+     * jar bundles a {@code logback.xml} that wires in a JavaFX {@code TextAreaLogAppender}; on a
+     * JavaFX-less JRE the first log line then fails with {@code NoClassDefFoundError:
+     * javafx/application/Application}. Pointing the child at this config (via {@code
+     * -Dlogback.configurationFile}) keeps the adapter headless; its output still reaches the
+     * harness through {@code ProcessOutputLogger}.
+     */
+    private static final String HEADLESS_LOGBACK_XML =
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <configuration>
+              <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder>
+                  <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{24} - %msg%n</pattern>
+                </encoder>
+              </appender>
+              <root level="${LOG_LEVEL:-INFO}">
+                <appender-ref ref="STDOUT"/>
+              </root>
+            </configuration>
+            """;
 
     /** Validated configuration the argument list is built from. */
     private final MockClientConfig config;
@@ -93,6 +132,9 @@ public final class IceAdapterLauncher {
         // Note: redirectErrorStream is intentionally NOT set — SubprocessManager keeps stdout and
         // stderr separate so stderr can be routed to WARN (spec §4 / §5.3).
         createLogDir();
+        if (BinaryLaunchCommand.isJar(binary)) {
+            writeHeadlessLogbackConfig();
+        }
 
         LOG.info("Launching ICE adapter: {}", String.join(" ", argv));
         try {
@@ -133,8 +175,14 @@ public final class IceAdapterLauncher {
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
-        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly.
-        List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary));
+        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly. The headless
+        // logback override is handed to commandPrefix so it lands right after the `java` token —
+        // robust against a future setpriv/setsid launch prefix (spec §7.3) that shifts argv[0].
+        List<String> jvmArgs =
+                BinaryLaunchCommand.isJar(binary)
+                        ? List.of("-Dlogback.configurationFile=" + headlessLogbackPath())
+                        : List.of();
+        List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary, jvmArgs));
 
         int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
         // Spec §2.6: --id and --login must precede every other flag.
@@ -142,6 +190,9 @@ public final class IceAdapterLauncher {
         argv.add(Integer.toString(playerId));
         argv.add("--login");
         argv.add(config.playerLogin());
+        // Required by faf-ice-adapter 3.3.x+; without it the adapter prints usage and exits.
+        argv.add("--game-id");
+        argv.add(Integer.toString(config.iceAdapterGameId()));
         argv.add("--rpc-port");
         argv.add(Integer.toString(config.iceAdapterRpcPort()));
         argv.add("--gpgnet-port");
@@ -157,6 +208,30 @@ public final class IceAdapterLauncher {
             Files.createDirectories(LOG_DIR);
         } catch (IOException e) {
             LOG.debug("Could not create ICE adapter log directory {}: {}", LOG_DIR, e.getMessage());
+        }
+    }
+
+    /**
+     * Absolute path of the headless logback config handed to the adapter child JVM via {@code
+     * -Dlogback.configurationFile} (see {@link #HEADLESS_LOGBACK_XML}).
+     *
+     * @return the absolute path of the materialised config under {@link #LOG_DIR}
+     */
+    private static Path headlessLogbackPath() {
+        return LOG_DIR.resolve(HEADLESS_LOGBACK_FILE).toAbsolutePath();
+    }
+
+    /**
+     * Writes {@link #HEADLESS_LOGBACK_XML} to {@link #headlessLogbackPath()} so the {@code .jar}
+     * adapter can be pointed at it. Best-effort: if the write fails, logback simply falls back to a
+     * built-in console default (still JavaFX-free), so the adapter remains launchable.
+     */
+    private void writeHeadlessLogbackConfig() {
+        Path target = headlessLogbackPath();
+        try {
+            Files.writeString(target, HEADLESS_LOGBACK_XML);
+        } catch (IOException e) {
+            LOG.warn("Could not write headless logback config {}: {}", target, e.getMessage());
         }
     }
 }

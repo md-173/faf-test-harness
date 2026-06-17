@@ -200,6 +200,17 @@ public final class MockClientCli implements Callable<Integer> {
                             + "faf-ice-adapter as --lobby-port.")
     private int iceAdapterLobbyPort;
 
+    /** Game ID passed to faf-ice-adapter as {@code --game-id} (required by the adapter). */
+    @Option(
+            names = "--ice-adapter-game-id",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0",
+            description =
+                    "Game ID passed to faf-ice-adapter as --game-id (required by the adapter). "
+                            + "Used by the launch-ice / ice-smoke diagnostics; a full 'run' "
+                            + "session sets it from the lobby game_launch.uid.")
+    private int iceAdapterGameId;
+
     /** Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR). */
     @Option(
             names = "--log-level",
@@ -268,6 +279,7 @@ public final class MockClientCli implements Callable<Integer> {
                 iceAdapterRpcPort,
                 iceAdapterGpgNetPort,
                 iceAdapterLobbyPort,
+                iceAdapterGameId,
                 logLevel,
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),

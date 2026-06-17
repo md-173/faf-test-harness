@@ -87,6 +87,9 @@ final class IceAdapterLauncherTest {
 
         assertEquals(binary.toString(), argv.get(0), "native binary should be argv[0]");
         assertEquals("--id", argv.get(1), "--id must immediately follow the binary");
+        assertFalse(
+                argv.stream().anyMatch(a -> a.startsWith("-Dlogback")),
+                "a native binary takes no JVM flags: " + argv);
     }
 
     @Test
@@ -95,9 +98,14 @@ final class IceAdapterLauncherTest {
         List<String> argv = new IceAdapterLauncher(configWithBinary(jar)).buildArgv(jar);
 
         assertTrue(argv.get(0).contains("java"), "a .jar must run via the java binary: " + argv);
-        assertEquals("-jar", argv.get(1), "java must be invoked with -jar");
-        assertEquals(jar.toString(), argv.get(2), "the jar path must follow -jar");
-        assertEquals("--id", argv.get(3), "--id must follow the jar path");
+        int jarFlag = argv.indexOf("-jar");
+        assertTrue(jarFlag > 0, "java must be invoked with -jar: " + argv);
+        assertEquals(jar.toString(), argv.get(jarFlag + 1), "the jar path must follow -jar");
+        assertEquals("--id", argv.get(jarFlag + 2), "--id must follow the jar path");
+        assertTrue(
+                argv.subList(0, jarFlag).stream()
+                        .anyMatch(a -> a.startsWith("-Dlogback.configurationFile=")),
+                "the headless logback override must precede -jar so it reaches the JVM: " + argv);
     }
 
     @Test
@@ -106,6 +114,7 @@ final class IceAdapterLauncherTest {
         List<String> argv = new IceAdapterLauncher(configWithBinary(binary)).buildArgv(binary);
 
         assertEquals("mock-client", valueAfter(argv, "--login"));
+        assertEquals("0", valueAfter(argv, "--game-id"));
         assertEquals("7236", valueAfter(argv, "--rpc-port"));
         assertEquals("7237", valueAfter(argv, "--gpgnet-port"));
         assertEquals("7238", valueAfter(argv, "--lobby-port"));

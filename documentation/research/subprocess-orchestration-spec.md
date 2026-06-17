@@ -134,6 +134,7 @@ Bold flags are passed by the Mock Client on every launch.
 |---|---|---|---|
 | **`--id <int>`** | — | yes | Local player id. Sourced from `welcome.me.id` cached at lobby auth time (json-rpc-spec §8.1). |
 | **`--login <string>`** | — | yes | Local player login. Sourced from `welcome.me.login`. |
+| **`--game-id <int>`** | — | yes | Game id. **Required by adapter 3.3.x** — it prints usage and exits without it. Sourced from `game_launch.uid`; a placeholder (`iceAdapterGameId`, default 0) for the standalone diagnostics. |
 | **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. Allocated dynamically (§3) so multiple harness instances on one host do not collide. |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
@@ -142,9 +143,12 @@ Bold flags are passed by the Mock Client on every launch.
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags. **Never set in headless Docker.** |
 | `--help` | — | no | Diagnostic only. |
 
-The `--id` and `--login` arguments must come before any other flag (the
-upstream parser is positional-prefix); the Mock Client always emits them
-first.
+The Mock Client emits `--id` and `--login` first, with `--game-id`
+immediately after. The 3.3.x parser is picocli and order-independent in
+practice (verified), but keeping the identity flags first matches the
+upstream synopsis. The `.jar` adapter additionally needs a
+`-Dlogback.configurationFile` override to run headless (see §2.7 and
+json-rpc-spec §8).
 
 ### 2.7 ICE adapter startup sequence
 
@@ -159,9 +163,11 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 
 2. ProcessBuilder argv =
    [ javaBin,
+     "-Dlogback.configurationFile=<console-only config>",  // headless: bypass JavaFX appender
      "-jar", iceAdapterJar,
      "--id",          welcome.me.id,
      "--login",       welcome.me.login,
+     "--game-id",     game_launch.uid,   // required by 3.3.x
      "--rpc-port",    rpcPort,
      "--gpgnet-port", gpgnetPort,
      "--lobby-port",  lobbyUdpPort ]
