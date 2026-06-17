@@ -177,9 +177,9 @@ public final class GameLaunchValidator {
                     expectedPlayers,
                     mapPoolMapVersionId,
                     gameOptionsCopy);
-            } catch (Exception e) {
-                LOG.warn("Unexpected validation error: {}", e.toString());
-                return null;
+        } catch (Exception e) {
+            LOG.warn("Unexpected validation error: {}", e.toString());
+            return null;
         }
     }
 }

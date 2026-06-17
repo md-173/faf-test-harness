@@ -1,11 +1,11 @@
 package com.faforever.testharness.client.lobby;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 public class GameLaunchHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -252,17 +252,12 @@ public class GameLaunchHandlerTest {
 
     private static String loadFixture(String path) throws Exception {
         return Files.readString(
-                Path.of(
-                        GameLaunchHandlerTest.class
-                                .getClassLoader()
-                                .getResource(path)
-                                .toURI()));                           
+                Path.of(GameLaunchHandlerTest.class.getClassLoader().getResource(path).toURI()));
     }
 
     @Test
     public void matchmakerKeepsAllFields() throws Exception {
-        GameConfig cfg =
-                handle(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
+        GameConfig cfg = handle(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
 
         Assertions.assertNotNull(cfg);
         Assertions.assertEquals("scmp_015", cfg.mapname());
