@@ -149,6 +149,12 @@ below):
 > is owned by **WBS 3.1.4.3 (ice-smoke, #151)**, which drives it through the 3.1.4.1
 > `IceAdapterConnection` (#155); it is gated on this task (the real binary) plus #155 (the
 > transport). Re-run the probe (Quick start) after any version bump.
+>
+> That check ships as `IceAdapterConnectionLiveSmokeTest`, run under `./gradlew integrationTest`
+> (not `test`). It resolves the adapter jar from the **`FAF_ICE_ADAPTER_JAR`** environment variable
+> if set, else the default `faf-ice-adapter.jar` on the launcher's path (repo root / CWD), and
+> self-skips cleanly when neither resolves — so it merges and stays green before this jar is
+> provisioned, and exercises the real binary once it is.
 
 ### Notes / gotchas (relevant to downstream ICE tasks, not this task)
 

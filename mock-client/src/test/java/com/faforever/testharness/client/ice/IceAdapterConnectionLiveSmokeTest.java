@@ -2,6 +2,7 @@ package com.faforever.testharness.client.ice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
@@ -9,11 +10,13 @@ import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.net.DatagramSocket;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -29,9 +32,9 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * IceAdapterConnection} against an in-process {@link ScriptedJsonRpcServer} — that proves framing,
  * correlation, and disconnect mechanics, but not that we can actually launch and connect to the
  * real binary. This covers exactly the gap: {@code documentation/research/json-rpc-spec.md} §9 boot
- * steps 1–2 (adapter launch → TCP connect → readiness {@code status} poll, §6). Everything past
- * readiness ({@code setIceServers}, ICE candidate relay, GPGNet forwarding) is downstream and out
- * of scope.
+ * steps 1–2 (adapter launch → TCP connect) plus the §6 {@code status} health round-trip. Everything
+ * past readiness ({@code setIceServers}, ICE candidate relay, GPGNet forwarding) is downstream and
+ * out of scope.
  *
  * <p><b>Gating.</b> Mirrors {@link
  * com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest}: an {@link EnabledIf} probe
@@ -41,9 +44,12 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * see {@code documentation/operations/ice-adapter-setup.md} (R74) — the provisioning steps are
  * deliberately not duplicated here.
  *
- * <p>Each run allocates a fresh free {@code --rpc-port} so concurrent harness runs don't collide,
- * and always tears the adapter down via {@link SubprocessManager#terminate()} in a {@code finally}
- * — no zombie process survives, including on failure.
+ * <p>Each run allocates fresh free ports for all three adapter sockets — {@code --rpc-port} and
+ * {@code --gpgnet-port} (TCP) and {@code --lobby-port} (UDP) — so concurrent harness runs don't
+ * collide. (The adapter binds GPGNet before RPC, so leaving those two on their fixed defaults would
+ * let a second run fail to bind and exit before RPC is ever reachable.) The adapter is always torn
+ * down via {@link SubprocessManager#terminate()} in a {@code finally} — no zombie process survives,
+ * including on failure.
  */
 @Tag("integration")
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
@@ -67,6 +73,9 @@ final class IceAdapterConnectionLiveSmokeTest {
 
     /**
      * A SIGTERM-ed JVM exits with 128 + SIGTERM(15); 128 + SIGKILL(9) = 137 would mean grace blown.
+     * POSIX signal semantics — appropriate for this Linux/WSL-targeted harness; a Windows port
+     * would need a different expected code (TerminateProcess does not use signal-offset exit
+     * codes).
      */
     private static final int EXIT_SIGTERM = 128 + 15;
 
@@ -74,8 +83,9 @@ final class IceAdapterConnectionLiveSmokeTest {
     @EnabledIf("adapterJarAvailable")
     void spawnsRealAdapterConnectsRunsReadinessStatusThenExitsCleanly() throws Exception {
         Path binary = resolveAdapterBinary();
-        int rpcPort = freePort();
-        MockClientConfig config = configFor(binary, rpcPort);
+        AdapterPorts ports = freeAdapterPorts();
+        int rpcPort = ports.rpc();
+        MockClientConfig config = configFor(binary, ports);
 
         SubprocessManager adapter = new IceAdapterLauncher(config).start();
         IceAdapterConnection conn =
@@ -84,12 +94,14 @@ final class IceAdapterConnectionLiveSmokeTest {
             // Boot step 2: TCP connect (with retry while the adapter JVM is still binding).
             conn.connect().get(30, TimeUnit.SECONDS);
 
-            // Readiness: the `status` RPC round-trips against the real binary (spec §6/§9). The
-            // real
-            // adapter returns `result` as a (double-encoded) JSON string, so a non-null result node
-            // is enough to prove the request/response path works end-to-end.
+            // Readiness: the `status` RPC round-trips against the real binary (spec §6 health
+            // poll).
+            // The adapter returns `result` as a (double-encoded) JSON string, so a present,
+            // non-null
+            // result node is enough to prove the request/response path works end-to-end.
             JsonNode status = conn.call("status").get(CALL_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-            assertFalse(status == null || status.isNull(), "adapter `status` returned no result");
+            assertNotNull(status, "adapter `status` returned no result");
+            assertFalse(status.isNull(), "adapter `status` result was JSON null");
             System.out.println("[live smoke] ICE adapter status: " + status);
         } finally {
             conn.close();
@@ -153,19 +165,36 @@ final class IceAdapterConnectionLiveSmokeTest {
         return null;
     }
 
-    /** Allocate a free loopback port for the adapter's {@code --rpc-port}. */
-    private static int freePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
+    /**
+     * The three adapter listener ports, allocated free per run.
+     *
+     * @param rpc JSON-RPC port (TCP)
+     * @param gpgnet GPGNet port (TCP)
+     * @param lobby lobby game-traffic port (UDP)
+     */
+    private record AdapterPorts(int rpc, int gpgnet, int lobby) {}
+
+    /**
+     * Allocate three distinct free ports for the adapter. The two TCP sockets (rpc, gpgnet) are
+     * held open simultaneously so the OS hands out distinct numbers; lobby is probed as UDP since
+     * the adapter binds {@code --lobby-port} for UDP game traffic. The sockets are closed before
+     * the adapter binds them — a benign TOCTOU window, acceptable for a smoke test.
+     */
+    private static AdapterPorts freeAdapterPorts() throws IOException {
+        try (ServerSocket rpc = new ServerSocket(0);
+                ServerSocket gpgnet = new ServerSocket(0);
+                DatagramSocket lobby = new DatagramSocket(0)) {
+            return new AdapterPorts(
+                    rpc.getLocalPort(), gpgnet.getLocalPort(), lobby.getLocalPort());
         }
     }
 
     /**
      * Build a {@link MockClientConfig} pointing the launcher at {@code binary} on the allocated
-     * {@code rpcPort}. The OAuth fields are required by config validation but unused here — the
+     * {@code ports}. The OAuth fields are required by config validation but unused here — the
      * adapter is only spawned, never authenticated (see ice-adapter-setup.md).
      */
-    private static MockClientConfig configFor(final Path binary, final int rpcPort) {
+    private static MockClientConfig configFor(final Path binary, final AdapterPorts ports) {
         List<String> args =
                 List.of(
                         "--lobby-websocket-url=wss://lobby.faforever.xyz",
@@ -177,7 +206,9 @@ final class IceAdapterConnectionLiveSmokeTest {
                         "--oauth-refresh-token=dummy-unused-by-live-smoke",
                         "--unique-id=00000000-0000-0000-0000-000000000000",
                         "--ice-adapter-binary-path=" + binary.toAbsolutePath(),
-                        "--ice-adapter-rpc-port=" + rpcPort);
-        return ConfigLoader.load(args.toArray(new String[0]), java.util.Map.of()).orElseThrow();
+                        "--ice-adapter-rpc-port=" + ports.rpc(),
+                        "--ice-adapter-gpg-net-port=" + ports.gpgnet(),
+                        "--ice-adapter-lobby-port=" + ports.lobby());
+        return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 }
