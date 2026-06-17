@@ -272,9 +272,8 @@ public class GameLaunchHandlerTest {
                 "{\"mod\":\"faf\",\"name\":\"x\",\"game_type\":\"custom\",\"rating_type\":\"global\"}";
 
         AtomicReference<GameConfig> sink = new AtomicReference<>();
-
-        Assertions.assertDoesNotThrow(
-                () -> new GameLaunchHandler(mapper, sink::set).onMessage(mapper.readTree(json)));
+        new GameLaunchHandler(mapper, sink::set)
+                .onMessage(mapper.readTree(json));
 
         Assertions.assertNull(sink.get());
     }
