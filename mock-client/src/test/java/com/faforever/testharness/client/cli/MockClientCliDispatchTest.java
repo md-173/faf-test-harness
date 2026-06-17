@@ -12,11 +12,11 @@ import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
 
 /**
- * Verifies that picocli routes {@code mock-client <subcommand> ...} to the matching command. The
- * not-yet-implemented stubs return {@link ExitCodes#NOT_IMPLEMENTED}; {@code launch-ice} and {@code
- * launch-game} are implemented and exit {@link ExitCodes#RUNTIME} on a missing binary. Either way
- * the exit code differs from a parse error ({@link ExitCodes#USAGE}), so it is a sufficient
- * dispatch signal.
+ * Verifies that picocli routes {@code mock-client <subcommand> ...} to the matching command. {@code
+ * ice-smoke} is still a stub returning {@link ExitCodes#NOT_IMPLEMENTED}; {@code run}, {@code
+ * launch-ice}, and {@code launch-game} are implemented and exit {@link ExitCodes#RUNTIME} on the
+ * minimal fixture (no usable token file / missing binary). Either way the exit code differs from a
+ * parse error ({@link ExitCodes#USAGE}), so it is a sufficient dispatch signal.
  */
 final class MockClientCliDispatchTest {
 
@@ -31,6 +31,15 @@ final class MockClientCliDispatchTest {
 
     private static int dispatch(final String subcommand) {
         return execute(CliTestFixtures.withSubcommand(subcommand));
+    }
+
+    @Test
+    void runDispatchesToRunCommand() {
+        // run is implemented (WBS-3.1.1.4). The minimal fixture supplies a literal
+        // --oauth-refresh-token but no --oauth-refresh-token-file; TokenSources only supports the
+        // file channel, so run routes through and fails fast with RUNTIME before any network I/O —
+        // a dispatch signal distinct from a parse error (USAGE), with no live-lobby dependency.
+        assertEquals(ExitCodes.RUNTIME, dispatch("run"));
     }
 
     @Test

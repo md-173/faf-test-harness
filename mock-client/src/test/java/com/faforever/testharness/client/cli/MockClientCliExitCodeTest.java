@@ -64,6 +64,14 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
+    void validRunInvocationWithoutTokenFileExitsRuntime() {
+        // run is implemented (WBS-3.1.1.4). The minimal fixture has a literal --oauth-refresh-token
+        // but no --oauth-refresh-token-file, and TokenSources only supports the file channel, so
+        // run fails fast with RUNTIME before any network I/O.
+        assertEquals(ExitCodes.RUNTIME, execute(CliTestFixtures.withSubcommand("run")));
+    }
+
+    @Test
     void launchIceWithMissingBinaryExitsRuntime() {
         // launch-ice is implemented (WBS-3.1.2.2). Point --ice-adapter-binary-path at a
         // guaranteed-absent path under the test's temp dir, so the launcher reports "binary not

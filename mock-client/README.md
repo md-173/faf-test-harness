@@ -12,16 +12,20 @@ subcommands that dispatch to the matching component.
 
 | Subcommand    | Purpose                                                                            |
 |---------------|------------------------------------------------------------------------------------|
-| `run`         | Run a full mock client session: authenticate, queue, play, teardown.               |
+| `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 |
 | `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    |
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
 | `ice-smoke`   | ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet handshake.|
 
-`launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) are implemented:
-each spawns its respective binary, runs it for `--duration-seconds`, terminates
-it, and logs the exit code. `ice-smoke` is still CLI scaffolding —
-it validates config, applies logging, logs a TODO line, and exit with code `64`
-(`NOT_IMPLEMENTED`). Real logic will ship in sibling tracks.
+`run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
+(`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
+authenticated player id, and then sits idle — the transport auto-replies `pong`
+to the lobby's `ping` heartbeats. `Ctrl-C` / `SIGTERM` closes the WebSocket
+cleanly (the process exit code then follows the signal: 130 for SIGINT, 143 for
+SIGTERM). `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) each spawn
+their respective binary, run it for `--duration-seconds`, terminate it, and log
+the exit code. `ice-smoke` is still CLI scaffolding — it validates config,
+applies logging, logs a TODO line, and exits with code `64` (`NOT_IMPLEMENTED`).
 
 Invocation shape:
 
@@ -29,7 +33,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 20
+Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 22
 config flags — are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag.
@@ -41,7 +45,7 @@ additionally take a subcommand-local `--duration-seconds` flag.
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
 | `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `launch-ice` / `launch-game` could not find/start its binary, or the child exited before its run window. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
@@ -110,6 +114,8 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `oauthAccessToken` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token (auxiliary/bootstrap output). |
 | `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT (auxiliary/bootstrap output). |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
+| `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
+| `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
 | `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | `faf-ice-adapter.jar` | no | Path to the `faf-ice-adapter` binary; a `.jar` runs via `java -jar`, any other file is executed directly. Relative paths resolve against the working directory. |
 | `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | `mock-game/build/install/mock-game/bin/mock-game` | no | Path to the `mock-game` binary; a `.jar` runs via `java -jar`, any other file is executed directly. The default is the Gradle `application` plugin install layout (resolved against the working directory), so the harness "just works" from the repo root after `./gradlew :mock-game:installDist`. |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | no | Local JSON-RPC port exposed by `faf-ice-adapter`. |
@@ -191,13 +197,22 @@ Root help lists every global flag and the four subcommands. Per-subcommand
 help shows the same flag set (subcommands inherit the root's flags). This is
 the source of truth that the field-reference table above mirrors.
 
-### `run` — full mock client session (config file)
+### `run` — connect to the lobby and sit idle (config file)
+
+Connects to the lobby, runs the auth handshake, hydrates the welcome state, logs
+the authenticated player id, then stays idle (auto-replying `pong` to the lobby's
+`ping` heartbeats) until `Ctrl-C` / `SIGTERM` closes the socket cleanly.
 
 ```bash
 cp mock-client.example.json mock-client.json
 # edit mock-client.json with real values
 ./gradlew :mock-client:run --args="run --config mock-client.json"
 ```
+
+`run` authenticates via the refresh-token **file** channel (`--oauth-refresh-token-file`
+/ `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` / `oauthRefreshTokenFile`), since
+the token is rotated and persisted on each use. A literal `--oauth-refresh-token`
+alone is not sufficient and `run` exits `70` (`RUNTIME`) before connecting.
 
 ### Providing the faf-ice-adapter binary
 
