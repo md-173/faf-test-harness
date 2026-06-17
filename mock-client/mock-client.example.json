@@ -10,6 +10,8 @@
     "oauthAccessToken": null,
     "oauthTokenFile": null,
     "uniqueId": "00000000-0000-0000-0000-000000000000",
+    "clientVersion": "0.0.0-mock",
+    "userAgent": "faf-test-harness",
     "iceAdapterBinaryPath": "/usr/local/bin/faf-ice-adapter",
     "mockGameBinaryPath": "./mock-game/build/install/mock-game/bin/mock-game",
     "iceAdapterRpcPort": 7236,
