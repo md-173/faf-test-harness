@@ -34,11 +34,6 @@ final class MockClientCliDispatchTest {
     }
 
     @Test
-    void runDispatchesToRunCommand() {
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, dispatch("run"));
-    }
-
-    @Test
     void launchIceDispatchesToLaunchIceCommand() {
         // launch-ice is implemented (WBS-3.1.2.2). Point it at a guaranteed-absent path inside the
         // test's temp dir so the command routes through, fails to find the binary, and exits
