@@ -134,7 +134,7 @@ public final class LobbyConnection {
      * Construct a connection bound to {@code endpoint}. The connection is not opened until {@link
      * #connect()} is called.
      *
-     * @param endpoint WebSocket URI (e.g. {@code wss://lobby.faforever.xyz})
+     * @param endpoint WebSocket URI (e.g. {@code wss://ws.faforever.xyz})
      */
     public LobbyConnection(final URI endpoint) {
         this(endpoint, HttpClient.newHttpClient(), new ObjectMapper(), DEFAULT_CONNECT_TIMEOUT);

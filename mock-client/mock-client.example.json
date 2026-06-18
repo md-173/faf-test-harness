@@ -1,5 +1,5 @@
 {
-    "lobbyWebSocketUrl": "wss://lobby.faforever.xyz",
+    "lobbyWebSocketUrl": "wss://ws.faforever.xyz",
     "oauthTokenUrl": "https://hydra.faforever.xyz/oauth2/token",
     "oauthAuthEndpoint": "https://hydra.faforever.xyz/oauth2/auth",
     "oauthRedirectUri": "http://127.0.0.1",

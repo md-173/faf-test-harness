@@ -54,7 +54,7 @@ downlords' `gradle.properties`.
 # 2. Confirm the R34 launcher can spawn it headless and capture its output (12s smoke run).
 mock-client/build/install/mock-client/bin/mock-client launch-ice --duration-seconds=12 \
   --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar" \
-  --lobby-websocket-url=wss://lobby.faforever.xyz \
+  --lobby-websocket-url=wss://ws.faforever.xyz \
   --oauth-token-url=https://hydra.faforever.xyz/oauth2/token \
   --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth \
   --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \

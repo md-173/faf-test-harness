@@ -300,7 +300,7 @@ exits `70` (`RUNTIME`) — no stack trace.
 ### Environment variables only
 
 ```bash
-export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://lobby.faforever.xyz
+export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://ws.faforever.xyz
 export FAF_MOCK_CLIENT_OAUTH_TOKEN_URL=https://hydra.faforever.xyz/oauth2/token
 export FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT=https://hydra.faforever.xyz/oauth2/auth
 export FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI=http://127.0.0.1
@@ -319,7 +319,7 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ```bash
 ./gradlew :mock-client:run --args="\
   run \
-  --lobby-websocket-url wss://lobby.faforever.xyz \
+  --lobby-websocket-url wss://ws.faforever.xyz \
   --oauth-token-url https://hydra.faforever.xyz/oauth2/token \
   --oauth-auth-endpoint https://hydra.faforever.xyz/oauth2/auth \
   --oauth-redirect-uri http://127.0.0.1 \
