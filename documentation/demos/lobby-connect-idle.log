@@ -1,0 +1,28 @@
+# lobby-connect-idle — real capture (WBS-3.1.1.4)
+#
+# `mock-client run` against the FAF test lobby, authenticating as the seeded
+# `test` account (id 7982) and going idle. Captured 2026-06-18.
+#
+# Endpoint:  wss://ws.faforever.xyz   (the working test endpoint — lobby-protocol-spec.md "Server Endpoints")
+# unique_id: generated at runtime by the FAF `faf-uid` binary (--uid-binary-path); the
+#            lobby's policy server rejects a placeholder UID. See README "run".
+# Command:   mock-client run --config mock-client.json --uid-binary-path <faf-uid>
+#
+# Console format (the same events are written as structured JSON to logs/<component>.jsonl).
+# No credentials appear: the access token, refresh token, and the faf-uid blob are never
+# logged — only the blob's length and the server-supplied login/id.
+
+[2026-06-18 15:20:21.761] [MockClient] [INFO ] lobby WebSocket connected: wss://ws.faforever.xyz
+[2026-06-18 15:20:23.892] [MockClient] [INFO ] generated unique_id via faf-uid (1916 chars)
+[2026-06-18 15:20:24.328] [MockClient] [INFO ] lobby authenticated as login=test
+[2026-06-18 15:20:24.366] [MockClient] [INFO ] session ready: id=7982 login=test
+[2026-06-18 15:20:24.366] [MockClient] [INFO ] mock client idle as player id=7982 login=test; press Ctrl-C to exit
+^C
+[2026-06-18 15:20:34.309] [MockClient] [INFO ] shutdown signal received; closing lobby connection
+
+# After the line above the shutdown hook sends the WebSocket close frame and the process
+# exits. (The server's close echo — which would log "lobby WebSocket closed: code=1000
+# bucket=LOCAL_CLOSE" — can arrive after the JVM has already halted, so that final line is
+# not always flushed; the close frame is still sent cleanly. No error lines at shutdown.)
+#
+# This capture used `timeout 15` (SIGTERM) as a stand-in for an interactive Ctrl-C.

@@ -83,7 +83,11 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection connection = new LobbyConnection(config.lobbyWebSocketUrl());
         LobbySession session =
                 new LobbySession(
-                        connection, config.uniqueId(), config.clientVersion(), config.userAgent());
+                        connection,
+                        config.uniqueId(),
+                        config.clientVersion(),
+                        config.userAgent(),
+                        config.uidBinaryPath());
 
         // Graceful shutdown on Ctrl-C / SIGTERM: close the socket cleanly. No-op if the session has
         // already disconnected (e.g. a server-initiated close that let call() return normally), so

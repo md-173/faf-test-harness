@@ -2,15 +2,21 @@ package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Unit tests for {@link LobbyHandshake} running against {@link ScriptedWebSocketServer}. */
 final class LobbyHandshakeTest {
@@ -150,5 +156,57 @@ final class LobbyHandshakeTest {
         ExecutionException e =
                 assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
+    }
+
+    @Test
+    void uidBinaryOutputBecomesUniqueId(@TempDir final Path dir) throws Exception {
+        assumeTrue(
+                !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
+                "POSIX-only: uses a shell script as a stand-in faf-uid binary");
+        // A stand-in 'faf-uid' that echoes a session-derived token, proving the handshake runs the
+        // binary with the lobby session and sends its stdout as unique_id.
+        Path fakeUid = dir.resolve("fake-uid.sh");
+        Files.writeString(fakeUid, "#!/bin/sh\necho \"UID-FOR-$1\"\n");
+        assertTrueExecutable(fakeUid);
+
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(fakeUid));
+        handshake.perform(fixedToken("jwt-token-abc"));
+
+        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.broadcastText("{\"command\":\"session\",\"session\":99}");
+
+        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertEquals("auth", auth.get("command").asText());
+        assertEquals("UID-FOR-99", auth.get("unique_id").asText());
+    }
+
+    @Test
+    void missingUidBinaryFallsBackToStaticUniqueId() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        Path absent = Path.of("nonexistent", "faf-uid-does-not-exist");
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(absent));
+        handshake.perform(fixedToken("jwt-token-abc"));
+
+        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.broadcastText("{\"command\":\"session\",\"session\":7}");
+
+        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertEquals("auth", auth.get("command").asText());
+        assertEquals("static-uid", auth.get("unique_id").asText());
+    }
+
+    private static void assertTrueExecutable(final Path file) {
+        if (!file.toFile().setExecutable(true)) {
+            throw new AssertionError("could not mark stand-in faf-uid script executable: " + file);
+        }
     }
 }

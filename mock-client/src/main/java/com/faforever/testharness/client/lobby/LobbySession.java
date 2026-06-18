@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -72,8 +73,28 @@ public final class LobbySession {
             final String uniqueId,
             final String clientVersion,
             final String userAgent) {
+        this(connection, uniqueId, clientVersion, userAgent, Optional.empty());
+    }
+
+    /**
+     * Bind a session that derives its {@code unique_id} from the {@code faf-uid} binary.
+     *
+     * @param connection a {@link LobbyConnection} that has not yet been {@link
+     *     LobbyConnection#connect() connected}
+     * @param uniqueId fallback hardware identifier used when {@code uidBinaryPath} is empty
+     * @param clientVersion {@code version} field sent in {@code ask_session}
+     * @param userAgent {@code user_agent} field sent in {@code ask_session}
+     * @param uidBinaryPath optional path to the {@code faf-uid} binary (see {@link LobbyHandshake})
+     */
+    public LobbySession(
+            final LobbyConnection connection,
+            final String uniqueId,
+            final String clientVersion,
+            final String userAgent,
+            final Optional<Path> uidBinaryPath) {
         this.connection = connection;
-        this.handshake = new LobbyHandshake(connection, uniqueId, clientVersion, userAgent);
+        this.handshake =
+                new LobbyHandshake(connection, uniqueId, clientVersion, userAgent, uidBinaryPath);
         connection.onDisconnect(
                 event -> {
                     this.disconnectEvent = event;

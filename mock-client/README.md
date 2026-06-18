@@ -33,7 +33,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 22
+Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 23
 config flags — are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag.
@@ -113,9 +113,10 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | no¹ | Path to the refresh-token file; rewritten atomically on rotation. |
 | `oauthAccessToken` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token (auxiliary/bootstrap output). |
 | `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT (auxiliary/bootstrap output). |
-| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
+| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
 | `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
 | `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
+| `uidBinaryPath` | `FAF_MOCK_CLIENT_UID_BINARY_PATH` | `--uid-binary-path` | — | no | Path to the FAF `faf-uid` binary. When set, the auth handshake runs `<path> <session>` and sends its output as `unique_id` (the lobby's policy server requires a real RSA-encrypted UID, not a placeholder). When unset, the static `uniqueId` is sent. |
 | `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | `faf-ice-adapter.jar` | no | Path to the `faf-ice-adapter` binary; a `.jar` runs via `java -jar`, any other file is executed directly. Relative paths resolve against the working directory. |
 | `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | `mock-game/build/install/mock-game/bin/mock-game` | no | Path to the `mock-game` binary; a `.jar` runs via `java -jar`, any other file is executed directly. The default is the Gradle `application` plugin install layout (resolved against the working directory), so the harness "just works" from the repo root after `./gradlew :mock-game:installDist`. |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | no | Local JSON-RPC port exposed by `faf-ice-adapter`. |
@@ -213,6 +214,13 @@ cp mock-client.example.json mock-client.json
 / `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` / `oauthRefreshTokenFile`), since
 the token is rotated and persisted on each use. A literal `--oauth-refresh-token`
 alone is not sufficient and `run` exits `70` (`RUNTIME`) before connecting.
+
+Against the live lobby you also need `--uid-binary-path` pointing at the FAF
+`faf-uid` binary: the lobby's policy server rejects a placeholder `unique_id`
+(the login ends in `{"command":"invalid"}`), so the handshake runs `faf-uid` with
+the session to produce a real RSA-encrypted UID. See
+[`documentation/demos/README.md`](../documentation/demos/README.md) for the full
+recipe (endpoint, token bootstrap, and obtaining the binary).
 
 ### Providing the faf-ice-adapter binary
 
