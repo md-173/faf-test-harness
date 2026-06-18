@@ -113,6 +113,7 @@ final class TestFixtures {
         assertEquals("INFO", config.logLevel());
         assertEquals("mock-client", config.playerLogin());
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
+        assertTrue(config.uidBinaryPath().isEmpty(), "uidBinaryPath should default to empty");
         assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
         assertTrue(config.hostConfig().isEmpty(), "hostConfig should default to empty");
         assertTrue(config.joinConfig().isEmpty(), "joinConfig should default to empty");

@@ -32,6 +32,10 @@ import java.util.OptionalInt;
  *     field of that command; lobby-protocol-spec.md §3)
  * @param userAgent client identifier string sent in the {@code ask_session} message (a required
  *     field of that command; lobby-protocol-spec.md §3)
+ * @param uidBinaryPath optional path to the FAF {@code faf-uid} binary. When present, the auth
+ *     handshake runs {@code <uidBinaryPath> <session>} and uses its output as the {@code unique_id}
+ *     (the lobby's policy/anti-cheat server requires a real RSA-encrypted UID, not a plain
+ *     placeholder; lobby-protocol-spec.md §3). When empty, the static {@code uniqueId} is sent.
  * @param iceAdapterBinaryPath path to the faf-ice-adapter executable
  * @param mockGameBinaryPath path to the mock-game executable
  * @param iceAdapterRpcPort local JSON-RPC port exposed by faf-ice-adapter
@@ -67,6 +71,7 @@ public record MockClientConfig(
         String uniqueId,
         String clientVersion,
         String userAgent,
+        Optional<Path> uidBinaryPath,
         Path iceAdapterBinaryPath,
         Path mockGameBinaryPath,
         int iceAdapterRpcPort,

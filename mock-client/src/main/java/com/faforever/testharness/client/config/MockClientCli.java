@@ -168,6 +168,19 @@ public final class MockClientCli implements Callable<Integer> {
                             + "(default: ${DEFAULT-VALUE}).")
     private String userAgent;
 
+    /**
+     * Optional path to the {@code faf-uid} binary used to generate a real lobby {@code unique_id}.
+     */
+    @Option(
+            names = "--uid-binary-path",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Optional path to the FAF faf-uid binary. When set, the auth handshake runs "
+                            + "'<path> <session>' and sends its output as unique_id (the lobby's "
+                            + "policy server requires a real RSA-encrypted UID). When unset, the "
+                            + "static --unique-id is sent.")
+    private Path uidBinaryPath;
+
     /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
     @Option(
             names = "--ice-adapter-binary-path",
@@ -386,6 +399,7 @@ public final class MockClientCli implements Callable<Integer> {
                 uniqueId,
                 clientVersion,
                 userAgent,
+                Optional.ofNullable(uidBinaryPath),
                 iceAdapterBinaryPath,
                 mockGameBinaryPath,
                 iceAdapterRpcPort,

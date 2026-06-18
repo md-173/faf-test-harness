@@ -34,6 +34,7 @@ final class TokenSourcesTest {
                 "00000000-0000-0000-0000-000000000000",
                 "0.0.0-mock",
                 "faf-test-harness",
+                Optional.empty(),
                 Path.of("/bin/faf-ice-adapter"),
                 Path.of("/bin/mock-game"),
                 7236,
