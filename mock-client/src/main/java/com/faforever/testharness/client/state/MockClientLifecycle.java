@@ -5,6 +5,7 @@ import com.faforever.testharness.client.lobby.LobbyHandshake;
 import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.message.WelcomeMessage;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
@@ -12,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +42,7 @@ public final class MockClientLifecycle {
     private final LobbyHandshake handshake;
 
     /** Future from LobbyHandshake with the welcome message. */
-    private final CompletableFuture<SessionState> welcomeFuture;
+    private CompletableFuture<SessionState> welcomeFuture;
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -52,10 +54,8 @@ public final class MockClientLifecycle {
      *
      * @param lobby an open connection to the lobby server.
      * @param handshake the object responsible for the initial handshake with the lobby server.
-     * @param source a source for OAuth tokens for the handshake.
      */
-    public MockClientLifecycle(
-            LobbyConnection lobby, LobbyHandshake handshake, TokenSource source) {
+    public MockClientLifecycle(LobbyConnection lobby, LobbyHandshake handshake) {
         this.lobby = lobby;
         this.handshake = handshake;
 
@@ -108,7 +108,20 @@ public final class MockClientLifecycle {
                             ShutdownRequested.class, states.get(ClientState.TERMINATED));
         }
 
-        // Adapt handshake/lobby events to state events.
+        // Adapt lobby events to state events.
+        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
+        lobby.registerHandler(
+                "game_launch", message -> machine.receiveEvent(new LaunchGame(message)));
+        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
+        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+    }
+
+    /**
+     * Initiates handshake with the lobby server, which sets the entire lifecycle in motion.
+     *
+     * @param source a source for OAuth tokens for the handshake.
+     */
+    public void start(TokenSource source) {
         welcomeFuture =
                 handshake
                         .perform(source)
@@ -124,18 +137,17 @@ public final class MockClientLifecycle {
                                         machine.receiveEvent(new AuthFailed(err.getCause()));
                                     }
                                 });
-
-        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
-        lobby.registerHandler(
-                "game_launch", message -> machine.receiveEvent(new LaunchGame(message)));
-        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
-        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
     }
 
-    /** Wait on the handshake to finish. */
-    public void performHandshake() throws Exception {
-        LOG.info("Waiting on lobby handshake to complete");
-        welcomeFuture.get();
+    /**
+     * Wait on the handshake to finish. Returns immediately if called before {@link
+     * #start(TokenSource) start}.
+     */
+    public void awaitHandshake() throws InterruptedException, ExecutionException {
+        if (welcomeFuture != null) {
+            LOG.info("Waiting on lobby handshake to complete");
+            welcomeFuture.get();
+        }
     }
 
     /**
@@ -151,5 +163,14 @@ public final class MockClientLifecycle {
     public void shutdown() {
         LOG.info("Manual shutdown requested");
         machine.receiveEvent(new ShutdownRequested());
+    }
+
+    /**
+     * Directly forwards an event to the state machine. Used for testing.
+     *
+     * @param e the event to send.
+     */
+    /*package-private*/ void post(Event e) {
+        machine.receiveEvent(e);
     }
 }

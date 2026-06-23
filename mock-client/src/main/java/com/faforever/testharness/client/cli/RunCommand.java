@@ -95,7 +95,21 @@ public final class RunCommand implements Callable<Integer> {
         LobbyHandshake handshake =
                 new LobbyHandshake(lobby, config.uniqueId(), "0.1", "faf-client");
 
-        MockClientLifecycle lifecycle = new MockClientLifecycle(lobby, handshake, source);
+        MockClientLifecycle lifecycle = new MockClientLifecycle(lobby, handshake);
+
+        lifecycle.start(source);
+        try {
+            lifecycle.awaitHandshake();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException e) {
+            LOG.error(
+                    "Could not complete handshake with lobby server due to {} ({})",
+                    e.getMessage(),
+                    e.getClass().getSimpleName());
+            System.out.println("Could not authenticate lobby server connection");
+            return ExitCodes.RUNTIME;
+        }
 
         lifecycle.shutdown();
         LOG.info("TODO: 'run' not implemented yet");
