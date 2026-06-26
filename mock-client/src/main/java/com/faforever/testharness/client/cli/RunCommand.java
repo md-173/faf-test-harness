@@ -72,10 +72,10 @@ public final class RunCommand implements Callable<Integer> {
         if (config.lobbyWebSocketUrl() == null) {
             System.out.println(
                     "Lobby websocket url (--lobby-websocket-url) required for run command");
-            return ExitCodes.RUNTIME;
+            return ExitCodes.USAGE;
         } else if (config.uniqueId() == null) {
             System.out.println("Unique ID (--unique-id) required for run command");
-            return ExitCodes.RUNTIME;
+            return ExitCodes.USAGE;
         }
 
         LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
@@ -112,7 +112,6 @@ public final class RunCommand implements Callable<Integer> {
         }
 
         lifecycle.shutdown();
-        LOG.info("TODO: 'run' not implemented yet");
-        return ExitCodes.NOT_IMPLEMENTED;
+        return ExitCodes.OK;
     }
 }
