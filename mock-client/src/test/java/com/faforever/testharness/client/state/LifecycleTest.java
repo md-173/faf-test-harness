@@ -80,4 +80,64 @@ final class LifecycleTest {
         lifecycle.shutdown();
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
     }
+
+    @Test
+    void authFailure() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+
+        MockClientLifecycle lifecycle = new MockClientLifecycle(lobby, handshake);
+        assertEquals(ClientState.CONNECTING, lifecycle.getState());
+
+        lifecycle.post(new AuthFailed(null));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
+    void disconnection() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+
+        MockClientLifecycle lifecycle = new MockClientLifecycle(lobby, handshake);
+        assertEquals(ClientState.CONNECTING, lifecycle.getState());
+
+        lifecycle.post(new Disconnected(null));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        lifecycle = new MockClientLifecycle(lobby, handshake);
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new Disconnected(null));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        lifecycle = new MockClientLifecycle(lobby, handshake);
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(null));
+        lifecycle.post(new Disconnected(null));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        lifecycle = new MockClientLifecycle(lobby, handshake);
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(null));
+        lifecycle.post(new HostGame(null));
+        lifecycle.post(new Disconnected(null));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        lifecycle = new MockClientLifecycle(lobby, handshake);
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(null));
+        lifecycle.post(new HostGame(null));
+        lifecycle.post(new StartMatch());
+        lifecycle.post(new Disconnected(null));
+        // When a game has already started, communication occurs peer-to-peer and lobby server is
+        // not needed. Disconnection does not cause termination.
+        assertEquals(ClientState.PLAYING, lifecycle.getState());
+    }
 }

@@ -89,6 +89,8 @@ public final class MockClientLifecycle {
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
         // Disconnection on any of these states results in termination.
+        states.get(ClientState.CONNECTING)
+                .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.IDLE)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.STARTING_GAME)
@@ -97,7 +99,6 @@ public final class MockClientLifecycle {
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
-
         states.get(ClientState.PLAYING)
                 .registerTransition(GameExited.class, states.get(ClientState.TERMINATED));
 
