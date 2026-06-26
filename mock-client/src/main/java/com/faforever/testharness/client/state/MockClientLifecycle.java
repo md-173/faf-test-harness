@@ -131,7 +131,6 @@ public final class MockClientLifecycle {
                         .whenComplete(
                                 (state, err) -> {
                                     if (err == null) {
-                                        LOG.info("Handshake complete, transitioning to IDLE");
                                         machine.receiveEvent(new WelcomeReceived(state));
                                     } else {
                                         LOG.warn("Handshake could not be completed");
