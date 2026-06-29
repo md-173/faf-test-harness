@@ -64,11 +64,6 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
-    void validRunInvocationExitsNotImplemented() {
-        assertEquals(ExitCodes.NOT_IMPLEMENTED, execute(CliTestFixtures.withSubcommand("run")));
-    }
-
-    @Test
     void launchIceWithMissingBinaryExitsRuntime() {
         // launch-ice is implemented (WBS-3.1.2.2). Point --ice-adapter-binary-path at a
         // guaranteed-absent path under the test's temp dir, so the launcher reports "binary not

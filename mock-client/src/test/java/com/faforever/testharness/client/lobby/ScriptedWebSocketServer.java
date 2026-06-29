@@ -21,20 +21,20 @@ import org.java_websocket.server.WebSocketServer;
  * listening; the {@link #uri()} method returns the {@code ws://127.0.0.1:&lt;port&gt;} URL to point
  * a client at. Always close via {@link #stop()} in {@code @AfterEach}.
  */
-final class ScriptedWebSocketServer extends WebSocketServer {
+public final class ScriptedWebSocketServer extends WebSocketServer {
 
     private final CountDownLatch started = new CountDownLatch(1);
     private final CountDownLatch firstClientConnected = new CountDownLatch(1);
     private final BlockingQueue<String> received = new LinkedBlockingQueue<>();
     private final List<WebSocket> connections = new CopyOnWriteArrayList<>();
 
-    ScriptedWebSocketServer() {
+    public ScriptedWebSocketServer() {
         super(new InetSocketAddress("127.0.0.1", 0));
         setReuseAddr(true);
     }
 
     /** Start the server and block until it's listening. */
-    void startAndAwait() throws InterruptedException {
+    public void startAndAwait() throws InterruptedException {
         start();
         if (!started.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("scripted WebSocket server failed to start within 5s");
@@ -42,19 +42,20 @@ final class ScriptedWebSocketServer extends WebSocketServer {
     }
 
     /** Block until the first client opens a connection. */
-    void awaitFirstClient() throws InterruptedException {
+    public void awaitFirstClient() throws InterruptedException {
         if (!firstClientConnected.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("no client connected within 5s");
         }
     }
 
     /** URI a client should connect to. */
-    URI uri() {
+    public URI uri() {
         return URI.create("ws://127.0.0.1:" + getPort());
     }
 
     /** Poll the next text frame the server received, or fail after {@code timeout}. */
-    String pollReceived(final long timeout, final TimeUnit unit) throws InterruptedException {
+    public String pollReceived(final long timeout, final TimeUnit unit)
+            throws InterruptedException {
         String msg = received.poll(timeout, unit);
         if (msg == null) {
             throw new AssertionError("no message received within " + timeout + " " + unit);
@@ -63,21 +64,21 @@ final class ScriptedWebSocketServer extends WebSocketServer {
     }
 
     /** Send a text frame to every connected client. */
-    void broadcastText(final String text) {
+    public void broadcastText(final String text) {
         for (WebSocket c : connections) {
             c.send(text);
         }
     }
 
     /** Send a clean WebSocket close to every connected client. */
-    void closeAllClean(final int code, final String reason) {
+    public void closeAllClean(final int code, final String reason) {
         for (WebSocket c : connections) {
             c.close(code, reason);
         }
     }
 
     /** Slam the underlying TCP socket without a close frame — simulates a network drop. */
-    void abruptlyTerminate() {
+    public void abruptlyTerminate() {
         for (WebSocket c : connections) {
             c.closeConnection(1006, "abrupt"); // 1006 = CLOSE_ABNORMAL, no close frame sent
         }
