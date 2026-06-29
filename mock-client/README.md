@@ -19,9 +19,9 @@ subcommands that dispatch to the matching component.
 
 `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) are implemented:
 each spawns its respective binary, runs it for `--duration-seconds`, terminates
-it, and logs the exit code. `run` and `ice-smoke` are still CLI scaffolding —
-they validate config, apply logging, log a TODO line, and exit with code `64`
-(`NOT_IMPLEMENTED`). Real logic for each ships in sibling tracks.
+it, and logs the exit code. `ice-smoke` is still CLI scaffolding —
+it validates config, applies logging, logs a TODO line, and exit with code `64`
+(`NOT_IMPLEMENTED`). Real logic will ship in sibling tracks.
 
 Invocation shape:
 
@@ -40,7 +40,7 @@ additionally take a subcommand-local `--duration-seconds` flag.
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`run`, `ice-smoke` stubs). |
+| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `launch-ice` / `launch-game` could not find/start its binary, or the child exited before its run window. |
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's

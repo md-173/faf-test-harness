@@ -21,13 +21,9 @@ import picocli.CommandLine.ParentCommand;
 import picocli.CommandLine.Spec;
 
 /**
- * Stub for the {@code run} subcommand. Eventually drives a full Mock Client session: authenticate
- * against the lobby, join the queue, spawn {@code faf-ice-adapter} and {@code mock-game}, run the
- * lifecycle FSM, and tear down on game-end.
- *
- * <p>For WBS-3.1.5.2 (CLI scaffolding) this validates config and logs a TODO line, returning {@link
- * ExitCodes#NOT_IMPLEMENTED} so CI cannot mistake the stub for a real success. The owning track is
- * responsible for replacing the body of {@link #call()} with the real lifecycle.
+ * The {@code run} subcommand (WIP) drives a full Mock Client session. It authenticates against the
+ * lobby, joins the queue, spawns {@code faf-ice-adapter} and {@code mock-game}, runs the lifecycle
+ * FSM, and tears down on game-end.
  */
 @Command(
         name = "run",
@@ -48,10 +44,10 @@ public final class RunCommand implements Callable<Integer> {
     @Spec private CommandSpec spec;
 
     /**
-     * Validate the config, set up logging, log a TODO line, and exit with {@link
-     * ExitCodes#NOT_IMPLEMENTED}. The real session loop is owned by a sibling track.
+     * Validate the config, establish a connection against the lobby server, and runs a game
+     * session.
      *
-     * @return {@link ExitCodes#NOT_IMPLEMENTED}
+     * @return an exit status code from {@link ExitCodes} based on the subcommand outcome.
      */
     @Override
     public Integer call() {
