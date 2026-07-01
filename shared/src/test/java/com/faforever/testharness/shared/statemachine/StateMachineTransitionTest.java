@@ -62,7 +62,8 @@ final class StateMachineTransitionTest {
 
         actionHappened = false;
 
-        red.registerTransition(IncomingCarDetected.class, green, () -> actionHappened = true, null);
+        red.registerTransition(
+                IncomingCarDetected.class, green, ignored -> actionHappened = true, null);
         StateMachine machine = new StateMachine(red);
         assertTrue(machine.getState() == red);
         assertTrue(!actionHappened);
@@ -112,7 +113,7 @@ final class StateMachineTransitionTest {
         List<String> processLog = new ArrayList<>();
 
         red.registerTransition(
-                IncomingCarDetected.class, green, () -> processLog.add("action"), null);
+                IncomingCarDetected.class, green, ignored -> processLog.add("action"), null);
         red.onExit(() -> processLog.add("red exit"));
         green.onEntry(() -> processLog.add("green entry"));
 

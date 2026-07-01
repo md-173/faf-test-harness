@@ -3,6 +3,7 @@ package com.faforever.testharness.shared.statemachine;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /** Represents a state. */
@@ -95,7 +96,10 @@ public class State {
      * @param guard must be true for transition to happen.
      */
     public void registerTransition(
-            Class<? extends Event> event, State other, Runnable action, Predicate<Event> guard) {
+            Class<? extends Event> event,
+            State other,
+            Consumer<Event> action,
+            Predicate<Event> guard) {
         Transition t = new Transition(this, other, action, guard);
         transitions.computeIfAbsent(event, k -> new ArrayList<>()).add(t);
     }

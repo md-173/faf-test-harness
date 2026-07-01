@@ -85,7 +85,7 @@ public class StateMachine implements EventListener {
                     event.getClass().getSimpleName());
             for (var t : transitions) {
                 if (t.guard(event)) {
-                    State newState = t.transition();
+                    State newState = t.transition(event);
                     LOG.debug(
                             "Transition from {} to {} caused by {} successful",
                             state.getName(),
@@ -135,8 +135,8 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
-                // No need to check guard.
-                state = transition.transition();
+                // No need to check guard and no actual event that triggered this.
+                state = transition.transition(null);
                 LOG.debug("Timeout fired, new state is {}", state.getName());
                 // State transition occured, any other timeouts are cancelled.
                 for (var timeout : timeouts) {
