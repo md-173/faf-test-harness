@@ -1,6 +1,5 @@
 package com.faforever.testharness.shared.statemachine;
 
-import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 /** Represents a transition to another state. */
@@ -12,7 +11,7 @@ public class Transition {
     private State to;
 
     /** The action taken if a transition actually takes place. */
-    private Consumer<Event> action;
+    private TransitionAction action;
 
     /** Condition that must be met for a transition to happen. */
     private Predicate<Event> guard;
@@ -27,7 +26,7 @@ public class Transition {
      * @param guard Condition that must be met for a transition to happen. Or {@code null} if the
      *     transition always happens.
      */
-    public Transition(State from, State to, Consumer<Event> action, Predicate<Event> guard) {
+    public Transition(State from, State to, TransitionAction action, Predicate<Event> guard) {
         this.from = from;
         this.to = to;
         this.action = action;
@@ -42,7 +41,18 @@ public class Transition {
      */
     public State transition(Event event) {
         if (action != null) {
-            action.accept(event);
+            try {
+                action.accept(event);
+            } catch (FailedTransitionException e) {
+                if (e.getFailureState() != null) {
+                    from.exit();
+                    State s = e.getFailureState();
+                    s.entry();
+                    return s;
+                } else {
+                    return from;
+                }
+            }
         }
         // Run any registered hooks.
         from.exit();
