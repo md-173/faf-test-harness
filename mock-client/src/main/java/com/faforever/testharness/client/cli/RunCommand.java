@@ -91,7 +91,7 @@ public final class RunCommand implements Callable<Integer> {
         LobbyHandshake handshake =
                 new LobbyHandshake(lobby, config.uniqueId(), "0.1", "faf-client");
 
-        MockClientLifecycle lifecycle = new MockClientLifecycle(lobby, handshake);
+        MockClientLifecycle lifecycle = new MockClientLifecycle(config, lobby, handshake);
 
         lifecycle.start(source);
         try {
@@ -108,6 +108,7 @@ public final class RunCommand implements Callable<Integer> {
         }
 
         lifecycle.shutdown();
+        lobby.close();
         return ExitCodes.OK;
     }
 }

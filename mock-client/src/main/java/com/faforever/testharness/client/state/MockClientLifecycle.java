@@ -1,17 +1,28 @@
 package com.faforever.testharness.client.state;
 
+import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.lobby.GameConfig;
+import com.faforever.testharness.client.lobby.GameLaunchHandler;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbyHandshake;
 import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.message.WelcomeMessage;
+import com.faforever.testharness.client.process.IceAdapterLaunchException;
+import com.faforever.testharness.client.process.IceAdapterLauncher;
+import com.faforever.testharness.client.process.MockGameLaunchException;
+import com.faforever.testharness.client.process.MockGameLauncher;
+import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.Event;
+import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
@@ -41,8 +52,20 @@ public final class MockClientLifecycle {
      */
     private final LobbyHandshake handshake;
 
+    /** Config settings for the mock client. */
+    private final MockClientConfig config;
+
     /** Future from LobbyHandshake with the welcome message. */
     private CompletableFuture<SessionState> welcomeFuture;
+
+    /** ICE adapter subprocess. */
+    private SubprocessManager iceAdapter;
+
+    /** Game binary subprocess. */
+    private SubprocessManager gameBinary;
+
+    /** JSON-RPC connection to the ICE adapter. */
+    private IceAdapterConnection iceConnection;
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -52,10 +75,13 @@ public final class MockClientLifecycle {
      * transitions on the internal state machine and subscribe to all relevant events from lobby and
      * handshake.
      *
+     * @param config a set of configuration options passed by the user.
      * @param lobby an open connection to the lobby server.
      * @param handshake the object responsible for the initial handshake with the lobby server.
      */
-    public MockClientLifecycle(LobbyConnection lobby, LobbyHandshake handshake) {
+    public MockClientLifecycle(
+            MockClientConfig config, LobbyConnection lobby, LobbyHandshake handshake) {
+        this.config = config;
         this.lobby = lobby;
         this.handshake = handshake;
 
@@ -76,7 +102,11 @@ public final class MockClientLifecycle {
                 .registerTransition(AuthFailed.class, states.get(ClientState.TERMINATED));
 
         states.get(ClientState.IDLE)
-                .registerTransition(LaunchGame.class, states.get(ClientState.STARTING_GAME));
+                .registerTransition(
+                        LaunchGame.class,
+                        states.get(ClientState.STARTING_GAME),
+                        this::launchGame,
+                        null);
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(HostGame.class, states.get(ClientState.HOSTING));
@@ -111,8 +141,10 @@ public final class MockClientLifecycle {
 
         // Adapt lobby events to state events.
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
-        lobby.registerHandler(
-                "game_launch", message -> machine.receiveEvent(new LaunchGame(message)));
+        GameLaunchHandler launchHandler =
+                new GameLaunchHandler(
+                        mapper, message -> machine.receiveEvent(new LaunchGame(message)));
+        lobby.registerHandler("game_launch", launchHandler::onMessage);
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
     }
@@ -163,6 +195,35 @@ public final class MockClientLifecycle {
     public void shutdown() {
         LOG.info("Manual shutdown requested");
         machine.receiveEvent(new ShutdownRequested());
+    }
+
+    private void launchGame(Event message) throws FailedTransitionException {
+        if (!(message instanceof LaunchGame)) {
+            throw new AssertionError(
+                    "launchGame method called without a LaunchGame event, should be impossible");
+        }
+        GameConfig gameConfig = ((LaunchGame) message).config();
+        try {
+            IceAdapterLauncher iceLauncher = new IceAdapterLauncher(config);
+            iceAdapter = iceLauncher.start();
+            iceConnection = new IceAdapterConnection(config.iceAdapterRpcPort());
+            iceConnection.connect().get();
+
+            MockGameLauncher gameLauncher = new MockGameLauncher(config);
+            gameBinary = gameLauncher.start();
+            iceConnection.call(
+                    "setLobbyInitMode",
+                    gameConfig.gameType().equals("matchmaker") ? "auto" : "normal");
+            // Empty list of ICE servers, so only public STUN servers will be used.
+            iceConnection.call("setIceServers", new Object[0]);
+        } catch (IceAdapterLaunchException | CancellationException | ExecutionException e) {
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (MockGameLaunchException e) {
+            iceAdapter.terminate();
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**
