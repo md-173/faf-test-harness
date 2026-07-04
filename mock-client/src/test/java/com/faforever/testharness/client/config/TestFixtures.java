@@ -113,5 +113,7 @@ final class TestFixtures {
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
         assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
         assertTrue(config.hostConfig().isEmpty(), "hostConfig should default to empty");
+        assertTrue(config.targetGameId().isEmpty(), "targetGameId should default to empty");
+        assertTrue(config.gameJoinPassword().isEmpty(), "gameJoinPassword should default to empty");
     }
 }

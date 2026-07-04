@@ -18,5 +18,7 @@
     "logLevel": "INFO",
     "logFile": null,
     "playerIdOverride": null,
-    "playerLogin": "mock-client"
+    "playerLogin": "mock-client",
+    "targetGameId": null,
+    "gameJoinPassword": null
 }

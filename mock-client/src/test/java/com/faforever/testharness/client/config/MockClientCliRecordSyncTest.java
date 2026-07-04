@@ -121,8 +121,8 @@ final class MockClientCliRecordSyncTest {
         // sanity check: catches the case where both sets drift in lockstep. The gap between the
         // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
         // .size() (7 host-* options collapse into 1 hostConfig record component).
-        long expectedRecordComponents = 20;
-        long expectedCliOptionsExcludingHelpers = 26;
+        long expectedRecordComponents = 22;
+        long expectedCliOptionsExcludingHelpers = 28;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =

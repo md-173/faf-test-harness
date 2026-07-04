@@ -45,6 +45,11 @@ import java.util.OptionalInt;
  * @param hostConfig host-a-custom-game settings (lobby-protocol-spec §4.1 / §10.2); present only
  *     when the operator configured the mock client to host — empty means this run does not host
  *     (e.g. it joins an existing game instead)
+ * @param targetGameId game ID to join, from config/CLI; when present the FSM sends {@code
+ *     game_join} for it from {@code IDLE} (lobby-protocol-spec.md §4.2 / §10.2); empty means this
+ *     run does not join a game
+ * @param gameJoinPassword optional password sent alongside {@code game_join}; empty is encoded as a
+ *     {@code null} password field, matching the protocol
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -66,7 +71,9 @@ public record MockClientConfig(
         Optional<Path> logFile,
         OptionalInt playerIdOverride,
         String playerLogin,
-        Optional<GameHostConfig> hostConfig) {
+        Optional<GameHostConfig> hostConfig,
+        OptionalInt targetGameId,
+        Optional<String> gameJoinPassword) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:

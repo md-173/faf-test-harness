@@ -23,6 +23,7 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -148,6 +149,7 @@ public final class MockClientLifecycle {
                         this::launchGame,
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendGameHostIfConfigured);
+        states.get(ClientState.IDLE).onEntry(this::sendGameJoinIfConfigured);
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -337,6 +339,24 @@ public final class MockClientLifecycle {
         GameHostConfig hostConfig = config.hostConfig().get();
         LOG.info("Sending game_host for title={}", hostConfig.title());
         new GameHostSender(lobby).sendGameHost(hostConfig);
+    }
+
+    /**
+     * IDLE entry hook: sends {@code game_join} for {@link MockClientConfig#targetGameId()}
+     * (lobby-protocol-spec.md §4.2 / §10.2). No-op if no target game was configured for this
+     * session — the mock client hosts, joins, or sits idle depending on what the operator
+     * configured.
+     */
+    private void sendGameJoinIfConfigured() {
+        if (config.targetGameId().isEmpty()) {
+            return;
+        }
+        ObjectNode node = mapper.createObjectNode();
+        node.put("command", "game_join");
+        node.put("uid", config.targetGameId().getAsInt());
+        node.put("password", config.gameJoinPassword().orElse(null));
+        LOG.info("Sending game_join for uid={}", config.targetGameId().getAsInt());
+        lobby.send(node);
     }
 
     /**
