@@ -19,6 +19,7 @@ import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.HashMap;
 import java.util.Map;
@@ -109,9 +110,11 @@ public final class MockClientLifecycle {
                         null);
 
         states.get(ClientState.STARTING_GAME)
-                .registerTransition(HostGame.class, states.get(ClientState.HOSTING));
+                .registerTransition(
+                        HostGame.class, states.get(ClientState.HOSTING), this::hostGame, null);
         states.get(ClientState.STARTING_GAME)
-                .registerTransition(JoinGame.class, states.get(ClientState.JOINING));
+                .registerTransition(
+                        JoinGame.class, states.get(ClientState.JOINING), this::joinGame, null);
 
         states.get(ClientState.HOSTING)
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
@@ -217,10 +220,56 @@ public final class MockClientLifecycle {
             // Empty list of ICE servers, so only public STUN servers will be used.
             iceConnection.call("setIceServers", new Object[0]);
         } catch (IceAdapterLaunchException | CancellationException | ExecutionException e) {
+            LOG.warn("Could not launch or connect to ICE adapter ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (MockGameLaunchException e) {
+            LOG.warn("Could not launch game binary ({})", e.getMessage());
             iceAdapter.terminate();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void hostGame(Event message) throws FailedTransitionException {
+        if (!(message instanceof HostGame)) {
+            throw new AssertionError(
+                    "hostGame method called without a HostGame event, should be impossible");
+        }
+        JsonNode command = ((HostGame) message).command();
+        JsonNode mapNode = command.path("args").path(0);
+        if (!mapNode.isTextual()) {
+            throw new FailedTransitionException(
+                    "textual map argument not found in HostGame message");
+        }
+
+        String map = mapNode.asText();
+        try {
+            iceConnection.call("hostGame", map).get();
+        } catch (ExecutionException e) {
+            throw new FailedTransitionException(e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void joinGame(Event message) throws FailedTransitionException {
+        if (!(message instanceof JoinGame)) {
+            throw new AssertionError(
+                    "joinGame method called without a JoinGame event should be impossible");
+        }
+        JsonNode command = ((JoinGame) message).command();
+        JsonNode remoteLogin = command.path("args").path(0);
+        JsonNode remoteID = command.path("args").path(1);
+        if (!remoteLogin.isTextual() || !remoteID.isTextual()) {
+            throw new FailedTransitionException(
+                    "textual remote login and remote id arguments not found in JoinGame message");
+        }
+
+        try {
+            iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asText()).get();
+        } catch (ExecutionException e) {
+            throw new FailedTransitionException(e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
