@@ -244,6 +244,42 @@ public final class MockClientCli implements Callable<Integer> {
                             + "lobby welcome identity instead.")
     private String playerLogin;
 
+    /** Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). */
+    @Option(
+            names = "--host-title",
+            scope = ScopeType.INHERIT,
+            defaultValue = "Test game",
+            description = "Hosted game title advertised to the lobby (default: ${DEFAULT-VALUE}).")
+    private String hostTitle;
+
+    /** Map folder name sent in the {@code game_host} request. */
+    @Option(
+            names = "--host-map",
+            scope = ScopeType.INHERIT,
+            defaultValue = "scmp_007",
+            description = "Map folder name for the hosted game (default: ${DEFAULT-VALUE}).")
+    private String hostMap;
+
+    /** Featured-mod technical name sent in the {@code game_host} request. */
+    @Option(
+            names = "--host-mod",
+            scope = ScopeType.INHERIT,
+            defaultValue = "faf",
+            description =
+                    "Featured-mod technical name for the hosted game (default: "
+                            + "${DEFAULT-VALUE}).")
+    private String hostMod;
+
+    /** Visibility ({@code public}/{@code friends}) sent in the {@code game_host} request. */
+    @Option(
+            names = "--host-visibility",
+            scope = ScopeType.INHERIT,
+            defaultValue = "public",
+            description =
+                    "Visibility for the hosted game, \"public\" or \"friends\" (default: "
+                            + "${DEFAULT-VALUE}).")
+    private String hostVisibility;
+
     /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
      * output stream and exit with {@link ExitCodes#USAGE}.
@@ -283,7 +319,11 @@ public final class MockClientCli implements Callable<Integer> {
                 logLevel,
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
-                playerLogin);
+                playerLogin,
+                hostTitle,
+                hostMap,
+                hostMod,
+                hostVisibility);
     }
 
     /**

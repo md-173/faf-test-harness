@@ -93,8 +93,8 @@ final class MockClientCliRecordSyncTest {
     @Test
     void counts() {
         // sanity check: catches the case where both sets drift in lockstep
-        long expectedRecordComponents = 19;
-        long expectedCliOptionsExcludingHelpers = 19;
+        long expectedRecordComponents = 23;
+        long expectedCliOptionsExcludingHelpers = 23;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =
