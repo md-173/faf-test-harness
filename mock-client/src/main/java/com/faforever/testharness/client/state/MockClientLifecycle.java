@@ -71,9 +71,6 @@ public final class MockClientLifecycle {
     /** Game binary subprocess. */
     private SubprocessManager gameBinary;
 
-    /** Future from LobbyHandshake with the welcome message. */
-    private CompletableFuture<SessionState> welcomeFuture;
-
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -198,20 +195,19 @@ public final class MockClientLifecycle {
      * @param source a source for OAuth tokens for the handshake.
      */
     public void start(TokenSource source) {
-        welcomeFuture =
-                handshake
-                        .perform(source)
-                        .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
-                        .thenApply(SessionState::from)
-                        .whenComplete(
-                                (state, err) -> {
-                                    if (err == null) {
-                                        machine.receiveEvent(new WelcomeReceived(state));
-                                    } else {
-                                        LOG.warn("Handshake could not be completed");
-                                        machine.receiveEvent(new AuthFailed(err.getCause()));
-                                    }
-                                });
+        handshake
+                .perform(source)
+                .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
+                .thenApply(SessionState::from)
+                .whenComplete(
+                        (state, err) -> {
+                            if (err == null) {
+                                machine.receiveEvent(new WelcomeReceived(state));
+                            } else {
+                                LOG.warn("Handshake could not be completed");
+                                machine.receiveEvent(new AuthFailed(err.getCause()));
+                            }
+                        });
     }
 
     /**
