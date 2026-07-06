@@ -215,13 +215,13 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Wait on the handshake to finish. Returns immediately if called before {@link
-     * #start(TokenSource) start}.
+     * Gives a future that completes when the state is reached.
+     *
+     * @param state the state to wait for.
+     * @return a future that only completes when the state is reached.
      */
-    public void awaitHandshake() throws InterruptedException, ExecutionException {
-        if (welcomeFuture != null) {
-            welcomeFuture.get();
-        }
+    public CompletableFuture<Void> stateReached(ClientState state) {
+        return machine.stateReached(states.get(state));
     }
 
     /**

@@ -1,9 +1,12 @@
 package com.faforever.testharness.shared.statemachine;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,9 @@ public class StateMachine implements EventListener {
     /** Collection of tasks scheduled, kept to cancel them later if necessary. */
     private final List<TimerTask> timeouts;
 
+    /** A map from states to a future that should be completed when the state is reached. */
+    private final Map<State, CompletableFuture<Void>> awaitedStates;
+
     /**
      * Initializes the machine with its initial state and policy.
      *
@@ -36,6 +42,7 @@ public class StateMachine implements EventListener {
         this.transitionPolicy = policy;
         this.timeoutTimer = new Timer(true);
         this.timeouts = new ArrayList<>();
+        this.awaitedStates = new HashMap<>();
 
         LOG.info(
                 "Created StateMachine with initial state {} and policy {}",
@@ -59,6 +66,16 @@ public class StateMachine implements EventListener {
      */
     public State getState() {
         return state;
+    }
+
+    /**
+     * Gives a future that completes when the state is reached.
+     *
+     * @param s state to wait for.
+     * @return a future that only completes when the state is reached.
+     */
+    public synchronized CompletableFuture<Void> stateReached(State s) {
+        return awaitedStates.computeIfAbsent(s, ignored -> new CompletableFuture<>());
     }
 
     /**
@@ -94,6 +111,10 @@ public class StateMachine implements EventListener {
                     state = newState;
                     for (var timeout : timeouts) {
                         timeout.cancel();
+                    }
+                    CompletableFuture<Void> alert = awaitedStates.remove(state);
+                    if (alert != null) {
+                        alert.complete(null);
                     }
                     timeouts.clear();
                     // Stop trying more transitions.

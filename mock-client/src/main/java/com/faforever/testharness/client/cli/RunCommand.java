@@ -7,6 +7,7 @@ import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbyHandshake;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.TokenSources;
+import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.util.concurrent.Callable;
@@ -36,6 +37,9 @@ public final class RunCommand implements Callable<Integer> {
 
     /** Maximum amount of seconds to wait for lobby server to establish connection. */
     private static final int SERVER_TIMEOUT = 5;
+
+    /** Maximum amount of seconds to wait for lifecycle setup before quitting. */
+    private static final int SETUP_TIMEOUT = 5;
 
     /** Picocli auto-injects the root command so the stub can read the populated config. */
     @ParentCommand private MockClientCli parent;
@@ -95,15 +99,28 @@ public final class RunCommand implements Callable<Integer> {
 
         lifecycle.start(source);
         try {
-            lifecycle.awaitHandshake();
+            lifecycle.stateReached(ClientState.IDLE).get(SETUP_TIMEOUT, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException e) {
+        } catch (ExecutionException | TimeoutException e) {
             LOG.error(
                     "Could not complete handshake with lobby server due to {} ({})",
                     e.getMessage(),
                     e.getClass().getSimpleName());
             System.out.println("Could not authenticate lobby server connection");
+            return ExitCodes.RUNTIME;
+        }
+
+        try {
+            lifecycle.stateReached(ClientState.PLAYING).get(SETUP_TIMEOUT, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            LOG.error(
+                    "Game could not be established due to {} ({})",
+                    e.getMessage(),
+                    e.getClass().getSimpleName());
+            System.out.println("Could not initiate a game");
             return ExitCodes.RUNTIME;
         }
 
