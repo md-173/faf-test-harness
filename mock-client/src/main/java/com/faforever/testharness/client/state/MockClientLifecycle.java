@@ -296,13 +296,13 @@ public final class MockClientLifecycle {
         JsonNode command = ((JoinGame) message).command();
         JsonNode remoteLogin = command.path("args").path(0);
         JsonNode remoteID = command.path("args").path(1);
-        if (!remoteLogin.isTextual() || !remoteID.isTextual()) {
+        if (!remoteLogin.isTextual() || !remoteID.isInt()) {
             throw new FailedTransitionException(
                     "textual remote login and remote id arguments not found in JoinGame message");
         }
 
         try {
-            iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asText()).get();
+            iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
         } catch (ExecutionException e) {
             throw new FailedTransitionException(e.getMessage());
         } catch (InterruptedException e) {
