@@ -42,7 +42,7 @@ import org.slf4j.LoggerFactory;
  * MappingIterator} over the socket stream, which (unlike the adapter's own brace-counter, §2.1)
  * does not desync on a string value containing {@code {} or {@code }}.
  */
-public final class IceAdapterConnection {
+public class IceAdapterConnection {
 
     /** SLF4J logger; no credentials flow on this channel. */
     private static final Logger LOG = LoggerFactory.getLogger(IceAdapterConnection.class);

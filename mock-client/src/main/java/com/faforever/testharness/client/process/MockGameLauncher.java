@@ -54,7 +54,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
-public final class MockGameLauncher {
+public class MockGameLauncher {
 
     /** MDC component tag applied to every captured mock-game log line. */
     public static final String COMPONENT_TAG = "MockGame";

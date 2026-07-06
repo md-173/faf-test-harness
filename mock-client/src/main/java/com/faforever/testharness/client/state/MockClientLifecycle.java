@@ -56,8 +56,14 @@ public final class MockClientLifecycle {
     /** Config settings for the mock client. */
     private final MockClientConfig config;
 
-    /** Future from LobbyHandshake with the welcome message. */
-    private CompletableFuture<SessionState> welcomeFuture;
+    /** JSON-RPC connection to the ICE adapter. */
+    private final IceAdapterConnection iceConnection;
+
+    /** Dependency-injected mock game launcher used to start the game binary process. */
+    private final MockGameLauncher gameLauncher;
+
+    /** Dependency-injected ice adapter launcher used to start the ice adapter process. */
+    private final IceAdapterLauncher iceLauncher;
 
     /** ICE adapter subprocess. */
     private SubprocessManager iceAdapter;
@@ -65,8 +71,8 @@ public final class MockClientLifecycle {
     /** Game binary subprocess. */
     private SubprocessManager gameBinary;
 
-    /** JSON-RPC connection to the ICE adapter. */
-    private IceAdapterConnection iceConnection;
+    /** Future from LobbyHandshake with the welcome message. */
+    private CompletableFuture<SessionState> welcomeFuture;
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -82,19 +88,53 @@ public final class MockClientLifecycle {
      */
     public MockClientLifecycle(
             MockClientConfig config, LobbyConnection lobby, LobbyHandshake handshake) {
+        this(
+                config,
+                lobby,
+                handshake,
+                new IceAdapterConnection(config.iceAdapterRpcPort()),
+                new MockGameLauncher(config),
+                new IceAdapterLauncher(config));
+    }
+
+    /**
+     * Constructor with all dependency-injected classes ({@code IceAdapterConnection}, {@code
+     * MockGameLauncher}, and {@code IceAdapterLauncher}) available, used for testing with mock
+     * versions of launchers and connection.
+     *
+     * @param config a set of configuration options passed by the user.
+     * @param lobby an open connection to the lobby server.
+     * @param handshake the object responsible for the initial handshake with the lobby server.
+     * @param iceConnection the ice adapter connection. {@link IceAdapterConnection#connect()}
+     *     should not be called on this object yet.
+     * @param gameLauncher spawns a mock game subprocess.
+     * @param iceLauncher spawns an ice adapter subprocess.
+     */
+    MockClientLifecycle(
+            MockClientConfig config,
+            LobbyConnection lobby,
+            LobbyHandshake handshake,
+            IceAdapterConnection iceConnection,
+            MockGameLauncher gameLauncher,
+            IceAdapterLauncher iceLauncher) {
         this.config = config;
         this.lobby = lobby;
         this.handshake = handshake;
+        this.iceConnection = iceConnection;
+        this.gameLauncher = gameLauncher;
+        this.iceLauncher = iceLauncher;
 
         states = new HashMap<>();
         for (var s : ClientState.values()) {
             states.put(s, new State(s.toString()));
         }
-
         machine =
                 new StateMachine(
                         states.get(ClientState.CONNECTING), InvalidTransitionPolicy.IGNORE);
+        setupStateMachine();
+    }
 
+    private void setupStateMachine() {
         // Transitions between states, caused by internal events.
         // TODO: No transition logic yet.
         states.get(ClientState.CONNECTING)
@@ -180,7 +220,6 @@ public final class MockClientLifecycle {
      */
     public void awaitHandshake() throws InterruptedException, ExecutionException {
         if (welcomeFuture != null) {
-            LOG.info("Waiting on lobby handshake to complete");
             welcomeFuture.get();
         }
     }
@@ -207,12 +246,8 @@ public final class MockClientLifecycle {
         }
         GameConfig gameConfig = ((LaunchGame) message).config();
         try {
-            IceAdapterLauncher iceLauncher = new IceAdapterLauncher(config);
             iceAdapter = iceLauncher.start();
-            iceConnection = new IceAdapterConnection(config.iceAdapterRpcPort());
             iceConnection.connect().get();
-
-            MockGameLauncher gameLauncher = new MockGameLauncher(config);
             gameBinary = gameLauncher.start();
             iceConnection.call(
                     "setLobbyInitMode",
