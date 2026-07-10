@@ -1,15 +1,16 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbyHandshake;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,20 +46,20 @@ final class GameJoinTest {
         server.stop(1000);
     }
 
-    private MockClientLifecycle newLifecycle(OptionalInt targetGameId, Optional<String> password)
-            throws Exception {
+    private MockClientLifecycle newLifecycle(Optional<GameJoinConfig> joinConfig) throws Exception {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         LobbyHandshake handshake =
                 new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
-        return new MockClientLifecycle(lobby, handshake, targetGameId, password);
+        return new MockClientLifecycle(lobby, handshake, joinConfig);
     }
 
     @Test
     void idleSendsGameJoinForConfiguredTargetWithPassword() throws Exception {
-        MockClientLifecycle lifecycle = newLifecycle(OptionalInt.of(42), Optional.of("s3cret"));
+        MockClientLifecycle lifecycle =
+                newLifecycle(Optional.of(new GameJoinConfig(42, Optional.of("s3cret"))));
 
         lifecycle.post(new WelcomeReceived(null));
         assertEquals(ClientState.IDLE, lifecycle.getState());
@@ -70,8 +71,9 @@ final class GameJoinTest {
     }
 
     @Test
-    void idleSendsGameJoinWithNullPasswordWhenNoneConfigured() throws Exception {
-        MockClientLifecycle lifecycle = newLifecycle(OptionalInt.of(7), Optional.empty());
+    void idleOmitsPasswordWhenNoneConfigured() throws Exception {
+        MockClientLifecycle lifecycle =
+                newLifecycle(Optional.of(new GameJoinConfig(7, Optional.empty())));
 
         lifecycle.post(new WelcomeReceived(null));
         assertEquals(ClientState.IDLE, lifecycle.getState());
@@ -79,12 +81,12 @@ final class GameJoinTest {
         JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
         assertEquals("game_join", sent.get("command").asText());
         assertEquals(7, sent.get("uid").asInt());
-        assertEquals(true, sent.get("password").isNull());
+        assertFalse(sent.has("password"), "password should be omitted, not sent as null");
     }
 
     @Test
     void idleSendsNothingWhenNoTargetGameConfigured() throws Exception {
-        MockClientLifecycle lifecycle = newLifecycle(OptionalInt.empty(), Optional.empty());
+        MockClientLifecycle lifecycle = newLifecycle(Optional.empty());
 
         lifecycle.post(new WelcomeReceived(null));
         assertEquals(ClientState.IDLE, lifecycle.getState());

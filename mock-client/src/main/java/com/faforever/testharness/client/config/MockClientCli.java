@@ -374,8 +374,20 @@ public final class MockClientCli implements Callable<Integer> {
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
                 buildHostConfig(),
-                targetGameId == null ? OptionalInt.empty() : OptionalInt.of(targetGameId),
-                Optional.ofNullable(gameJoinPassword));
+                buildJoinConfig());
+    }
+
+    /**
+     * Builds the join config from {@code --target-game-id} and {@code --game-join-password}, or
+     * empty if no target game was set.
+     *
+     * @return the join config, or {@link Optional#empty()} if the operator did not request joining
+     */
+    private Optional<GameJoinConfig> buildJoinConfig() {
+        if (targetGameId == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new GameJoinConfig(targetGameId, Optional.ofNullable(gameJoinPassword)));
     }
 
     /**

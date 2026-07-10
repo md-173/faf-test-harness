@@ -1,10 +1,12 @@
 package com.faforever.testharness.client.state;
 
 import com.faforever.testharness.client.config.GameHostConfig;
+import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.GameHostSender;
+import com.faforever.testharness.client.lobby.GameJoinSender;
 import com.faforever.testharness.client.lobby.GameLaunchHandler;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbyHandshake;
@@ -23,7 +25,6 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -342,21 +343,18 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * IDLE entry hook: sends {@code game_join} for {@link MockClientConfig#targetGameId()}
+     * IDLE entry hook: sends {@code game_join} for {@link MockClientConfig#joinConfig()}
      * (lobby-protocol-spec.md §4.2 / §10.2). No-op if no target game was configured for this
      * session — the mock client hosts, joins, or sits idle depending on what the operator
      * configured.
      */
     private void sendGameJoinIfConfigured() {
-        if (config.targetGameId().isEmpty()) {
+        if (config.joinConfig().isEmpty()) {
             return;
         }
-        ObjectNode node = mapper.createObjectNode();
-        node.put("command", "game_join");
-        node.put("uid", config.targetGameId().getAsInt());
-        node.put("password", config.gameJoinPassword().orElse(null));
-        LOG.info("Sending game_join for uid={}", config.targetGameId().getAsInt());
-        lobby.send(node);
+        GameJoinConfig joinConfig = config.joinConfig().get();
+        LOG.info("Sending game_join for uid={}", joinConfig.targetGameId());
+        new GameJoinSender(lobby).sendGameJoin(joinConfig);
     }
 
     /**

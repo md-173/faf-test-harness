@@ -23,12 +23,14 @@ import picocli.CommandLine.Option;
  * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
  * NPE instead of a config error.
  *
- * <p>The 1:1 rule has one deliberate exception: {@code hostConfig} groups seven CLI options ({@code
- * hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code hostRatingMin},
- * {@code hostRatingMax}, {@code hostEnforceRatingRange}) into a single {@link GameHostConfig}
- * record component (see {@link MockClientCli#toConfig()}), so it can be absent as a whole when the
- * mock client isn't configured to host. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
- * #GROUPED_CLI_FIELD_NAMES} carve that pairing out of the strict 1:1 checks below.
+ * <p>The 1:1 rule has two deliberate exceptions: {@code hostConfig} groups seven CLI options
+ * ({@code hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code
+ * hostRatingMin}, {@code hostRatingMax}, {@code hostEnforceRatingRange}) into a single {@link
+ * GameHostConfig} record component, and {@code joinConfig} groups two ({@code targetGameId}, {@code
+ * gameJoinPassword}) into a single {@link GameJoinConfig} component (see {@link
+ * MockClientCli#toConfig()}), so each can be absent as a whole when the mock client isn't
+ * configured to host or join. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
+ * #GROUPED_CLI_FIELD_NAMES} carve those pairings out of the strict 1:1 checks below.
  */
 final class MockClientCliRecordSyncTest {
 
@@ -36,7 +38,8 @@ final class MockClientCliRecordSyncTest {
     private static final Set<String> CLI_ONLY_FIELD_NAMES = Set.of("configFile");
 
     /** Record components populated from more than one CLI option; see class javadoc. */
-    private static final Set<String> GROUPED_RECORD_COMPONENT_NAMES = Set.of("hostConfig");
+    private static final Set<String> GROUPED_RECORD_COMPONENT_NAMES =
+            Set.of("hostConfig", "joinConfig");
 
     /**
      * CLI options that feed a {@linkplain #GROUPED_RECORD_COMPONENT_NAMES grouped} record
@@ -50,7 +53,9 @@ final class MockClientCliRecordSyncTest {
                     "hostVisibility",
                     "hostRatingMin",
                     "hostRatingMax",
-                    "hostEnforceRatingRange");
+                    "hostEnforceRatingRange",
+                    "targetGameId",
+                    "gameJoinPassword");
 
     @Test
     void everyRecordComponentHasAMatchingCliOption() {
@@ -120,8 +125,9 @@ final class MockClientCliRecordSyncTest {
     void counts() {
         // sanity check: catches the case where both sets drift in lockstep. The gap between the
         // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
-        // .size() (7 host-* options collapse into 1 hostConfig record component).
-        long expectedRecordComponents = 22;
+        // .size() (7 host-* options collapse into 1 hostConfig record component, and 2 join
+        // options collapse into 1 joinConfig component).
+        long expectedRecordComponents = 21;
         long expectedCliOptionsExcludingHelpers = 28;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
