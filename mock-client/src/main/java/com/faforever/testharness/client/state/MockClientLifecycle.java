@@ -244,21 +244,32 @@ public final class MockClientLifecycle {
         try {
             iceAdapter = iceLauncher.start();
             iceConnection.connect().get();
-            gameBinary = gameLauncher.start();
-            iceConnection.call(
-                    "setLobbyInitMode",
-                    gameConfig.gameType().equals("matchmaker") ? "auto" : "normal");
+            iceConnection
+                    .call(
+                            "setLobbyInitMode",
+                            gameConfig.gameType().equals("matchmaker") ? "auto" : "normal")
+                    .get();
             // Empty list of ICE servers, so only public STUN servers will be used.
-            iceConnection.call("setIceServers", new Object[0]);
-        } catch (IceAdapterLaunchException | CancellationException | ExecutionException e) {
-            LOG.warn("Could not launch or connect to ICE adapter ({})", e.getMessage());
+            iceConnection.call("setIceServers", new Object[0]).get();
+            gameBinary = gameLauncher.start();
+        } catch (IceAdapterLaunchException e) {
+            LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (CancellationException | ExecutionException e) {
+            LOG.warn("Could not connect or setup the ICE adapter ({})", e.getMessage());
+            iceAdapter.terminate();
+            iceConnection.close();
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            iceAdapter.terminate();
+            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (MockGameLaunchException e) {
             LOG.warn("Could not launch game binary ({})", e.getMessage());
             iceAdapter.terminate();
+            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
 
@@ -271,16 +282,18 @@ public final class MockClientLifecycle {
         JsonNode mapNode = command.path("args").path(0);
         if (!mapNode.isTextual()) {
             throw new FailedTransitionException(
-                    "textual map argument not found in HostGame message");
+                    "textual map argument not found in HostGame message",
+                    states.get(ClientState.TERMINATED));
         }
 
         String map = mapNode.asText();
         try {
             iceConnection.call("hostGame", map).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage());
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
     }
 
@@ -294,15 +307,17 @@ public final class MockClientLifecycle {
         JsonNode remoteID = command.path("args").path(1);
         if (!remoteLogin.isTextual() || !remoteID.isInt()) {
             throw new FailedTransitionException(
-                    "textual remote login and remote id arguments not found in JoinGame message");
+                    "textual remote login and remote id arguments not found in JoinGame message",
+                    states.get(ClientState.TERMINATED));
         }
 
         try {
             iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage());
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
     }
 
