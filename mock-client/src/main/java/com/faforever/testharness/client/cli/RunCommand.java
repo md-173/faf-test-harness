@@ -111,19 +111,6 @@ public final class RunCommand implements Callable<Integer> {
             return ExitCodes.RUNTIME;
         }
 
-        try {
-            lifecycle.stateReached(ClientState.PLAYING).get(SETUP_TIMEOUT, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            LOG.error(
-                    "Game could not be established due to {} ({})",
-                    e.getMessage(),
-                    e.getClass().getSimpleName());
-            System.out.println("Could not initiate a game");
-            return ExitCodes.RUNTIME;
-        }
-
         lifecycle.shutdown();
         lobby.close();
         return ExitCodes.OK;
