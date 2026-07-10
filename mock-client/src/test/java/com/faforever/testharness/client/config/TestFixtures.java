@@ -112,10 +112,6 @@ final class TestFixtures {
         assertEquals("mock-client", config.playerLogin());
         assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
         assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
-        assertEquals("Test game", config.hostTitle(), "hostTitle default should be \"Test game\"");
-        assertEquals("scmp_007", config.hostMap(), "hostMap default should be \"scmp_007\"");
-        assertEquals("faf", config.hostMod(), "hostMod default should be \"faf\"");
-        assertEquals(
-                "public", config.hostVisibility(), "hostVisibility default should be \"public\"");
+        assertTrue(config.hostConfig().isEmpty(), "hostConfig should default to empty");
     }
 }

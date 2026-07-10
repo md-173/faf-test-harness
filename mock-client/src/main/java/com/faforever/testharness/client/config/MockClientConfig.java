@@ -42,12 +42,9 @@ import java.util.OptionalInt;
  *     by the standalone {@code launch-ice} / {@code ice-smoke} diagnostics; during a full {@code
  *     run} session the lobby {@code welcome.me.login} is the authoritative identity (json-rpc-spec
  *     §8.1), so this value is a default that orchestration may override.
- * @param hostTitle title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 /
- *     §10.2)
- * @param hostMap map folder name sent in the {@code game_host} request
- * @param hostMod featured-mod technical name sent in the {@code game_host} request
- * @param hostVisibility visibility ({@code "public"} or {@code "friends"}) sent in the {@code
- *     game_host} request
+ * @param hostConfig host-a-custom-game settings (lobby-protocol-spec §4.1 / §10.2); present only
+ *     when the operator configured the mock client to host — empty means this run does not host
+ *     (e.g. it joins an existing game instead)
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -69,10 +66,7 @@ public record MockClientConfig(
         Optional<Path> logFile,
         OptionalInt playerIdOverride,
         String playerLogin,
-        String hostTitle,
-        String hostMap,
-        String hostMod,
-        String hostVisibility) {
+        Optional<GameHostConfig> hostConfig) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:

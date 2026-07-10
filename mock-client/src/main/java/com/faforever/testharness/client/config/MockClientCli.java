@@ -244,40 +244,49 @@ public final class MockClientCli implements Callable<Integer> {
                             + "lobby welcome identity instead.")
     private String playerLogin;
 
-    /** Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). */
+    /**
+     * Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). No
+     * default: set together with {@code --host-map}, {@code --host-mod}, and {@code
+     * --host-visibility} to host a game on IDLE; omit all four to not host.
+     */
     @Option(
             names = "--host-title",
             scope = ScopeType.INHERIT,
-            defaultValue = "Test game",
-            description = "Hosted game title advertised to the lobby (default: ${DEFAULT-VALUE}).")
+            description =
+                    "Hosted game title advertised to the lobby. Set together with --host-map, "
+                            + "--host-mod, and --host-visibility to host a game on IDLE; omit "
+                            + "all four to not host.")
     private String hostTitle;
 
-    /** Map folder name sent in the {@code game_host} request. */
+    /**
+     * Map folder name sent in the {@code game_host} request. No default; see {@code --host-title}.
+     */
     @Option(
             names = "--host-map",
             scope = ScopeType.INHERIT,
-            defaultValue = "scmp_007",
-            description = "Map folder name for the hosted game (default: ${DEFAULT-VALUE}).")
+            description = "Map folder name for the hosted game. See --host-title.")
     private String hostMap;
 
-    /** Featured-mod technical name sent in the {@code game_host} request. */
+    /**
+     * Featured-mod technical name sent in the {@code game_host} request. No default; see {@code
+     * --host-title}.
+     */
     @Option(
             names = "--host-mod",
             scope = ScopeType.INHERIT,
-            defaultValue = "faf",
-            description =
-                    "Featured-mod technical name for the hosted game (default: "
-                            + "${DEFAULT-VALUE}).")
+            description = "Featured-mod technical name for the hosted game. See --host-title.")
     private String hostMod;
 
-    /** Visibility ({@code public}/{@code friends}) sent in the {@code game_host} request. */
+    /**
+     * Visibility ({@code public}/{@code friends}) sent in the {@code game_host} request. No
+     * default; see {@code --host-title}.
+     */
     @Option(
             names = "--host-visibility",
             scope = ScopeType.INHERIT,
-            defaultValue = "public",
             description =
-                    "Visibility for the hosted game, \"public\" or \"friends\" (default: "
-                            + "${DEFAULT-VALUE}).")
+                    "Visibility for the hosted game, \"public\" or \"friends\". See "
+                            + "--host-title.")
     private String hostVisibility;
 
     /**
@@ -320,10 +329,21 @@ public final class MockClientCli implements Callable<Integer> {
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
-                hostTitle,
-                hostMap,
-                hostMod,
-                hostVisibility);
+                buildHostConfig());
+    }
+
+    /**
+     * Builds the host config from the four {@code --host-*} options, or empty if none of them was
+     * set. A partial set (e.g. only {@code --host-title}) is rejected by {@link GameHostConfig}'s
+     * compact constructor, which names the specific missing option.
+     *
+     * @return the host config, or {@link Optional#empty()} if the operator did not request hosting
+     */
+    private Optional<GameHostConfig> buildHostConfig() {
+        if (hostTitle == null && hostMap == null && hostMod == null && hostVisibility == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new GameHostConfig(hostTitle, hostMap, hostMod, hostVisibility));
     }
 
     /**

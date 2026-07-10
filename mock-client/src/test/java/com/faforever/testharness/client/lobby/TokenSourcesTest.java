@@ -42,10 +42,7 @@ final class TokenSourcesTest {
                 Optional.empty(),
                 OptionalInt.empty(),
                 "mock-client",
-                "Test game",
-                "scmp_007",
-                "faf",
-                "public");
+                Optional.empty());
     }
 
     @Test
