@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -22,7 +23,6 @@ final class StateMachineTransitionTest {
 
     private final class CrossingCarLeft implements Event {}
 
-    private boolean actionHappened = false;
     private int carsCrossing;
 
     @Test
@@ -60,17 +60,43 @@ final class StateMachineTransitionTest {
         State red = new State("RED");
         State green = new State("GREEN");
 
-        actionHappened = false;
+        CountDownLatch actionHappened = new CountDownLatch(1);
 
-        red.registerTransition(IncomingCarDetected.class, green, () -> actionHappened = true, null);
+        red.registerTransition(
+                IncomingCarDetected.class, green, ignored -> actionHappened.countDown(), null);
         StateMachine machine = new StateMachine(red);
         assertTrue(machine.getState() == red);
-        assertTrue(!actionHappened);
+        assertTrue(actionHappened.getCount() == 1);
 
         // Changes to green and performs action with side-effect.
         machine.receiveEvent(new IncomingCarDetected());
         assertTrue(machine.getState() == green);
-        assertTrue(actionHappened);
+        assertTrue(actionHappened.getCount() == 0);
+    }
+
+    @Test
+    void actionWithFailure() {
+        State red = new State("RED");
+        State green = new State("GREEN");
+        State fail = new State("FAIL");
+
+        CountDownLatch failureEntryHook = new CountDownLatch(1);
+        fail.onEntry(failureEntryHook::countDown);
+
+        red.registerTransition(
+                IncomingCarDetected.class,
+                green,
+                ignored -> {
+                    throw new FailedTransitionException("FAILED", fail);
+                },
+                null);
+        StateMachine machine = new StateMachine(red);
+        assertTrue(machine.getState() == red);
+
+        // Changes to green and performs action with side-effect.
+        machine.receiveEvent(new IncomingCarDetected());
+        assertTrue(machine.getState() == fail);
+        assertTrue(failureEntryHook.getCount() == 0);
     }
 
     @Test
@@ -112,7 +138,7 @@ final class StateMachineTransitionTest {
         List<String> processLog = new ArrayList<>();
 
         red.registerTransition(
-                IncomingCarDetected.class, green, () -> processLog.add("action"), null);
+                IncomingCarDetected.class, green, ignored -> processLog.add("action"), null);
         red.onExit(() -> processLog.add("red exit"));
         green.onEntry(() -> processLog.add("green entry"));
 

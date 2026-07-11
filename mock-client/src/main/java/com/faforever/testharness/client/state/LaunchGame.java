@@ -1,11 +1,11 @@
 package com.faforever.testharness.client.state;
 
+import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.shared.statemachine.Event;
-import com.fasterxml.jackson.databind.JsonNode;
 
 /**
  * Lobby instructs mock client to launch game process.
  *
- * @param command the launch_game command received.
+ * @param config the configuration settings for the game.
  */
-/*package-private*/ record LaunchGame(JsonNode command) implements Event {}
+/*package-private*/ record LaunchGame(GameConfig config) implements Event {}

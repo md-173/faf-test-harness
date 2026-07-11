@@ -95,7 +95,10 @@ public class State {
      * @param guard must be true for transition to happen.
      */
     public void registerTransition(
-            Class<? extends Event> event, State other, Runnable action, Predicate<Event> guard) {
+            Class<? extends Event> event,
+            State other,
+            TransitionAction action,
+            Predicate<Event> guard) {
         Transition t = new Transition(this, other, action, guard);
         transitions.computeIfAbsent(event, k -> new ArrayList<>()).add(t);
     }

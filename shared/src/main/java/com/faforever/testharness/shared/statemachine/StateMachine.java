@@ -1,9 +1,12 @@
 package com.faforever.testharness.shared.statemachine;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +28,9 @@ public class StateMachine implements EventListener {
     /** Collection of tasks scheduled, kept to cancel them later if necessary. */
     private final List<TimerTask> timeouts;
 
+    /** A map from states to a future that should be completed when the state is reached. */
+    private final Map<State, CompletableFuture<Void>> awaitedStates;
+
     /**
      * Initializes the machine with its initial state and policy.
      *
@@ -36,6 +42,7 @@ public class StateMachine implements EventListener {
         this.transitionPolicy = policy;
         this.timeoutTimer = new Timer(true);
         this.timeouts = new ArrayList<>();
+        this.awaitedStates = new HashMap<>();
 
         LOG.info(
                 "Created StateMachine with initial state {} and policy {}",
@@ -62,6 +69,22 @@ public class StateMachine implements EventListener {
     }
 
     /**
+     * Gives a future that completes when the state is reached. If the state machine's current state
+     * is {@code s} then the future completes immediately.
+     *
+     * @param s state to wait for.
+     * @return a future that only completes when the state is reached.
+     */
+    public synchronized CompletableFuture<Void> stateReached(State s) {
+        if (state == s) {
+            // Return an already completed future if the state has already been reached.
+            return CompletableFuture.completedFuture(null);
+        } else {
+            return awaitedStates.computeIfAbsent(s, ignored -> new CompletableFuture<>());
+        }
+    }
+
+    /**
      * Forwards event to its current state, then updates state.
      *
      * @throws InvalidTransitionException if the {@link StateMachine} policy was set to {@link
@@ -85,7 +108,7 @@ public class StateMachine implements EventListener {
                     event.getClass().getSimpleName());
             for (var t : transitions) {
                 if (t.guard(event)) {
-                    State newState = t.transition();
+                    State newState = t.transition(event);
                     LOG.debug(
                             "Transition from {} to {} caused by {} successful",
                             state.getName(),
@@ -94,6 +117,10 @@ public class StateMachine implements EventListener {
                     state = newState;
                     for (var timeout : timeouts) {
                         timeout.cancel();
+                    }
+                    CompletableFuture<Void> alert = awaitedStates.remove(state);
+                    if (alert != null) {
+                        alert.complete(null);
                     }
                     timeouts.clear();
                     // Stop trying more transitions.
@@ -135,8 +162,8 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
-                // No need to check guard.
-                state = transition.transition();
+                // No need to check guard and no actual event that triggered this.
+                state = transition.transition(null);
                 LOG.debug("Timeout fired, new state is {}", state.getName());
                 // State transition occured, any other timeouts are cancelled.
                 for (var timeout : timeouts) {

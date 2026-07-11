@@ -50,7 +50,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
-public final class IceAdapterLauncher {
+public class IceAdapterLauncher {
 
     /** MDC component tag applied to every captured adapter log line. */
     public static final String COMPONENT_TAG = "ICEAdapter";

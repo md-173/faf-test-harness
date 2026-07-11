@@ -11,7 +11,7 @@ public class Transition {
     private State to;
 
     /** The action taken if a transition actually takes place. */
-    private Runnable action;
+    private TransitionAction action;
 
     /** Condition that must be met for a transition to happen. */
     private Predicate<Event> guard;
@@ -26,7 +26,7 @@ public class Transition {
      * @param guard Condition that must be met for a transition to happen. Or {@code null} if the
      *     transition always happens.
      */
-    public Transition(State from, State to, Runnable action, Predicate<Event> guard) {
+    public Transition(State from, State to, TransitionAction action, Predicate<Event> guard) {
         this.from = from;
         this.to = to;
         this.action = action;
@@ -36,11 +36,23 @@ public class Transition {
     /**
      * Performs a transition, and all actions that occur due to it.
      *
+     * @param event the event that triggers this transition.
      * @return the new state.
      */
-    public State transition() {
+    public State transition(Event event) {
         if (action != null) {
-            action.run();
+            try {
+                action.accept(event);
+            } catch (FailedTransitionException e) {
+                if (e.getFailureState() != null) {
+                    from.exit();
+                    State s = e.getFailureState();
+                    s.entry();
+                    return s;
+                } else {
+                    return from;
+                }
+            }
         }
         // Run any registered hooks.
         from.exit();
