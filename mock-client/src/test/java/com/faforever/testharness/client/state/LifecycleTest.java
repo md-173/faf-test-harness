@@ -8,7 +8,7 @@ import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
-import com.faforever.testharness.client.lobby.LobbyHandshake;
+import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
@@ -43,6 +43,9 @@ final class LifecycleTest {
                     "test-refresh-token",
                     null,
                     "00000000-0000-0000-0000-000000000000",
+                    "0.0.0-mock",
+                    "faf-test-harness",
+                    Optional.empty(),
                     Path.of("/bin/faf-ice-adapter"),
                     Path.of("/bin/mock-game"),
                     0,
@@ -305,12 +308,10 @@ final class LifecycleTest {
     }
 
     private MockClientLifecycle lifecycleWithConfig(MockClientConfig config) {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         return new MockClientLifecycle(
                 config,
-                lobby,
-                handshake,
+                session,
                 new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
                 new DummyGameLauncher(config),
                 new DummyIceLauncher(config));

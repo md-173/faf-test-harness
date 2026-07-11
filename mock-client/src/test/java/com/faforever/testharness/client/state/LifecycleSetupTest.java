@@ -7,7 +7,7 @@ import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
-import com.faforever.testharness.client.lobby.LobbyHandshake;
+import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
@@ -48,6 +48,9 @@ final class LifecycleSetupTest {
                     "test-refresh-token",
                     null,
                     "00000000-0000-0000-0000-000000000000",
+                    "0.0.0-mock",
+                    "faf-test-harness",
+                    Optional.empty(),
                     Path.of("/bin/faf-ice-adapter"),
                     Path.of("/bin/mock-game"),
                     0,
@@ -120,15 +123,14 @@ final class LifecycleSetupTest {
 
     @Test
     void launchGameTransition() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -148,15 +150,14 @@ final class LifecycleSetupTest {
 
     @Test
     void hostGameTransition() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -169,15 +170,14 @@ final class LifecycleSetupTest {
 
     @Test
     void joinGameTransition() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -191,15 +191,14 @@ final class LifecycleSetupTest {
 
     @Test
     void gameLauncherFails() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG, true);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -209,15 +208,14 @@ final class LifecycleSetupTest {
 
     @Test
     void iceAdapterLauncherFails() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG, true);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -227,15 +225,14 @@ final class LifecycleSetupTest {
 
     @Test
     void iceConnectionFailsOnConnection() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort(), true);
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -245,8 +242,7 @@ final class LifecycleSetupTest {
 
     @Test
     void iceConnectionCallFails() throws Exception {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
@@ -254,7 +250,7 @@ final class LifecycleSetupTest {
         iceConn.setupCallFail("setLobbyInitMode");
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));

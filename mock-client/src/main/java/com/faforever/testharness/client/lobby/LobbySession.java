@@ -21,9 +21,10 @@ import java.util.concurrent.TimeoutException;
  * and keep the connection alive" is simply {@link #awaitDisconnect()} blocking on the disconnect
  * latch.
  *
- * <p>The session owns the connection's single {@link
- * LobbyConnection#onDisconnect(java.util.function.Consumer) disconnect listener}; do not register
- * another on the same connection.
+ * <p>The session installs one of the connection's {@link
+ * LobbyConnection#onDisconnect(java.util.function.Consumer) disconnect listeners} (they are
+ * additive); other components — e.g. the lifecycle FSM — may register their own via {@link
+ * #connection()}.
  *
  * <p><b>Usage:</b>
  *
@@ -100,6 +101,33 @@ public final class LobbySession {
                     this.disconnectEvent = event;
                     disconnected.countDown();
                 });
+    }
+
+    /**
+     * The transport this session is bound to. Exposed so collaborators that need lobby traffic
+     * beyond the handshake — e.g. {@code MockClientLifecycle} registering {@code game_launch} /
+     * disconnect listeners — can reach the server through the session instead of holding a separate
+     * reference. The session remains the owner of connect ({@link #start}/{@link
+     * #connectAndAuthenticate}) and {@link #close()}.
+     *
+     * @return the underlying {@link LobbyConnection}
+     */
+    public LobbyConnection connection() {
+        return connection;
+    }
+
+    /**
+     * Open the transport and run the full handshake asynchronously: {@code connect → ask_session →
+     * session → auth → welcome}, hydrating the welcome into a {@link SessionState}. Non-blocking
+     * counterpart of {@link #connectAndAuthenticate}; at most one of the two may be called, since
+     * the underlying handshake performs only once.
+     *
+     * @param tokens source of the JWT access token for the {@code auth} step
+     * @return future completing with the hydrated session identity, or exceptionally with the
+     *     connect/handshake failure (e.g. {@link AuthenticationException})
+     */
+    public CompletableFuture<SessionState> start(final TokenSource tokens) {
+        return connection.connect().thenCompose(v -> stateSync.hydrate(handshake.perform(tokens)));
     }
 
     /**
