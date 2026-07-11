@@ -50,7 +50,14 @@ public final class GameHostSender {
         Objects.requireNonNull(config, "config");
         GameHostMessage message =
                 new GameHostMessage(
-                        config.title(), config.visibility(), config.mod(), config.map(), null);
+                        config.title(),
+                        config.visibility(),
+                        config.mod(),
+                        config.map(),
+                        null,
+                        config.ratingMin().orElse(null),
+                        config.ratingMax().orElse(null),
+                        config.enforceRatingRange());
         return lobby.send(mapper.valueToTree(message));
     }
 }

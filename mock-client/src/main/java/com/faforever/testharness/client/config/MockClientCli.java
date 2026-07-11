@@ -290,6 +290,34 @@ public final class MockClientCli implements Callable<Integer> {
     private String hostVisibility;
 
     /**
+     * Minimum displayed rating for joining the hosted game. No default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-rating-min",
+            scope = ScopeType.INHERIT,
+            description = "Minimum displayed rating for joining the hosted game.")
+    private Double hostRatingMin;
+
+    /**
+     * Maximum displayed rating for joining the hosted game. No default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-rating-max",
+            scope = ScopeType.INHERIT,
+            description = "Maximum displayed rating for joining the hosted game.")
+    private Double hostRatingMax;
+
+    /** Whether the server should enforce {@code --host-rating-min}/{@code --host-rating-max}. */
+    @Option(
+            names = "--host-enforce-rating-range",
+            scope = ScopeType.INHERIT,
+            defaultValue = "false",
+            description =
+                    "Whether to enforce --host-rating-min/--host-rating-max for the hosted game "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private boolean hostEnforceRatingRange;
+
+    /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
      * output stream and exit with {@link ExitCodes#USAGE}.
      *
@@ -343,7 +371,15 @@ public final class MockClientCli implements Callable<Integer> {
         if (hostTitle == null && hostMap == null && hostMod == null && hostVisibility == null) {
             return Optional.empty();
         }
-        return Optional.of(new GameHostConfig(hostTitle, hostMap, hostMod, hostVisibility));
+        return Optional.of(
+                new GameHostConfig(
+                        hostTitle,
+                        hostMap,
+                        hostMod,
+                        hostVisibility,
+                        Optional.ofNullable(hostRatingMin),
+                        Optional.ofNullable(hostRatingMax),
+                        hostEnforceRatingRange));
     }
 
     /**

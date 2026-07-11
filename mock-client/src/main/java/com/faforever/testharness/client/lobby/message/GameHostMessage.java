@@ -2,6 +2,7 @@ package com.faforever.testharness.client.lobby.message;
 
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 /**
  * Outbound {@code game_host} request (lobby-protocol-spec.md §4.1, §10.2) — sent by the Mock Client
@@ -9,9 +10,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * <p>{@code command} is always {@code "game_host"} on the wire, so it is not a field on this record
  * — {@link #command()} reports the constant directly, which rules out a caller ever constructing a
- * message with the wrong command. Every other field is written as-is; a {@code null} field (e.g.
- * {@code password} when the game isn't password-protected) is omitted from the wire frame rather
- * than serialised as JSON {@code null}.
+ * message with the wrong command. Every other nullable field is omitted from the wire frame when
+ * {@code null} rather than serialised as JSON {@code null} (e.g. {@code password} when the game
+ * isn't password-protected).
  *
  * <p>Encoded via Jackson directly by the sender: {@code mapper.valueToTree(message)}.
  *
@@ -21,10 +22,20 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param mapname map folder name; required by the spec
  * @param password required only when {@code visibility} is password-protected; {@code null}
  *     otherwise
+ * @param ratingMin minimum displayed rating for joining; {@code null} means unset
+ * @param ratingMax maximum displayed rating for joining; {@code null} means unset
+ * @param enforceRatingRange whether the server should enforce {@code ratingMin}/{@code ratingMax}
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record GameHostMessage(
-        String title, String visibility, String mod, String mapname, String password) {
+        String title,
+        String visibility,
+        String mod,
+        String mapname,
+        String password,
+        @JsonProperty("rating_min") Double ratingMin,
+        @JsonProperty("rating_max") Double ratingMax,
+        @JsonProperty("enforce_rating_range") boolean enforceRatingRange) {
 
     /**
      * Validates the fields the spec marks required.

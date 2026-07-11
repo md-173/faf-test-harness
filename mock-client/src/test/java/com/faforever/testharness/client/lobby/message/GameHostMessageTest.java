@@ -16,7 +16,8 @@ final class GameHostMessageTest {
     @Test
     void commandIsAlwaysGameHostAndNullPasswordIsOmitted() throws JsonProcessingException {
         GameHostMessage message =
-                new GameHostMessage("Test game", "public", "faf", "scmp_007", null);
+                new GameHostMessage(
+                        "Test game", "public", "faf", "scmp_007", null, null, null, false);
 
         JsonNode json = MAPPER.valueToTree(message);
 
@@ -26,30 +27,65 @@ final class GameHostMessageTest {
     }
 
     @Test
+    void nullRatingBoundsAreOmittedButEnforceRatingRangeIsAlwaysSent()
+            throws JsonProcessingException {
+        GameHostMessage message =
+                new GameHostMessage(
+                        "Test game", "public", "faf", "scmp_007", null, null, null, false);
+
+        JsonNode json = MAPPER.valueToTree(message);
+
+        assertFalse(json.has("rating_min"), "null rating_min should be omitted, not sent as null");
+        assertFalse(json.has("rating_max"), "null rating_max should be omitted, not sent as null");
+        assertFalse(json.get("enforce_rating_range").asBoolean());
+    }
+
+    @Test
+    void ratingBoundsAreSentWhenPresent() throws JsonProcessingException {
+        GameHostMessage message =
+                new GameHostMessage(
+                        "Test game", "public", "faf", "scmp_007", null, 800.0, 1500.0, true);
+
+        JsonNode json = MAPPER.valueToTree(message);
+
+        assertEquals(800.0, json.get("rating_min").asDouble());
+        assertEquals(1500.0, json.get("rating_max").asDouble());
+        assertEquals(true, json.get("enforce_rating_range").asBoolean());
+    }
+
+    @Test
     void rejectsBlankTitle() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameHostMessage(" ", "public", "faf", "scmp_007", null));
+                () ->
+                        new GameHostMessage(
+                                " ", "public", "faf", "scmp_007", null, null, null, false));
     }
 
     @Test
     void rejectsBlankVisibility() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameHostMessage("Test game", null, "faf", "scmp_007", null));
+                () ->
+                        new GameHostMessage(
+                                "Test game", null, "faf", "scmp_007", null, null, null, false));
     }
 
     @Test
     void rejectsBlankMod() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameHostMessage("Test game", "public", null, "scmp_007", null));
+                () ->
+                        new GameHostMessage(
+                                "Test game", "public", null, "scmp_007", null, null, null, false));
     }
 
     @Test
     void rejectsBlankMapname() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameHostMessage("Test game", "public", "faf", "", null));
+                () ->
+                        new GameHostMessage(
+                                "Test game", "public", "faf", "", null, null, null, false));
     }
 }

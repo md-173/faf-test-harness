@@ -23,11 +23,12 @@ import picocli.CommandLine.Option;
  * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
  * NPE instead of a config error.
  *
- * <p>The 1:1 rule has one deliberate exception: {@code hostConfig} groups four CLI options ({@code
- * hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}) into a single {@link
- * GameHostConfig} record component (see {@link MockClientCli#toConfig()}), so it can be absent as a
- * whole when the mock client isn't configured to host. {@link #GROUPED_RECORD_COMPONENT_NAMES} and
- * {@link #GROUPED_CLI_FIELD_NAMES} carve that pairing out of the strict 1:1 checks below.
+ * <p>The 1:1 rule has one deliberate exception: {@code hostConfig} groups seven CLI options ({@code
+ * hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code hostRatingMin},
+ * {@code hostRatingMax}, {@code hostEnforceRatingRange}) into a single {@link GameHostConfig}
+ * record component (see {@link MockClientCli#toConfig()}), so it can be absent as a whole when the
+ * mock client isn't configured to host. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
+ * #GROUPED_CLI_FIELD_NAMES} carve that pairing out of the strict 1:1 checks below.
  */
 final class MockClientCliRecordSyncTest {
 
@@ -42,7 +43,14 @@ final class MockClientCliRecordSyncTest {
      * component.
      */
     private static final Set<String> GROUPED_CLI_FIELD_NAMES =
-            Set.of("hostTitle", "hostMap", "hostMod", "hostVisibility");
+            Set.of(
+                    "hostTitle",
+                    "hostMap",
+                    "hostMod",
+                    "hostVisibility",
+                    "hostRatingMin",
+                    "hostRatingMax",
+                    "hostEnforceRatingRange");
 
     @Test
     void everyRecordComponentHasAMatchingCliOption() {
@@ -112,9 +120,9 @@ final class MockClientCliRecordSyncTest {
     void counts() {
         // sanity check: catches the case where both sets drift in lockstep. The gap between the
         // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
-        // .size() (4 host-* options collapse into 1 hostConfig record component).
+        // .size() (7 host-* options collapse into 1 hostConfig record component).
         long expectedRecordComponents = 20;
-        long expectedCliOptionsExcludingHelpers = 23;
+        long expectedCliOptionsExcludingHelpers = 26;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =

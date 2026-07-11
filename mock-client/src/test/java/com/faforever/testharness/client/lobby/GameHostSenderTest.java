@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,7 +48,15 @@ final class GameHostSenderTest {
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
-        GameHostConfig config = new GameHostConfig("Custom Title", "scmp_016", "faf", "public");
+        GameHostConfig config =
+                new GameHostConfig(
+                        "Custom Title",
+                        "scmp_016",
+                        "faf",
+                        "public",
+                        Optional.empty(),
+                        Optional.empty(),
+                        false);
 
         new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
 
@@ -59,6 +68,34 @@ final class GameHostSenderTest {
         assertEquals("faf", parsed.get("mod").asText());
         assertEquals("public", parsed.get("visibility").asText());
         assertFalse(parsed.has("password"), "password should be omitted, not sent as null");
+        assertFalse(parsed.has("rating_min"), "rating_min should be omitted when unset");
+        assertFalse(parsed.has("rating_max"), "rating_max should be omitted when unset");
+        assertFalse(parsed.get("enforce_rating_range").asBoolean());
+    }
+
+    @Test
+    void sendsRatingRangeWhenConfigured() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        GameHostConfig config =
+                new GameHostConfig(
+                        "Ranked Custom",
+                        "scmp_016",
+                        "faf",
+                        "public",
+                        Optional.of(800.0),
+                        Optional.of(1500.0),
+                        true);
+
+        new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
+
+        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        JsonNode parsed = MAPPER.readTree(received);
+        assertEquals(800.0, parsed.get("rating_min").asDouble());
+        assertEquals(1500.0, parsed.get("rating_max").asDouble());
+        assertTrue(parsed.get("enforce_rating_range").asBoolean());
     }
 
     @Test
@@ -68,7 +105,14 @@ final class GameHostSenderTest {
         server.awaitFirstClient();
 
         GameHostConfig config =
-                new GameHostConfig("Another Game", "scmp_003", "ladder1v1", "friends");
+                new GameHostConfig(
+                        "Another Game",
+                        "scmp_003",
+                        "ladder1v1",
+                        "friends",
+                        Optional.empty(),
+                        Optional.empty(),
+                        false);
 
         new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
 
