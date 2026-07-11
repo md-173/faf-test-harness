@@ -69,13 +69,19 @@ public class StateMachine implements EventListener {
     }
 
     /**
-     * Gives a future that completes when the state is reached.
+     * Gives a future that completes when the state is reached. If the state machine's current state
+     * is {@code s} then the future completes immediately.
      *
      * @param s state to wait for.
      * @return a future that only completes when the state is reached.
      */
     public synchronized CompletableFuture<Void> stateReached(State s) {
-        return awaitedStates.computeIfAbsent(s, ignored -> new CompletableFuture<>());
+        if (state == s) {
+            // Return an already completed future if the state has already been reached.
+            return CompletableFuture.completedFuture(null);
+        } else {
+            return awaitedStates.computeIfAbsent(s, ignored -> new CompletableFuture<>());
+        }
     }
 
     /**
