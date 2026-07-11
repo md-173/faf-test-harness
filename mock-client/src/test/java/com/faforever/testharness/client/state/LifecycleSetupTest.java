@@ -17,12 +17,16 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -183,23 +187,121 @@ final class LifecycleSetupTest {
         assertEquals(1, joinGame[1]);
     }
 
+    @Test
+    void gameLauncherFails() throws Exception {
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG, true);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
+    void iceAdapterLauncherFails() throws Exception {
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG, true);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
+    void iceConnectionFailsOnConnection() throws Exception {
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort(), true);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
+    void iceConnectionCallFails() throws Exception {
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallFail("setLobbyInitMode");
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG, lobby, handshake, iceConn, gameLauncher, iceLauncher);
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
     private class DummyIceAdapterConnection extends IceAdapterConnection {
 
         private final Map<String, Object[]> received = new HashMap<>();
 
+        private final Set<String> failCalls = new HashSet<>();
+
+        private final boolean failOnConnection;
+
         DummyIceAdapterConnection(int port) {
+            this(port, false);
+        }
+
+        DummyIceAdapterConnection(int port, boolean failOnConnection) {
             super(port);
+            this.failOnConnection = failOnConnection;
         }
 
         @Override
         public CompletableFuture<Void> connect() {
-            return CompletableFuture.completedFuture(null);
+            if (failOnConnection) {
+                return CompletableFuture.failedFuture(new IOException("Could not connect"));
+            } else {
+                return CompletableFuture.completedFuture(null);
+            }
+        }
+
+        /**
+         * A {@link #call(final String method, final Object... params)} with {@code method} will
+         * result in an exceptional future.
+         */
+        public void setupCallFail(String method) {
+            failCalls.add(method);
         }
 
         @Override
         public CompletableFuture<JsonNode> call(final String method, final Object... params) {
             received.put(method, params);
-            return CompletableFuture.completedFuture(null);
+            if (failCalls.remove(method)) {
+                return CompletableFuture.failedFuture(new IOException("Bad call"));
+            } else {
+                return CompletableFuture.completedFuture(null);
+            }
         }
 
         @Override
@@ -218,15 +320,29 @@ final class LifecycleSetupTest {
 
     private class DummyGameLauncher extends MockGameLauncher {
         private boolean subprocessStarted = false;
+        private final boolean throwException;
 
         DummyGameLauncher(MockClientConfig config) {
+            this(config, false);
+        }
+
+        DummyGameLauncher(MockClientConfig config, boolean throwException) {
             super(config);
+            this.throwException = throwException;
         }
 
         @Override
         public SubprocessManager start() throws MockGameLaunchException {
             subprocessStarted = true;
-            return null;
+            if (throwException) {
+                throw new MockGameLaunchException("Mock Game Launch failed");
+            }
+            try {
+                return SubprocessManager.start(
+                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            } catch (IOException e) {
+                throw new MockGameLaunchException(e.getMessage());
+            }
         }
 
         public boolean subprocessStarted() {
@@ -236,15 +352,29 @@ final class LifecycleSetupTest {
 
     private class DummyIceLauncher extends IceAdapterLauncher {
         private boolean subprocessStarted = false;
+        private final boolean throwException;
 
         DummyIceLauncher(MockClientConfig config) {
+            this(config, false);
+        }
+
+        DummyIceLauncher(MockClientConfig config, boolean throwException) {
             super(config);
+            this.throwException = throwException;
         }
 
         @Override
         public SubprocessManager start() throws IceAdapterLaunchException {
             subprocessStarted = true;
-            return null;
+            if (throwException) {
+                throw new IceAdapterLaunchException("Ice Adapter Launch failed");
+            }
+            try {
+                return SubprocessManager.start(
+                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            } catch (IOException e) {
+                throw new IceAdapterLaunchException(e.getMessage());
+            }
         }
 
         public boolean subprocessStarted() {
