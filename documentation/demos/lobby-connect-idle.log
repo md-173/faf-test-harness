@@ -1,0 +1,40 @@
+# lobby-connect-idle — real capture (WBS-3.1.1.4)
+#
+# `mock-client run` against the FAF test lobby, authenticating as the seeded
+# `test` account (id 7982) and going idle. Captured 2026-07-14, on the final
+# integrated code path: run drives the lifecycle FSM (WBS-3.1.3.1) via
+# LobbySession, authenticating through the refresh-token file channel.
+#
+# Endpoint:  wss://ws.faforever.xyz   (the working test endpoint — lobby-protocol-spec.md "Server Endpoints")
+# unique_id: generated at runtime by the FAF `faf-uid` binary (--uid-binary-path); the
+#            lobby's policy server rejects a placeholder UID. See README "run".
+# Command:   mock-client run --config mock-client.json --uid-binary-path <faf-uid>
+#
+# Console format (the same events are written as structured JSON to logs/<component>.jsonl).
+# No credentials appear: the access token, refresh token, and the faf-uid blob are never
+# logged — only the blob's length and the server-supplied login/id. The refresh token was
+# rotated and persisted back to the token file by the run (verified via file mtime).
+
+[2026-07-14 21:00:34.876] [MockClient] [INFO ] Created StateMachine with initial state CONNECTING and policy IGNORE
+[2026-07-14 21:00:36.856] [MockClient] [INFO ] lobby WebSocket connected: wss://ws.faforever.xyz
+[2026-07-14 21:00:38.849] [MockClient] [WARN ] unhandled lobby command 'notice' (will be silent for subsequent occurrences)
+[2026-07-14 21:00:38.980] [MockClient] [INFO ] generated unique_id via faf-uid (1916 chars)
+[2026-07-14 21:00:39.360] [MockClient] [WARN ] unhandled lobby command 'irc_password' (will be silent for subsequent occurrences)
+[2026-07-14 21:00:39.415] [MockClient] [INFO ] lobby authenticated as login=test
+[2026-07-14 21:00:39.456] [MockClient] [INFO ] session ready: id=7982 login=test
+[2026-07-14 21:00:39.456] [MockClient] [INFO ] mock client idle as player id=7982 login=test; press Ctrl-C to exit
+[2026-07-14 21:00:39.457] [MockClient] [WARN ] unhandled lobby command 'player_info' (will be silent for subsequent occurrences)
+[2026-07-14 21:00:39.457] [MockClient] [WARN ] unhandled lobby command 'social' (will be silent for subsequent occurrences)
+[2026-07-14 21:00:39.458] [MockClient] [WARN ] unhandled lobby command 'game_info' (will be silent for subsequent occurrences)
+
+# After ~20s idle (transport auto-ponging lobby pings), SIGTERM triggered the shutdown
+# hook: the WebSocket close frame is sent cleanly and the process exits 143 (the JVM
+# default for SIGTERM — see README "Exit codes"). The hook's own log line and the server's
+# close echo can arrive after the JVM has already halted, so those final lines are not
+# always flushed; no error lines at shutdown.
+#
+# The WARN lines are expected: 'notice', 'irc_password', 'player_info', 'social', and
+# 'game_info' are lobby broadcasts with no registered handler yet — they belong to later
+# stories (matchmaking 3.1.1.x, game_info consumption). Each is logged once then muted.
+#
+# This capture used `timeout --signal=TERM 20` as a stand-in for an interactive Ctrl-C.

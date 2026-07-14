@@ -2,6 +2,8 @@ package com.faforever.testharness.client.config;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -22,10 +24,19 @@ import java.util.OptionalInt;
  * @param oauthRedirectUri Redirect URI registered on the OAuth client
  * @param oauthScopes Space-separated OAuth2 scopes (e.g. {@code openid offline lobby})
  * @param oauthClientId OAuth2 public client identifier
- * @param oauthRefreshToken long-lived refresh token (sensitive — rotated by Hydra on every use)
- * @param oauthRefreshTokenFile path to a file holding the refresh token; rewritten atomically on
- *     each rotation
+ * @param oauthRefreshTokenFile path to a file holding the long-lived refresh token (sensitive —
+ *     rotated by Hydra on every use); rewritten atomically on each rotation. The file is the only
+ *     credential channel: a literal token value cannot receive the rotated token back, so it would
+ *     silently break on the next run.
  * @param uniqueId stable hardware identifier sent in the lobby auth message
+ * @param clientVersion client version string sent in the {@code ask_session} message (a required
+ *     field of that command; lobby-protocol-spec.md §3)
+ * @param userAgent client identifier string sent in the {@code ask_session} message (a required
+ *     field of that command; lobby-protocol-spec.md §3)
+ * @param uidBinaryPath optional path to the FAF {@code faf-uid} binary. When present, the auth
+ *     handshake runs {@code <uidBinaryPath> <session>} and uses its output as the {@code unique_id}
+ *     (the lobby's policy/anti-cheat server requires a real RSA-encrypted UID, not a plain
+ *     placeholder; lobby-protocol-spec.md §3). When empty, the static {@code uniqueId} is sent.
  * @param iceAdapterBinaryPath path to the faf-ice-adapter executable
  * @param mockGameBinaryPath path to the mock-game executable
  * @param iceAdapterRpcPort local JSON-RPC port exposed by faf-ice-adapter
@@ -56,9 +67,11 @@ public record MockClientConfig(
         URI oauthRedirectUri,
         String oauthScopes,
         String oauthClientId,
-        String oauthRefreshToken,
         Path oauthRefreshTokenFile,
         String uniqueId,
+        String clientVersion,
+        String userAgent,
+        Optional<Path> uidBinaryPath,
         Path iceAdapterBinaryPath,
         Path mockGameBinaryPath,
         int iceAdapterRpcPort,
@@ -74,8 +87,8 @@ public record MockClientConfig(
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:
-     * a refresh token ({@code oauthRefreshToken} or {@code oauthRefreshTokenFile}) — the
-     * steady-state, headless path, exchanged at {@code oauthTokenUrl} for short-lived JWTs.
+     * a refresh-token file ({@code oauthRefreshTokenFile}) — the steady-state, headless path,
+     * exchanged at {@code oauthTokenUrl} for short-lived JWTs and rewritten on each rotation.
      *
      * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
      * oauthClientSecret}) are not accepted on this record — the de-risking work in WBS-2.2.10
@@ -83,17 +96,69 @@ public record MockClientConfig(
      * earlier by {@link LayeredDefaultProvider} so the user sees a deprecation error pointing at
      * the spec rather than a generic missing-creds error.
      *
-     * @throws IllegalArgumentException if neither credential channel is satisfied, or if {@code
-     *     playerLogin} is {@code null} or blank
+     * @throws IllegalArgumentException if any mandatory endpoint/identity field is missing, if
+     *     neither credential channel is satisfied, if {@code clientVersion} or {@code userAgent} is
+     *     {@code null} or blank, or if {@code playerLogin} is {@code null} or blank
      */
     public MockClientConfig {
-        boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
-        if (!hasRefreshToken) {
+        // Mandatory endpoint/identity fields. These are intentionally NOT marked required = true on
+        // the picocli options: picocli enforces required on INHERIT-scoped options at the
+        // subcommand
+        // level before consulting the default-value provider, which would make env-var and
+        // config-file values unreachable for every subcommand. Validating here lets those layers
+        // populate the fields first, while a genuinely missing value still surfaces as a clean
+        // usage error (toValidatedConfig wraps this as a picocli ParameterException).
+        List<String> missing = new ArrayList<>();
+        if (lobbyWebSocketUrl == null) {
+            missing.add("--lobby-websocket-url");
+        }
+        if (oauthTokenUrl == null) {
+            missing.add("--oauth-token-url");
+        }
+        if (oauthAuthEndpoint == null) {
+            missing.add("--oauth-auth-endpoint");
+        }
+        if (oauthRedirectUri == null) {
+            missing.add("--oauth-redirect-uri");
+        }
+        if (oauthScopes == null || oauthScopes.isBlank()) {
+            missing.add("--oauth-scopes");
+        }
+        if (oauthClientId == null || oauthClientId.isBlank()) {
+            missing.add("--oauth-client-id");
+        }
+        if (uniqueId == null || uniqueId.isBlank()) {
+            missing.add("--unique-id");
+        }
+        if (!missing.isEmpty()) {
             throw new IllegalArgumentException(
-                    "no OAuth credentials supplied: set --oauth-refresh-token or "
-                            + "--oauth-refresh-token-file for headless refresh-token rotation. See "
+                    "missing required configuration: "
+                            + String.join(", ", missing)
+                            + ". Supply each via its CLI flag, the matching FAF_MOCK_CLIENT_* "
+                            + "environment variable, or a --config file.");
+        }
+
+        if (oauthRefreshTokenFile == null) {
+            throw new IllegalArgumentException(
+                    "no OAuth credentials supplied: set --oauth-refresh-token-file for headless "
+                            + "refresh-token rotation. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
+        }
+        // clientVersion and userAgent are required arguments of the lobby ask_session command; a
+        // blank value (reachable via a JSON config file even though the CLI flags have defaults)
+        // would otherwise be sent verbatim and rejected by the lobby mid-handshake.
+        if (clientVersion == null || clientVersion.isBlank()) {
+            throw new IllegalArgumentException(
+                    "clientVersion must not be blank: it is sent as the ask_session 'version' "
+                            + "field. Set --client-version or remove the empty value from the "
+                            + "config file.");
+        }
+        if (userAgent == null || userAgent.isBlank()) {
+            throw new IllegalArgumentException(
+                    "userAgent must not be blank: it is sent as the ask_session 'user_agent' "
+                            + "field. Set --user-agent or remove the empty value from the config "
+                            + "file.");
         }
         // playerLogin is passed verbatim to faf-ice-adapter as --login; a blank value (reachable
         // via a JSON config file even though the CLI flag has a default) would otherwise surface

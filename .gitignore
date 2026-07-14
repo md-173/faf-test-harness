@@ -56,3 +56,6 @@ bin/
 
 # Provisioned faf-ice-adapter binary (fetch via ./gradlew downloadIceAdapter)
 /faf-ice-adapter.jar
+
+# Provisioned faf-uid binary (download per documentation/demos/README.md; also .exe / -macos)
+/faf-uid*

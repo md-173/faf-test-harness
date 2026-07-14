@@ -18,7 +18,8 @@ import picocli.CommandLine;
  * Verifies the cross-field auth-choice rule after the WBS-2.2.10 / spec §2 migration:
  *
  * <ul>
- *   <li>A refresh token (literal or file) must be supplied.
+ *   <li>A refresh-token file must be supplied — it is the only credential channel, since the
+ *       rotated token must be persisted back on every use.
  *   <li>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
  *       oauthClientSecret}) are rejected with a deprecation error pointing at the spec.
  * </ul>
@@ -57,12 +58,13 @@ final class ConfigLoaderAuthChoiceTest {
     }
 
     @Test
-    void refreshTokenSatisfiesAuthChoice() {
+    void literalRefreshTokenFlagRejectedAsUnknownOption() {
+        // The literal --oauth-refresh-token flag was removed: Hydra rotates the refresh token on
+        // every use and the rotated value must be persisted back, which only the file channel can
+        // do. A literal value would silently break on the next run.
         String[] args = withExtra(REQUIRED_NO_CREDS, "--oauth-refresh-token=rt-value");
 
-        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
-
-        assertNotNull(config);
+        assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
     }
 
     @Test

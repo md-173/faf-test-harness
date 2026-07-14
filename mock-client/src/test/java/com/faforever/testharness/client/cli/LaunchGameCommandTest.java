@@ -128,7 +128,7 @@ final class LaunchGameCommandTest {
         args.add("--oauth-redirect-uri=" + CliTestFixtures.OAUTH_REDIRECT_URI);
         args.add("--oauth-scopes=" + CliTestFixtures.OAUTH_SCOPES);
         args.add("--oauth-client-id=" + CliTestFixtures.OAUTH_CLIENT_ID);
-        args.add("--oauth-refresh-token=" + CliTestFixtures.OAUTH_REFRESH_TOKEN);
+        args.add("--oauth-refresh-token-file=" + CliTestFixtures.OAUTH_REFRESH_TOKEN_FILE);
         args.add("--unique-id=" + CliTestFixtures.UNIQUE_ID);
         args.add("--mock-game-binary-path=" + bin);
         args.addAll(List.of(extra));

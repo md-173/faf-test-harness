@@ -18,13 +18,15 @@ import picocli.CommandLine;
 final class ConfigLoaderDefaultsOnlyTest {
 
     @Test
-    void emptyArgsThrowsMissingParameterExceptionListingEveryRequiredFlag() {
-        CommandLine.MissingParameterException ex =
+    void emptyArgsThrowsParameterExceptionListingEveryRequiredFlag() {
+        // Required-ness is validated by the MockClientConfig record (not picocli's required=true),
+        // so the env/file layers can reach subcommands; toValidatedConfig surfaces it as a
+        // ParameterException whose message names every missing flag.
+        CommandLine.ParameterException ex =
                 assertThrows(
-                        CommandLine.MissingParameterException.class,
+                        CommandLine.ParameterException.class,
                         () -> ConfigLoader.load(new String[] {}, Map.of()),
-                        "Empty args + empty env should fail picocli's required-options "
-                                + "check.");
+                        "Empty args + empty env should fail the required-field check.");
 
         String message = ex.getMessage();
 

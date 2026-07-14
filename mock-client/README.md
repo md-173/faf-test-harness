@@ -12,16 +12,20 @@ subcommands that dispatch to the matching component.
 
 | Subcommand    | Purpose                                                                            |
 |---------------|------------------------------------------------------------------------------------|
-| `run`         | Run a full mock client session: authenticate, queue, play, teardown.               |
+| `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 |
 | `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    |
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
 | `ice-smoke`   | ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet handshake.|
 
-`launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) are implemented:
-each spawns its respective binary, runs it for `--duration-seconds`, terminates
-it, and logs the exit code. `ice-smoke` is still CLI scaffolding —
-it validates config, applies logging, logs a TODO line, and exit with code `64`
-(`NOT_IMPLEMENTED`). Real logic will ship in sibling tracks.
+`run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
+(`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
+authenticated player id, and then sits idle — the transport auto-replies `pong`
+to the lobby's `ping` heartbeats. `Ctrl-C` / `SIGTERM` closes the WebSocket
+cleanly (the process exit code then follows the signal: 130 for SIGINT, 143 for
+SIGTERM). `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) each spawn
+their respective binary, run it for `--duration-seconds`, terminate it, and log
+the exit code. `ice-smoke` is still CLI scaffolding — it validates config,
+applies logging, logs a TODO line, and exits with code `64` (`NOT_IMPLEMENTED`).
 
 Invocation shape:
 
@@ -29,7 +33,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 20
+Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 23
 config flags — are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag.
@@ -41,7 +45,7 @@ additionally take a subcommand-local `--duration-seconds` flag.
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
 | `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `launch-ice` / `launch-game` could not find/start its binary, or the child exited before its run window. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
@@ -105,11 +109,11 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 public client identifier. |
-| `oauthRefreshToken` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN` | `--oauth-refresh-token` | — | no¹ | Long-lived OAuth refresh token (sensitive — rotated on each use). |
-| `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | no¹ | Path to the refresh-token file; rewritten atomically on rotation. |
-| `oauthAccessToken` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token (auxiliary/bootstrap output). |
-| `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT (auxiliary/bootstrap output). |
-| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message. |
+| `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
+| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
+| `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
+| `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
+| `uidBinaryPath` | `FAF_MOCK_CLIENT_UID_BINARY_PATH` | `--uid-binary-path` | — | no | Path to the FAF `faf-uid` binary. When set, the auth handshake runs `<path> <session>` and sends its output as `unique_id` (the lobby's policy server requires a real RSA-encrypted UID, not a placeholder). When unset, the static `uniqueId` is sent. |
 | `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | `faf-ice-adapter.jar` | no | Path to the `faf-ice-adapter` binary; a `.jar` runs via `java -jar`, any other file is executed directly. Relative paths resolve against the working directory. |
 | `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | `mock-game/build/install/mock-game/bin/mock-game` | no | Path to the `mock-game` binary; a `.jar` runs via `java -jar`, any other file is executed directly. The default is the Gradle `application` plugin install layout (resolved against the working directory), so the harness "just works" from the repo root after `./gradlew :mock-game:installDist`. |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | no | Local JSON-RPC port exposed by `faf-ice-adapter`. |
@@ -120,18 +124,19 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login`; used by the `launch-ice` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
-¹ Each individual OAuth-credential field is optional, but the loader requires
-at least one credential channel: a refresh token (`oauthRefreshToken` or
-`oauthRefreshTokenFile`) **or** a pre-obtained access token (`oauthAccessToken`
-or `oauthTokenFile`). Failing to supply at least one channel produces a picocli
+¹ The refresh-token file is the **only** credential channel: Hydra rotates the
+refresh token on every use and the rotated value is persisted back to this
+file, which a literal option could not do. Omitting it produces a picocli
 `ParameterException` pointing at the bootstrap procedure in
 `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
 
 > **Removed (WBS-2.2.10):** `oauthClientSecret`, `oauthUsername`, and
-> `oauthPassword` are no longer accepted. The seeded FAF Hydra clients with
+> `oauthPassword` are no longer accepted — the seeded FAF Hydra clients with
 > `lobby` scope are *public* (no client secret) and do not enable the
 > password-grant or client_credentials grant types. Configs that still set
 > these keys fail at load time with a deprecation error pointing at the spec.
+> A literal `oauthRefreshToken` option is likewise no longer offered; write
+> the bootstrap token to a file instead.
 
 ### Auth flow
 
@@ -164,9 +169,9 @@ A typical setup:
 - Public values (`lobbyWebSocketUrl`, `oauthTokenUrl`, `oauthAuthEndpoint`,
   `oauthRedirectUri`, `oauthScopes`, `oauthClientId`, ports, binary paths) →
   `mock-client.json`, tracked in version control.
-- Secrets (`oauthRefreshToken`, `oauthAccessToken`) or
-  `oauthRefreshTokenFile` pointing at a gitignored file → CI secret store,
-  injected as `FAF_MOCK_CLIENT_*` env vars at runtime.
+- The secret: `oauthRefreshTokenFile` pointing at a gitignored file, with the
+  path injected as a `FAF_MOCK_CLIENT_*` env var at runtime (the file itself
+  lives in the CI secret store or a local `.secrets/` directory).
 
 Refresh tokens are environment-specific (they encode the Hydra issuer and
 client ID), so each environment (`.xyz` / production / future local Tilt
@@ -191,13 +196,30 @@ Root help lists every global flag and the four subcommands. Per-subcommand
 help shows the same flag set (subcommands inherit the root's flags). This is
 the source of truth that the field-reference table above mirrors.
 
-### `run` — full mock client session (config file)
+### `run` — connect to the lobby and sit idle (config file)
+
+Connects to the lobby, runs the auth handshake, hydrates the welcome state, logs
+the authenticated player id, then stays idle (auto-replying `pong` to the lobby's
+`ping` heartbeats) until `Ctrl-C` / `SIGTERM` closes the socket cleanly.
 
 ```bash
 cp mock-client.example.json mock-client.json
 # edit mock-client.json with real values
 ./gradlew :mock-client:run --args="run --config mock-client.json"
 ```
+
+`run` authenticates via the refresh-token **file** channel (`--oauth-refresh-token-file`
+/ `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` / `oauthRefreshTokenFile`), since
+the token is rotated and persisted back to the file on each use. There is no
+literal token option; write the bootstrap token to a file. If the file is
+missing or unreadable, `run` exits `70` (`RUNTIME`) before connecting.
+
+Against the live lobby you also need `--uid-binary-path` pointing at the FAF
+`faf-uid` binary: the lobby's policy server rejects a placeholder `unique_id`
+(the login ends in `{"command":"invalid"}`), so the handshake runs `faf-uid` with
+the session to produce a real RSA-encrypted UID. See
+[`documentation/demos/README.md`](../documentation/demos/README.md) for the full
+recipe (endpoint, token bootstrap, and obtaining the binary).
 
 ### Providing the faf-ice-adapter binary
 
@@ -285,7 +307,7 @@ exits `70` (`RUNTIME`) — no stack trace.
 ### Environment variables only
 
 ```bash
-export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://lobby.faforever.xyz
+export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://ws.faforever.xyz
 export FAF_MOCK_CLIENT_OAUTH_TOKEN_URL=https://hydra.faforever.xyz/oauth2/token
 export FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT=https://hydra.faforever.xyz/oauth2/auth
 export FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI=http://127.0.0.1
@@ -304,7 +326,7 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ```bash
 ./gradlew :mock-client:run --args="\
   run \
-  --lobby-websocket-url wss://lobby.faforever.xyz \
+  --lobby-websocket-url wss://ws.faforever.xyz \
   --oauth-token-url https://hydra.faforever.xyz/oauth2/token \
   --oauth-auth-endpoint https://hydra.faforever.xyz/oauth2/auth \
   --oauth-redirect-uri http://127.0.0.1 \
@@ -324,8 +346,8 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
   run \
   --config mock-client.json \
   --log-level DEBUG"
-# env adds secrets:
-#   FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN (or _FILE)
+# env adds the secret's location:
+#   FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE
 # the --log-level flag overrides whatever the file said
 ```
 

@@ -36,6 +36,14 @@ import picocli.CommandLine.Spec;
  * the record's compact constructor into a {@link CommandLine.ParameterException} scoped to the
  * calling subcommand, so picocli renders a clean usage-style error rather than a stack trace.
  *
+ * <p>Mandatory fields are <em>not</em> marked {@code required = true} on these options. picocli
+ * enforces {@code required} on {@code INHERIT}-scoped options at the subcommand level
+ * <em>before</em> consulting the default-value provider, which would make env-var and config-file
+ * values unreachable for every subcommand (only explicit CLI flags would satisfy them). Instead,
+ * presence is validated by the {@link MockClientConfig} compact constructor, so the env/file layers
+ * populate the inherited options first and a genuinely missing value still surfaces as a clean
+ * usage error.
+ *
  * <p>When the root is invoked with no subcommand, {@link #call()} prints usage and exits with
  * {@link ExitCodes#USAGE}.
  */
@@ -76,7 +84,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--lobby-websocket-url",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "WebSocket endpoint of the FAF lobby server.")
     private URI lobbyWebSocketUrl;
 
@@ -84,7 +91,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-token-url",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "OAuth2 token endpoint used to acquire lobby access tokens.")
     private URI oauthTokenUrl;
 
@@ -92,7 +98,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-auth-endpoint",
             scope = ScopeType.INHERIT,
-            required = true,
             description =
                     "OAuth2 authorization endpoint used by the one-time refresh-token bootstrap.")
     private URI oauthAuthEndpoint;
@@ -101,7 +106,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-redirect-uri",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Redirect URI registered on the OAuth client.")
     private URI oauthRedirectUri;
 
@@ -109,7 +113,6 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-scopes",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Space-separated OAuth2 scopes (e.g. \"openid offline lobby\").")
     private String oauthScopes;
 
@@ -117,18 +120,8 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--oauth-client-id",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "OAuth2 public client identifier.")
     private String oauthClientId;
-
-    /** Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated by Hydra on use. */
-    @Option(
-            names = "--oauth-refresh-token",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated on "
-                            + "use.")
-    private String oauthRefreshToken;
 
     /** Path to a file holding the refresh token; rewritten atomically on each rotation. */
     @Option(
@@ -143,9 +136,41 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--unique-id",
             scope = ScopeType.INHERIT,
-            required = true,
             description = "Stable hardware identifier sent in the lobby auth message.")
     private String uniqueId;
+
+    /** Client version string sent in the lobby {@code ask_session} message. */
+    @Option(
+            names = "--client-version",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0.0.0-mock",
+            description =
+                    "Client version string sent in the lobby ask_session message "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private String clientVersion;
+
+    /** Client identifier string sent in the lobby {@code ask_session} message. */
+    @Option(
+            names = "--user-agent",
+            scope = ScopeType.INHERIT,
+            defaultValue = "faf-test-harness",
+            description =
+                    "Client identifier string sent in the lobby ask_session message "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private String userAgent;
+
+    /**
+     * Optional path to the {@code faf-uid} binary used to generate a real lobby {@code unique_id}.
+     */
+    @Option(
+            names = "--uid-binary-path",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Optional path to the FAF faf-uid binary. When set, the auth handshake runs "
+                            + "'<path> <session>' and sends its output as unique_id (the lobby's "
+                            + "policy server requires a real RSA-encrypted UID). When unset, the "
+                            + "static --unique-id is sent.")
+    private Path uidBinaryPath;
 
     /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
     @Option(
@@ -360,9 +385,11 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthRedirectUri,
                 oauthScopes,
                 oauthClientId,
-                oauthRefreshToken,
                 oauthRefreshTokenFile,
                 uniqueId,
+                clientVersion,
+                userAgent,
+                Optional.ofNullable(uidBinaryPath),
                 iceAdapterBinaryPath,
                 mockGameBinaryPath,
                 iceAdapterRpcPort,

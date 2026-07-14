@@ -19,7 +19,8 @@ public final class ConfigAssertions {
         assertEquals(URI.create(TestFixtures.OAUTH_REDIRECT_URI), config.oauthRedirectUri());
         assertEquals(TestFixtures.OAUTH_SCOPES, config.oauthScopes());
         assertEquals(TestFixtures.OAUTH_CLIENT_ID, config.oauthClientId());
-        assertEquals(TestFixtures.OAUTH_REFRESH_TOKEN, config.oauthRefreshToken());
+        assertEquals(
+                Path.of(TestFixtures.OAUTH_REFRESH_TOKEN_FILE), config.oauthRefreshTokenFile());
         assertEquals(TestFixtures.UNIQUE_ID, config.uniqueId());
         assertEquals(Path.of(TestFixtures.ICE_ADAPTER_BIN), config.iceAdapterBinaryPath());
         assertEquals(Path.of(TestFixtures.MOCK_GAME_BIN), config.mockGameBinaryPath());

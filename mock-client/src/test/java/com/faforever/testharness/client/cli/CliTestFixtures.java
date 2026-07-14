@@ -15,7 +15,10 @@ final class CliTestFixtures {
     static final String OAUTH_REDIRECT_URI = "http://127.0.0.1";
     static final String OAUTH_SCOPES = "openid offline lobby";
     static final String OAUTH_CLIENT_ID = "95ecec08-29c1-4c48-ae0a-b000ff349cb8";
-    static final String OAUTH_REFRESH_TOKEN = "test-refresh-token";
+
+    /** Placeholder path, never read by parse-level tests (mirrors the binary-path placeholders). */
+    static final String OAUTH_REFRESH_TOKEN_FILE = "/nonexistent/test-refresh-token";
+
     static final String UNIQUE_ID = "00000000-0000-0000-0000-000000000000";
     static final String ICE_ADAPTER_BIN = "/bin/faf-ice-adapter";
     static final String MOCK_GAME_BIN = "/bin/mock-game";
@@ -31,7 +34,7 @@ final class CliTestFixtures {
             "--oauth-redirect-uri=" + OAUTH_REDIRECT_URI,
             "--oauth-scopes=" + OAUTH_SCOPES,
             "--oauth-client-id=" + OAUTH_CLIENT_ID,
-            "--oauth-refresh-token=" + OAUTH_REFRESH_TOKEN,
+            "--oauth-refresh-token-file=" + OAUTH_REFRESH_TOKEN_FILE,
             "--unique-id=" + UNIQUE_ID,
             "--ice-adapter-binary-path=" + ICE_ADAPTER_BIN,
             "--mock-game-binary-path=" + MOCK_GAME_BIN,

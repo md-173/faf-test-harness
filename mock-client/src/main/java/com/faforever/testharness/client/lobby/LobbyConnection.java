@@ -88,8 +88,9 @@ public final class LobbyConnection {
     public record DisconnectEvent(
             DisconnectReason reason, int statusCode, String closeMessage, Throwable error) {}
 
-    /** Default listener installed before {@link #onDisconnect(Consumer)} replaces it. */
-    private static final Consumer<DisconnectEvent> NOOP_LISTENER = ignored -> {};
+    /** Disconnect listeners; each fires at most once, in registration order. */
+    private final List<Consumer<DisconnectEvent>> disconnectListeners =
+            new CopyOnWriteArrayList<>();
 
     /** Lobby endpoint this connection is bound to. */
     private final URI endpoint;
@@ -118,9 +119,6 @@ public final class LobbyConnection {
     /** True iff {@link #close()} was called by this side; used to label the disconnect bucket. */
     private final AtomicBoolean closeRequested = new AtomicBoolean(false);
 
-    /** Currently-installed disconnect listener; volatile so updates are seen by I/O threads. */
-    private volatile Consumer<DisconnectEvent> disconnectListener = NOOP_LISTENER;
-
     /** Live WebSocket after {@link #connect()} succeeds; {@code null} before that. */
     private volatile WebSocket webSocket;
 
@@ -134,7 +132,7 @@ public final class LobbyConnection {
      * Construct a connection bound to {@code endpoint}. The connection is not opened until {@link
      * #connect()} is called.
      *
-     * @param endpoint WebSocket URI (e.g. {@code wss://lobby.faforever.xyz})
+     * @param endpoint WebSocket URI (e.g. {@code wss://ws.faforever.xyz})
      */
     public LobbyConnection(final URI endpoint) {
         this(endpoint, HttpClient.newHttpClient(), new ObjectMapper(), DEFAULT_CONNECT_TIMEOUT);
@@ -181,14 +179,17 @@ public final class LobbyConnection {
     }
 
     /**
-     * Install a disconnect listener. The listener fires exactly once per {@link LobbyConnection}
-     * instance, regardless of whether the cause is a clean close, an abrupt error, or a {@link
-     * #close()} call. Calling this more than once replaces the previous listener.
+     * Install a disconnect listener. Multiple listeners may be installed; on the single disconnect
+     * of this {@link LobbyConnection} instance — clean close, abrupt error, or a {@link #close()}
+     * call — each fires exactly once, in registration order. Listeners installed after the
+     * disconnect has already fired are never invoked.
      *
-     * @param listener receives the disconnect event; {@code null} is equivalent to a no-op
+     * @param listener receives the disconnect event; {@code null} is ignored
      */
     public void onDisconnect(final Consumer<DisconnectEvent> listener) {
-        this.disconnectListener = listener == null ? NOOP_LISTENER : listener;
+        if (listener != null) {
+            disconnectListeners.add(listener);
+        }
     }
 
     /**
@@ -289,13 +290,15 @@ public final class LobbyConnection {
 
     private void fireDisconnect(final DisconnectEvent event) {
         if (disconnectFired.compareAndSet(false, true)) {
-            try {
-                disconnectListener.accept(event);
-            } catch (RuntimeException e) {
-                LOG.warn(
-                        "disconnect listener threw {}: {}",
-                        e.getClass().getSimpleName(),
-                        e.getMessage());
+            for (Consumer<DisconnectEvent> listener : disconnectListeners) {
+                try {
+                    listener.accept(event);
+                } catch (RuntimeException e) {
+                    LOG.warn(
+                            "disconnect listener threw {}: {}",
+                            e.getClass().getSimpleName(),
+                            e.getMessage());
+                }
             }
         }
     }

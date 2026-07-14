@@ -9,10 +9,9 @@ import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameJoinSender;
 import com.faforever.testharness.client.lobby.GameLaunchHandler;
 import com.faforever.testharness.client.lobby.LobbyConnection;
-import com.faforever.testharness.client.lobby.LobbyHandshake;
+import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
-import com.faforever.testharness.client.lobby.message.WelcomeMessage;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
@@ -46,16 +45,17 @@ public final class MockClientLifecycle {
     private final Map<ClientState, State> states;
 
     /**
-     * Connection to lobby. The lifecycle object listens to various messages from the lobby and
-     * forwards them to the state machine.
+     * The lobby session — the lifecycle's single point of contact with the server. Owns the
+     * transport, the auth handshake, and the welcome hydration; events raised by it are used to
+     * transition from CONNECTING to IDLE.
      */
-    private final LobbyConnection lobby;
+    private final LobbySession session;
 
     /**
-     * Performs the handshake with the lobby. Events raised by this object are used to transition
-     * from CONNECTING to IDLE.
+     * The session's underlying transport. The lifecycle object listens to various messages from the
+     * lobby and forwards them to the state machine.
      */
-    private final LobbyHandshake handshake;
+    private final LobbyConnection lobby;
 
     /** Config settings for the mock client. */
     private final MockClientConfig config;
@@ -80,19 +80,16 @@ public final class MockClientLifecycle {
 
     /**
      * Build and initialise the mock client's lifecycle. This constructor will set up all
-     * transitions on the internal state machine and subscribe to all relevant events from lobby and
-     * handshake.
+     * transitions on the internal state machine and subscribe to all relevant events from the
+     * session and its transport.
      *
      * @param config a set of configuration options passed by the user.
-     * @param lobby an open connection to the lobby server.
-     * @param handshake the object responsible for the initial handshake with the lobby server.
+     * @param session a not-yet-started lobby session; {@link #start(TokenSource)} opens it.
      */
-    public MockClientLifecycle(
-            MockClientConfig config, LobbyConnection lobby, LobbyHandshake handshake) {
+    public MockClientLifecycle(MockClientConfig config, LobbySession session) {
         this(
                 config,
-                lobby,
-                handshake,
+                session,
                 new IceAdapterConnection(config.iceAdapterRpcPort()),
                 new MockGameLauncher(config),
                 new IceAdapterLauncher(config));
@@ -104,8 +101,7 @@ public final class MockClientLifecycle {
      * versions of launchers and connection.
      *
      * @param config a set of configuration options passed by the user.
-     * @param lobby an open connection to the lobby server.
-     * @param handshake the object responsible for the initial handshake with the lobby server.
+     * @param session a not-yet-started lobby session; {@link #start(TokenSource)} opens it.
      * @param iceConnection the ice adapter connection. {@link IceAdapterConnection#connect()}
      *     should not be called on this object yet.
      * @param gameLauncher spawns a mock game subprocess.
@@ -113,14 +109,13 @@ public final class MockClientLifecycle {
      */
     MockClientLifecycle(
             MockClientConfig config,
-            LobbyConnection lobby,
-            LobbyHandshake handshake,
+            LobbySession session,
             IceAdapterConnection iceConnection,
             MockGameLauncher gameLauncher,
             IceAdapterLauncher iceLauncher) {
         this.config = config;
-        this.lobby = lobby;
-        this.handshake = handshake;
+        this.session = session;
+        this.lobby = session.connection();
         this.iceConnection = iceConnection;
         this.gameLauncher = gameLauncher;
         this.iceLauncher = iceLauncher;
@@ -196,24 +191,28 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Initiates handshake with the lobby server, which sets the entire lifecycle in motion.
+     * Opens the session (connect + handshake + welcome hydration), which sets the entire lifecycle
+     * in motion: success posts {@code WelcomeReceived} (CONNECTING → IDLE), failure posts {@code
+     * AuthFailed} (CONNECTING → TERMINATED).
      *
      * @param source a source for OAuth tokens for the handshake.
+     * @return the session's future, completing with the hydrated identity or exceptionally with the
+     *     connect/handshake failure — callers may use it for precise error reporting while the
+     *     state machine tracks the same outcome as events.
      */
-    public void start(TokenSource source) {
-        handshake
-                .perform(source)
-                .thenApply(node -> mapper.convertValue(node, WelcomeMessage.class))
-                .thenApply(SessionState::from)
-                .whenComplete(
-                        (state, err) -> {
-                            if (err == null) {
-                                machine.receiveEvent(new WelcomeReceived(state));
-                            } else {
-                                LOG.warn("Handshake could not be completed");
-                                machine.receiveEvent(new AuthFailed(err.getCause()));
-                            }
-                        });
+    public CompletableFuture<SessionState> start(TokenSource source) {
+        CompletableFuture<SessionState> result = session.start(source);
+        result.whenComplete(
+                (state, err) -> {
+                    if (err == null) {
+                        machine.receiveEvent(new WelcomeReceived(state));
+                    } else {
+                        LOG.warn("Handshake could not be completed");
+                        machine.receiveEvent(
+                                new AuthFailed(err.getCause() != null ? err.getCause() : err));
+                    }
+                });
+        return result;
     }
 
     /**

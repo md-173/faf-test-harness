@@ -249,7 +249,7 @@ final class IceAdapterConnectionLiveSmokeTest {
                         "--oauth-redirect-uri=http://127.0.0.1",
                         "--oauth-scopes=openid offline lobby",
                         "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                        "--oauth-refresh-token=dummy-unused-by-live-smoke",
+                        "--oauth-refresh-token-file=/nonexistent/dummy-unused-by-live-smoke",
                         "--unique-id=00000000-0000-0000-0000-000000000000",
                         "--ice-adapter-binary-path=" + binary.toAbsolutePath(),
                         "--ice-adapter-rpc-port=" + ports.rpc(),

@@ -4,12 +4,14 @@ import com.faforever.testharness.client.config.MockClientCli;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.AuthenticationException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
-import com.faforever.testharness.client.lobby.LobbyHandshake;
+import com.faforever.testharness.client.lobby.LobbySession;
+import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -22,97 +24,156 @@ import picocli.CommandLine.ParentCommand;
 import picocli.CommandLine.Spec;
 
 /**
- * The {@code run} subcommand (WIP) drives a full Mock Client session. It authenticates against the
- * lobby, joins the queue, spawns {@code faf-ice-adapter} and {@code mock-game}, runs the lifecycle
- * FSM, and tears down on game-end.
+ * {@code run} subcommand: connect to the lobby, authenticate, hydrate the welcome state, and sit
+ * idle (WBS-3.1.1.4) — with the lifecycle FSM (WBS-3.1.3.1) tracking every phase. This is the
+ * user-facing umbrella over the three lobby pillars — transport (3.1.1.1), auth (3.1.1.2), and
+ * welcome (3.1.1.3) — wired together via {@link LobbySession} and driven by {@link
+ * MockClientLifecycle}.
+ *
+ * <p>The flow is {@code connect → ask_session → session → auth → welcome} (CONNECTING → IDLE on the
+ * FSM), after which the client logs its player id and blocks until the FSM reaches TERMINATED — a
+ * lobby disconnect, or a full game session once the lobby drives one (game_launch → STARTING_GAME →
+ * … , WBS-3.1.3.3). The idle heartbeat is handled by the transport, which auto-replies {@code pong}
+ * to lobby {@code ping}s.
+ *
+ * <p>A JVM shutdown hook closes the WebSocket cleanly on {@code Ctrl-C} / {@code SIGTERM}; the
+ * resulting disconnect event drives the FSM to TERMINATED. The process exit code then follows the
+ * signal per the JVM default (130 for SIGINT, 143 for SIGTERM) — the close itself is clean, with no
+ * error logs.
+ *
+ * <p>Out of scope (later sprints): matchmaking/host/join initiation, and reconnect/recovery.
  */
 @Command(
         name = "run",
         mixinStandardHelpOptions = true,
-        description = "Run a full mock client session: authenticate, queue, play, teardown.")
+        description = "Connect to the lobby, authenticate, and sit idle until interrupted.")
 public final class RunCommand implements Callable<Integer> {
 
-    /** Logger for this class. */
-    private static final Logger LOG = LoggerFactory.getLogger(RunCommand.class);
+    /** Bound on the whole session setup: WebSocket open plus {@code ask_session → welcome}. */
+    private static final Duration SETUP_TIMEOUT = Duration.ofSeconds(45);
 
-    /** Maximum amount of seconds to wait for lobby server to establish connection. */
-    private static final int SERVER_TIMEOUT = 5;
+    /** Bound on the FSM observing the welcome that already completed the setup future. */
+    private static final Duration FSM_SYNC_TIMEOUT = Duration.ofSeconds(5);
 
-    /** Maximum amount of seconds to wait for lifecycle setup before quitting. */
-    private static final int SETUP_TIMEOUT = 5;
+    /** Bound on the clean WebSocket close performed by the shutdown hook. */
+    private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
-    /** Picocli auto-injects the root command so the stub can read the populated config. */
+    /** Picocli auto-injects the root command so the subcommand can read the populated config. */
     @ParentCommand private MockClientCli parent;
 
     /** Picocli auto-injects the active {@link CommandSpec} for scoped error reporting. */
     @Spec private CommandSpec spec;
 
     /**
-     * Validate the config, establish a connection against the lobby server, and runs a game
-     * session.
+     * Validate config, open the lobby session through the lifecycle FSM, and block until the FSM
+     * terminates — on a lobby disconnect or a shutdown signal.
      *
-     * @return an exit status code from {@link ExitCodes} based on the subcommand outcome.
+     * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
+     *     could not be established or the connection dropped unexpectedly
      */
     @Override
     public Integer call() {
         MockClientConfig config = parent.toValidatedConfig(spec);
         MockClientCli.applyLoggingProperties(config);
         LoggingSetup.configure(MockClientCli.COMPONENT_NAME);
+        Logger log = LoggerFactory.getLogger(RunCommand.class);
 
-        TokenSource source = null;
+        TokenSource tokens;
         try {
-            source = TokenSources.fromConfig(config);
+            tokens = TokenSources.fromConfig(config);
         } catch (AuthenticationException e) {
-            LOG.error("Could not configure tokens due to: {}", e.getMessage());
-            System.out.println(
-                    String.format("Could not configure tokens due to: %s", e.getMessage()));
+            log.error("cannot start lobby session: {}", e.getMessage());
             return ExitCodes.RUNTIME;
         }
 
-        if (config.lobbyWebSocketUrl() == null) {
-            System.out.println(
-                    "Lobby websocket url (--lobby-websocket-url) required for run command");
-            return ExitCodes.USAGE;
-        } else if (config.uniqueId() == null) {
-            System.out.println("Unique ID (--unique-id) required for run command");
-            return ExitCodes.USAGE;
-        }
+        LobbyConnection connection = new LobbyConnection(config.lobbyWebSocketUrl());
+        LobbySession session =
+                new LobbySession(
+                        connection,
+                        config.uniqueId(),
+                        config.clientVersion(),
+                        config.userAgent(),
+                        config.uidBinaryPath());
+        MockClientLifecycle lifecycle = new MockClientLifecycle(config, session);
 
-        LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
+        // Graceful shutdown on Ctrl-C / SIGTERM: close the socket cleanly. The disconnect event
+        // drives the FSM to TERMINATED, releasing the main thread. No-op if the session has already
+        // disconnected (e.g. a server-initiated close that let call() return normally), so a normal
+        // exit doesn't emit a spurious "shutdown signal" line.
+        Runtime.getRuntime()
+                .addShutdownHook(new Thread(() -> closeOnShutdown(session, log), "mc-shutdown"));
+
+        SessionState me;
         try {
-            lobby.connect().get(SERVER_TIMEOUT, TimeUnit.SECONDS);
+            me = lifecycle.start(tokens).get(SETUP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            lifecycle
+                    .stateReached(ClientState.IDLE)
+                    .get(FSM_SYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            log.error("lobby session timed out before welcome; closing");
+            awaitQuietClose(session);
+            return ExitCodes.RUNTIME;
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            log.error("lobby session failed: {}", cause.getMessage());
+            awaitQuietClose(session);
+            return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            LOG.error(
-                    "Could not connect to lobby server due to {} ({})",
-                    e.getMessage(),
-                    e.getClass().getSimpleName());
-            System.out.println("Could not connect to lobby server");
+            awaitQuietClose(session);
             return ExitCodes.RUNTIME;
         }
 
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, config.uniqueId(), "0.1", "faf-client");
+        log.info(
+                "mock client idle as player id={} login={}; press Ctrl-C to exit",
+                me.id(),
+                me.login());
 
-        MockClientLifecycle lifecycle = new MockClientLifecycle(config, lobby, handshake);
-
-        lifecycle.start(source);
+        // Idle: the transport auto-pongs lobby pings, so we just wait for the FSM to terminate —
+        // via a disconnect (server close, network drop, or the shutdown hook's local close), or a
+        // completed game session once the lobby drives one.
         try {
-            lifecycle.stateReached(ClientState.IDLE).get(SETUP_TIMEOUT, TimeUnit.SECONDS);
+            lifecycle.stateReached(ClientState.TERMINATED).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            LOG.error(
-                    "Could not complete handshake with lobby server due to {} ({})",
-                    e.getMessage(),
-                    e.getClass().getSimpleName());
-            System.out.println("Could not authenticate lobby server connection");
-            return ExitCodes.RUNTIME;
+        } catch (ExecutionException e) {
+            // stateReached futures complete normally; nothing actionable on this teardown path.
         }
 
-        lifecycle.shutdown();
-        lobby.close();
+        LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
+        if (event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE) {
+            log.warn("lobby connection dropped unexpectedly");
+            return ExitCodes.RUNTIME;
+        }
         return ExitCodes.OK;
+    }
+
+    /**
+     * Shutdown-hook body: close the connection cleanly unless the session is already gone.
+     *
+     * @param session the live lobby session to close
+     * @param log logger for the single "shutdown signal received" line
+     */
+    private static void closeOnShutdown(final LobbySession session, final Logger log) {
+        if (session.isDisconnected()) {
+            return;
+        }
+        log.info("shutdown signal received; closing lobby connection");
+        awaitQuietClose(session);
+    }
+
+    /**
+     * Close the session and wait briefly for the close to complete, swallowing close failures.
+     *
+     * @param session the lobby session to close
+     */
+    private static void awaitQuietClose(final LobbySession session) {
+        try {
+            session.close().get(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            // Best-effort close on a failing/teardown path; nothing actionable to do.
+        }
     }
 }

@@ -8,7 +8,7 @@ import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
-import com.faforever.testharness.client.lobby.LobbyHandshake;
+import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
@@ -40,9 +40,11 @@ final class LifecycleTest {
                     URI.create("http://127.0.0.1"),
                     "openid offline lobby",
                     "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    "test-refresh-token",
-                    null,
+                    Path.of("/nonexistent/test-refresh-token"),
                     "00000000-0000-0000-0000-000000000000",
+                    "0.0.0-mock",
+                    "faf-test-harness",
+                    Optional.empty(),
                     Path.of("/bin/faf-ice-adapter"),
                     Path.of("/bin/mock-game"),
                     0,
@@ -287,9 +289,11 @@ final class LifecycleTest {
                 MINIMAL_CONFIG.oauthRedirectUri(),
                 MINIMAL_CONFIG.oauthScopes(),
                 MINIMAL_CONFIG.oauthClientId(),
-                MINIMAL_CONFIG.oauthRefreshToken(),
                 MINIMAL_CONFIG.oauthRefreshTokenFile(),
                 MINIMAL_CONFIG.uniqueId(),
+                MINIMAL_CONFIG.clientVersion(),
+                MINIMAL_CONFIG.userAgent(),
+                MINIMAL_CONFIG.uidBinaryPath(),
                 MINIMAL_CONFIG.iceAdapterBinaryPath(),
                 MINIMAL_CONFIG.mockGameBinaryPath(),
                 MINIMAL_CONFIG.iceAdapterRpcPort(),
@@ -305,12 +309,10 @@ final class LifecycleTest {
     }
 
     private MockClientLifecycle lifecycleWithConfig(MockClientConfig config) {
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         return new MockClientLifecycle(
                 config,
-                lobby,
-                handshake,
+                session,
                 new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
                 new DummyGameLauncher(config),
                 new DummyIceLauncher(config));

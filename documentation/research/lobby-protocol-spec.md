@@ -8,10 +8,12 @@ The FAF Lobby Server uses a **WebSocket-based bidirectional messaging protocol**
 | Environment | URL | Protocol |
 |---|---|---|
 | Production | `wss://ws.faforever.com` | WSS (TLS) |
-| Test | `wss://lobby.faforever.xyz` | WSS (TLS) |
+| Test | `wss://ws.faforever.xyz` | WSS (TLS) |
 | Local | `ws://localhost` | WS |
 
-> All environments serve the lobby WebSocket at the **host root (`/`)** — see the aiohttp route `add_get("/")` in [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). The earlier `/ws` suffix was the retired `ws_bridge_rs` path and no longer applies (`GET /ws` now 404s). Note the **test** host is `lobby.faforever.xyz`, **not** `ws.faforever.xyz`, and it is **not** a `.com↔.xyz` swap of prod — configure per environment (see §2).
+> All environments serve the lobby WebSocket at the **host root (`/`)** — see the aiohttp route `add_get("/")` in [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). The earlier `/ws` suffix was the retired `ws_bridge_rs` path and no longer applies (`GET /ws` now 404s).
+>
+> **Correction (2026-06-18, empirical — supersedes earlier sourcing):** the working **test** lobby endpoint is **`wss://ws.faforever.xyz`** — the straightforward `.com→.xyz` swap of the production host — confirmed by a full live login from the mock client (`connect → ask_session → session → auth → welcome`, authenticated as the seeded `test` account). **`lobby.faforever.xyz:443` times out** from every network tried (WSL, native Windows, `curl`, an independent cloud egress) **and for a FAF maintainer too**, while Hydra on the same domain is reachable — so the cause is destination/network-side, not our config (unconfirmed; `ws.faforever.xyz` is Cloudflare-fronted, `lobby.faforever.xyz` is not). This contradicts the earlier reading of downlords-faf-client `application-test.yml` (`server.url: wss://lobby.faforever.xyz`), which is **wrong in practice**. Always source the endpoint from config per environment.
 
 ### Wire Format
 Each message is a single JSON object terminated by a newline character (`\n`). There is no additional framing beyond WebSocket frames themselves.
@@ -67,11 +69,11 @@ The FAF test environment mirrors production with anonymized data. The mock clien
 | OAuth2 Base (Hydra) | `https://hydra.faforever.xyz` |
 | Authorization | `https://hydra.faforever.xyz/oauth2/auth` |
 | Token | `https://hydra.faforever.xyz/oauth2/token` |
-| Lobby (paired) | `wss://lobby.faforever.xyz` |
+| Lobby (paired) | `wss://ws.faforever.xyz` |
 
 Test users share the password `foo`. Same OAuth client list as production (verified against `gitops-stack/apps/ory-hydra/values-test.yaml`, The test override only differs in CORS settings).
 
-Note that the lobby WebSocket hostname is *not* a clean `.com ↔ .xyz` substitution: prod uses `wss://ws.faforever.com` while test uses `wss://lobby.faforever.xyz`. Other services (Hydra, API, replay) do follow the `.com ↔ .xyz` pattern. Configure per-environment rather than deriving by hostname swap.
+The lobby WebSocket hostname *does* follow the `.com ↔ .xyz` pattern like the other services: prod uses `wss://ws.faforever.com`, test uses `wss://ws.faforever.xyz` (empirically confirmed — see the Correction under Server Endpoints above; the previously documented `lobby.faforever.xyz` is unreachable in practice). Still configure per-environment from config rather than hard-coding a hostname swap.
 
 ### Client Configuration (Reference: Desktop Client)
 

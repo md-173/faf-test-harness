@@ -113,8 +113,8 @@ final class ConfigLoaderHelpTest {
                 output.contains("--oauth-client-id"),
                 "Help output should mention --oauth-client-id.");
         assertTrue(
-                output.contains("--oauth-refresh-token"),
-                "Help output should mention --oauth-refresh-token.");
+                output.contains("--oauth-refresh-token-file"),
+                "Help output should mention --oauth-refresh-token-file.");
         assertTrue(output.contains("--unique-id"), "Help output should mention --unique-id.");
         assertTrue(
                 output.contains("--ice-adapter-binary-path"),
