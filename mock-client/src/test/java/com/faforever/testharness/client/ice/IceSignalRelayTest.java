@@ -32,6 +32,7 @@ final class IceSignalRelayTest {
     private ScriptedJsonRpcServer adapterServer;
     private LobbyConnection lobby;
     private IceAdapterConnection adapter;
+    private IceSignalRelay relay;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -50,7 +51,8 @@ final class IceSignalRelayTest {
         adapter.connect().get(5, TimeUnit.SECONDS);
         adapterServer.awaitClient();
 
-        new IceSignalRelay(lobby, adapter).start();
+        relay = new IceSignalRelay(lobby, adapter);
+        relay.start();
     }
 
     @AfterEach
@@ -127,6 +129,12 @@ final class IceSignalRelayTest {
         JsonNode call = MAPPER.readTree(adapterServer.pollReceived(3, TimeUnit.SECONDS));
         assertEquals("iceMsg", call.get("method").asText());
         assertEquals(7, call.get("params").get(0).asInt());
+    }
+
+    /** start() is one-shot — a second call would relay every candidate twice, so it throws. */
+    @Test
+    void startTwiceThrows() {
+        assertThrows(IllegalStateException.class, relay::start);
     }
 
     /** Malformed outbound notifications are logged and dropped; the relay keeps working. */

@@ -25,6 +25,7 @@ final class GpgNetForwarderTest {
     private ScriptedJsonRpcServer adapterServer;
     private LobbyConnection lobby;
     private IceAdapterConnection adapter;
+    private GpgNetForwarder forwarder;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -43,7 +44,8 @@ final class GpgNetForwarderTest {
         adapter.connect().get(5, TimeUnit.SECONDS);
         adapterServer.awaitClient();
 
-        new GpgNetForwarder(lobby, adapter).start();
+        forwarder = new GpgNetForwarder(lobby, adapter);
+        forwarder.start();
     }
 
     @AfterEach
@@ -96,6 +98,12 @@ final class GpgNetForwarderTest {
                         "{\"command\":\"PlayerOption\",\"target\":\"game\","
                                 + "\"args\":[1,\"StartSpot\",2]}"),
                 MAPPER.readTree(sent));
+    }
+
+    /** start() is one-shot — a second call would forward every frame twice, so it throws. */
+    @Test
+    void startTwiceThrows() {
+        assertThrows(IllegalStateException.class, forwarder::start);
     }
 
     /** Malformed notifications are logged and dropped; the forwarder keeps working. */
