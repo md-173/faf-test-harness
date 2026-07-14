@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
  * read loop and closes the connection with no attempt to resync (§5.3), and a clean socket close
  * likewise surfaces as a disconnect.
  */
-public final class GpgNetConnection {
+public final class GpgNetConnection implements GpgNetFrameSink {
 
     /** SLF4J logger — see logback.xml for the {@code component=MockGame} MDC. */
     private static final Logger LOG = LoggerFactory.getLogger(GpgNetConnection.class);
@@ -176,6 +176,7 @@ public final class GpgNetConnection {
      * @throws IOException if the socket is not connected or the write fails
      * @throws IllegalArgumentException if the frame exceeds the codec's chunk cap
      */
+    @Override
     public void send(final GpgNetFrame frame) throws IOException {
         byte[] bytes = GpgNetCodec.encode(frame);
         OutputStream stream = out;
