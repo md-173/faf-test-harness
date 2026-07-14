@@ -6,7 +6,7 @@ a real environment, captured by hand and committed here.
 
 | Demo | WBS | Proves | Artifact |
 |------|-----|--------|----------|
-| `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-06-18) |
+| `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
 
 ---
 
