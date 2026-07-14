@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,6 +56,9 @@ public final class IceSignalRelay {
     /** Adapter side of the relay. */
     private final IceAdapterConnection adapter;
 
+    /** Guards against {@link #start()} being called more than once. */
+    private final AtomicBoolean started = new AtomicBoolean(false);
+
     /**
      * Creates a relay between {@code lobby} and {@code adapter}. Nothing is registered until {@link
      * #start()} — construction is side-effect free.
@@ -70,9 +74,15 @@ public final class IceSignalRelay {
     /**
      * Registers both directions of the relay: the adapter's {@code onIceMsg} notification and the
      * lobby's {@code IceMsg} command handler. Call once, after both connections exist (they need
-     * not be connected yet — registration is independent of connection state).
+     * not be connected yet — registration is independent of connection state). A second call would
+     * register duplicate handlers and relay every candidate twice, so it throws instead.
+     *
+     * @throws IllegalStateException if called more than once
      */
     public void start() {
+        if (!started.compareAndSet(false, true)) {
+            throw new IllegalStateException("start() may only be called once");
+        }
         adapter.registerNotification("onIceMsg", this::forwardToLobby);
         lobby.registerHandler("IceMsg", this::forwardToAdapter);
     }
@@ -135,6 +145,15 @@ public final class IceSignalRelay {
                     "dropping IceMsg from senderId={}: args[1] is not valid JSON: {}",
                     senderId,
                     e.getOriginalMessage());
+            return;
+        }
+        // readTree accepts inputs the adapter's msg:object contract (spec §5) excludes: "" parses
+        // to a MissingNode (which would reach the adapter as null) and scalars parse to themselves.
+        if (!msg.isObject()) {
+            LOG.warn(
+                    "dropping IceMsg from senderId={}: args[1] is not a JSON object: {}",
+                    senderId,
+                    args.get(1));
             return;
         }
         adapter.call("iceMsg", senderId, msg)

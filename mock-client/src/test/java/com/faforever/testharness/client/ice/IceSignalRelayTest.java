@@ -110,6 +110,10 @@ final class IceSignalRelayTest {
     void malformedInboundIceMsgIsDroppedAndRelaySurvives() throws Exception {
         // args[1] is not valid JSON.
         lobbyServer.broadcastText(iceMsgFrame(1, "{not-json"));
+        // args[1] is empty — readTree("") yields a MissingNode rather than throwing.
+        lobbyServer.broadcastText(iceMsgFrame(1, ""));
+        // args[1] is valid JSON but not an object (spec §5 requires msg: object).
+        lobbyServer.broadcastText(iceMsgFrame(1, "123"));
         // args missing entirely.
         lobbyServer.broadcastText("{\"command\":\"IceMsg\",\"target\":\"game\"}");
 
