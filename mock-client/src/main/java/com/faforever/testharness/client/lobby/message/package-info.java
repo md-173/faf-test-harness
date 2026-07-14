@@ -11,13 +11,20 @@
  *   <li>{@link com.faforever.testharness.client.lobby.message.GameHostMessage} — outbound {@code
  *       game_host} request sent by {@link com.faforever.testharness.client.lobby.GameHostSender} to
  *       start the custom-game host flow (3.1.1.7).
+ *   <li>{@link com.faforever.testharness.client.lobby.message.GameJoinMessage} — outbound {@code
+ *       game_join} request sent by {@link com.faforever.testharness.client.lobby.GameJoinSender} to
+ *       join an existing custom game by ID (3.1.1.8).
+ *   <li>{@link com.faforever.testharness.client.lobby.message.IceMsgMessage} — outbound {@code
+ *       IceMsg} envelope sent by {@link com.faforever.testharness.client.ice.IceSignalRelay} to
+ *       relay adapter ICE candidates through the lobby (3.1.4.5).
  * </ul>
  *
  * <p>The inbound records ({@code WelcomeMessage}, {@code GameLaunchMessage}) are presence-validated
  * in their canonical constructors — required primitives are boxed so an omitted field decodes to
- * {@code null} and throws, rather than silently defaulting to {@code 0}. The outbound {@code
- * GameHostMessage} has no such checks: the sender owns construction and its values are sourced from
- * validated config, so there is nothing to guard against.
+ * {@code null} and throws, rather than silently defaulting to {@code 0}. The outbound records
+ * ({@code GameHostMessage}, {@code GameJoinMessage}, {@code IceMsgMessage}) have no such checks:
+ * the senders own construction and their values are sourced from validated config or the adapter,
+ * so there is nothing to guard against.
  *
  * <p>Inbound consumers decode directly with Jackson:
  *
@@ -31,10 +38,10 @@
  * lobby.send(mapper.valueToTree(gameHostMessage));
  * }</pre>
  *
- * <p>Smaller payloads (ask_session, session, auth, authentication_failed, game_join, the matchmaker
- * shapes) are read straight off the {@link com.fasterxml.jackson.databind.JsonNode}, or written by
- * hand with {@code ObjectMapper.createObjectNode()}. Adding a record for those would be more
- * boilerplate than the field-access saves.
+ * <p>Smaller payloads (ask_session, session, auth, authentication_failed, the matchmaker shapes)
+ * are read straight off the {@link com.fasterxml.jackson.databind.JsonNode}, or written by hand
+ * with {@code ObjectMapper.createObjectNode()}. Adding a record for those would be more boilerplate
+ * than the field-access saves.
  *
  * <p>Wire schemas live in {@code documentation/research/lobby-protocol-spec.md} §3 / §5 / §10.
  */
