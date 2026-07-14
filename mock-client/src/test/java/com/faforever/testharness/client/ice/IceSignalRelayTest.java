@@ -125,6 +125,32 @@ final class IceSignalRelayTest {
         assertEquals(7, call.get("params").get(0).asInt());
     }
 
+    /** Malformed outbound notifications are logged and dropped; the relay keeps working. */
+    @Test
+    void malformedOnIceMsgIsDroppedAndRelaySurvives() throws Exception {
+        // params too short (msg missing).
+        adapterServer.send("{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,2]}\n");
+        // remoteId not an int.
+        adapterServer.send(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,\"x\","
+                        + ICE_MSG_JSON
+                        + "]}\n");
+
+        assertThrows(
+                AssertionError.class,
+                () -> lobbyServer.pollReceived(300, TimeUnit.MILLISECONDS),
+                "malformed notifications must not produce a lobby IceMsg frame");
+
+        // A valid notification afterwards still relays — the reader thread survived.
+        adapterServer.send(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,9,"
+                        + ICE_MSG_JSON
+                        + "]}\n");
+        JsonNode sent = MAPPER.readTree(lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip());
+        assertEquals("IceMsg", sent.get("command").asText());
+        assertEquals(9, sent.get("args").get(0).asInt());
+    }
+
     /**
      * Builds a lobby {@code IceMsg} frame: {@code args[0]} is the sender id, {@code args[1]} the
      * given string carried verbatim (a stringified msg for the happy path, garbage for the
