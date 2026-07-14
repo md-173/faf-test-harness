@@ -20,5 +20,7 @@
     "playerIdOverride": null,
     "playerLogin": "mock-client",
     "targetGameId": null,
+    "gameJoinPassword": null,
+    "targetGameId": null,
     "gameJoinPassword": null
 }
