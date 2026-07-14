@@ -245,6 +245,79 @@ public final class MockClientCli implements Callable<Integer> {
     private String playerLogin;
 
     /**
+     * Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). No
+     * default: set together with {@code --host-map}, {@code --host-mod}, and {@code
+     * --host-visibility} to host a game on IDLE; omit all four to not host.
+     */
+    @Option(
+            names = "--host-title",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Hosted game title advertised to the lobby. Set together with --host-map, "
+                            + "--host-mod, and --host-visibility to host a game on IDLE; omit "
+                            + "all four to not host.")
+    private String hostTitle;
+
+    /**
+     * Map folder name sent in the {@code game_host} request. No default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-map",
+            scope = ScopeType.INHERIT,
+            description = "Map folder name for the hosted game. See --host-title.")
+    private String hostMap;
+
+    /**
+     * Featured-mod technical name sent in the {@code game_host} request. No default; see {@code
+     * --host-title}.
+     */
+    @Option(
+            names = "--host-mod",
+            scope = ScopeType.INHERIT,
+            description = "Featured-mod technical name for the hosted game. See --host-title.")
+    private String hostMod;
+
+    /**
+     * Visibility ({@code public}/{@code friends}) sent in the {@code game_host} request. No
+     * default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-visibility",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Visibility for the hosted game, \"public\" or \"friends\". See "
+                            + "--host-title.")
+    private String hostVisibility;
+
+    /**
+     * Minimum displayed rating for joining the hosted game. No default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-rating-min",
+            scope = ScopeType.INHERIT,
+            description = "Minimum displayed rating for joining the hosted game.")
+    private Double hostRatingMin;
+
+    /**
+     * Maximum displayed rating for joining the hosted game. No default; see {@code --host-title}.
+     */
+    @Option(
+            names = "--host-rating-max",
+            scope = ScopeType.INHERIT,
+            description = "Maximum displayed rating for joining the hosted game.")
+    private Double hostRatingMax;
+
+    /** Whether the server should enforce {@code --host-rating-min}/{@code --host-rating-max}. */
+    @Option(
+            names = "--host-enforce-rating-range",
+            scope = ScopeType.INHERIT,
+            defaultValue = "false",
+            description =
+                    "Whether to enforce --host-rating-min/--host-rating-max for the hosted game "
+                            + "(default: ${DEFAULT-VALUE}).")
+    private boolean hostEnforceRatingRange;
+
+    /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
      * output stream and exit with {@link ExitCodes#USAGE}.
      *
@@ -283,7 +356,30 @@ public final class MockClientCli implements Callable<Integer> {
                 logLevel,
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
-                playerLogin);
+                playerLogin,
+                buildHostConfig());
+    }
+
+    /**
+     * Builds the host config from the four {@code --host-*} options, or empty if none of them was
+     * set. A partial set (e.g. only {@code --host-title}) is rejected by {@link GameHostConfig}'s
+     * compact constructor, which names the specific missing option.
+     *
+     * @return the host config, or {@link Optional#empty()} if the operator did not request hosting
+     */
+    private Optional<GameHostConfig> buildHostConfig() {
+        if (hostTitle == null && hostMap == null && hostMod == null && hostVisibility == null) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new GameHostConfig(
+                        hostTitle,
+                        hostMap,
+                        hostMod,
+                        hostVisibility,
+                        Optional.ofNullable(hostRatingMin),
+                        Optional.ofNullable(hostRatingMax),
+                        hostEnforceRatingRange));
     }
 
     /**

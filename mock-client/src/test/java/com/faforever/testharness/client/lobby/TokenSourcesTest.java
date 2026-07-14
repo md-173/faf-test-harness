@@ -41,7 +41,8 @@ final class TokenSourcesTest {
                 "INFO",
                 Optional.empty(),
                 OptionalInt.empty(),
-                "mock-client");
+                "mock-client",
+                Optional.empty());
     }
 
     @Test

@@ -1049,7 +1049,10 @@ Host a custom game.
   "visibility": "public",
   "mod": "faf",
   "mapname": "scmp_007",
-  "password": null
+  "password": null,
+  "rating_min": null,
+  "rating_max": null,
+  "enforce_rating_range": false
 }
 ```
 
@@ -1060,6 +1063,11 @@ Host a custom game.
 | `mod` | string | yes | Featured-mod technical name (e.g. `"faf"`). |
 | `mapname` | string | yes | Map folder name. |
 | `password` | string | no | Required when visibility is password-protected. |
+| `rating_min` | number | no | Minimum displayed rating for joining. Omit/`null` for unset. |
+| `rating_max` | number | no | Maximum displayed rating for joining. Omit/`null` for unset. |
+| `enforce_rating_range` | boolean | no | Whether the server enforces `rating_min`/`rating_max`. Defaults to `false`. |
+
+`access`, `options`, and `version` also appear in the server's `game_host` handler but are ignored by it and are not sent by the Mock Client.
 
 #### `game_join` (C→S, lobby)
 

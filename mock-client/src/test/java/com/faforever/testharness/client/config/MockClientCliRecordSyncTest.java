@@ -22,11 +22,35 @@ import picocli.CommandLine.Option;
  * kebab-case ↔ camelCase mapping. Without this test, adding a new field to one side and forgetting
  * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
  * NPE instead of a config error.
+ *
+ * <p>The 1:1 rule has one deliberate exception: {@code hostConfig} groups seven CLI options ({@code
+ * hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code hostRatingMin},
+ * {@code hostRatingMax}, {@code hostEnforceRatingRange}) into a single {@link GameHostConfig}
+ * record component (see {@link MockClientCli#toConfig()}), so it can be absent as a whole when the
+ * mock client isn't configured to host. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
+ * #GROUPED_CLI_FIELD_NAMES} carve that pairing out of the strict 1:1 checks below.
  */
 final class MockClientCliRecordSyncTest {
 
     /** Names of CLI Field Names that don't correspond to record component names. */
     private static final Set<String> CLI_ONLY_FIELD_NAMES = Set.of("configFile");
+
+    /** Record components populated from more than one CLI option; see class javadoc. */
+    private static final Set<String> GROUPED_RECORD_COMPONENT_NAMES = Set.of("hostConfig");
+
+    /**
+     * CLI options that feed a {@linkplain #GROUPED_RECORD_COMPONENT_NAMES grouped} record
+     * component.
+     */
+    private static final Set<String> GROUPED_CLI_FIELD_NAMES =
+            Set.of(
+                    "hostTitle",
+                    "hostMap",
+                    "hostMod",
+                    "hostVisibility",
+                    "hostRatingMin",
+                    "hostRatingMax",
+                    "hostEnforceRatingRange");
 
     @Test
     void everyRecordComponentHasAMatchingCliOption() {
@@ -35,6 +59,7 @@ final class MockClientCliRecordSyncTest {
 
         Set<String> missingFromCli = new TreeSet<>(recordNames);
         missingFromCli.removeAll(cliOptionNames);
+        missingFromCli.removeAll(GROUPED_RECORD_COMPONENT_NAMES);
 
         if (!missingFromCli.isEmpty()) {
             fail(
@@ -52,6 +77,7 @@ final class MockClientCliRecordSyncTest {
         Set<String> extraOnCli = new TreeSet<>(cliOptionNames);
         extraOnCli.removeAll(recordNames);
         extraOnCli.removeAll(CLI_ONLY_FIELD_NAMES);
+        extraOnCli.removeAll(GROUPED_CLI_FIELD_NAMES);
 
         if (!extraOnCli.isEmpty()) {
             fail(
@@ -92,9 +118,11 @@ final class MockClientCliRecordSyncTest {
 
     @Test
     void counts() {
-        // sanity check: catches the case where both sets drift in lockstep
-        long expectedRecordComponents = 19;
-        long expectedCliOptionsExcludingHelpers = 19;
+        // sanity check: catches the case where both sets drift in lockstep. The gap between the
+        // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
+        // .size() (7 host-* options collapse into 1 hostConfig record component).
+        long expectedRecordComponents = 20;
+        long expectedCliOptionsExcludingHelpers = 26;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =

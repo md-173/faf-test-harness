@@ -1,7 +1,9 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
@@ -50,7 +52,8 @@ final class LifecycleTest {
                     "WARN",
                     Optional.empty(),
                     OptionalInt.empty(),
-                    "Rhiza");
+                    "Rhiza",
+                    Optional.empty());
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
@@ -131,6 +134,42 @@ final class LifecycleTest {
 
         lifecycle.post(new GameExited(0));
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
+    void sendsGameHostOnIdleEntryWhenConfigured() throws Exception {
+        GameHostConfig hostConfig =
+                new GameHostConfig(
+                        "Test game",
+                        "scmp_007",
+                        "faf",
+                        "public",
+                        Optional.empty(),
+                        Optional.empty(),
+                        false);
+        MockClientLifecycle lifecycle =
+                lifecycleWithConfig(configWithHostConfig(Optional.of(hostConfig)));
+
+        lifecycle.post(new WelcomeReceived(null));
+        assertEquals(ClientState.IDLE, lifecycle.getState());
+
+        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        JsonNode parsed = MAPPER.readTree(received);
+        assertEquals("game_host", parsed.get("command").asText());
+        assertEquals("Test game", parsed.get("title").asText());
+    }
+
+    @Test
+    void doesNotSendGameHostWhenNotConfigured() throws Exception {
+        MockClientLifecycle lifecycle = defaultLifecycle();
+
+        lifecycle.post(new WelcomeReceived(null));
+        assertEquals(ClientState.IDLE, lifecycle.getState());
+
+        assertThrows(
+                AssertionError.class,
+                () -> server.pollReceived(500, TimeUnit.MILLISECONDS),
+                "no game_host should be sent when the mock client was not configured to host");
     }
 
     @Test
@@ -235,15 +274,47 @@ final class LifecycleTest {
         }
     }
 
-    private MockClientLifecycle defaultLifecycle() {
+    /**
+     * Copies {@link #MINIMAL_CONFIG} with {@code hostConfig} overridden — used by host-on-IDLE
+     * tests that need a config distinct from the shared minimal fixture.
+     */
+    private static MockClientConfig configWithHostConfig(Optional<GameHostConfig> hostConfig) {
+        return new MockClientConfig(
+                MINIMAL_CONFIG.lobbyWebSocketUrl(),
+                MINIMAL_CONFIG.oauthTokenUrl(),
+                MINIMAL_CONFIG.oauthAuthEndpoint(),
+                MINIMAL_CONFIG.oauthRedirectUri(),
+                MINIMAL_CONFIG.oauthScopes(),
+                MINIMAL_CONFIG.oauthClientId(),
+                MINIMAL_CONFIG.oauthRefreshToken(),
+                MINIMAL_CONFIG.oauthRefreshTokenFile(),
+                MINIMAL_CONFIG.uniqueId(),
+                MINIMAL_CONFIG.iceAdapterBinaryPath(),
+                MINIMAL_CONFIG.mockGameBinaryPath(),
+                MINIMAL_CONFIG.iceAdapterRpcPort(),
+                MINIMAL_CONFIG.iceAdapterGpgNetPort(),
+                MINIMAL_CONFIG.iceAdapterLobbyPort(),
+                MINIMAL_CONFIG.iceAdapterGameId(),
+                MINIMAL_CONFIG.logLevel(),
+                MINIMAL_CONFIG.logFile(),
+                MINIMAL_CONFIG.playerIdOverride(),
+                MINIMAL_CONFIG.playerLogin(),
+                hostConfig);
+    }
+
+    private MockClientLifecycle lifecycleWithConfig(MockClientConfig config) {
         LobbyHandshake handshake =
                 new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         return new MockClientLifecycle(
-                MINIMAL_CONFIG,
+                config,
                 lobby,
                 handshake,
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
-                new DummyGameLauncher(MINIMAL_CONFIG),
-                new DummyIceLauncher(MINIMAL_CONFIG));
+                new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
+                new DummyGameLauncher(config),
+                new DummyIceLauncher(config));
+    }
+
+    private MockClientLifecycle defaultLifecycle() {
+        return lifecycleWithConfig(MINIMAL_CONFIG);
     }
 }

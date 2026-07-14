@@ -57,7 +57,8 @@ final class LifecycleSetupTest {
                     "WARN",
                     Optional.empty(),
                     OptionalInt.empty(),
-                    "Rhiza");
+                    "Rhiza",
+                    Optional.empty());
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(

@@ -1,8 +1,10 @@
 package com.faforever.testharness.client.state;
 
+import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
+import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameLaunchHandler;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbyHandshake;
@@ -145,6 +147,7 @@ public final class MockClientLifecycle {
                         states.get(ClientState.STARTING_GAME),
                         this::launchGame,
                         null);
+        states.get(ClientState.IDLE).onEntry(this::sendGameHostIfConfigured);
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -319,6 +322,21 @@ public final class MockClientLifecycle {
             Thread.currentThread().interrupt();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
+    }
+
+    /**
+     * IDLE entry hook: sends {@code game_host} for {@link MockClientConfig#hostConfig()}
+     * (lobby-protocol-spec.md §4.1 / §10.2). No-op if no host settings were configured for this
+     * session — the mock client hosts, joins, or sits idle depending on what the operator
+     * configured.
+     */
+    private void sendGameHostIfConfigured() {
+        if (config.hostConfig().isEmpty()) {
+            return;
+        }
+        GameHostConfig hostConfig = config.hostConfig().get();
+        LOG.info("Sending game_host for title={}", hostConfig.title());
+        new GameHostSender(lobby).sendGameHost(hostConfig);
     }
 
     /**
