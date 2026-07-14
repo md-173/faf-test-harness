@@ -109,10 +109,7 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 public client identifier. |
-| `oauthRefreshToken` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN` | `--oauth-refresh-token` | — | no¹ | Long-lived OAuth refresh token (sensitive — rotated on each use). |
-| `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | no¹ | Path to the refresh-token file; rewritten atomically on rotation. |
-| `oauthAccessToken` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN` | `--oauth-access-token` | — | no¹ | Pre-obtained JWT bearer token (auxiliary/bootstrap output). |
-| `oauthTokenFile` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_FILE` | `--oauth-token-file` | — | no¹ | Path to a file containing a pre-obtained JWT (auxiliary/bootstrap output). |
+| `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
 | `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
 | `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
@@ -127,18 +124,19 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login`; used by the `launch-ice` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
-¹ Each individual OAuth-credential field is optional, but the loader requires
-at least one credential channel: a refresh token (`oauthRefreshToken` or
-`oauthRefreshTokenFile`) **or** a pre-obtained access token (`oauthAccessToken`
-or `oauthTokenFile`). Failing to supply at least one channel produces a picocli
+¹ The refresh-token file is the **only** credential channel: Hydra rotates the
+refresh token on every use and the rotated value is persisted back to this
+file, which a literal option could not do. Omitting it produces a picocli
 `ParameterException` pointing at the bootstrap procedure in
 `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
 
 > **Removed (WBS-2.2.10):** `oauthClientSecret`, `oauthUsername`, and
-> `oauthPassword` are no longer accepted. The seeded FAF Hydra clients with
+> `oauthPassword` are no longer accepted — the seeded FAF Hydra clients with
 > `lobby` scope are *public* (no client secret) and do not enable the
 > password-grant or client_credentials grant types. Configs that still set
 > these keys fail at load time with a deprecation error pointing at the spec.
+> A literal `oauthRefreshToken` option is likewise no longer offered; write
+> the bootstrap token to a file instead.
 
 ### Auth flow
 
@@ -171,9 +169,9 @@ A typical setup:
 - Public values (`lobbyWebSocketUrl`, `oauthTokenUrl`, `oauthAuthEndpoint`,
   `oauthRedirectUri`, `oauthScopes`, `oauthClientId`, ports, binary paths) →
   `mock-client.json`, tracked in version control.
-- Secrets (`oauthRefreshToken`, `oauthAccessToken`) or
-  `oauthRefreshTokenFile` pointing at a gitignored file → CI secret store,
-  injected as `FAF_MOCK_CLIENT_*` env vars at runtime.
+- The secret: `oauthRefreshTokenFile` pointing at a gitignored file, with the
+  path injected as a `FAF_MOCK_CLIENT_*` env var at runtime (the file itself
+  lives in the CI secret store or a local `.secrets/` directory).
 
 Refresh tokens are environment-specific (they encode the Hydra issuer and
 client ID), so each environment (`.xyz` / production / future local Tilt
@@ -212,8 +210,9 @@ cp mock-client.example.json mock-client.json
 
 `run` authenticates via the refresh-token **file** channel (`--oauth-refresh-token-file`
 / `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` / `oauthRefreshTokenFile`), since
-the token is rotated and persisted on each use. A literal `--oauth-refresh-token`
-alone is not sufficient and `run` exits `70` (`RUNTIME`) before connecting.
+the token is rotated and persisted back to the file on each use. There is no
+literal token option; write the bootstrap token to a file. If the file is
+missing or unreadable, `run` exits `70` (`RUNTIME`) before connecting.
 
 Against the live lobby you also need `--uid-binary-path` pointing at the FAF
 `faf-uid` binary: the lobby's policy server rejects a placeholder `unique_id`
@@ -347,8 +346,8 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
   run \
   --config mock-client.json \
   --log-level DEBUG"
-# env adds secrets:
-#   FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN (or _FILE)
+# env adds the secret's location:
+#   FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE
 # the --log-level flag overrides whatever the file said
 ```
 

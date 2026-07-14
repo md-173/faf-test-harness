@@ -24,9 +24,10 @@ import java.util.OptionalInt;
  * @param oauthRedirectUri Redirect URI registered on the OAuth client
  * @param oauthScopes Space-separated OAuth2 scopes (e.g. {@code openid offline lobby})
  * @param oauthClientId OAuth2 public client identifier
- * @param oauthRefreshToken long-lived refresh token (sensitive — rotated by Hydra on every use)
- * @param oauthRefreshTokenFile path to a file holding the refresh token; rewritten atomically on
- *     each rotation
+ * @param oauthRefreshTokenFile path to a file holding the long-lived refresh token (sensitive —
+ *     rotated by Hydra on every use); rewritten atomically on each rotation. The file is the only
+ *     credential channel: a literal token value cannot receive the rotated token back, so it would
+ *     silently break on the next run.
  * @param uniqueId stable hardware identifier sent in the lobby auth message
  * @param clientVersion client version string sent in the {@code ask_session} message (a required
  *     field of that command; lobby-protocol-spec.md §3)
@@ -66,7 +67,6 @@ public record MockClientConfig(
         URI oauthRedirectUri,
         String oauthScopes,
         String oauthClientId,
-        String oauthRefreshToken,
         Path oauthRefreshTokenFile,
         String uniqueId,
         String clientVersion,
@@ -87,8 +87,8 @@ public record MockClientConfig(
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:
-     * a refresh token ({@code oauthRefreshToken} or {@code oauthRefreshTokenFile}) — the
-     * steady-state, headless path, exchanged at {@code oauthTokenUrl} for short-lived JWTs.
+     * a refresh-token file ({@code oauthRefreshTokenFile}) — the steady-state, headless path,
+     * exchanged at {@code oauthTokenUrl} for short-lived JWTs and rewritten on each rotation.
      *
      * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
      * oauthClientSecret}) are not accepted on this record — the de-risking work in WBS-2.2.10
@@ -138,11 +138,10 @@ public record MockClientConfig(
                             + "environment variable, or a --config file.");
         }
 
-        boolean hasRefreshToken = oauthRefreshToken != null || oauthRefreshTokenFile != null;
-        if (!hasRefreshToken) {
+        if (oauthRefreshTokenFile == null) {
             throw new IllegalArgumentException(
-                    "no OAuth credentials supplied: set --oauth-refresh-token or "
-                            + "--oauth-refresh-token-file for headless refresh-token rotation. See "
+                    "no OAuth credentials supplied: set --oauth-refresh-token-file for headless "
+                            + "refresh-token rotation. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
         }

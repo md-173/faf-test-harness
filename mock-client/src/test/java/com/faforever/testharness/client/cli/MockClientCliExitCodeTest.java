@@ -64,10 +64,10 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
-    void validRunInvocationWithoutTokenFileExitsRuntime() {
-        // run is implemented (WBS-3.1.1.4). The minimal fixture has a literal --oauth-refresh-token
-        // but no --oauth-refresh-token-file, and TokenSources only supports the file channel, so
-        // run fails fast with RUNTIME before any network I/O.
+    void runWithUnreadableTokenFileExitsRuntime() {
+        // run is implemented (WBS-3.1.1.4). The minimal fixture's --oauth-refresh-token-file points
+        // at a guaranteed-absent placeholder path, so TokenSources fails to read it and run exits
+        // RUNTIME fast, before any network I/O.
         assertEquals(ExitCodes.RUNTIME, execute(CliTestFixtures.withSubcommand("run")));
     }
 

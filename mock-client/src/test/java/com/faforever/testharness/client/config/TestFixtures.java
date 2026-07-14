@@ -17,7 +17,10 @@ final class TestFixtures {
     static final String OAUTH_REDIRECT_URI = "http://127.0.0.1";
     static final String OAUTH_SCOPES = "openid offline lobby";
     static final String OAUTH_CLIENT_ID = "95ecec08-29c1-4c48-ae0a-b000ff349cb8";
-    static final String OAUTH_REFRESH_TOKEN = "test-refresh-token";
+
+    /** Placeholder path, never read by parse-level tests (mirrors the binary-path placeholders). */
+    static final String OAUTH_REFRESH_TOKEN_FILE = "/nonexistent/test-refresh-token";
+
     static final String OAUTH_ACCESS_TOKEN = "test-access-token";
     static final String UNIQUE_ID = "00000000-0000-0000-0000-000000000000";
     static final String ICE_ADAPTER_BIN = "/bin/faf-ice-adapter";
@@ -33,7 +36,7 @@ final class TestFixtures {
             "--oauth-redirect-uri=" + OAUTH_REDIRECT_URI,
             "--oauth-scopes=" + OAUTH_SCOPES,
             "--oauth-client-id=" + OAUTH_CLIENT_ID,
-            "--oauth-refresh-token=" + OAUTH_REFRESH_TOKEN,
+            "--oauth-refresh-token-file=" + OAUTH_REFRESH_TOKEN_FILE,
             "--unique-id=" + UNIQUE_ID,
             "--ice-adapter-binary-path=" + ICE_ADAPTER_BIN,
             "--mock-game-binary-path=" + MOCK_GAME_BIN,
@@ -48,7 +51,7 @@ final class TestFixtures {
         env.put("FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI", OAUTH_REDIRECT_URI);
         env.put("FAF_MOCK_CLIENT_OAUTH_SCOPES", OAUTH_SCOPES);
         env.put("FAF_MOCK_CLIENT_OAUTH_CLIENT_ID", OAUTH_CLIENT_ID);
-        env.put("FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN", OAUTH_REFRESH_TOKEN);
+        env.put("FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE", OAUTH_REFRESH_TOKEN_FILE);
         env.put("FAF_MOCK_CLIENT_UNIQUE_ID", UNIQUE_ID);
         env.put("FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH", ICE_ADAPTER_BIN);
         env.put("FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH", MOCK_GAME_BIN);
@@ -64,7 +67,7 @@ final class TestFixtures {
                   "oauthRedirectUri":      "%s",
                   "oauthScopes":           "%s",
                   "oauthClientId":         "%s",
-                  "oauthRefreshToken":     "%s",
+                  "oauthRefreshTokenFile": "%s",
                   "uniqueId":              "%s",
                   "iceAdapterBinaryPath":  "%s",
                   "mockGameBinaryPath":    "%s"
@@ -77,7 +80,7 @@ final class TestFixtures {
                         OAUTH_REDIRECT_URI,
                         OAUTH_SCOPES,
                         OAUTH_CLIENT_ID,
-                        OAUTH_REFRESH_TOKEN,
+                        OAUTH_REFRESH_TOKEN_FILE,
                         UNIQUE_ID,
                         ICE_ADAPTER_BIN,
                         MOCK_GAME_BIN);
@@ -101,7 +104,7 @@ final class TestFixtures {
         assertEquals(URI.create(OAUTH_REDIRECT_URI), config.oauthRedirectUri());
         assertEquals(OAUTH_SCOPES, config.oauthScopes());
         assertEquals(OAUTH_CLIENT_ID, config.oauthClientId());
-        assertEquals(OAUTH_REFRESH_TOKEN, config.oauthRefreshToken());
+        assertEquals(Path.of(OAUTH_REFRESH_TOKEN_FILE), config.oauthRefreshTokenFile());
         assertEquals(UNIQUE_ID, config.uniqueId());
         assertEquals(Path.of(ICE_ADAPTER_BIN), config.iceAdapterBinaryPath());
         assertEquals(Path.of(MOCK_GAME_BIN), config.mockGameBinaryPath());

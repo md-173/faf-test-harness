@@ -203,7 +203,7 @@ final class MockGameLauncherTest {
                                 "--oauth-redirect-uri=http://127.0.0.1",
                                 "--oauth-scopes=openid offline lobby",
                                 "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                                "--oauth-refresh-token=test-refresh-token",
+                                "--oauth-refresh-token-file=/nonexistent/test-refresh-token",
                                 "--unique-id=00000000-0000-0000-0000-000000000000",
                                 "--mock-game-binary-path=" + binary));
         if (playerId != null) {

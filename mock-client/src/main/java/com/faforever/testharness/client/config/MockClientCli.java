@@ -123,15 +123,6 @@ public final class MockClientCli implements Callable<Integer> {
             description = "OAuth2 public client identifier.")
     private String oauthClientId;
 
-    /** Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated by Hydra on use. */
-    @Option(
-            names = "--oauth-refresh-token",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Long-lived OAuth refresh token. Prefer env vars or CI secrets; rotated on "
-                            + "use.")
-    private String oauthRefreshToken;
-
     /** Path to a file holding the refresh token; rewritten atomically on each rotation. */
     @Option(
             names = "--oauth-refresh-token-file",
@@ -394,7 +385,6 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthRedirectUri,
                 oauthScopes,
                 oauthClientId,
-                oauthRefreshToken,
                 oauthRefreshTokenFile,
                 uniqueId,
                 clientVersion,

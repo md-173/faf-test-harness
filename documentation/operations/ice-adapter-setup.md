@@ -60,7 +60,7 @@ mock-client/build/install/mock-client/bin/mock-client launch-ice --duration-seco
   --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \
   --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
   --unique-id=00000000-0000-0000-0000-000000000000 \
-  --oauth-refresh-token=dummy-unused-by-launch-ice
+  --oauth-refresh-token-file=dummy-unused-by-launch-ice
 # (build the launcher first if needed: ./gradlew :mock-client:installDist)
 ```
 

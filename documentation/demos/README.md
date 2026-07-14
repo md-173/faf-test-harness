@@ -34,8 +34,8 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
 
 1. **A bootstrapped refresh token** at `.secrets/refresh_token.txt` (gitignored).
    `run` authenticates via the refresh-token **file** channel — the token is
-   rotated and re-persisted on each use, so a literal `--oauth-refresh-token`
-   alone is rejected. See `lobby-protocol-spec.md` §2 for the one-time bootstrap.
+   rotated and re-persisted on each use, which is why no literal token option
+   exists. See `lobby-protocol-spec.md` §2 for the one-time bootstrap.
 2. **The `faf-uid` binary.** The lobby's policy/anti-cheat server rejects a
    placeholder `unique_id` (the login ends in `{"command":"invalid"}`), so a real
    RSA-encrypted UID is required. Download the official binary for your platform
