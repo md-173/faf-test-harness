@@ -196,8 +196,8 @@ public final class MockClientLifecycle {
      * AuthFailed} (CONNECTING → TERMINATED).
      *
      * @param source a source for OAuth tokens for the handshake.
-     * @return the session's future, completing with the hydrated identity or exceptionally with
-     *     the connect/handshake failure — callers may use it for precise error reporting while the
+     * @return the session's future, completing with the hydrated identity or exceptionally with the
+     *     connect/handshake failure — callers may use it for precise error reporting while the
      *     state machine tracks the same outcome as events.
      */
     public CompletableFuture<SessionState> start(TokenSource source) {

@@ -36,6 +36,9 @@ public final class LobbyHandshake {
     /** Bound on the {@code faf-uid} subprocess before it is killed and the static UID is used. */
     private static final int UID_BINARY_TIMEOUT_SECONDS = 15;
 
+    /** Cap on the {@code faf-uid} stderr text quoted in the failure-path warning log. */
+    private static final int STDERR_LOG_CAP = 500;
+
     /** Underlying transport — must already be {@code connect()}ed before {@link #perform}. */
     private final LobbyConnection connection;
 
@@ -201,7 +204,8 @@ public final class LobbyHandshake {
      * faf-uid} tool's RSA-encrypted blob, which the lobby's policy server requires (a plain
      * placeholder is rejected; lobby-protocol-spec.md §3). On any failure (missing binary, non-zero
      * exit, timeout, empty output) it logs a warning and falls back to the static {@link
-     * #uniqueId}. The blob is never logged — only its length.
+     * #uniqueId}. On failure the tool's stderr is logged — there is no UID to leak on that path;
+     * the successful blob itself is never logged, only its length.
      *
      * @param session the lobby-issued session number passed to the UID binary
      * @return the resolved unique_id string
@@ -213,20 +217,25 @@ public final class LobbyHandshake {
         String binary = uidBinaryPath.get().toString();
         try {
             Process process = new ProcessBuilder(binary, Long.toString(session)).start();
-            String output =
-                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
-                            .strip();
+            // Bound the process before reading: readAllBytes blocks until stream EOF, so reading
+            // first would let a hung-but-silent binary defeat the timeout. The pipe buffers the
+            // small UID blob comfortably until the process exits.
             if (!process.waitFor(UID_BINARY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
                 LOG.warn("faf-uid timed out; falling back to configured unique_id");
                 return uniqueId;
             }
+            String output =
+                    new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
+                            .strip();
             if (process.exitValue() != 0 || output.isEmpty()) {
+                String stderr =
+                        new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8)
+                                .strip();
                 LOG.warn(
-                        "faf-uid exited {} with {} chars of output; falling back to configured "
-                                + "unique_id",
+                        "faf-uid exited {}: {}; falling back to configured unique_id",
                         process.exitValue(),
-                        output.length());
+                        stderr.isEmpty() ? "<no stderr output>" : truncateForLog(stderr));
                 return uniqueId;
             }
             LOG.info("generated unique_id via faf-uid ({} chars)", output.length());
@@ -239,6 +248,17 @@ public final class LobbyHandshake {
             LOG.warn("faf-uid interrupted; falling back to configured unique_id");
             return uniqueId;
         }
+    }
+
+    /**
+     * Cap diagnostic process output to one log-friendly line.
+     *
+     * @param text raw stderr text
+     * @return the text flattened to a single line and capped at {@link #STDERR_LOG_CAP} chars
+     */
+    private static String truncateForLog(final String text) {
+        String flat = text.replaceAll("\\s+", " ");
+        return flat.length() <= STDERR_LOG_CAP ? flat : flat.substring(0, STDERR_LOG_CAP) + "…";
     }
 
     private void onWelcome(final JsonNode msg) {

@@ -30,11 +30,11 @@ import picocli.CommandLine.Spec;
  * welcome (3.1.1.3) — wired together via {@link LobbySession} and driven by {@link
  * MockClientLifecycle}.
  *
- * <p>The flow is {@code connect → ask_session → session → auth → welcome} (CONNECTING → IDLE on
- * the FSM), after which the client logs its player id and blocks until the FSM reaches TERMINATED —
- * a lobby disconnect, or a full game session once the lobby drives one (game_launch → STARTING_GAME
- * → … , WBS-3.1.3.3). The idle heartbeat is handled by the transport, which auto-replies {@code
- * pong} to lobby {@code ping}s.
+ * <p>The flow is {@code connect → ask_session → session → auth → welcome} (CONNECTING → IDLE on the
+ * FSM), after which the client logs its player id and blocks until the FSM reaches TERMINATED — a
+ * lobby disconnect, or a full game session once the lobby drives one (game_launch → STARTING_GAME →
+ * … , WBS-3.1.3.3). The idle heartbeat is handled by the transport, which auto-replies {@code pong}
+ * to lobby {@code ping}s.
  *
  * <p>A JVM shutdown hook closes the WebSocket cleanly on {@code Ctrl-C} / {@code SIGTERM}; the
  * resulting disconnect event drives the FSM to TERMINATED. The process exit code then follows the

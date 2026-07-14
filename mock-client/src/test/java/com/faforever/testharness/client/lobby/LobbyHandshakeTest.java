@@ -186,6 +186,33 @@ final class LobbyHandshakeTest {
     }
 
     @Test
+    void failingUidBinaryFallsBackToStaticUniqueId(@TempDir final Path dir) throws Exception {
+        assumeTrue(
+                !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
+                "POSIX-only: uses a shell script as a stand-in faf-uid binary");
+        // A stand-in 'faf-uid' that writes an error to stderr and exits non-zero, proving the
+        // handshake falls back to the static unique_id when the tool fails after starting.
+        Path fakeUid = dir.resolve("failing-uid.sh");
+        Files.writeString(fakeUid, "#!/bin/sh\necho 'boom: no hardware id' >&2\nexit 3\n");
+        assertTrueExecutable(fakeUid);
+
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(fakeUid));
+        handshake.perform(fixedToken("jwt-token-abc"));
+
+        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.broadcastText("{\"command\":\"session\",\"session\":13}");
+
+        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertEquals("auth", auth.get("command").asText());
+        assertEquals("static-uid", auth.get("unique_id").asText());
+    }
+
+    @Test
     void missingUidBinaryFallsBackToStaticUniqueId() throws Exception {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
