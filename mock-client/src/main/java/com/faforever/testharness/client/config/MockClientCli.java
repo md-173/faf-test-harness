@@ -244,6 +244,22 @@ public final class MockClientCli implements Callable<Integer> {
                             + "lobby welcome identity instead.")
     private String playerLogin;
 
+    /** ID of an existing game to join; when set the FSM sends {@code game_join} from IDLE. */
+    @Option(
+            names = "--target-game-id",
+            scope = ScopeType.INHERIT,
+            description =
+                    "ID of an existing game to join. When set, the mock client sends game_join "
+                            + "for this ID once it reaches the IDLE lobby state.")
+    private Integer targetGameId;
+
+    /** Optional password sent alongside {@code game_join} for password-protected games. */
+    @Option(
+            names = "--game-join-password",
+            scope = ScopeType.INHERIT,
+            description = "Optional password sent alongside game_join for a protected game.")
+    private String gameJoinPassword;
+
     /**
      * Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). No
      * default: set together with {@code --host-map}, {@code --host-mod}, and {@code
@@ -357,7 +373,21 @@ public final class MockClientCli implements Callable<Integer> {
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
-                buildHostConfig());
+                buildHostConfig(),
+                buildJoinConfig());
+    }
+
+    /**
+     * Builds the join config from {@code --target-game-id} and {@code --game-join-password}, or
+     * empty if no target game was set.
+     *
+     * @return the join config, or {@link Optional#empty()} if the operator did not request joining
+     */
+    private Optional<GameJoinConfig> buildJoinConfig() {
+        if (targetGameId == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new GameJoinConfig(targetGameId, Optional.ofNullable(gameJoinPassword)));
     }
 
     /**
