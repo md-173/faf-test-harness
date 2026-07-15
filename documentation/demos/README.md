@@ -88,7 +88,7 @@ Each transition is logged on its own line (console + `logs/<component>.jsonl`):
 | State hydrated | `session ready: id=<id> login=<name>` (`WelcomeStateSync`) |
 | Idle | `mock client idle as player id=<id> login=<name>; press Ctrl-C to exit` (`RunCommand`) |
 | Heartbeat | the connection stays up across ≥ 5 min — server `ping`s are auto-answered with `pong` (no per-ping line at INFO) |
-| Clean shutdown | `shutdown signal received; closing lobby connection` (`RunCommand`) |
+| Clean shutdown | `shutdown signal received; tearing down session` (`RunCommand`) |
 
 **No credential ever appears in a log line** — the JWT access token, the refresh
 token, and the `faf-uid` UID blob are never logged; only the blob's length and

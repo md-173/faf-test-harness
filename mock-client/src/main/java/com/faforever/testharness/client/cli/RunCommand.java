@@ -8,6 +8,7 @@ import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.TokenSources;
+import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.shared.logging.LoggingSetup;
@@ -36,10 +37,11 @@ import picocli.CommandLine.Spec;
  * … , WBS-3.1.3.3). The idle heartbeat is handled by the transport, which auto-replies {@code pong}
  * to lobby {@code ping}s.
  *
- * <p>A JVM shutdown hook closes the WebSocket cleanly on {@code Ctrl-C} / {@code SIGTERM}; the
- * resulting disconnect event drives the FSM to TERMINATED. The process exit code then follows the
- * signal per the JVM default (130 for SIGINT, 143 for SIGTERM) — the close itself is clean, with no
- * error logs.
+ * <p>A JVM shutdown hook runs the coordinated {@link SessionTeardown} on {@code Ctrl-C} / {@code
+ * SIGTERM} (WBS-3.1.3.2) — subprocesses first, then connections; today only the lobby connection is
+ * registered, and the game/adapter handles join via the FSM wiring (R59b). The resulting disconnect
+ * event drives the FSM to TERMINATED. The process exit code then follows the signal per the JVM
+ * default (130 for SIGINT, 143 for SIGTERM) — the close itself is clean, with no error logs.
  *
  * <p>Out of scope (later sprints): matchmaking/host/join initiation, and reconnect/recovery.
  */
@@ -54,9 +56,6 @@ public final class RunCommand implements Callable<Integer> {
 
     /** Bound on the FSM observing the welcome that already completed the setup future. */
     private static final Duration FSM_SYNC_TIMEOUT = Duration.ofSeconds(5);
-
-    /** Bound on the clean WebSocket close performed by the shutdown hook. */
-    private static final Duration CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
     /** Picocli auto-injects the root command so the subcommand can read the populated config. */
     @ParentCommand private MockClientCli parent;
@@ -95,13 +94,17 @@ public final class RunCommand implements Callable<Integer> {
                         config.userAgent(),
                         config.uidBinaryPath());
         MockClientLifecycle lifecycle = new MockClientLifecycle(config, session);
+        SessionTeardown teardown = new SessionTeardown(connection);
 
-        // Graceful shutdown on Ctrl-C / SIGTERM: close the socket cleanly. The disconnect event
-        // drives the FSM to TERMINATED, releasing the main thread. No-op if the session has already
-        // disconnected (e.g. a server-initiated close that let call() return normally), so a normal
-        // exit doesn't emit a spurious "shutdown signal" line.
+        // Graceful shutdown on Ctrl-C / SIGTERM: run the coordinated teardown synchronously before
+        // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
+        // the main thread. No-op if the session has already disconnected (e.g. a server-initiated
+        // close that let call() return normally), so a normal exit doesn't emit a spurious
+        // "shutdown signal" line.
         Runtime.getRuntime()
-                .addShutdownHook(new Thread(() -> closeOnShutdown(session, log), "mc-shutdown"));
+                .addShutdownHook(
+                        new Thread(
+                                () -> teardownOnShutdown(session, teardown, log), "mc-shutdown"));
 
         SessionState me;
         try {
@@ -111,16 +114,16 @@ public final class RunCommand implements Callable<Integer> {
                     .get(FSM_SYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             log.error("lobby session timed out before welcome; closing");
-            awaitQuietClose(session);
+            teardown.run();
             return ExitCodes.RUNTIME;
         } catch (ExecutionException e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
             log.error("lobby session failed: {}", cause.getMessage());
-            awaitQuietClose(session);
+            teardown.run();
             return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            awaitQuietClose(session);
+            teardown.run();
             return ExitCodes.RUNTIME;
         }
 
@@ -149,31 +152,18 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Shutdown-hook body: close the connection cleanly unless the session is already gone.
+     * Shutdown-hook body: run the coordinated session teardown unless the session is already gone.
      *
-     * @param session the live lobby session to close
+     * @param session the live lobby session, checked to keep normal exits quiet
+     * @param teardown the session's teardown, shared with the FSM path (R59b)
      * @param log logger for the single "shutdown signal received" line
      */
-    private static void closeOnShutdown(final LobbySession session, final Logger log) {
+    private static void teardownOnShutdown(
+            final LobbySession session, final SessionTeardown teardown, final Logger log) {
         if (session.isDisconnected()) {
             return;
         }
-        log.info("shutdown signal received; closing lobby connection");
-        awaitQuietClose(session);
-    }
-
-    /**
-     * Close the session and wait briefly for the close to complete, swallowing close failures.
-     *
-     * @param session the lobby session to close
-     */
-    private static void awaitQuietClose(final LobbySession session) {
-        try {
-            session.close().get(CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            // Best-effort close on a failing/teardown path; nothing actionable to do.
-        }
+        log.info("shutdown signal received; tearing down session");
+        teardown.run();
     }
 }
