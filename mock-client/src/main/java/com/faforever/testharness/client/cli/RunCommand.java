@@ -113,7 +113,7 @@ public final class RunCommand implements Callable<Integer> {
                     .stateReached(ClientState.IDLE)
                     .get(FSM_SYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("lobby session timed out before welcome; closing");
+            log.error("lobby session timed out before welcome");
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (ExecutionException e) {
@@ -122,8 +122,11 @@ public final class RunCommand implements Callable<Integer> {
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            // Tear down before restoring the interrupt flag: with the flag set, every await inside
+            // the teardown would throw immediately, degrading SIGTERM→grace→SIGKILL into an
+            // instant kill.
             teardown.run();
+            Thread.currentThread().interrupt();
             return ExitCodes.RUNTIME;
         }
 
@@ -152,18 +155,19 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Shutdown-hook body: run the coordinated session teardown unless the session is already gone.
+     * Shutdown-hook body: always run the coordinated session teardown — even when the lobby is
+     * already disconnected, later-registered handles (game/adapter, R59b) may still need tearing
+     * down. Only the "shutdown signal" line is guarded, so normal exits stay quiet.
      *
-     * @param session the live lobby session, checked to keep normal exits quiet
+     * @param session the live lobby session, checked only to keep normal exits quiet
      * @param teardown the session's teardown, shared with the FSM path (R59b)
      * @param log logger for the single "shutdown signal received" line
      */
     private static void teardownOnShutdown(
             final LobbySession session, final SessionTeardown teardown, final Logger log) {
-        if (session.isDisconnected()) {
-            return;
+        if (!session.isDisconnected()) {
+            log.info("shutdown signal received; tearing down session");
         }
-        log.info("shutdown signal received; tearing down session");
         teardown.run();
     }
 }

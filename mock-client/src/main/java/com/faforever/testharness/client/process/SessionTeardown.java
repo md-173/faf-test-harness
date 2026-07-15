@@ -58,7 +58,10 @@ public final class SessionTeardown {
     /** Mock game subprocess handle; {@code null} until registered. */
     private volatile SubprocessManager gameProcess;
 
-    /** True once {@link #run()} has executed; guarded by the {@code run()} monitor. */
+    /**
+     * True once {@link #run()} has executed. Written under the {@code run()} monitor; also read
+     * without it by {@link #warnIfDone(String)}, which tolerates a stale value.
+     */
     private boolean done;
 
     /**
@@ -78,6 +81,7 @@ public final class SessionTeardown {
      */
     public void registerAdapterRpc(final IceAdapterConnection connection) {
         this.adapterRpc = Objects.requireNonNull(connection, "connection");
+        warnIfDone("adapter RPC connection");
     }
 
     /**
@@ -87,6 +91,7 @@ public final class SessionTeardown {
      */
     public void registerAdapterProcess(final SubprocessManager process) {
         this.adapterProcess = Objects.requireNonNull(process, "process");
+        warnIfDone("ICE adapter process");
     }
 
     /**
@@ -96,6 +101,21 @@ public final class SessionTeardown {
      */
     public void registerGameProcess(final SubprocessManager process) {
         this.gameProcess = Objects.requireNonNull(process, "process");
+        warnIfDone("game process");
+    }
+
+    /**
+     * Best-effort visibility for a handle registered after teardown already ran — it will not be
+     * torn down by this instance (the JVM-exit registry hook still covers processes). The read is
+     * deliberately unsynchronised: a missed warning in the race window is acceptable, blocking a
+     * registration is not.
+     *
+     * @param label human-readable name of the late registrant for the log line
+     */
+    private void warnIfDone(final String label) {
+        if (done) {
+            LOG.warn("{} registered after teardown already ran; it will not be torn down", label);
+        }
     }
 
     /**
