@@ -108,7 +108,7 @@ public final class SessionTeardown {
             return;
         }
         done = true;
-        LOG.info("tearing down session: game, ICE adapter, connections");
+        LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
         terminate(adapterProcess, "ICE adapter");
         closeAdapterRpc();
