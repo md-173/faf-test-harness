@@ -18,8 +18,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Order (deterministic):</b> mock-game → ICE adapter → adapter RPC close → lobby close.
  * Subprocesses go first so the adapter is never left relaying for a dead game; connections close
- * last and tolerate the peer already being gone. Each step is exception-isolated — a failing step
- * is logged and the sequence continues.
+ * last and tolerate the peer already being gone. This mirrors the official FAF client's teardown
+ * (game exit → {@code iceAdapter.stop()} → notify server; {@code GameRunner} in
+ * downlords-faf-client). Each step is exception-isolated — a failing step is logged and the
+ * sequence continues.
  *
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
