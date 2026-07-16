@@ -11,6 +11,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -91,6 +92,41 @@ final class SessionTeardownTest {
         teardown.run();
 
         assertEquals(List.of("rpc-closed", "lobby-closed"), events);
+    }
+
+    /**
+     * Concurrent run() calls execute the sequence exactly once — the losing thread blocks on the
+     * monitor, then no-ops. The monitor serializes the threads, so a broken guard would be caught
+     * probabilistically; the test's main job is pinning the documented concurrent-no-op contract.
+     */
+    @Test
+    void concurrentRunsExecuteTeardownOnce() throws Exception {
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+
+        CountDownLatch go = new CountDownLatch(1);
+        Runnable call =
+                () -> {
+                    try {
+                        go.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                    teardown.run();
+                };
+        Thread first = new Thread(call);
+        Thread second = new Thread(call);
+        first.start();
+        second.start();
+        go.countDown();
+        first.join();
+        second.join();
+
+        assertEquals(
+                List.of("rpc-closed", "lobby-closed"),
+                events,
+                "each teardown step must fire exactly once across concurrent callers");
     }
 
     /** An idle, lobby-only session tears down cleanly — unregistered handles are skipped. */

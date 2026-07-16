@@ -61,10 +61,10 @@ public final class SessionTeardown {
     private volatile SubprocessManager gameProcess;
 
     /**
-     * True once {@link #run()} has executed. Written under the {@code run()} monitor; also read
-     * without it by {@link #warnIfDone(String)}, which tolerates a stale value.
+     * True once {@link #run()} has executed. Volatile so the lock-free read in {@link
+     * #warnIfDone(String)} is guaranteed to see a completed teardown.
      */
-    private boolean done;
+    private volatile boolean done;
 
     /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
@@ -107,10 +107,10 @@ public final class SessionTeardown {
     }
 
     /**
-     * Best-effort visibility for a handle registered after teardown already ran — it will not be
-     * torn down by this instance (the JVM-exit registry hook still covers processes). The read is
-     * deliberately unsynchronised: a missed warning in the race window is acceptable, blocking a
-     * registration is not.
+     * Best-effort warning for a handle registered after teardown already ran — it will not be torn
+     * down by this instance (the JVM-exit registry hook still covers processes). Lock-free so a
+     * registration never blocks; a registration racing {@link #run()} may still miss the warning,
+     * which is acceptable.
      *
      * @param label human-readable name of the late registrant for the log line
      */
