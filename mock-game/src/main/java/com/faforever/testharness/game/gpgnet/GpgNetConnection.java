@@ -279,6 +279,14 @@ public final class GpgNetConnection {
             // there is no resync for GPGNet (§5.3), so any read/parse error ends the connection.
             error = e;
         } finally {
+            // The socket must not outlive the read loop: a parse error alone leaves it
+            // established, so send() would keep succeeding while the adapter's writes back up
+            // unread. Socket.close() is idempotent, so the local-close path is unaffected.
+            try {
+                connectedSocket.close();
+            } catch (IOException e) {
+                LOG.warn("error closing GPGNet socket: {}", e.getMessage());
+            }
             DisconnectReason reason =
                     closeRequested.get()
                             ? DisconnectReason.LOCAL_CLOSE

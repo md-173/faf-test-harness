@@ -15,7 +15,7 @@ import org.junit.jupiter.api.Test;
  */
 final class GpgNetCodecTest {
 
-    /** {@code GameState("Lobby")} — the 26-byte map from §6. */
+    /** {@code GameState("Lobby")} — the 27-byte map from §6. */
     private static final byte[] GAME_STATE_LOBBY =
             hex(
                     "09 00 00 00"
@@ -25,7 +25,7 @@ final class GpgNetCodecTest {
                             + "05 00 00 00" // length = 5
                             + "4c 6f 62 62 79"); // "Lobby"
 
-    /** {@code CreateLobby(0, 6112, "TestPlayer", 1234, 1)} — the 47-byte map from §6. */
+    /** {@code CreateLobby(0, 6112, "TestPlayer", 1234, 1)} — the 54-byte map from §6. */
     private static final byte[] CREATE_LOBBY =
             hex(
                     "0B 00 00 00"
@@ -42,8 +42,7 @@ final class GpgNetCodecTest {
         assertArrayEquals(
                 GAME_STATE_LOBBY, GpgNetCodec.encode(GpgNetFrame.of("GameState", "Lobby")));
         // The §6 byte map spans offsets 0x00–0x1A = 27 bytes (4 cmd-len + 9 "GameState" + 4
-        // chunk-count + 1 tag + 4 str-len + 5 "Lobby"). The spec prose "26 bytes" undercounts by
-        // one; the map's offsets are authoritative and are what the codec must match.
+        // chunk-count + 1 tag + 4 str-len + 5 "Lobby").
         assertEquals(27, GAME_STATE_LOBBY.length);
     }
 
@@ -58,8 +57,7 @@ final class GpgNetCodecTest {
                 GpgNetCodec.encode(GpgNetFrame.of("CreateLobby", 0, 6112, "TestPlayer", 1234, 1));
         assertArrayEquals(CREATE_LOBBY, encoded);
         // The §6 byte map spans offsets 0x00–0x35 = 54 bytes (19-byte header + four 5-byte int
-        // chunks + one 15-byte "TestPlayer" string chunk). The spec prose "47 bytes" is a miscount;
-        // the map's offsets and arg values are authoritative and are what the codec must match.
+        // chunks + one 15-byte "TestPlayer" string chunk).
         assertEquals(54, CREATE_LOBBY.length);
     }
 
@@ -133,7 +131,7 @@ final class GpgNetCodecTest {
 
     @Test
     void truncatedFrameThrowsEof() {
-        // The 26-byte GameState("Lobby") map cut short mid-string desyncs unrecoverably (§5.3).
+        // The 27-byte GameState("Lobby") map cut short mid-string desyncs unrecoverably (§5.3).
         byte[] truncated = Arrays.copyOf(GAME_STATE_LOBBY, 20);
         assertThrows(EOFException.class, () -> GpgNetCodec.decode(truncated));
     }

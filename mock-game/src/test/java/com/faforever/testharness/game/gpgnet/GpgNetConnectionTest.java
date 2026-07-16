@@ -169,6 +169,9 @@ final class GpgNetConnectionTest {
 
         assertTrue(disconnected.await(2, TimeUnit.SECONDS), "malformed frame should disconnect");
         assertEquals(DisconnectReason.REMOTE_CLOSE, event.get().reason());
+        // The socket must actually be closed, not just reported dead — otherwise send() keeps
+        // succeeding into a connection nobody reads and the adapter's writes stall.
+        assertThrows(IOException.class, () -> conn.send(GpgNetFrame.of("GameEnded")));
     }
 
     @Test
