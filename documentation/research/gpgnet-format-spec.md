@@ -194,7 +194,7 @@ There is none. A truncated or malformed frame produces an unrecoverable parse er
 <a id="section-6-byte-map"></a>
 ## 6. Worked Byte Map
 
-A complete `GameState` frame with arg `"Lobby"` is 26 bytes:
+A complete `GameState` frame with arg `"Lobby"` is 27 bytes:
 
 ```
 offset  hex                                              meaning
@@ -208,7 +208,7 @@ offset  hex                                              meaning
 0x1B    -- end of frame; next byte is start of next frame --
 ```
 
-A `CreateLobby(0, 6112, "TestPlayer", 1234, 1)` frame is 47 bytes:
+A `CreateLobby(0, 6112, "TestPlayer", 1234, 1)` frame is 54 bytes:
 
 ```
 offset  hex                                              meaning
