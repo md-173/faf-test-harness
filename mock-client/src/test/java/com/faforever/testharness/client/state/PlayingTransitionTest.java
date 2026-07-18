@@ -186,6 +186,39 @@ final class PlayingTransitionTest {
         assertEquals(ClientState.HOSTING, lifecycle.getState());
     }
 
+    @Test
+    void malformedGpgNetMessageHandledSilently() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+        lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
+
+        // Typo on purpose (head instead of header)
+        ObjectNode node = MAPPER.createObjectNode().put("head", "GameState");
+        node.putArray("chunks");
+        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        assertEquals(ClientState.HOSTING, lifecycle.getState());
+
+        // Lacking chunks array
+        node = MAPPER.createObjectNode().put("header", "GameState");
+        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        assertEquals(ClientState.HOSTING, lifecycle.getState());
+
+        // Empty chunks array
+        node = MAPPER.createObjectNode().put("header", "GameState");
+        node.putArray("chunks");
+        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        assertEquals(ClientState.HOSTING, lifecycle.getState());
+    }
+
     private class DummyIceAdapterConnection extends IceAdapterConnection {
         // One handler per notification is enough for this test.
         private Map<String, Consumer<JsonNode>> notificationHandlers = new HashMap<>();
