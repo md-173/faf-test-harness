@@ -40,9 +40,9 @@ import picocli.CommandLine.Spec;
  * <p>A JVM shutdown hook runs the coordinated {@link SessionTeardown} on {@code Ctrl-C} / {@code
  * SIGTERM} (WBS-3.1.3.2) — subprocesses first, then connections. The lobby connection is registered
  * from startup and the lifecycle registers the game process at launch (WBS-3.1.2.4); the adapter
- * handles join via their own wiring (R38, R59b). The resulting disconnect
- * event drives the FSM to TERMINATED. The process exit code then follows the signal per the JVM
- * default (130 for SIGINT, 143 for SIGTERM) — the close itself is clean, with no error logs.
+ * handles join via their own wiring (R38, R59b). The resulting disconnect event drives the FSM to
+ * TERMINATED. The process exit code then follows the signal per the JVM default (130 for SIGINT,
+ * 143 for SIGTERM) — the close itself is clean, with no error logs.
  *
  * <p>Out of scope (later sprints): matchmaking/host/join initiation, and reconnect/recovery.
  */

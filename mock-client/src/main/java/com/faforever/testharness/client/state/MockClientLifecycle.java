@@ -261,8 +261,8 @@ public final class MockClientLifecycle {
      * never completes.
      *
      * <p>Each call returns an independent copy; cancelling or completing it does not affect other
-     * subscribers. Continuations run on the JDK's exit-completion thread — hand non-trivial work
-     * to your own executor.
+     * subscribers. Continuations run on the JDK's exit-completion thread — hand non-trivial work to
+     * your own executor.
      *
      * @return a future resolving to the game's exit code
      */
