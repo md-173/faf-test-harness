@@ -76,12 +76,6 @@ public final class MockClientLifecycle {
      */
     private final SessionTeardown teardown;
 
-    /** ICE adapter subprocess. */
-    private SubprocessManager iceAdapter;
-
-    /** Game binary subprocess. */
-    private SubprocessManager gameBinary;
-
     /**
      * The session's single game-exit signal (WBS-3.1.2.4): completes with the game's exit code once
      * the process launched by {@link #launchGame} exits. Never completes if no game launches.
@@ -291,7 +285,7 @@ public final class MockClientLifecycle {
         }
         GameConfig gameConfig = ((LaunchGame) message).config();
         try {
-            iceAdapter = iceLauncher.start();
+            SubprocessManager iceAdapter = iceLauncher.start();
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
             iceConnection.connect().get();
@@ -317,7 +311,7 @@ public final class MockClientLifecycle {
                             machine.receiveEvent(new StartMatch());
                         }
                     });
-            gameBinary = gameLauncher.start();
+            SubprocessManager gameBinary = gameLauncher.start();
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
             // subscribe via gameExit(); nothing else touches the manager's onExit.
