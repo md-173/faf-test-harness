@@ -1,0 +1,97 @@
+package com.faforever.testharness.game.config;
+
+import picocli.CommandLine;
+import picocli.CommandLine.Command;
+import picocli.CommandLine.Option;
+import picocli.CommandLine.ParameterException;
+
+/**
+ * Strict parser for the mock game's launch arguments (WBS-3.2.1.1), producing a {@link
+ * MockGameConfig}. The caller is a machine — the Mock Client's {@code MockGameLauncher}
+ * (WBS-3.1.2.3) — so the contract is strict: every argument required, nothing defaulted, no
+ * environment-variable or config-file fallbacks, and unknown arguments fail the parse.
+ *
+ * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8, the subset the launcher
+ * currently emits — extend both ends together when orchestration adds the {@code game_launch}
+ * -derived flags):
+ *
+ * <pre>{@code
+ * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
+ * }</pre>
+ *
+ * <p>Failures throw picocli's {@link ParameterException}; friendly error messages, usage text, and
+ * exit codes are the CLI framework card's job (WBS-3.2.1.2). This card only guarantees the game
+ * cannot boot on bad input.
+ */
+@Command(name = "mock-game")
+public final class MockGameCli {
+
+    /** Highest valid TCP/UDP port number. */
+    private static final int MAX_PORT = 65535;
+
+    /** TCP port of the adapter's GPGNet server; validated to a real port range. */
+    @Option(names = "--gpgnet-port", required = true, description = "adapter GPGNet TCP port")
+    private int gpgNetPort;
+
+    /** UDP lobby port shared with the adapter; validated to a real port range. */
+    @Option(names = "--lobby-port", required = true, description = "lobby UDP port")
+    private int lobbyPort;
+
+    /** FAF player id of the owning session; must be positive. */
+    @Option(names = "--player-id", required = true, description = "FAF player id")
+    private int playerId;
+
+    /** FAF player login of the owning session; must not be blank. */
+    @Option(names = "--player-login", required = true, description = "FAF player login")
+    private String playerLogin;
+
+    /** Instantiated only by {@link #parse(String[])}. */
+    private MockGameCli() {}
+
+    /**
+     * Parses and validates the launch argv into an immutable config.
+     *
+     * @param args the raw argv as passed to {@code main}
+     * @return the fully populated config; never partial
+     * @throws ParameterException if any argument is missing, unknown, malformed, or out of range
+     */
+    public static MockGameConfig parse(final String[] args) {
+        MockGameCli cli = new MockGameCli();
+        CommandLine commandLine = new CommandLine(cli);
+        commandLine.parseArgs(args);
+        cli.validate(commandLine);
+        return new MockGameConfig(cli.gpgNetPort, cli.lobbyPort, cli.playerId, cli.playerLogin);
+    }
+
+    /**
+     * Semantic checks past picocli's presence and type conversion, so a bad value fails at parse
+     * time instead of surfacing later as an unexplained connect failure.
+     *
+     * @param commandLine the parse context, required by {@link ParameterException}
+     */
+    private void validate(final CommandLine commandLine) {
+        requirePortRange(commandLine, "--gpgnet-port", gpgNetPort);
+        requirePortRange(commandLine, "--lobby-port", lobbyPort);
+        if (playerId < 1) {
+            throw new ParameterException(commandLine, "--player-id must be positive: " + playerId);
+        }
+        if (playerLogin.isBlank()) {
+            throw new ParameterException(commandLine, "--player-login must not be blank");
+        }
+    }
+
+    /**
+     * Requires {@code value} to be a usable port number.
+     *
+     * @param commandLine the parse context, required by {@link ParameterException}
+     * @param name the option name for the failure message
+     * @param value the parsed port value
+     */
+    private static void requirePortRange(
+            final CommandLine commandLine, final String name, final int value) {
+        if (value < 1 || value > MAX_PORT) {
+            throw new ParameterException(
+                    commandLine, name + " out of range (1-" + MAX_PORT + "): " + value);
+        }
+    }
+}
