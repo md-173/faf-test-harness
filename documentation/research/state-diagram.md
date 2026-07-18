@@ -106,8 +106,8 @@ stateDiagram-v2
         JOINING : Receive and handle ConnectToPeer messages
     }
 
-    JOINING --> PLAYING : Host starts peer-to-peer communication
-    HOSTING --> PLAYING : All players connected / Send GameState(LAUNCHING) message
+    JOINING --> PLAYING : GameState(LAUNCHING) received from game via Ice adapter
+    HOSTING --> PLAYING : GameState(LAUNCHING) received from game via Ice adapter
     PLAYING --> [*]
 
     # Error conditions
