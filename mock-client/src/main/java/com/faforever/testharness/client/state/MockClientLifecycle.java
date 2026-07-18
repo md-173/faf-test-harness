@@ -151,7 +151,6 @@ public final class MockClientLifecycle {
 
     private void setupStateMachine() {
         // Transitions between states, caused by internal events.
-        // TODO: No transition logic yet.
         states.get(ClientState.CONNECTING)
                 .registerTransition(WelcomeReceived.class, states.get(ClientState.IDLE));
         states.get(ClientState.CONNECTING)
@@ -292,6 +291,20 @@ public final class MockClientLifecycle {
                     .get();
             // Empty list of ICE servers, so only public STUN servers will be used.
             iceConnection.call("setIceServers", new Object[0]).get();
+            iceConnection.registerNotification(
+                    "onGpgNetMessageReceived",
+                    node -> {
+                        JsonNode params = node.get("params");
+                        if (params == null
+                                || !params.isArray()
+                                || params.size() < 2
+                                || !params.get(1).isArray()) {
+                            LOG.warn("Ignoring malformed onGpgNetMessageReceived message");
+                        } else if ("GameState".equals(params.get(0).asText())
+                                && "Launching".equals(params.get(1).path(0).asText())) {
+                            machine.receiveEvent(new StartMatch());
+                        }
+                    });
             gameBinary = gameLauncher.start();
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers

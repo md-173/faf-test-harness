@@ -136,6 +136,9 @@ public final class RunCommand implements Callable<Integer> {
                 me.id(),
                 me.login());
 
+        // Log when a match starts
+        lifecycle.stateReached(ClientState.PLAYING).thenRun(() -> log.info("Match started"));
+
         // Idle: the transport auto-pongs lobby pings, so we just wait for the FSM to terminate —
         // via a disconnect (server close, network drop, or the shutdown hook's local close), or a
         // completed game session once the lobby drives one.
