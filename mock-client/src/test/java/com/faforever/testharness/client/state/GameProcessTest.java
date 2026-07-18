@@ -2,6 +2,7 @@ package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.MockClientConfig;
@@ -134,6 +135,8 @@ final class GameProcessTest {
 
         int delivered = lifecycle.gameExit().get(5, TimeUnit.SECONDS);
         assertEquals(gameLauncher.manager.exitCode().getAsInt(), delivered);
+        // A killed process must be distinguishable from a clean exit (R41 relies on this).
+        assertNotEquals(0, delivered);
     }
 
     @Test
