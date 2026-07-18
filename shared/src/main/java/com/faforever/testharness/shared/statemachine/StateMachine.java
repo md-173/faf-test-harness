@@ -147,6 +147,21 @@ public class StateMachine implements EventListener {
         timeoutTimer.schedule(task, millis);
     }
 
+    /**
+     * Stops the machine's time-based scheduling: cancels every pending timeout and shuts down the
+     * timer thread, so no scheduled transition can fire after this returns. Intended for the
+     * shutdown path — it is terminal, so {@link #setTimeout(long, State)} must not be called again
+     * afterwards (the underlying timer is dead). Event-driven transitions via {@link
+     * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     */
+    public synchronized void cancel() {
+        for (var timeout : timeouts) {
+            timeout.cancel();
+        }
+        timeouts.clear();
+        timeoutTimer.cancel();
+    }
+
     private class UpdateStateTask extends TimerTask {
         /** Transition to fire when the timeout finishes. */
         private final Transition transition;
