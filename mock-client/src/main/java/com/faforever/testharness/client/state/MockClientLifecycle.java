@@ -139,6 +139,9 @@ public final class MockClientLifecycle {
         this.iceLauncher = iceLauncher;
         this.teardown = teardown;
 
+        // Register Ice connection for teardown.
+        teardown.registerAdapterRpc(iceConnection);
+
         states = new HashMap<>();
         for (var s : ClientState.values()) {
             states.put(s, new State(s.toString()));
@@ -198,6 +201,9 @@ public final class MockClientLifecycle {
                             ShutdownRequested.class, states.get(ClientState.TERMINATED));
         }
 
+        // Teardown subprocesses and connections.
+        states.get(ClientState.TERMINATED).onEntry(() -> teardown.run());
+
         // Adapt lobby events to state events.
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         GameLaunchHandler launchHandler =
@@ -206,6 +212,9 @@ public final class MockClientLifecycle {
         lobby.registerHandler("game_launch", launchHandler::onMessage);
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+
+        // Wire the game exiting to the appropriate event.
+        gameExit.thenAccept(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
     }
 
     /**
@@ -283,6 +292,8 @@ public final class MockClientLifecycle {
         GameConfig gameConfig = ((LaunchGame) message).config();
         try {
             iceAdapter = iceLauncher.start();
+            // Register adapter for teardown.
+            teardown.registerAdapterProcess(iceAdapter);
             iceConnection.connect().get();
             iceConnection
                     .call(
@@ -317,18 +328,12 @@ public final class MockClientLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (CancellationException | ExecutionException e) {
             LOG.warn("Could not connect or setup the ICE adapter ({})", e.getMessage());
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (MockGameLaunchException e) {
             LOG.warn("Could not launch game binary ({})", e.getMessage());
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
     }

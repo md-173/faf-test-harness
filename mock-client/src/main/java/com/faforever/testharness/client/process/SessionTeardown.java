@@ -3,6 +3,7 @@ package com.faforever.testharness.client.process;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.shared.process.SubprocessManager;
+import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
@@ -172,7 +173,8 @@ public final class SessionTeardown {
     /** Closes the lobby WebSocket, waiting at most {@link #LOBBY_CLOSE_TIMEOUT}. */
     private void closeLobby() {
         try {
-            lobby.close().get(LOBBY_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            lobby.close(WebSocket.NORMAL_CLOSURE, "Session teardown")
+                    .get(LOBBY_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (ExecutionException | TimeoutException e) {

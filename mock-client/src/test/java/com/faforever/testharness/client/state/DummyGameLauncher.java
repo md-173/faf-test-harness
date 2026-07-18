@@ -8,33 +8,43 @@ import java.io.IOException;
 import java.time.Duration;
 
 class DummyGameLauncher extends MockGameLauncher {
-    private boolean subprocessStarted = false;
     private final boolean throwException;
+    private final ProcessBuilder builder;
+    private SubprocessManager subprocess;
 
     DummyGameLauncher(MockClientConfig config) {
-        this(config, false);
+        this(config, false, new ProcessBuilder("echo"));
     }
 
     DummyGameLauncher(MockClientConfig config, boolean throwException) {
+        this(config, throwException, new ProcessBuilder("echo"));
+    }
+
+    DummyGameLauncher(MockClientConfig config, boolean throwException, ProcessBuilder builder) {
         super(config);
         this.throwException = throwException;
+        this.builder = builder;
     }
 
     @Override
     public SubprocessManager start() throws MockGameLaunchException {
-        subprocessStarted = true;
         if (throwException) {
             throw new MockGameLaunchException("Mock Game Launch failed");
         }
         try {
-            return SubprocessManager.start(
-                    new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            subprocess =
+                    SubprocessManager.start(builder, "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            return subprocess;
         } catch (IOException e) {
             throw new MockGameLaunchException(e.getMessage());
         }
     }
 
+    public SubprocessManager getSubprocess() {
+        return subprocess;
+    }
+
     public boolean subprocessStarted() {
-        return subprocessStarted;
+        return subprocess != null;
     }
 }

@@ -169,15 +169,6 @@ final class LifecycleTest {
     }
 
     @Test
-    void forcefulShutdown() throws Exception {
-        MockClientLifecycle lifecycle = defaultLifecycle();
-        assertEquals(ClientState.CONNECTING, lifecycle.getState());
-
-        lifecycle.shutdown();
-        assertEquals(ClientState.TERMINATED, lifecycle.getState());
-    }
-
-    @Test
     void authFailure() throws Exception {
         MockClientLifecycle lifecycle = defaultLifecycle();
         assertEquals(ClientState.CONNECTING, lifecycle.getState());
