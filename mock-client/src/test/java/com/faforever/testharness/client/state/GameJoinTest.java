@@ -14,6 +14,7 @@ import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
+import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -124,7 +125,8 @@ final class GameJoinTest {
                 session,
                 new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
                 new DummyGameLauncher(config),
-                new DummyIceLauncher(config));
+                new DummyIceLauncher(config),
+                new SessionTeardown(lobby));
     }
 
     @Test
