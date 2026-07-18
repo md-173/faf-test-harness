@@ -14,12 +14,15 @@ import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
+import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
@@ -260,9 +263,16 @@ final class LifecycleTest {
             super(config);
         }
 
+        // The launch path registers the returned manager for teardown and chains on its exit
+        // future, so the dummy must hand back a real (trivially short-lived) child process.
         @Override
         public SubprocessManager start() throws MockGameLaunchException {
-            return null;
+            try {
+                return SubprocessManager.start(
+                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            } catch (IOException e) {
+                throw new MockGameLaunchException(e.getMessage());
+            }
         }
     }
 
@@ -315,7 +325,8 @@ final class LifecycleTest {
                 session,
                 new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
                 new DummyGameLauncher(config),
-                new DummyIceLauncher(config));
+                new DummyIceLauncher(config),
+                new SessionTeardown(lobby));
     }
 
     private MockClientLifecycle defaultLifecycle() {

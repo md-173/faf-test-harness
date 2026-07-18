@@ -38,10 +38,11 @@ import picocli.CommandLine.Spec;
  * to lobby {@code ping}s.
  *
  * <p>A JVM shutdown hook runs the coordinated {@link SessionTeardown} on {@code Ctrl-C} / {@code
- * SIGTERM} (WBS-3.1.3.2) — subprocesses first, then connections; today only the lobby connection is
- * registered, and the game/adapter handles join via the FSM wiring (R59b). The resulting disconnect
- * event drives the FSM to TERMINATED. The process exit code then follows the signal per the JVM
- * default (130 for SIGINT, 143 for SIGTERM) — the close itself is clean, with no error logs.
+ * SIGTERM} (WBS-3.1.3.2) — subprocesses first, then connections. The lobby connection is registered
+ * from startup and the lifecycle registers the game process at launch (WBS-3.1.2.4); the adapter
+ * handles join via their own wiring (R38, R59b). The resulting disconnect event drives the FSM to
+ * TERMINATED. The process exit code then follows the signal per the JVM default (130 for SIGINT,
+ * 143 for SIGTERM) — the close itself is clean, with no error logs.
  *
  * <p>Out of scope (later sprints): matchmaking/host/join initiation, and reconnect/recovery.
  */
@@ -93,8 +94,8 @@ public final class RunCommand implements Callable<Integer> {
                         config.clientVersion(),
                         config.userAgent(),
                         config.uidBinaryPath());
-        MockClientLifecycle lifecycle = new MockClientLifecycle(config, session);
         SessionTeardown teardown = new SessionTeardown(connection);
+        MockClientLifecycle lifecycle = new MockClientLifecycle(config, session, teardown);
 
         // Graceful shutdown on Ctrl-C / SIGTERM: run the coordinated teardown synchronously before
         // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
@@ -156,8 +157,9 @@ public final class RunCommand implements Callable<Integer> {
 
     /**
      * Shutdown-hook body: always run the coordinated session teardown — even when the lobby is
-     * already disconnected, later-registered handles (game/adapter, R59b) may still need tearing
-     * down. Only the "shutdown signal" line is guarded, so normal exits stay quiet.
+     * already disconnected, later-registered handles (the game at launch, the adapter via R38/R59b)
+     * may still need tearing down. Only the "shutdown signal" line is guarded, so normal exits stay
+     * quiet.
      *
      * @param session the live lobby session, checked only to keep normal exits quiet
      * @param teardown the session's teardown, shared with the FSM path (R59b)

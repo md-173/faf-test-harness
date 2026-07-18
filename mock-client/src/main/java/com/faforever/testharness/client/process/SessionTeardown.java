@@ -37,8 +37,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Handles are registered as they come into existence: the lobby connection exists from startup
  * (constructor), while the adapter RPC connection and the two subprocess handles appear only once a
- * game session is being set up (register methods, wired by R59b). {@link #run()} skips whatever was
- * never registered — tearing down an idle, lobby-only session is valid.
+ * game session is being set up. The game process is registered at launch by the lifecycle
+ * (WBS-3.1.2.4); the adapter handles are wired by R38/R59b. {@link #run()} skips whatever was never
+ * registered — tearing down an idle, lobby-only session is valid.
  */
 public final class SessionTeardown {
 

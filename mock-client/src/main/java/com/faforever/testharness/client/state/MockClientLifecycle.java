@@ -16,6 +16,7 @@ import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
+import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
@@ -69,11 +70,23 @@ public final class MockClientLifecycle {
     /** Dependency-injected ice adapter launcher used to start the ice adapter process. */
     private final IceAdapterLauncher iceLauncher;
 
+    /**
+     * Coordinated session teardown shared with the CLI's signal hook; the game subprocess is
+     * registered with it at launch (WBS-3.1.2.4) so both shutdown paths can reach it.
+     */
+    private final SessionTeardown teardown;
+
     /** ICE adapter subprocess. */
     private SubprocessManager iceAdapter;
 
     /** Game binary subprocess. */
     private SubprocessManager gameBinary;
+
+    /**
+     * The session's single game-exit signal (WBS-3.1.2.4): completes with the game's exit code once
+     * the process launched by {@link #launchGame} exits. Never completes if no game launches.
+     */
+    private final CompletableFuture<Integer> gameExit = new CompletableFuture<>();
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -85,14 +98,17 @@ public final class MockClientLifecycle {
      *
      * @param config a set of configuration options passed by the user.
      * @param session a not-yet-started lobby session; {@link #start(TokenSource)} opens it.
+     * @param teardown the session's coordinated teardown, shared with the CLI's signal hook.
      */
-    public MockClientLifecycle(MockClientConfig config, LobbySession session) {
+    public MockClientLifecycle(
+            MockClientConfig config, LobbySession session, SessionTeardown teardown) {
         this(
                 config,
                 session,
                 new IceAdapterConnection(config.iceAdapterRpcPort()),
                 new MockGameLauncher(config),
-                new IceAdapterLauncher(config));
+                new IceAdapterLauncher(config),
+                teardown);
     }
 
     /**
@@ -106,19 +122,22 @@ public final class MockClientLifecycle {
      *     should not be called on this object yet.
      * @param gameLauncher spawns a mock game subprocess.
      * @param iceLauncher spawns an ice adapter subprocess.
+     * @param teardown the session's coordinated teardown, shared with the CLI's signal hook.
      */
     MockClientLifecycle(
             MockClientConfig config,
             LobbySession session,
             IceAdapterConnection iceConnection,
             MockGameLauncher gameLauncher,
-            IceAdapterLauncher iceLauncher) {
+            IceAdapterLauncher iceLauncher,
+            SessionTeardown teardown) {
         this.config = config;
         this.session = session;
         this.lobby = session.connection();
         this.iceConnection = iceConnection;
         this.gameLauncher = gameLauncher;
         this.iceLauncher = iceLauncher;
+        this.teardown = teardown;
 
         states = new HashMap<>();
         for (var s : ClientState.values()) {
@@ -234,6 +253,23 @@ public final class MockClientLifecycle {
         return ClientState.valueOf(machine.getState().getName());
     }
 
+    /**
+     * The session's single game-exit signal: completes exactly once with the game process's exit
+     * code, whether it exited cleanly or was killed. Safe to call at any time — before launch,
+     * while the game runs, or after exit (a copy of an already-completed future is already
+     * complete, so late subscribers still observe the code). If no game ever launches, the future
+     * never completes.
+     *
+     * <p>Each call returns an independent copy; cancelling or completing it does not affect other
+     * subscribers. Continuations run on the JDK's exit-completion thread — hand non-trivial work to
+     * your own executor.
+     *
+     * @return a future resolving to the game's exit code
+     */
+    public CompletableFuture<Integer> gameExit() {
+        return gameExit.copy();
+    }
+
     /** Performs the full shutdown of the lifecycle. Valid to call on any state. */
     public void shutdown() {
         LOG.info("Manual shutdown requested");
@@ -257,6 +293,11 @@ public final class MockClientLifecycle {
             // Empty list of ICE servers, so only public STUN servers will be used.
             iceConnection.call("setIceServers", new Object[0]).get();
             gameBinary = gameLauncher.start();
+            // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
+            // teardown and fan its exit code into the session's one exit signal. Consumers
+            // subscribe via gameExit(); nothing else touches the manager's onExit.
+            teardown.registerGameProcess(gameBinary);
+            gameBinary.onExit().thenAccept(gameExit::complete);
         } catch (IceAdapterLaunchException e) {
             LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
