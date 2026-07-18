@@ -70,4 +70,26 @@ public final class LoggingSetup {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.putProperty(COMPONENT_MDC_KEY, componentName);
     }
+
+    /**
+     * Flushes and stops the logging subsystem. Stopping the Logback {@link LoggerContext} stops
+     * every appender, which flushes and closes their output (e.g. the JSONL file handle), so
+     * buffered records are written before the JVM exits.
+     *
+     * <p>Intended as the <em>last</em> step of a component's shutdown sequence: no further log
+     * output is produced afterwards. Idempotent — stopping an already-stopped context is a no-op.
+     */
+    public static void shutdown() {
+        shutdown((LoggerContext) LoggerFactory.getILoggerFactory());
+    }
+
+    /**
+     * Stops a specific {@link LoggerContext}. Package-private overload so tests can exercise the
+     * flush/stop behaviour against a throwaway context without tearing down the JVM-global one.
+     *
+     * @param context the logger context to flush and stop
+     */
+    static void shutdown(final LoggerContext context) {
+        context.stop();
+    }
 }
