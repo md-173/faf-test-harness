@@ -294,14 +294,14 @@ public final class MockClientLifecycle {
             iceConnection.registerNotification(
                     "onGpgNetMessageReceived",
                     node -> {
-                        JsonNode header = node.get("header");
-                        JsonNode chunks = node.get("chunks");
-                        if (header == null || chunks == null) {
-                            LOG.warn(
-                                    "Expected onGpgNetMessageReceived argument"
-                                            + " to have a header and chunks field");
-                        } else if ("GameState".equals(header.asText())
-                                && "Launching".equals(chunks.path(0).asText())) {
+                        JsonNode params = node.get("params");
+                        if (params == null
+                                || !params.isArray()
+                                || params.size() < 2
+                                || !params.get(1).isArray()) {
+                            LOG.warn("Ignoring malformed onGpgNetMessageReceived message");
+                        } else if ("GameState".equals(params.get(0).asText())
+                                && "Launching".equals(params.get(1).path(0).asText())) {
                             machine.receiveEvent(new StartMatch());
                         }
                     });

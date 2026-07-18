@@ -12,13 +12,16 @@ import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
+import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -117,7 +120,7 @@ final class PlayingTransitionTest {
     }
 
     @Test
-    void successfulLaunch() throws Exception {
+    void successfulHostLaunch() throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
@@ -125,14 +128,46 @@ final class PlayingTransitionTest {
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
-        ObjectNode node = MAPPER.createObjectNode().put("header", "GameState");
-        node.putArray("chunks").add("Launching");
-        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        String node =
+                "{\"method\": \"onGpgNetMessageReceived\","
+                        + "\"params\": [\"GameState\", [\"Launching\"]]}";
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
+        assertEquals(ClientState.PLAYING, lifecycle.getState());
+    }
+
+    @Test
+    void successfulJoinLaunch() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+        lifecycle.post(new JoinGame(JOIN_GAME_MESSAGE));
+        String node =
+                "{\"method\": \"onGpgNetMessageReceived\","
+                        + "\"params\": [\"GameState\", [\"Launching\"]]}";
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
         assertEquals(ClientState.PLAYING, lifecycle.getState());
     }
 
@@ -145,22 +180,28 @@ final class PlayingTransitionTest {
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
-        ObjectNode node = MAPPER.createObjectNode().put("header", "GameState");
-        ArrayNode gameState = node.putArray("chunks").add("Idle");
+        ObjectNode node = MAPPER.createObjectNode().put("method", "onGpgNetMessageReceived");
+        ArrayNode params =
+                node.putArray("params").add("GameState").add(MAPPER.createArrayNode().add("Idle"));
 
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
 
-        gameState.set(0, "Lobby");
+        params.set(1, "Lobby");
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
 
-        gameState.set(0, "Ended");
+        params.set(1, "Ended");
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
     }
@@ -174,15 +215,21 @@ final class PlayingTransitionTest {
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
-        ObjectNode node = MAPPER.createObjectNode().put("header", "DifferentCommand");
-        node.putArray("chunks");
+        String node =
+                "{\"method\": \"onGpgNetMessageReceived\","
+                        + "\"params\": [\"DifferentMessage\", []]}";
 
-        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
         assertEquals(ClientState.HOSTING, lifecycle.getState());
     }
 
@@ -195,27 +242,30 @@ final class PlayingTransitionTest {
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
-                        MINIMAL_CONFIG, session, iceConn, gameLauncher, iceLauncher);
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
 
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
 
-        // Typo on purpose (head instead of header)
-        ObjectNode node = MAPPER.createObjectNode().put("head", "GameState");
-        node.putArray("chunks");
-        iceConn.fireNotification("onGpgNetMessageReceived", node);
-        assertEquals(ClientState.HOSTING, lifecycle.getState());
-
         // Lacking chunks array
-        node = MAPPER.createObjectNode().put("header", "GameState");
-        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        String node = "{\"method\": \"onGpgNetMessageReceived\"," + "\"params\": [\"GameState\"]}";
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
         assertEquals(ClientState.HOSTING, lifecycle.getState());
 
         // Empty chunks array
-        node = MAPPER.createObjectNode().put("header", "GameState");
-        node.putArray("chunks");
-        iceConn.fireNotification("onGpgNetMessageReceived", node);
+        node = "{\"method\": \"onGpgNetMessageReceived\"," + "\"params\": [\"GameState\", []]}";
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
+        assertEquals(ClientState.HOSTING, lifecycle.getState());
+
+        // Empty params array
+        node = "{\"method\": \"onGpgNetMessageReceived\"," + "\"params\": []}";
+        iceConn.fireNotification("onGpgNetMessageReceived", MAPPER.readTree(node));
         assertEquals(ClientState.HOSTING, lifecycle.getState());
     }
 
@@ -263,7 +313,12 @@ final class PlayingTransitionTest {
 
         @Override
         public SubprocessManager start() throws MockGameLaunchException {
-            return null;
+            try {
+                return SubprocessManager.start(
+                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            } catch (IOException e) {
+                throw new MockGameLaunchException(e.getMessage());
+            }
         }
     }
 
@@ -274,7 +329,12 @@ final class PlayingTransitionTest {
 
         @Override
         public SubprocessManager start() throws IceAdapterLaunchException {
-            return null;
+            try {
+                return SubprocessManager.start(
+                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+            } catch (IOException e) {
+                throw new IceAdapterLaunchException(e.getMessage());
+            }
         }
     }
 }
