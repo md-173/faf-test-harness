@@ -6,18 +6,14 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.MockClientConfig;
-import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
-import com.faforever.testharness.client.process.IceAdapterLaunchException;
-import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
@@ -27,7 +23,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -210,42 +205,6 @@ final class GameProcessTest {
             } catch (IOException e) {
                 throw new MockGameLaunchException(e.getMessage());
             }
-        }
-    }
-
-    private class DummyIceAdapterConnection extends IceAdapterConnection {
-        DummyIceAdapterConnection(int port) {
-            super(port);
-        }
-
-        @Override
-        public CompletableFuture<Void> connect() {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletableFuture<JsonNode> call(final String method, final Object... params) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public void registerNotification(final String name, final Consumer<JsonNode> handler) {}
-
-        @Override
-        public void onDisconnect(final Consumer<DisconnectEvent> listener) {}
-
-        @Override
-        public void close() {}
-    }
-
-    private class DummyIceLauncher extends IceAdapterLauncher {
-        DummyIceLauncher(MockClientConfig config) {
-            super(config);
-        }
-
-        @Override
-        public SubprocessManager start() throws IceAdapterLaunchException {
-            return null;
         }
     }
 }

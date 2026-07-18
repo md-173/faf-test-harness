@@ -4,33 +4,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.MockClientConfig;
-import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
-import com.faforever.testharness.client.process.IceAdapterLaunchException;
-import com.faforever.testharness.client.process.IceAdapterLauncher;
-import com.faforever.testharness.client.process.MockGameLaunchException;
-import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
-import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
-import java.time.Duration;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -291,127 +277,5 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-    }
-
-    private class DummyIceAdapterConnection extends IceAdapterConnection {
-
-        private final Map<String, Object[]> received = new HashMap<>();
-
-        private final Set<String> failCalls = new HashSet<>();
-
-        private final boolean failOnConnection;
-
-        DummyIceAdapterConnection(int port) {
-            this(port, false);
-        }
-
-        DummyIceAdapterConnection(int port, boolean failOnConnection) {
-            super(port);
-            this.failOnConnection = failOnConnection;
-        }
-
-        @Override
-        public CompletableFuture<Void> connect() {
-            if (failOnConnection) {
-                return CompletableFuture.failedFuture(new IOException("Could not connect"));
-            } else {
-                return CompletableFuture.completedFuture(null);
-            }
-        }
-
-        /**
-         * A {@link #call(final String method, final Object... params)} with {@code method} will
-         * result in an exceptional future.
-         */
-        public void setupCallFail(String method) {
-            failCalls.add(method);
-        }
-
-        @Override
-        public CompletableFuture<JsonNode> call(final String method, final Object... params) {
-            received.put(method, params);
-            if (failCalls.remove(method)) {
-                return CompletableFuture.failedFuture(new IOException("Bad call"));
-            } else {
-                return CompletableFuture.completedFuture(null);
-            }
-        }
-
-        @Override
-        public void registerNotification(final String name, final Consumer<JsonNode> handler) {}
-
-        @Override
-        public void onDisconnect(final Consumer<DisconnectEvent> listener) {}
-
-        @Override
-        public void close() {}
-
-        public Object[] receivedMessage(String method) {
-            return received.get(method);
-        }
-    }
-
-    private class DummyGameLauncher extends MockGameLauncher {
-        private boolean subprocessStarted = false;
-        private final boolean throwException;
-
-        DummyGameLauncher(MockClientConfig config) {
-            this(config, false);
-        }
-
-        DummyGameLauncher(MockClientConfig config, boolean throwException) {
-            super(config);
-            this.throwException = throwException;
-        }
-
-        @Override
-        public SubprocessManager start() throws MockGameLaunchException {
-            subprocessStarted = true;
-            if (throwException) {
-                throw new MockGameLaunchException("Mock Game Launch failed");
-            }
-            try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
-            } catch (IOException e) {
-                throw new MockGameLaunchException(e.getMessage());
-            }
-        }
-
-        public boolean subprocessStarted() {
-            return subprocessStarted;
-        }
-    }
-
-    private class DummyIceLauncher extends IceAdapterLauncher {
-        private boolean subprocessStarted = false;
-        private final boolean throwException;
-
-        DummyIceLauncher(MockClientConfig config) {
-            this(config, false);
-        }
-
-        DummyIceLauncher(MockClientConfig config, boolean throwException) {
-            super(config);
-            this.throwException = throwException;
-        }
-
-        @Override
-        public SubprocessManager start() throws IceAdapterLaunchException {
-            subprocessStarted = true;
-            if (throwException) {
-                throw new IceAdapterLaunchException("Ice Adapter Launch failed");
-            }
-            try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
-            } catch (IOException e) {
-                throw new IceAdapterLaunchException(e.getMessage());
-            }
-        }
-
-        public boolean subprocessStarted() {
-            return subprocessStarted;
-        }
     }
 }
