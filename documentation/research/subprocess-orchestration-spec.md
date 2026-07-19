@@ -200,9 +200,13 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   ... game_launch-derived flags (mod, map, faction, team) ]
 ```
 
-Exact mock-game CLI is owned by WBS 1.2 (Mock Game Core); the Subprocess
-Execution Controller treats it as opaque except for the two ports it shares
-with the adapter.
+The game-side parser is `MockGameCli` in mock-game's `game.config` package
+(WBS-3.2.1.1): strict, every argument required, unknown arguments rejected.
+`MockGameLauncher` currently emits only the config-derivable subset
+(`--gpgnet-port`, `--lobby-port`, `--player-id`, `--player-login`); the
+`--game-uid` and `game_launch`-derived flags arrive when orchestration extends
+both ends together. The Subprocess Execution Controller treats the argv as
+opaque except for the two ports it shares with the adapter.
 
 ## 3. Port allocation
 

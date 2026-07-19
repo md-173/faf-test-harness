@@ -149,8 +149,8 @@ public class MockGameLauncher {
 
         int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
         // Spec §2.8 order: --gpgnet-port, --lobby-port, --player-id, --player-login. mock-game's
-        // CLI parser is ours (WBS 3.2.3), no positional-prefix constraint like the upstream
-        // adapter has.
+        // CLI parser is ours (MockGameCli, WBS 3.2.1.1), no positional-prefix constraint like the
+        // upstream adapter has.
         argv.add("--gpgnet-port");
         argv.add(Integer.toString(config.iceAdapterGpgNetPort()));
         argv.add("--lobby-port");
