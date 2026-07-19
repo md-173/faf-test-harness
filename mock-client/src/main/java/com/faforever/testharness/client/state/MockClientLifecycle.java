@@ -290,7 +290,8 @@ public final class MockClientLifecycle {
                             gameConfig.gameType().equals("matchmaker") ? "auto" : "normal")
                     .get();
             // Empty list of ICE servers, so only public STUN servers will be used.
-            iceConnection.call("setIceServers", new Object[0]).get();
+            Object[] servers = {new Object[0]};
+            iceConnection.call("setIceServers", servers).get();
             iceConnection.registerNotification(
                     "onGpgNetMessageReceived",
                     node -> {

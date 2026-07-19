@@ -150,7 +150,7 @@ final class LifecycleSetupTest {
 
         Object[] iceServers = iceConn.receivedMessage("setIceServers");
         assertTrue(iceServers != null);
-        assertTrue(iceServers.length == 0);
+        assertTrue(((Object[]) iceServers[0]).length == 0);
     }
 
     @Test
