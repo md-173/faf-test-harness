@@ -129,8 +129,10 @@ public final class GameTicker {
                             t.setDaemon(true);
                             return t;
                         });
+        // Nanosecond units so a positive sub-millisecond interval doesn't truncate to an illegal
+        // zero delay.
         executor.scheduleWithFixedDelay(
-                this::deliver, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+                this::deliver, interval.toNanos(), interval.toNanos(), TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -167,6 +169,9 @@ public final class GameTicker {
 
     /**
      * Delivers one tick, isolating callback exceptions so the schedule survives (log-and-continue).
+     * {@link Error}s are deliberately not caught: manual mode propagates them synchronously to the
+     * advancing test (an {@code AssertionError} in a callback should fail that test), and a
+     * real-time schedule should not outlive a JVM-level failure.
      */
     private void deliver() {
         if (stopped) {

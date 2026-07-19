@@ -81,22 +81,25 @@ class GameTickerTest {
     @Test
     void realTimeDeliversTicksWithAtLeastFixedDelaySpacing() throws InterruptedException {
         Duration interval = Duration.ofMillis(20);
-        CountDownLatch threeTicks = new CountDownLatch(3);
-        GameTicker ticker = GameTicker.realTime(interval, threeTicks::countDown);
+        CountDownLatch fourTicks = new CountDownLatch(4);
+        GameTicker ticker = GameTicker.realTime(interval, fourTicks::countDown);
 
         long before = System.nanoTime();
         ticker.start();
+        // Double-start must be a no-op: two in-phase schedules would deliver 4 ticks in about
+        // 2 intervals, breaking the 3-interval lower bound asserted below.
+        ticker.start();
         try {
-            assertTrue(threeTicks.await(AWAIT_SECONDS, TimeUnit.SECONDS), "expected 3 ticks");
+            assertTrue(fourTicks.await(AWAIT_SECONDS, TimeUnit.SECONDS), "expected 4 ticks");
         } finally {
             ticker.stop();
         }
         long elapsedMillis = (System.nanoTime() - before) / 1_000_000;
-        // First tick fires one interval after start, so 3 ticks take at least 3 intervals; assert
-        // the guaranteed spacing of the ticks themselves (2 gaps) to leave slack for timer grain.
+        // First tick fires one interval after start, so 4 fixed-delay ticks take at least
+        // 4 intervals; asserting 3 leaves a full interval of slack for timer grain.
         assertTrue(
-                elapsedMillis >= 2 * interval.toMillis(),
-                "3 fixed-delay ticks arrived in " + elapsedMillis + "ms");
+                elapsedMillis >= 3 * interval.toMillis(),
+                "4 fixed-delay ticks arrived in " + elapsedMillis + "ms");
     }
 
     @Test
