@@ -76,12 +76,6 @@ public final class MockClientLifecycle {
      */
     private final SessionTeardown teardown;
 
-    /** ICE adapter subprocess. */
-    private SubprocessManager iceAdapter;
-
-    /** Game binary subprocess. */
-    private SubprocessManager gameBinary;
-
     /**
      * The session's single game-exit signal (WBS-3.1.2.4): completes with the game's exit code once
      * the process launched by {@link #launchGame} exits. Never completes if no game launches.
@@ -138,6 +132,9 @@ public final class MockClientLifecycle {
         this.gameLauncher = gameLauncher;
         this.iceLauncher = iceLauncher;
         this.teardown = teardown;
+
+        // Register Ice connection for teardown.
+        teardown.registerAdapterRpc(iceConnection);
 
         states = new HashMap<>();
         for (var s : ClientState.values()) {
@@ -198,6 +195,9 @@ public final class MockClientLifecycle {
                             ShutdownRequested.class, states.get(ClientState.TERMINATED));
         }
 
+        // Teardown subprocesses and connections.
+        states.get(ClientState.TERMINATED).onEntry(() -> teardown.run());
+
         // Adapt lobby events to state events.
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         GameLaunchHandler launchHandler =
@@ -206,6 +206,9 @@ public final class MockClientLifecycle {
         lobby.registerHandler("game_launch", launchHandler::onMessage);
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+
+        // Wire the game exiting to the appropriate event.
+        gameExit.thenAccept(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
     }
 
     /**
@@ -282,7 +285,9 @@ public final class MockClientLifecycle {
         }
         GameConfig gameConfig = ((LaunchGame) message).config();
         try {
-            iceAdapter = iceLauncher.start();
+            SubprocessManager iceAdapter = iceLauncher.start();
+            // Register adapter for teardown.
+            teardown.registerAdapterProcess(iceAdapter);
             iceConnection.connect().get();
             iceConnection
                     .call(
@@ -306,7 +311,7 @@ public final class MockClientLifecycle {
                             machine.receiveEvent(new StartMatch());
                         }
                     });
-            gameBinary = gameLauncher.start();
+            SubprocessManager gameBinary = gameLauncher.start();
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
             // subscribe via gameExit(); nothing else touches the manager's onExit.
@@ -317,18 +322,12 @@ public final class MockClientLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (CancellationException | ExecutionException e) {
             LOG.warn("Could not connect or setup the ICE adapter ({})", e.getMessage());
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (MockGameLaunchException e) {
             LOG.warn("Could not launch game binary ({})", e.getMessage());
-            iceAdapter.terminate();
-            iceConnection.close();
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
     }

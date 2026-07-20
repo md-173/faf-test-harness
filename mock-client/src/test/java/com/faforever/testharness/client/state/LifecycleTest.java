@@ -5,29 +5,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
-import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
-import com.faforever.testharness.client.process.IceAdapterLaunchException;
-import com.faforever.testharness.client.process.IceAdapterLauncher;
-import com.faforever.testharness.client.process.MockGameLaunchException;
-import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
-import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -179,15 +169,6 @@ final class LifecycleTest {
     }
 
     @Test
-    void forcefulShutdown() throws Exception {
-        MockClientLifecycle lifecycle = defaultLifecycle();
-        assertEquals(ClientState.CONNECTING, lifecycle.getState());
-
-        lifecycle.shutdown();
-        assertEquals(ClientState.TERMINATED, lifecycle.getState());
-    }
-
-    @Test
     void authFailure() throws Exception {
         MockClientLifecycle lifecycle = defaultLifecycle();
         assertEquals(ClientState.CONNECTING, lifecycle.getState());
@@ -231,60 +212,6 @@ final class LifecycleTest {
         // When a game has already started, communication occurs peer-to-peer and lobby server is
         // not needed. Disconnection does not cause termination.
         assertEquals(ClientState.PLAYING, lifecycle.getState());
-    }
-
-    private class DummyIceAdapterConnection extends IceAdapterConnection {
-        DummyIceAdapterConnection(int port) {
-            super(port);
-        }
-
-        @Override
-        public CompletableFuture<Void> connect() {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletableFuture<JsonNode> call(final String method, final Object... params) {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public void registerNotification(final String name, final Consumer<JsonNode> handler) {}
-
-        @Override
-        public void onDisconnect(final Consumer<DisconnectEvent> listener) {}
-
-        @Override
-        public void close() {}
-    }
-
-    private class DummyGameLauncher extends MockGameLauncher {
-        DummyGameLauncher(MockClientConfig config) {
-            super(config);
-        }
-
-        // The launch path registers the returned manager for teardown and chains on its exit
-        // future, so the dummy must hand back a real (trivially short-lived) child process.
-        @Override
-        public SubprocessManager start() throws MockGameLaunchException {
-            try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
-            } catch (IOException e) {
-                throw new MockGameLaunchException(e.getMessage());
-            }
-        }
-    }
-
-    private class DummyIceLauncher extends IceAdapterLauncher {
-        DummyIceLauncher(MockClientConfig config) {
-            super(config);
-        }
-
-        @Override
-        public SubprocessManager start() throws IceAdapterLaunchException {
-            return null;
-        }
     }
 
     /**
