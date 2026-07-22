@@ -35,6 +35,11 @@ tasks.register('integrationTest', Test) {
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     shouldRunAfter test
+    // Live tests exist to show what the real adapter does; the frame log and the adapter's own
+    // captured output are the deliverable, so don't bury them in the HTML report.
+    testLogging {
+        showStandardStreams = true
+    }
 }
 
 tasks.withType(Checkstyle).configureEach {
