@@ -170,6 +170,14 @@ below):
   worth plumbing.
 - Runtime reports `Version: SNAPSHOT` — a cosmetic upstream build-stamp quirk; the artifact is the
   `3.3.14` release.
+- **The adapter's GPGNet server is unusable until a JSON-RPC peer connects.** The GPGNet port binds
+  and accepts at boot, but the adapter's per-client setup blocks in `RPCService.getPeerOrWait()`
+  until the first RPC client arrives, so a game that connects and sends a frame first has its
+  listener thread killed (`IllegalStateException: gameState must not change to null`) and the socket
+  dropped. A plain TCP connection to the RPC port is enough to release it — no JSON-RPC call is
+  needed. Full chain, sources and the Mock Game policy are in
+  [`gpgnet-format-spec.md` §8.1](../research/gpgnet-format-spec.md#section-8-1-preconditions);
+  `GpgNetConnectionLiveSmokeTest` (3.2.2.4) is the re-runnable check.
 
 ## Out of scope (here)
 
