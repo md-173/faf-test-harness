@@ -21,7 +21,20 @@ dependencies {
 }
 
 test {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Runs JUnit tests tagged "integration" (launches the real faf-ice-adapter binary).'
+    group = 'verification'
+    useJUnitPlatform {
+        includeTags 'integration'
+    }
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter test
 }
 
 tasks.withType(Checkstyle).configureEach {
