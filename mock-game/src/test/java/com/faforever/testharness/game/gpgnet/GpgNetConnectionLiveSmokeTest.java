@@ -88,13 +88,16 @@ import org.junit.jupiter.api.io.TempDir;
  * switch anyway (see ice-adapter-setup.md).
  *
  * <p>This test therefore holds a plain TCP socket open on the RPC port and pauses {@link
- * #PRE_HANDSHAKE_SETTLE} before its first frame. The card's "no JSON-RPC" constraint is kept at the
- * protocol level — not one JSON-RPC byte is sent, and the handshake still needs no {@code
- * hostGame}/{@code joinGame} — but it cannot hold at the connection level, because the adapter
- * couples its GPGNet path to an RPC peer existing. <b>For 3.2.4.1 and 3.1.2.7 this is an ordering
- * constraint across components:</b> the mock game cannot hold a GPGNet session against a real
- * adapter until the mock client's JSON-RPC connection is up, so the client must connect its adapter
- * transport before the game is told to connect its own.
+ * #PRE_HANDSHAKE_SETTLE} before its first frame. The socket is held until after {@code
+ * terminate()}, so the observed exit code comes from SIGTERM and not from the adapter's own
+ * first-peer-loss shutdown: dropping the RPC peer while at {@code GameState "Lobby"} makes the
+ * adapter call {@code close(0)}, which reaches {@code System.exit(0)} roughly half a second later.
+ * The card's "no JSON-RPC" constraint is kept at the protocol level — not one JSON-RPC byte is
+ * sent, and the handshake still needs no {@code hostGame}/{@code joinGame} — but it cannot hold at
+ * the connection level, because the adapter couples its GPGNet path to an RPC peer existing. <b>For
+ * 3.2.4.1 and 3.1.2.7 this is an ordering constraint across components:</b> the mock game cannot
+ * hold a GPGNet session against a real adapter until the mock client's JSON-RPC connection is up,
+ * so the client must connect its adapter transport before the game is told to connect its own.
  *
  * <p><b>Gating.</b> Mirrors the client's {@code IceAdapterConnectionLiveSmokeTest}: an {@link
  * EnabledIf} probe self-skips (does not fail) when no adapter jar is resolvable, from {@code
@@ -206,9 +209,13 @@ final class GpgNetConnectionLiveSmokeTest {
                     System.out.println("[live smoke] adapter -> game: " + frame);
                     inbound.add(frame);
                 });
-        // Held open for the whole run, never written to; without it the adapter's GPGNet listener
-        // thread dies on our first frame. See the class javadoc.
-        try (Socket rpcPeer = openRpcPeerSocket(ports.rpc())) {
+        // Held open past terminate() below, never written to. Two reasons, both in the class
+        // javadoc: without it the adapter's GPGNet listener dies on our first frame, and losing it
+        // makes the adapter start its own close(0) shutdown that reaches System.exit(0) ~500ms
+        // later, which would race the exit-143 SIGTERM assertion.
+        Socket rpcPeer = null;
+        try {
+            rpcPeer = openRpcPeerSocket(ports.rpc());
             conn.connect().get(30, TimeUnit.SECONDS);
             // The adapter assigns currentClient only after its client constructor returns, which
             // can trail our connect(); sending inside that window kills its listener thread.
@@ -234,9 +241,18 @@ final class GpgNetConnectionLiveSmokeTest {
             assertTrue(adapter.isAlive(), "adapter exited during the settle period");
             logRemainingFrames();
         } finally {
-            // Always runs, so a failed assertion above still leaves no adapter behind.
+            // Always runs, so a failed assertion above still leaves no adapter behind. The RPC
+            // peer is closed only after terminate(), so the observed exit code comes from SIGTERM
+            // and not from the adapter's own first-peer-loss shutdown.
             conn.close();
             adapter.terminate();
+            if (rpcPeer != null) {
+                try {
+                    rpcPeer.close();
+                } catch (IOException ignored) {
+                    // best effort
+                }
+            }
         }
 
         int exitCode = adapter.onExit().get(15, TimeUnit.SECONDS);
