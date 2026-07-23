@@ -188,6 +188,33 @@ public final class MockClientLifecycle {
         states.get(ClientState.PLAYING)
                 .registerTransition(GameExited.class, states.get(ClientState.TERMINATED));
 
+        // Lobby loss during PLAYING (#193): the official client survives lobby loss mid-game —
+        // FafServerAccessor auto-reconnects and the game is never killed, because established peer
+        // connections are peer-to-peer and the lobby is only the signalling relay. The harness
+        // defers reconnect (R40) but matches the "play on" half of that behaviour: log and stay,
+        // no teardown. The session still ends deterministically through the mock game's own exit
+        // (GameExited, above), so this doesn't strand the session. Every other state above tears
+        // down on Disconnected because setup/negotiation genuinely cannot proceed without the
+        // lobby — PLAYING is the one phase where it can.
+        states.get(ClientState.PLAYING)
+                .registerTransition(
+                        Disconnected.class,
+                        states.get(ClientState.PLAYING),
+                        this::logLobbyLossDuringPlaying,
+                        null);
+
+        // Teardown closes the lobby, which fires onDisconnect -> Disconnected while already in
+        // TERMINATED. The framework's IGNORE policy already prevents any error from this (a
+        // generic WARN), but registering it explicitly turns that noise into a deliberate,
+        // debug-level no-op instead of an unregistered-event warning, and guarantees teardown
+        // does not run a second time (self-loop transitions skip entry/exit hooks).
+        states.get(ClientState.TERMINATED)
+                .registerTransition(
+                        Disconnected.class,
+                        states.get(ClientState.TERMINATED),
+                        this::logSelfInflictedDisconnect,
+                        null);
+
         // Manual shutdown valid from every state.
         for (var s : ClientState.values()) {
             states.get(s)
@@ -330,6 +357,37 @@ public final class MockClientLifecycle {
             LOG.warn("Could not launch game binary ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         }
+    }
+
+    /**
+     * PLAYING stay-in-state action for {@link Disconnected} (#193): logs the close reason and does
+     * nothing else. See the transition registration in {@link #setupStateMachine()} for the
+     * rationale — the harness plays on without reconnect (R40 deferred) instead of tearing down,
+     * because peer connections are already established and the lobby is only the signalling relay.
+     *
+     * @param message the {@link Disconnected} event; guaranteed by registration, never anything
+     *     else.
+     */
+    private void logLobbyLossDuringPlaying(Event message) {
+        Disconnected disconnected = (Disconnected) message;
+        LOG.warn(
+                "Lost lobby connection while PLAYING ({}); continuing without reconnect (R40"
+                        + " deferred), session will end via its own game exit",
+                disconnected.event());
+    }
+
+    /**
+     * TERMINATED no-op action for {@link Disconnected} (#193): teardown closes the lobby, which
+     * fires this same event on a session that is already torn down. Logged at debug level only —
+     * deliberately quieter than the framework's default unregistered-event WARN — and does not
+     * re-run teardown.
+     *
+     * @param message the {@link Disconnected} event; guaranteed by registration, never anything
+     *     else.
+     */
+    private void logSelfInflictedDisconnect(Event message) {
+        Disconnected disconnected = (Disconnected) message;
+        LOG.debug("Disconnected from lobby after session teardown ({})", disconnected.event());
     }
 
     private void hostGame(Event message) throws FailedTransitionException {
