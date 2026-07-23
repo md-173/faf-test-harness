@@ -111,7 +111,9 @@ import org.junit.jupiter.api.io.TempDir;
  * injected.
  */
 @Tag("integration")
-@Timeout(value = 60, unit = TimeUnit.SECONDS)
+// Above the sum of the internal budgets (30s connect + 20s CreateLobby + 15s exit + sleeps), so a
+// failure surfaces as the specific assertion that timed out, not a blanket JUnit timeout.
+@Timeout(value = 90, unit = TimeUnit.SECONDS)
 final class GpgNetConnectionLiveSmokeTest {
 
     /** Environment override for the adapter jar, consistent with R74's documented setup. */
