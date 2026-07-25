@@ -27,10 +27,10 @@ import org.junit.jupiter.api.Test;
 /**
  * Covers lobby-disconnect handling during PLAYING (#193): unlike every setup state, where losing
  * the lobby means the session cannot proceed and tears down, PLAYING plays on. This mirrors the
- * official client — {@code FafServerAccessor} auto-reconnects and the game is never killed,
- * because established peer connections are peer-to-peer and the lobby is only the signalling
- * relay. The harness defers reconnect (R40) but keeps the session alive; it still ends
- * deterministically through the mock game's own exit.
+ * official client — {@code FafServerAccessor} auto-reconnects and the game is never killed, because
+ * established peer connections are peer-to-peer and the lobby is only the signalling relay. The
+ * harness defers reconnect (R40) but keeps the session alive; it still ends deterministically
+ * through the mock game's own exit.
  */
 final class LobbyDisconnectPlayingTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
