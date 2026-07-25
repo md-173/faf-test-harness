@@ -22,7 +22,9 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -270,8 +272,10 @@ final class PlayingTransitionTest {
     }
 
     private class DummyIceAdapterConnection extends IceAdapterConnection {
-        // One handler per notification is enough for this test.
-        private Map<String, Consumer<JsonNode>> notificationHandlers = new HashMap<>();
+        // Mirrors IceAdapterConnection's real fan-out: MockClientLifecycle registers more than one
+        // handler under "onGpgNetMessageReceived" (#192's GameEnded consumer alongside the
+        // GameState/Launching one), so a single-handler map would silently drop earlier handlers.
+        private final Map<String, List<Consumer<JsonNode>>> notificationHandlers = new HashMap<>();
 
         DummyIceAdapterConnection(int port) {
             super(port);
@@ -289,12 +293,11 @@ final class PlayingTransitionTest {
 
         @Override
         public void registerNotification(final String name, final Consumer<JsonNode> handler) {
-            notificationHandlers.put(name, handler);
+            notificationHandlers.computeIfAbsent(name, ignored -> new ArrayList<>()).add(handler);
         }
 
         public void fireNotification(final String name, JsonNode value) {
-            Consumer<JsonNode> handler = notificationHandlers.get(name);
-            if (handler != null) {
+            for (Consumer<JsonNode> handler : notificationHandlers.getOrDefault(name, List.of())) {
                 handler.accept(value);
             }
         }
