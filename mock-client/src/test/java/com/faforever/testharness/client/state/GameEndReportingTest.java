@@ -225,9 +225,9 @@ final class GameEndReportingTest {
     }
 
     /**
-     * Captures every {@code onGpgNetMessageReceived} handler registered by the lifecycle (there
-     * are two — the existing GameState/Launching one and #192's GameEnded one) so tests can
-     * fabricate GPGNet frames without a real ICE adapter.
+     * Captures every {@code onGpgNetMessageReceived} handler registered by the lifecycle (there are
+     * two — the existing GameState/Launching one and #192's GameEnded one) so tests can fabricate
+     * GPGNet frames without a real ICE adapter.
      */
     private static class FakeIceAdapterConnection extends IceAdapterConnection {
         private final Map<String, CopyOnWriteArrayList<Consumer<JsonNode>>> handlers =
@@ -264,8 +264,9 @@ final class GameEndReportingTest {
             notification.put("jsonrpc", "2.0");
             notification.put("method", "onGpgNetMessageReceived");
             notification.putArray("params").add(command).addArray();
-            for (Consumer<JsonNode> handler :
-                    handlers.getOrDefault("onGpgNetMessageReceived", new CopyOnWriteArrayList<>())) {
+            List<Consumer<JsonNode>> registered =
+                    handlers.getOrDefault("onGpgNetMessageReceived", new CopyOnWriteArrayList<>());
+            for (Consumer<JsonNode> handler : registered) {
                 handler.accept(notification);
             }
         }

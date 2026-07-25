@@ -100,9 +100,9 @@ public final class MockClientLifecycle {
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
-     * Set once an {@code onGpgNetMessageReceived("GameEnded", …)} notification is observed for
-     * this session (#192). Read by crash classification (R41): an exit observed after this flag is
-     * set — including a 143 from a teardown-initiated SIGTERM — is a clean end, not a crash.
+     * Set once an {@code onGpgNetMessageReceived("GameEnded", …)} notification is observed for this
+     * session (#192). Read by crash classification (R41): an exit observed after this flag is set —
+     * including a 143 from a teardown-initiated SIGTERM — is a clean end, not a crash.
      */
     private final AtomicBoolean cleanEndSeen = new AtomicBoolean(false);
 
@@ -112,7 +112,9 @@ public final class MockClientLifecycle {
     /** The pending safety-net task armed on {@code GameEnded}, if any; cancelled on game exit. */
     private volatile TimerTask safetyNetTask;
 
-    /** Effective safety-net window; {@link #GAME_END_SAFETY_NET_WINDOW} unless overridden by test. */
+    /**
+     * Effective safety-net window; {@link #GAME_END_SAFETY_NET_WINDOW} unless overridden by test.
+     */
     private final Duration safetyNetWindow;
 
     /**
