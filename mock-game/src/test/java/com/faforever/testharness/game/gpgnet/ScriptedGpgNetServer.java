@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
  * script a malformed or truncated frame to exercise the client's read loop. {@link
  * #sendFrame(GpgNetFrame)} is the well-formed convenience.
  */
-final class ScriptedGpgNetServer {
+public final class ScriptedGpgNetServer {
 
     private final ServerSocket serverSocket;
     private final CountDownLatch clientConnected = new CountDownLatch(1);
@@ -34,19 +34,19 @@ final class ScriptedGpgNetServer {
     private volatile Socket client;
     private volatile OutputStream clientOut;
 
-    ScriptedGpgNetServer() throws IOException {
+    public ScriptedGpgNetServer() throws IOException {
         serverSocket = new ServerSocket();
         serverSocket.setReuseAddress(true);
         serverSocket.bind(new InetSocketAddress("127.0.0.1", 0));
     }
 
     /** Port the client should connect to. Valid as soon as the constructor returns. */
-    int port() {
+    public int port() {
         return serverSocket.getLocalPort();
     }
 
     /** Begin accepting one client and decoding its frames on a background thread. */
-    void start() {
+    public void start() {
         Thread thread = new Thread(this::run, "scripted-gpgnet-server");
         thread.setDaemon(true);
         thread.start();
@@ -68,14 +68,15 @@ final class ScriptedGpgNetServer {
     }
 
     /** Block until the client connects, or fail after 5s. */
-    void awaitClient() throws InterruptedException {
+    public void awaitClient() throws InterruptedException {
         if (!clientConnected.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("no client connected within 5s");
         }
     }
 
     /** Next frame the client sent, or fail after {@code timeout}. */
-    GpgNetFrame pollReceived(final long timeout, final TimeUnit unit) throws InterruptedException {
+    public GpgNetFrame pollReceived(final long timeout, final TimeUnit unit)
+            throws InterruptedException {
         GpgNetFrame frame = received.poll(timeout, unit);
         if (frame == null) {
             throw new AssertionError("no frame received within " + timeout + " " + unit);
@@ -84,12 +85,12 @@ final class ScriptedGpgNetServer {
     }
 
     /** Send a well-formed frame to the client. */
-    void sendFrame(final GpgNetFrame frame) throws IOException {
+    public void sendFrame(final GpgNetFrame frame) throws IOException {
         sendRaw(GpgNetCodec.encode(frame));
     }
 
     /** Send {@code raw} to the client verbatim (the test owns framing). */
-    void sendRaw(final byte[] raw) throws IOException {
+    public void sendRaw(final byte[] raw) throws IOException {
         OutputStream out = clientOut;
         if (out == null) {
             throw new IllegalStateException("no client connected yet");
@@ -99,7 +100,7 @@ final class ScriptedGpgNetServer {
     }
 
     /** Abruptly drop the client socket — simulates a peer reset / read error on the client side. */
-    void dropClient() throws IOException {
+    public void dropClient() throws IOException {
         Socket current = client;
         if (current != null) {
             current.close();
@@ -107,7 +108,7 @@ final class ScriptedGpgNetServer {
     }
 
     /** Close the client (if any) and the listening socket. */
-    void stop() {
+    public void stop() {
         try {
             if (client != null) {
                 client.close();
