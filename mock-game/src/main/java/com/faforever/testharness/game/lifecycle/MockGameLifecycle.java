@@ -82,11 +82,13 @@ public final class MockGameLifecycle {
      * states.
      */
     public void launchMatch() {
+        LOG.info("Launching match");
         machine.receiveEvent(new LaunchMatch());
     }
 
     /** Instruct the lifecycle to end the match. Idempotent outside of the LIVE state. */
     public void endMatch() {
+        LOG.info("Ending match");
         machine.receiveEvent(new GameEnded());
     }
 
@@ -171,6 +173,7 @@ public final class MockGameLifecycle {
 
     /* Transition action for INITIALIZING -> IDLE. */
     private void gpgnetConnected(Event event) throws FailedTransitionException {
+        LOG.info("Successful connection with GpgNet server established");
         try {
             // Wait some time before sending the first message.
             Thread.sleep(GPGNET_CONNECTION_WAIT);
@@ -194,6 +197,7 @@ public final class MockGameLifecycle {
 
     /* Transition action for LOBBY -> HOST. */
     private void beginHosting(Event event) throws FailedTransitionException {
+        LOG.info("Setting up game as host");
         // TODO: Game options here
     }
 
@@ -208,12 +212,14 @@ public final class MockGameLifecycle {
 
     /* Transition action for LOBBY -> JOIN. */
     private void joinGame(Event event) throws FailedTransitionException {
+        LOG.info("Setting up game as joiner");
         if (!(event instanceof JoinGame)) {
             throw new AssertionError(
                     "JoinGame called without a JoinGame event, should be impossible");
         }
         GpgNetFrame frame = ((JoinGame) event).frame();
         String address = (String) frame.args().get(0);
+        LOG.info("Joining game from host with address {}", address);
         // TODO: Use the address to connect to a peer.
     }
 
@@ -221,10 +227,12 @@ public final class MockGameLifecycle {
     private void peerConnectionRequest(Event event) throws FailedTransitionException {
         if (!(event instanceof ConnectToPeer)) {
             throw new AssertionError(
-                    "JoinGame called without a JoinGame event, should be impossible");
+                    "peerConnectionRequest called without a ConnectToPeer event, "
+                            + "should be impossible");
         }
         GpgNetFrame frame = ((ConnectToPeer) event).frame();
         String address = (String) frame.args().get(0);
+        LOG.info("New peer with address {}, attempting connection now", address);
         // TODO: Use the address to connect to a peer.
     }
 
