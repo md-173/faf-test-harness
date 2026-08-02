@@ -25,11 +25,15 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,6 +42,16 @@ public final class MockClientLifecycle {
 
     /** Logger for this class. */
     private static final Logger LOG = LoggerFactory.getLogger(MockClientLifecycle.class);
+
+    /**
+     * Bounded safety net for client end-of-session reporting (#192): if the game has not exited
+     * this long after a clean {@code GameEnded} frame was observed, a hung game is assumed and
+     * {@link ShutdownRequested} is posted so the harness is not left waiting forever. Teardown
+     * still runs through the ordinary TERMINATED path (R59b, {@link
+     * com.faforever.testharness.client.process.SessionTeardown}) — this only decides when to
+     * trigger it, it is not a second teardown mechanism.
+     */
+    private static final Duration GAME_END_SAFETY_NET_WINDOW = Duration.ofSeconds(30);
 
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
@@ -86,6 +100,24 @@ public final class MockClientLifecycle {
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
+     * Set once an {@code onGpgNetMessageReceived("GameEnded", …)} notification is observed for this
+     * session (#192). Read by crash classification (R41): an exit observed after this flag is set —
+     * including a 143 from a teardown-initiated SIGTERM — is a clean end, not a crash.
+     */
+    private final AtomicBoolean cleanEndSeen = new AtomicBoolean(false);
+
+    /** Backs the safety-net window; a daemon thread, one per lifecycle. */
+    private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
+
+    /** The pending safety-net task armed on {@code GameEnded}, if any; cancelled on game exit. */
+    private volatile TimerTask safetyNetTask;
+
+    /**
+     * Effective safety-net window; {@link #GAME_END_SAFETY_NET_WINDOW} unless overridden by test.
+     */
+    private final Duration safetyNetWindow;
+
+    /**
      * Build and initialise the mock client's lifecycle. This constructor will set up all
      * transitions on the internal state machine and subscribe to all relevant events from the
      * session and its transport.
@@ -125,6 +157,37 @@ public final class MockClientLifecycle {
             MockGameLauncher gameLauncher,
             IceAdapterLauncher iceLauncher,
             SessionTeardown teardown) {
+        this(
+                config,
+                session,
+                iceConnection,
+                gameLauncher,
+                iceLauncher,
+                teardown,
+                GAME_END_SAFETY_NET_WINDOW);
+    }
+
+    /**
+     * Full-control constructor — used by tests to shrink the #192 safety-net window for fast,
+     * deterministic runs.
+     *
+     * @param config a set of configuration options passed by the user.
+     * @param session a not-yet-started lobby session; {@link #start(TokenSource)} opens it.
+     * @param iceConnection the ice adapter connection. {@link IceAdapterConnection#connect()}
+     *     should not be called on this object yet.
+     * @param gameLauncher spawns a mock game subprocess.
+     * @param iceLauncher spawns an ice adapter subprocess.
+     * @param teardown the session's coordinated teardown, shared with the CLI's signal hook.
+     * @param safetyNetWindow how long to wait after {@code GameEnded} before requesting shutdown.
+     */
+    MockClientLifecycle(
+            MockClientConfig config,
+            LobbySession session,
+            IceAdapterConnection iceConnection,
+            MockGameLauncher gameLauncher,
+            IceAdapterLauncher iceLauncher,
+            SessionTeardown teardown,
+            Duration safetyNetWindow) {
         this.config = config;
         this.session = session;
         this.lobby = session.connection();
@@ -132,6 +195,7 @@ public final class MockClientLifecycle {
         this.gameLauncher = gameLauncher;
         this.iceLauncher = iceLauncher;
         this.teardown = teardown;
+        this.safetyNetWindow = safetyNetWindow;
 
         // Register Ice connection for teardown.
         teardown.registerAdapterRpc(iceConnection);
@@ -186,7 +250,11 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.PLAYING)
-                .registerTransition(GameExited.class, states.get(ClientState.TERMINATED));
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
 
         // Manual shutdown valid from every state.
         for (var s : ClientState.values()) {
@@ -278,6 +346,71 @@ public final class MockClientLifecycle {
         machine.receiveEvent(new ShutdownRequested());
     }
 
+    /**
+     * Whether a clean {@code GameEnded} frame has been observed for this session (#192). Read by
+     * crash classification (R41) to distinguish a clean exit — including a 143 from a
+     * teardown-initiated SIGTERM — from an actual crash.
+     *
+     * @return {@code true} once {@code onGpgNetMessageReceived("GameEnded", …)} has been seen.
+     */
+    public boolean isCleanEndSeen() {
+        return cleanEndSeen.get();
+    }
+
+    /**
+     * Filtering consumer on the ICE-notification fan-out (R36): looks for {@code GameEnded} among
+     * the GPGNet frames R72 forwards verbatim, records the clean-end flag, and arms the bounded
+     * safety net. Ignores every other frame; sends and tears down nothing.
+     *
+     * @param notification the raw {@code onGpgNetMessageReceived} JSON-RPC notification.
+     */
+    private void onGpgNetMessage(JsonNode notification) {
+        JsonNode params = notification.get("params");
+        if (params == null || !params.isArray() || params.isEmpty()) {
+            return;
+        }
+        if (!"GameEnded".equals(params.get(0).asText())) {
+            return;
+        }
+        if (!cleanEndSeen.compareAndSet(false, true)) {
+            // Duplicate GameEnded frame; already recorded and safety net already armed.
+            return;
+        }
+        LOG.info("GameEnded observed; arming {} safety net", safetyNetWindow);
+        TimerTask task =
+                new TimerTask() {
+                    @Override
+                    public void run() {
+                        LOG.warn(
+                                "Game did not exit within {} of GameEnded; requesting shutdown",
+                                safetyNetWindow);
+                        machine.receiveEvent(new ShutdownRequested());
+                    }
+                };
+        safetyNetTask = task;
+        try {
+            safetyNetTimer.schedule(task, safetyNetWindow.toMillis());
+        } catch (IllegalStateException e) {
+            // The timer was already cancelled by a game exit racing this notification; nothing
+            // left to protect against.
+            LOG.debug("Safety net not armed, lifecycle is already tearing down");
+        }
+    }
+
+    /**
+     * {@link GameExited} transition action for PLAYING → TERMINATED (#192): cancels any pending
+     * safety-net task armed by {@link #onGpgNetMessage} now that the game has actually exited on
+     * its own. No new FSM edge — this attaches to the transition that already exists.
+     *
+     * @param event the {@link GameExited} event that triggered this transition.
+     */
+    private void onGameExited(Event event) {
+        TimerTask task = safetyNetTask;
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
     private void launchGame(Event message) throws FailedTransitionException {
         if (!(message instanceof LaunchGame)) {
             throw new AssertionError(
@@ -311,6 +444,10 @@ public final class MockClientLifecycle {
                             machine.receiveEvent(new StartMatch());
                         }
                     });
+            // #192: second, filtering consumer on the same fan-out — watches for the game's own
+            // clean-end signal and records it. Sends nothing and tears down nothing directly; R72's
+            // frame forwarding (above) is the reporting, R59b's TERMINATED action is the teardown.
+            iceConnection.registerNotification("onGpgNetMessageReceived", this::onGpgNetMessage);
             SubprocessManager gameBinary = gameLauncher.start();
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
