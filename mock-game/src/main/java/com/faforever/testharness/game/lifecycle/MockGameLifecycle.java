@@ -1,5 +1,6 @@
 package com.faforever.testharness.game.lifecycle;
 
+import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
@@ -25,8 +26,8 @@ public final class MockGameLifecycle {
     /** Logger for this class. */
     private static final Logger LOG = LoggerFactory.getLogger(MockGameLifecycle.class);
 
-    /** A timeout of 30 seconds for the GpgNet connection, in milliseconds. */
-    private static final int GPGNET_CONNECTION_TIMEOUT = 30 * 1000;
+    /** The default timeout length for the GpgNet connection, in milliseconds. */
+    private static final int DEFAULT_GPGNET_CONNECTION_TIMEOUT = 30 * 1000;
 
     /**
      * A delay to wait before sending messages to the GpgNet server on first connection, in
@@ -46,6 +47,12 @@ public final class MockGameLifecycle {
     /** Receive messages from the GpgNet serveer. */
     private final GpgNetDispatcher gpgnetDispatcher;
 
+    /** A timeout for the GpgNet connection, in milliseconds. */
+    private final int gpgnetConnectionTimeout;
+
+    /** A copy of the configuration settings given to the mock game. */
+    private final MockGameConfig config;
+
     /**
      * A mapping from the {@link GameState} enum to the actual state objects used by {@code
      * machine}.
@@ -55,10 +62,26 @@ public final class MockGameLifecycle {
     /**
      * Constructs a lifecycle object.
      *
+     * @param config the configuration options given to the mock game.
      * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
      */
-    public MockGameLifecycle(GpgNetConnection gpgnetServer) {
+    public MockGameLifecycle(MockGameConfig config, GpgNetConnection gpgnetServer) {
+        this(config, gpgnetServer, DEFAULT_GPGNET_CONNECTION_TIMEOUT);
+    }
+
+    /**
+     * Internal constructor for testing with shorter timeout durations.
+     *
+     * @param config the configuration options given to the mock game.
+     * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
+     * @param gpgnetConnectionTimeout the timeout to wait on a GpgNet connection for, in
+     *     milliseconds.
+     */
+    MockGameLifecycle(
+            MockGameConfig config, GpgNetConnection gpgnetServer, int gpgnetConnectionTimeout) {
+        this.config = config;
         this.gpgnet = gpgnetServer;
+        this.gpgnetConnectionTimeout = gpgnetConnectionTimeout;
 
         // Create the sender and receiver objects from the server.
         this.gpgnetSender = new GpgNetSender(gpgnetServer);
@@ -126,7 +149,8 @@ public final class MockGameLifecycle {
                 .registerTransition(
                         HostGame.class, states.get(GameState.HOSTING), this::beginHosting, null);
         states.get(GameState.LOBBY)
-                .registerTransition(JoinGame.class, states.get(GameState.JOINING));
+                .registerTransition(
+                        JoinGame.class, states.get(GameState.JOINING), this::joinGame, null);
         states.get(GameState.HOSTING)
                 .registerTransition(
                         LaunchMatch.class, states.get(GameState.LIVE), this::matchBegins, null);
@@ -151,14 +175,17 @@ public final class MockGameLifecycle {
                         null);
 
         // Error transitions
-        for (var s : new GameState[] {GameState.LOBBY, GameState.HOSTING, GameState.JOINING}) {
+        GameState[] fromStates = {
+            GameState.IDLE, GameState.LOBBY, GameState.HOSTING, GameState.JOINING
+        };
+        for (var s : fromStates) {
             states.get(s).registerTransition(PeerDisconnected.class, states.get(GameState.ENDED));
             states.get(s).registerTransition(ServerDisconnected.class, states.get(GameState.ENDED));
         }
 
         // Set gpgnet message transitions.
         gpgnetDispatcher.registerHandler(
-                "CreateLobby", ignored -> machine.receiveEvent(new CreateLobby()));
+                "CreateLobby", frame -> machine.receiveEvent(new CreateLobby(frame)));
         gpgnetDispatcher.registerHandler(
                 "HostGame", ignored -> machine.receiveEvent(new HostGame()));
         gpgnetDispatcher.registerHandler(
@@ -167,7 +194,7 @@ public final class MockGameLifecycle {
         gpgnet.onDisconnect(ignored -> machine.receiveEvent(new ServerDisconnected()));
 
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
-        machine.setTimeout(GPGNET_CONNECTION_TIMEOUT, states.get(GameState.ENDED));
+        machine.setTimeout(gpgnetConnectionTimeout, states.get(GameState.ENDED));
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
     }
 
@@ -188,6 +215,28 @@ public final class MockGameLifecycle {
 
     /* Transition action for IDLE -> LOBBY. */
     private void createLobby(Event event) throws FailedTransitionException {
+        if (!(event instanceof CreateLobby)) {
+            throw new AssertionError(
+                    "createLobby called without a CreateLobby event, should be impossible");
+        }
+        GpgNetFrame frame = ((CreateLobby) event).frame();
+
+        try {
+            // Check whether the port given matches the one given as an argument.
+            // The argument is the authoritative source, but we log when this one doesn't match as a
+            // warning.
+            int port = frame.intArg(1);
+            if (port != config.lobbyPort()) {
+                LOG.warn(
+                        "CreateLobby lobby port ({}) differ "
+                                + "from config lobby port ({}), might cause connection issues",
+                        config.lobbyPort(),
+                        port);
+            }
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.warn("CreateLobby frame did not have a GpgNet port argument");
+        }
+
         try {
             gpgnetSender.gameState("Lobby");
         } catch (IOException e) {
@@ -215,12 +264,17 @@ public final class MockGameLifecycle {
         LOG.info("Setting up game as joiner");
         if (!(event instanceof JoinGame)) {
             throw new AssertionError(
-                    "JoinGame called without a JoinGame event, should be impossible");
+                    "joinGame called without a JoinGame event, should be impossible");
         }
         GpgNetFrame frame = ((JoinGame) event).frame();
-        String address = (String) frame.args().get(0);
-        LOG.info("Joining game from host with address {}", address);
-        // TODO: Use the address to connect to a peer.
+        try {
+            String address = frame.stringArg(0);
+            LOG.info("Joining game from host with address {}", address);
+            // TODO: Use the address to connect to a peer.
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.error("JoinGame frame did not have an IP address argument");
+            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
     }
 
     /* Transition action for peer request messages. */
@@ -231,9 +285,14 @@ public final class MockGameLifecycle {
                             + "should be impossible");
         }
         GpgNetFrame frame = ((ConnectToPeer) event).frame();
-        String address = (String) frame.args().get(0);
-        LOG.info("New peer with address {}, attempting connection now", address);
-        // TODO: Use the address to connect to a peer.
+        try {
+            String address = frame.stringArg(0);
+            LOG.info("New peer with address {}, attempting connection now", address);
+            // TODO: Use the address to connect to a peer.
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.error("ConnectToPeer frame did not have an IP address argument");
+            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
     }
 
     /* Transition action for LIVE -> ENDED. */
