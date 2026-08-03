@@ -48,6 +48,16 @@ public final class LifecycleFailureTest {
     }
 
     @Test
+    void serverDisconnectionOnInitializing() throws Exception {
+        // Stop the server now.
+        gpgnet.stop();
+        // GpgNetConnection.start fails after 10 tries (default) and sends a ServerDisconnected.
+        MockGameLifecycle lifecycle =
+                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));
+        lifecycle.stateReached(GameState.ENDED).get(3, TimeUnit.SECONDS);
+    }
+
+    @Test
     void malformedJoinGameCommand() throws Exception {
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));

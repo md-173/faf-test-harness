@@ -176,7 +176,11 @@ public final class MockGameLifecycle {
 
         // Error transitions
         GameState[] fromStates = {
-            GameState.IDLE, GameState.LOBBY, GameState.HOSTING, GameState.JOINING
+            GameState.INITIALIZING,
+            GameState.IDLE,
+            GameState.LOBBY,
+            GameState.HOSTING,
+            GameState.JOINING
         };
         for (var s : fromStates) {
             states.get(s).registerTransition(PeerDisconnected.class, states.get(GameState.ENDED));
