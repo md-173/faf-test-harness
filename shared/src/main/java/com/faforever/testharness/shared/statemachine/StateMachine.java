@@ -118,11 +118,11 @@ public class StateMachine implements EventListener {
                     for (var timeout : timeouts) {
                         timeout.cancel();
                     }
+                    timeouts.clear();
                     CompletableFuture<Void> alert = awaitedStates.remove(state);
                     if (alert != null) {
                         alert.complete(null);
                     }
-                    timeouts.clear();
                     // Stop trying more transitions.
                     return;
                 }
@@ -185,6 +185,10 @@ public class StateMachine implements EventListener {
                     timeout.cancel();
                 }
                 timeouts.clear();
+                CompletableFuture<Void> alert = awaitedStates.remove(state);
+                if (alert != null) {
+                    alert.complete(null);
+                }
             }
         }
     }
