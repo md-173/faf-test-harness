@@ -8,4 +8,4 @@ import com.faforever.testharness.shared.statemachine.Event;
  *
  * @param frame The GpgNet frame that produced this event.
  */
-public record JoinGame(GpgNetFrame frame) implements Event {}
+/*package-private*/ record JoinGame(GpgNetFrame frame) implements Event {}
