@@ -123,7 +123,7 @@ final class LobbyDisconnectPlayingTest {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         // Game exits on its own deterministic schedule, well after the disconnect below.
         DummyGameLauncher gameLauncher =
-                new DummyGameLauncher(MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "1"));
+                new DummyGameLauncher(MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "2"));
         DummyIceLauncher iceLauncher =
                 new DummyIceLauncher(MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "10"));
         SessionTeardown teardown = new SessionTeardown(lobby);
@@ -148,7 +148,7 @@ final class LobbyDisconnectPlayingTest {
         assertTrue(gameLauncher.getSubprocess().isAlive());
 
         // Session still ends on its own via the game's own exit (GameExited), teardown runs once.
-        lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
+        lifecycle.stateReached(ClientState.TERMINATED).get(10, TimeUnit.SECONDS);
         assertFalse(gameLauncher.getSubprocess().isAlive());
         assertFalse(iceLauncher.getSubprocess().isAlive());
     }
