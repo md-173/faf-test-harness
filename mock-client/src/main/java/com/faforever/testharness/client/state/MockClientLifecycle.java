@@ -25,6 +25,7 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -256,6 +257,28 @@ public final class MockClientLifecycle {
                         this::onGameExited,
                         null);
 
+        // #211: a game that dies before reaching PLAYING must still drive the FSM to TERMINATED
+        // instead of leaving the client hanging. Same action as the PLAYING edge above — cancelling
+        // the (not-yet-armed, in these states) safety-net task is a harmless no-op here.
+        states.get(ClientState.STARTING_GAME)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+        states.get(ClientState.JOINING)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+
         // Lobby loss during PLAYING (#193): the official client survives lobby loss mid-game —
         // FafServerAccessor auto-reconnects and the game is never killed, because established peer
         // connections are peer-to-peer and the lobby is only the signalling relay. The harness
@@ -303,7 +326,7 @@ public final class MockClientLifecycle {
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
 
         // Wire the game exiting to the appropriate event.
-        gameExit.thenAccept(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
+        gameExit.thenAccept(this::onGameProcessExit);
     }
 
     /**
@@ -436,6 +459,52 @@ public final class MockClientLifecycle {
         if (task != null) {
             task.cancel();
         }
+    }
+
+    /**
+     * {@link #gameExit} completion handler (#211): classifies the exit locally — WARN with the exit
+     * code on non-zero, INFO on zero — then sends the lobby the same generic {@code GameState
+     * Ended} frame the real client sends on every termination (clean or crashed; see faf-client's
+     * {@code GameRunner.notifyGameEnded}), before posting {@link GameExited} so the frame leaves
+     * before teardown closes the connection. Crash detail itself never reaches the server — only
+     * this local log line carries it, per the card's source verification (no crash-report command
+     * exists in the protocol).
+     *
+     * @param exitCode the game process's exit code.
+     */
+    private void onGameProcessExit(int exitCode) {
+        if (exitCode == 0) {
+            LOG.info("mock-game exited cleanly; exit code {}", exitCode);
+        } else {
+            LOG.warn("mock-game exited abnormally; exit code {}", exitCode);
+        }
+        sendGameStateEnded();
+        machine.receiveEvent(new GameExited(exitCode));
+    }
+
+    /**
+     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby — the
+     * exact envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send
+     * for a {@code GameState Ended} GPGNet frame. Sent directly here rather than through the
+     * forwarder because a crashed/killed game process never emits this frame to the adapter itself.
+     * Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
+     * ignored, since a dead lobby connection surfaces through the connection's own disconnect
+     * listener.
+     */
+    private void sendGameStateEnded() {
+        ObjectNode envelope = mapper.createObjectNode();
+        envelope.put("command", "GameState");
+        envelope.put("target", "game");
+        envelope.putArray("args").add("Ended");
+        lobby.send(envelope)
+                .whenComplete(
+                        (ok, error) -> {
+                            if (error != null) {
+                                LOG.warn(
+                                        "failed to send GameState Ended to lobby: {}",
+                                        error.getMessage());
+                            }
+                        });
     }
 
     private void launchGame(Event message) throws FailedTransitionException {
