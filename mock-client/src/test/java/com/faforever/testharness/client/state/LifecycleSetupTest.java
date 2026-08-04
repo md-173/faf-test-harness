@@ -14,6 +14,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
@@ -85,6 +88,12 @@ final class LifecycleSetupTest {
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
 
+    // #211: tests that stop at STARTING_GAME/HOSTING/JOINING never reach TERMINATED, so
+    // SessionTeardown never runs to reap the DummyGameLauncher/DummyIceLauncher's now-hanging
+    // subprocess (see DummyGameLauncher's javadoc). Tracked here so tearDown can terminate them.
+    private final List<DummyGameLauncher> gameLaunchers = new ArrayList<>();
+    private final List<DummyIceLauncher> iceLaunchers = new ArrayList<>();
+
     @BeforeEach
     void setUp() throws Exception {
         server = new ScriptedWebSocketServer();
@@ -97,6 +106,16 @@ final class LifecycleSetupTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        for (DummyGameLauncher launcher : gameLaunchers) {
+            if (launcher.getSubprocess() != null) {
+                launcher.getSubprocess().terminate(Duration.ofSeconds(1));
+            }
+        }
+        for (DummyIceLauncher launcher : iceLaunchers) {
+            if (launcher.getSubprocess() != null) {
+                launcher.getSubprocess().terminate(Duration.ofSeconds(1));
+            }
+        }
         if (lobby != null) {
             try {
                 lobby.close().get(2, TimeUnit.SECONDS);
@@ -112,6 +131,8 @@ final class LifecycleSetupTest {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
@@ -144,6 +165,8 @@ final class LifecycleSetupTest {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
@@ -169,6 +192,8 @@ final class LifecycleSetupTest {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle =
@@ -261,6 +286,8 @@ final class LifecycleSetupTest {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         iceConn.setupCallFail("setLobbyInitMode");
