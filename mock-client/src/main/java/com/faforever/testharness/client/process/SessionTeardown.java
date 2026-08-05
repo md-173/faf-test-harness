@@ -123,6 +123,18 @@ public final class SessionTeardown {
     }
 
     /**
+     * Whether {@link #run()} has started (and therefore, since {@link #done} is set before any
+     * step executes, always has by the time a teardown-initiated subprocess exit is observed).
+     * Read by adapter-exit classification (#214) so a SIGTERM this instance sent is not logged as
+     * a crash.
+     *
+     * @return {@code true} once {@link #run()} has been entered
+     */
+    public boolean isTearingDown() {
+        return done;
+    }
+
+    /**
      * Runs the teardown sequence once: terminate game, terminate adapter, close the adapter RPC
      * connection, close the lobby connection. Unregistered handles are skipped; a failing step is
      * logged and does not stop the rest. Subsequent (or concurrent) calls are no-ops.

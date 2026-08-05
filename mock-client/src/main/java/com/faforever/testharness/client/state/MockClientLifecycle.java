@@ -238,6 +238,35 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
+        // ICE adapter death (#214): no session survives an adapter exit to restart into (verified
+        // against downlords-faf-client and java-ice-adapter — see class javadoc for this card),
+        // so every post-launch state tears down rather than hanging. Pre-launch failures are
+        // already handled by launchGame's own exception handling and never reach this event.
+        states.get(ClientState.STARTING_GAME)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.JOINING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.PLAYING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+
         // Disconnection on any of these states results in termination.
         states.get(ClientState.CONNECTING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
@@ -438,6 +467,28 @@ public final class MockClientLifecycle {
         }
     }
 
+    /**
+     * {@link AdapterExited} transition action for STARTING_GAME/HOSTING/JOINING/PLAYING →
+     * TERMINATED (#214): classifies the adapter's own exit the way the real client's {@code
+     * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise — except once
+     * this session's teardown has already started, since every clean run terminates the adapter
+     * itself and that expected SIGTERM must not be logged as a crash. The TERMINATED entry hook
+     * (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
+     * logs.
+     *
+     * @param event the {@link AdapterExited} event that triggered this transition.
+     */
+    private void onAdapterExited(Event event) {
+        int exitCode = ((AdapterExited) event).exitCode();
+        if (teardown.isTearingDown()) {
+            LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
+        } else if (exitCode == 0) {
+            LOG.info("ICE adapter terminated normally");
+        } else {
+            LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
+        }
+    }
+
     private void launchGame(Event message) throws FailedTransitionException {
         if (!(message instanceof LaunchGame)) {
             throw new AssertionError(
@@ -448,6 +499,13 @@ public final class MockClientLifecycle {
             SubprocessManager iceAdapter = iceLauncher.start();
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
+            // #214: single detection channel for adapter death — the process exit. The RPC
+            // connection's onDisconnect fires for the same death; that channel is deliberately
+            // left unwired here (3.1.2.5 owns adapter exit-signal exposure and relocates this
+            // subscriber onto its shared future, the way 3.1.2.6 reads R26's game signal).
+            iceAdapter
+                    .onExit()
+                    .thenAccept(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
             iceConnection.connect().get();
             iceConnection
                     .call(
