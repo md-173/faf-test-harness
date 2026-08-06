@@ -169,6 +169,15 @@ final class GpgNetConnectionLiveSmokeTest {
      * Pause between the socket opening and the first {@code GameState}, covering the second half of
      * the finding in the class javadoc. The window is a few statements wide, so this is orders of
      * magnitude more than it needs to be.
+     *
+     * <p><b>Best-effort heuristic, not a guarantee.</b> Nothing asserts that the window has closed,
+     * so a long enough adapter-side stall (GC, a loaded host) reopens it silently. Raising this
+     * constant is not the fix. The deterministic replacement is the adapter's own {@code
+     * "GPGNetClient has connected"} log line: it is the last statement of the client constructor,
+     * so it proves the blocking {@code getPeerOrWait()} above it has returned, and the only thing
+     * left uncovered is the {@code currentClient} write, which completes long before the line
+     * travels the pipe into this JVM. Waiting on it needs a per-line hook on subprocess output,
+     * which {@code ProcessOutputLogger} does not have today; tracked as #225 (WBS 3.1.2.10).
      */
     private static final Duration PRE_HANDSHAKE_SETTLE = Duration.ofMillis(500);
 
