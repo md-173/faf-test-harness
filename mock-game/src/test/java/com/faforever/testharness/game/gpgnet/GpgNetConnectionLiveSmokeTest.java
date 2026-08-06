@@ -428,7 +428,9 @@ final class GpgNetConnectionLiveSmokeTest {
      * Allocate three distinct free ports. The TCP sockets are held open simultaneously so the OS
      * hands out distinct numbers; lobby is probed as UDP since the adapter binds it for game
      * traffic. All are closed before the adapter binds them, a benign TOCTOU window for a smoke
-     * test.
+     * test. If a port is taken in that window the adapter logs {@code Couldn't start GPGNetServer}
+     * and exits before we connect, so it surfaces as connect-retry exhaustion rather than a
+     * protocol failure.
      */
     private static AdapterPorts freeAdapterPorts() throws IOException {
         try (ServerSocket rpc = new ServerSocket(0);
