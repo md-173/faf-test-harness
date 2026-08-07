@@ -72,9 +72,6 @@ public final class LifecycleSetupTest {
         assertEquals("Launching", received.args().get(0));
 
         lifecycle.endMatch();
-        received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        assertEquals("GameState", received.command());
-        assertEquals("Ended", received.args().get(0));
 
         received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         assertEquals("GameResult", received.command());
@@ -84,6 +81,11 @@ public final class LifecycleSetupTest {
 
         received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         assertEquals("GameEnded", received.command());
+
+        received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        assertEquals("GameState", received.command());
+        assertEquals("Ended", received.args().get(0));
+
         lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
     }
 
@@ -105,11 +107,8 @@ public final class LifecycleSetupTest {
         lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
 
         lifecycle.endMatch();
-        GpgNetFrame received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        assertEquals("GameState", received.command());
-        assertEquals("Ended", received.args().get(0));
 
-        received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        GpgNetFrame received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         assertEquals("GameResult", received.command());
 
         received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
@@ -117,6 +116,11 @@ public final class LifecycleSetupTest {
 
         received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         assertEquals("GameEnded", received.command());
+
+        received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        assertEquals("GameState", received.command());
+        assertEquals("Ended", received.args().get(0));
+
         lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
     }
 }

@@ -174,13 +174,14 @@ public final class MockGameLifecycle {
                         this::peerConnectionRequest,
                         null);
 
-        // Error transitions
+        // Error transitions anywhere but ENDED
         GameState[] fromStates = {
             GameState.INITIALIZING,
             GameState.IDLE,
             GameState.LOBBY,
             GameState.HOSTING,
-            GameState.JOINING
+            GameState.JOINING,
+            GameState.LIVE
         };
         for (var s : fromStates) {
             states.get(s).registerTransition(PeerDisconnected.class, states.get(GameState.ENDED));
@@ -194,6 +195,8 @@ public final class MockGameLifecycle {
                 "HostGame", ignored -> machine.receiveEvent(new HostGame()));
         gpgnetDispatcher.registerHandler(
                 "JoinGame", frame -> machine.receiveEvent(new JoinGame(frame)));
+        gpgnetDispatcher.registerHandler(
+                "ConnectToPeer", frame -> machine.receiveEvent(new ConnectToPeer(frame)));
 
         gpgnet.onDisconnect(ignored -> machine.receiveEvent(new ServerDisconnected()));
 
@@ -302,12 +305,11 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            gpgnetSender.gameState("Ended");
             // TODO: Configurable values.
             gpgnetSender.gameResult(1, "victory 10");
-            // TODO: Actual json
-            gpgnetSender.jsonStats("");
+            gpgnetSender.jsonStats("{\"stats\": []}");
             gpgnetSender.gameEnded();
+            gpgnetSender.gameState("Ended");
         } catch (IOException e) {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
