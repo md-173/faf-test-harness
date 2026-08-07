@@ -28,17 +28,40 @@ import org.slf4j.MDC;
  *
  * <p>The log file path is read from the {@value #LOG_FILE_ENV} environment variable. The default is
  * {@code logs/test-harness.jsonl}.
+ *
+ * <p>The optional {@value #INSTANCE_NAME_ENV} environment variable names which instance of a
+ * component this process is (WBS-3.1.6.2). Several instances then stay attributable line by line.
+ * It pairs with {@value #LOG_FILE_ENV}. Give each instance its own label and its own file. When it
+ * is unset no {@value #INSTANCE_MDC_KEY} field is emitted, so existing output is unchanged. See
+ * {@code mock-client/README.md} § "Harness log contract".
  */
 public final class LoggingSetup {
 
     /** MDC key written into every log record to identify the source component. */
     public static final String COMPONENT_MDC_KEY = "component";
 
+    /**
+     * MDC key written into every log record to identify the instance, when one is configured. It is
+     * deliberately separate from {@value #COMPONENT_MDC_KEY}. {@link ProcessOutputLogger} rewrites
+     * the component key on every captured subprocess line, which would discard a label folded into
+     * it.
+     */
+    public static final String INSTANCE_MDC_KEY = "instance";
+
     /** Environment variable controlling the minimum log level for all components. */
     public static final String LOG_LEVEL_ENV = "LOG_LEVEL";
 
     /** Environment variable controlling the JSONL output file path. */
     public static final String LOG_FILE_ENV = "LOG_FILE";
+
+    /**
+     * Environment variable naming this instance of the component. Use a real environment variable
+     * to reach subprocesses. {@code ProcessBuilder} inherits the parent environment, so a spawner's
+     * value propagates to the mock game and adapter this process launches and their own logs
+     * self-label with it. A {@code -D} system property of the same name is honoured for this JVM
+     * only and does not cross a process boundary.
+     */
+    public static final String INSTANCE_NAME_ENV = "INSTANCE_NAME";
 
     private LoggingSetup() {}
 
@@ -69,6 +92,37 @@ public final class LoggingSetup {
         // resolved by ComponentConverter and JsonLineEncoder when the MDC is empty.
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.putProperty(COMPONENT_MDC_KEY, componentName);
+
+        // Same two-place treatment for the instance label (WBS-3.1.6.2). The context property is
+        // load-bearing rather than a nicety here: logback 1.5's MDC is a plain ThreadLocal, so the
+        // subprocess capture threads in ProcessOutputLogger and the adapter's reader thread never
+        // see the value put above, and those are exactly the lines a multi-instance harness needs
+        // to attribute.
+        String instanceName = resolveInstanceName();
+        if (!instanceName.isEmpty()) {
+            MDC.put(INSTANCE_MDC_KEY, instanceName);
+            context.putProperty(INSTANCE_MDC_KEY, instanceName);
+        }
+    }
+
+    /**
+     * Resolves this process's instance label. A {@code -D} system property wins over the
+     * environment variable, matching the precedence Logback itself applies to {@value
+     * #LOG_FILE_ENV} and letting a future {@code --instance-name} flag set the property without
+     * changing this class.
+     *
+     * @return the trimmed label, or an empty string when neither source supplies a non-blank value
+     */
+    static String resolveInstanceName() {
+        String fromProperty = System.getProperty(INSTANCE_NAME_ENV);
+        if (fromProperty != null && !fromProperty.isBlank()) {
+            return fromProperty.trim();
+        }
+        String fromEnv = System.getenv(INSTANCE_NAME_ENV);
+        if (fromEnv != null && !fromEnv.isBlank()) {
+            return fromEnv.trim();
+        }
+        return "";
     }
 
     /**
