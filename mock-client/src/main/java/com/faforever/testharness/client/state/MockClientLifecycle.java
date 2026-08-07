@@ -4,6 +4,7 @@ import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.ice.IceEventLogger;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameJoinSender;
@@ -689,6 +690,10 @@ public final class MockClientLifecycle {
             // clean-end signal and records it. Sends nothing and tears down nothing directly; R72's
             // frame forwarding (above) is the reporting, R59b's TERMINATED action is the teardown.
             iceConnection.registerNotification("onGpgNetMessageReceived", this::onGpgNetMessage);
+            // Harness-facing connection-state reporting (WBS-3.1.6.2). Read-only observer on the
+            // same fan-out: it reports the GPGNet link and the per-peer ICE transitions the Phase 5
+            // fault-injection tests measure, and sends nothing.
+            new IceEventLogger(iceConnection).start();
             SubprocessManager gameBinary = gameLauncher.start(identity);
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
