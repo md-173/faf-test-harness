@@ -217,9 +217,23 @@ public final class MockClientLifecycle {
                 new StateMachine(
                         states.get(ClientState.CONNECTING), InvalidTransitionPolicy.IGNORE);
         setupStateMachine();
+
+        // The framework assigns the initial state directly and never runs its entry hooks, so the
+        // hook registered in setupStateMachine cannot report CONNECTING. Emit it here instead,
+        // otherwise a harness reading the log would never see the state the client starts in
+        // (WBS-3.1.6.2).
+        logStateEntry(ClientState.CONNECTING);
     }
 
     private void setupStateMachine() {
+        // Harness-facing state reporting (WBS-3.1.6.2). Registered before every other entry hook
+        // so the line precedes that state's side effects, such as the game_host send on IDLE and
+        // teardown on TERMINATED. Self-loops skip entry hooks, so a stay-in-state transition such
+        // as the lobby-loss path on PLAYING does not emit a duplicate line.
+        for (var s : ClientState.values()) {
+            states.get(s).onEntry(() -> logStateEntry(s));
+        }
+
         // Transitions between states, caused by internal events.
         states.get(ClientState.CONNECTING)
                 .registerTransition(
@@ -618,6 +632,17 @@ public final class MockClientLifecycle {
         // into the CreateLobby frame that tells the game who it is.
         LaunchIdentity identity =
                 new LaunchIdentity(sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
+        // Harness-facing identity line (WBS-3.1.6.2). The uid is what a second instance needs as
+        // its join target, and it reaches no other output. Logged from the transition action
+        // rather than from GameLaunchHandler so it reports the game this client actually entered,
+        // not every game_launch frame that arrived. Host and joiner both receive game_launch, so
+        // one line serves both roles. The free-text name is last, keeping the fields ahead of it
+        // unambiguous to parse.
+        LOG.info(
+                "game launch: uid={} mod={} name={}",
+                gameConfig.uid(),
+                gameConfig.mod(),
+                gameConfig.name());
         try {
             SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
@@ -792,6 +817,17 @@ public final class MockClientLifecycle {
         GameJoinConfig joinConfig = config.joinConfig().get();
         LOG.info("Sending game_join for uid={}", joinConfig.targetGameId());
         new GameJoinSender(lobby).sendGameJoin(joinConfig);
+    }
+
+    /**
+     * Emits the harness-facing state line for one state entry (WBS-3.1.6.2). The format is a
+     * documented interface, described in {@code mock-client/README.md} § "Harness log contract".
+     * Changing it breaks the harness cards that parse it.
+     *
+     * @param state the state that was just entered.
+     */
+    private void logStateEntry(ClientState state) {
+        LOG.info("state entry: {}", state);
     }
 
     /**
