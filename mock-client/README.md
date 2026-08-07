@@ -359,11 +359,12 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ### Multiple clients on one box
 
 To simulate 2–4 players locally, give each instance its own ports, player ID,
-and log file. Public values come from the shared config file, per-client values
-come from CLI flags:
+log file, and instance name. Public values come from the shared config file,
+per-client values come from CLI flags and the `INSTANCE_NAME` environment
+variable:
 
 ```bash
-./gradlew :mock-client:run --args="\
+INSTANCE_NAME=peer-a ./gradlew :mock-client:run --args="\
   run \
   --config mock-client.json \
   --player-id-override 1 \
@@ -371,7 +372,7 @@ come from CLI flags:
   --ice-adapter-gpg-net-port 7237 \
   --log-file logs/client-1.jsonl" &
 
-./gradlew :mock-client:run --args="\
+INSTANCE_NAME=peer-b ./gradlew :mock-client:run --args="\
   run \
   --config mock-client.json \
   --player-id-override 2 \
@@ -379,6 +380,71 @@ come from CLI flags:
   --ice-adapter-gpg-net-port 7247 \
   --log-file logs/client-2.jsonl" &
 ```
+
+`INSTANCE_NAME` and `--log-file` are the multi-instance convention: the label
+identifies the instance inside each record, the file separates the streams.
+Use the environment variable rather than `-DINSTANCE_NAME`, because the value
+is inherited by the `faf-ice-adapter` and `mock-game` subprocesses this client
+launches, so their own logs carry the same label. A system property would not
+cross the process boundary. Leaving it unset is the normal single-instance
+case and changes nothing about the output.
+
+## Harness log contract
+
+An automated harness observes a running client from the outside, through its
+log records alone (WBS-3.1.6.2). There is no health port and no readiness
+message — see the note at the end of this section. The formats below are a
+documented interface consumed by the N-client spawner (WBS 4.2.2) and the
+fault-injection cards (Phase 5). **Changing any of them is a breaking change**
+for those cards, and each is pinned by a test that parses real JSONL records
+(`HarnessLogContractTest`, `IceEventLoggerTest`).
+
+Read the JSONL file rather than the console: every record is one line of JSON
+with a millisecond `timestamp`, a `component`, and an `instance` when one is
+named.
+
+### Lifecycle
+
+One record on entry to each FSM state. `CONNECTING` is emitted once when the
+lifecycle is constructed, because the initial state fires no entry hook. A
+transition that stays in the same state, such as losing the lobby while
+`PLAYING`, does not repeat the line.
+
+| Line | Meaning |
+|---|---|
+| `state entry: <STATE>` | The client entered `<STATE>`, one of `CONNECTING`, `IDLE`, `STARTING_GAME`, `HOSTING`, `JOINING`, `PLAYING`, `TERMINATED`. |
+
+The line precedes that state's side effects, so `state entry: TERMINATED`
+appears before teardown output.
+
+### Identity
+
+| Line | Meaning |
+|---|---|
+| `session ready: id=<id> login=<login>` | The lobby assigned this client its player ID and login in the `welcome` frame. |
+| `game launch: uid=<uid> mod=<mod> name=<name>` | This client entered the game with lobby-assigned `<uid>`. The uid is what a second instance needs as its join target. Emitted by host and joiner alike. `name` is free text and always last. |
+
+### Connection state
+
+Three distinct signals. They are **not** interchangeable, and only the peer
+ones move during ICE negotiation:
+
+| Line | Meaning |
+|---|---|
+| `gpgnet link: state=<state>` | The local mock game connected to or disconnected from this client's adapter over GPGNet. Not a peer signal. |
+| `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer, mirroring `RTCPeerConnection.iceConnectionState` (`new`, `checking`, `connected`, `completed`, `failed`, `disconnected`, `closed`). These are the transitions delayed-negotiation tests measure. |
+| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal. |
+
+Player IDs are 64-bit, matching the adapter's `RPCService` signatures.
+
+A malformed notification is logged at WARN with the prefix
+`dropping malformed <method>` and produces no contract line.
+
+> **Why logs and not a health port.** The lobby protocol has no readiness
+> channel to be faithful to: faf-server's `command_match_ready` is an
+> unimplemented stub, and the only liveness mechanism is ping/pong. A harness
+> already has two capture channels, this JSONL file and the spawner's own
+> stdout capture, so a health port would have no consumer today.
 
 ## Failure mode
 

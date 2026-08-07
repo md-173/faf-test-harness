@@ -156,8 +156,14 @@ Same as the WebRTC IDL — `{ "urls": [string], "username"?: string, "credential
 | `onConnectionStateChanged` | `state: "Connected" \| "Disconnected"` | The game has connected (or disconnected) to the adapter's internal GPGNet TCP server. |
 | `onGpgNetMessageReceived` | `header: string`, `chunks: array` | The game emitted a GPGNet frame; the adapter forwards it verbatim. |
 | `onIceMsg` | `localPlayerId: int`, `remotePlayerId: int`, `msg: object` | A local PeerRelay produced an ICE candidate / SDP for `remotePlayerId`. The Mock Client must forward this to the lobby (see §7). |
-| `onIceConnectionStateChanged` | `localPlayerId: int`, `remotePlayerId: int`, `state: string` | Mirrors `RTCPeerConnection.iceConnectionState` (`new` / `checking` / `connected` / `completed` / `failed` / `disconnected` / `closed`). |
-| `onConnected` | `localPlayerId: int`, `remotePlayerId: int`, `connected: bool` | High-level summary: the peer is reachable / unreachable. |
+| `onIceConnectionStateChanged` | `localPlayerId: long`, `remotePlayerId: long`, `state: string` | Mirrors `RTCPeerConnection.iceConnectionState` (`new` / `checking` / `connected` / `completed` / `failed` / `disconnected` / `closed`). |
+| `onConnected` | `localPlayerId: long`, `remotePlayerId: long`, `connected: bool` | High-level summary: the peer is reachable / unreachable. |
+
+> **Player id width.** The two peer notifications above declare their ids as
+> `long`, not `int` — `RPCService.onIceConnectionStateChanged(long, long,
+> String)` and `RPCService.onConnected(long, long, boolean)`, verified against
+> the shipped adapter jar. `onIceMsg` uses `int` (`CandidatesMessage`).
+> Consumers of the peer notifications must parse with `asLong()`.
 
 > **Undocumented notification.** The README's "Example usage sequence"
 > mentions `onDatachannelOpen` as an alternative readiness indicator, but
