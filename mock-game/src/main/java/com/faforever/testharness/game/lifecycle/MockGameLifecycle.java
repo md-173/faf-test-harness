@@ -155,7 +155,8 @@ public final class MockGameLifecycle {
                 .registerTransition(
                         LaunchMatch.class, states.get(GameState.LIVE), this::matchBegins, null);
         states.get(GameState.JOINING)
-                .registerTransition(LaunchMatch.class, states.get(GameState.LIVE));
+                .registerTransition(
+                        LaunchMatch.class, states.get(GameState.LIVE), this::matchBegins, null);
         states.get(GameState.LIVE)
                 .registerTransition(
                         GameEnded.class, states.get(GameState.ENDED), this::gameEnds, null);
@@ -257,7 +258,7 @@ public final class MockGameLifecycle {
         // TODO: Game options here
     }
 
-    /* Transition action for HOST -> LIVE. */
+    /* Transition action for HOSTING/JOINING -> LIVE. */
     private void matchBegins(Event event) throws FailedTransitionException {
         try {
             gpgnetSender.gameState("Launching");

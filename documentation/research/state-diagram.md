@@ -44,7 +44,7 @@ stateDiagram-v2
         JOINING : Receive and handle ConnectToPeer messages
     }
     HOSTING --> LIVE : All players connected / Send GameState(Launching) message
-    JOINING --> LIVE : Host starts peer-to-peer communication
+    JOINING --> LIVE : Host starts peer-to-peer communication / Send GameState(Launching) message
 
     LIVE --> LIVE : Peer desynchronises [desyncs <= 20] / Send Desync message
     LIVE --> ENDED : Game finished / Send GameState(Ended) message

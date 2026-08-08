@@ -104,11 +104,14 @@ public final class LifecycleSetupTest {
         lifecycle.stateReached(GameState.JOINING).get(1, TimeUnit.SECONDS);
 
         lifecycle.launchMatch();
+        GpgNetFrame received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
+        assertEquals("GameState", received.command());
+        assertEquals("Launching", received.args().get(0));
 
         lifecycle.endMatch();
 
-        GpgNetFrame received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
         assertEquals("GameResult", received.command());
 
         received = gpgnet.pollReceived(1, TimeUnit.SECONDS);
