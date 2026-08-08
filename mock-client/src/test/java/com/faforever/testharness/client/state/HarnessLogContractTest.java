@@ -8,6 +8,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.ice.IceEventLogger;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -126,7 +127,8 @@ final class HarnessLogContractTest {
         loggers =
                 List.of(
                         context.getLogger(MockClientLifecycle.class),
-                        context.getLogger(SessionTeardown.class));
+                        context.getLogger(SessionTeardown.class),
+                        context.getLogger(IceEventLogger.class));
         loggers.forEach(l -> l.addAppender(appender));
     }
 
@@ -183,11 +185,15 @@ final class HarnessLogContractTest {
     }
 
     private MockClientLifecycle newLifecycle() {
+        return newLifecycle(new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()));
+    }
+
+    private MockClientLifecycle newLifecycle(DummyIceAdapterConnection adapter) {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         return new MockClientLifecycle(
                 MINIMAL_CONFIG,
                 session,
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                adapter,
                 new DummyGameLauncher(MINIMAL_CONFIG),
                 new DummyIceLauncher(MINIMAL_CONFIG),
                 new SessionTeardown(lobby));
@@ -256,6 +262,23 @@ final class HarnessLogContractTest {
         assertTrue(
                 stateLine < sideEffect,
                 "the state line must precede that state's side effects: " + captured);
+    }
+
+    @Test
+    void reportsPeerStateFromAnOrchestratedSession() {
+        DummyIceAdapterConnection adapter =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        MockClientLifecycle lifecycle = newLifecycle(adapter);
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        ObjectNode notification = MAPPER.createObjectNode();
+        notification.set("params", MAPPER.createArrayNode().add(1).add(2).add(true));
+        adapter.fireNotification("onConnected", notification);
+
+        assertTrue(
+                messages().contains("peer connected: local=1 remote=2 connected=true"),
+                "a launched session must wire the adapter event logger, not merely define it");
     }
 
     @Test
