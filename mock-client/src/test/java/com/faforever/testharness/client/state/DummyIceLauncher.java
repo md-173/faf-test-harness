@@ -12,12 +12,14 @@ class DummyIceLauncher extends IceAdapterLauncher {
     private final ProcessBuilder builder;
     private SubprocessManager subprocess;
 
+    // #211: see DummyGameLauncher's matching constructors for why the default builder must not
+    // exit on its own.
     DummyIceLauncher(MockClientConfig config) {
-        this(config, false, new ProcessBuilder("echo"));
+        this(config, false, new ProcessBuilder("sort"));
     }
 
     DummyIceLauncher(MockClientConfig config, boolean throwException) {
-        this(config, throwException, new ProcessBuilder("echo"));
+        this(config, throwException, new ProcessBuilder("sort"));
     }
 
     DummyIceLauncher(MockClientConfig config, boolean throwException, ProcessBuilder builder) {

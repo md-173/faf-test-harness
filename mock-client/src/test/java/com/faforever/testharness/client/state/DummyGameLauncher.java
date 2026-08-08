@@ -12,12 +12,17 @@ class DummyGameLauncher extends MockGameLauncher {
     private final ProcessBuilder builder;
     private SubprocessManager subprocess;
 
+    // #211: HOSTING/JOINING/STARTING_GAME now drive to TERMINATED on GameExited, so a launcher
+    // whose default subprocess exits on its own would race that transition against whatever state
+    // a test is asserting on. "sort" with no arguments blocks on stdin EOF on both Windows and
+    // POSIX (the GameEndReportingTest HANGING_PROCESS pattern), keeping the process alive for the
+    // test's duration unless a test explicitly supplies its own (quick-exiting) builder.
     DummyGameLauncher(MockClientConfig config) {
-        this(config, false, new ProcessBuilder("echo"));
+        this(config, false, new ProcessBuilder("sort"));
     }
 
     DummyGameLauncher(MockClientConfig config, boolean throwException) {
-        this(config, throwException, new ProcessBuilder("echo"));
+        this(config, throwException, new ProcessBuilder("sort"));
     }
 
     DummyGameLauncher(MockClientConfig config, boolean throwException, ProcessBuilder builder) {

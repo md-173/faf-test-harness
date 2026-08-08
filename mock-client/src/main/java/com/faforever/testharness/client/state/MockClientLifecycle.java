@@ -25,6 +25,7 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -238,34 +239,7 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
-        // ICE adapter death (#214): no session survives an adapter exit to restart into (verified
-        // against downlords-faf-client and java-ice-adapter — see class javadoc for this card),
-        // so every post-launch state tears down rather than hanging. Pre-launch failures are
-        // already handled by launchGame's own exception handling and never reach this event.
-        states.get(ClientState.STARTING_GAME)
-                .registerTransition(
-                        AdapterExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onAdapterExited,
-                        null);
-        states.get(ClientState.HOSTING)
-                .registerTransition(
-                        AdapterExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onAdapterExited,
-                        null);
-        states.get(ClientState.JOINING)
-                .registerTransition(
-                        AdapterExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onAdapterExited,
-                        null);
-        states.get(ClientState.PLAYING)
-                .registerTransition(
-                        AdapterExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onAdapterExited,
-                        null);
+        registerAdapterExitedTransitions();
 
         // Disconnection on any of these states results in termination.
         states.get(ClientState.CONNECTING)
@@ -279,6 +253,28 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.PLAYING)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+
+        // #211: a game that dies before reaching PLAYING must still drive the FSM to TERMINATED
+        // instead of leaving the client hanging. Same action as the PLAYING edge above — cancelling
+        // the (not-yet-armed, in these states) safety-net task is a harmless no-op here.
+        states.get(ClientState.STARTING_GAME)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onGameExited,
+                        null);
+        states.get(ClientState.JOINING)
                 .registerTransition(
                         GameExited.class,
                         states.get(ClientState.TERMINATED),
@@ -331,12 +327,51 @@ public final class MockClientLifecycle {
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
 
-        // Wire the game exiting to the appropriate event. Async for the same reason as the
-        // adapter's wiring below (#214): GameExited's TERMINATED entry hook synchronously
-        // terminates the adapter and awaits its exit, and that await needs the JDK's process-
-        // reaper machinery free to observe the adapter's death — a synchronous thenAccept here
-        // would tie up that same machinery with this event's handling instead.
-        gameExit.thenAcceptAsync(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
+        // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
+        // #214): a game that exits near-instantly can complete gameExit on the same thread that
+        // is still inside launchGame()/StateMachine#receiveEvent, before the LaunchGame transition
+        // has installed STARTING_GAME as the current state — receiveEvent is synchronized and
+        // publishes the new state before releasing its lock, so hopping to the common pool here
+        // guarantees this continuation cannot run until that transition has actually completed.
+        // It also keeps GameExited's TERMINATED entry hook (which synchronously terminates the
+        // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
+        // own exit wiring below needs free to observe that death.
+        gameExit.thenAcceptAsync(this::onGameProcessExit);
+    }
+
+    /**
+     * Registers the ICE adapter death edges (#214): no session survives an adapter exit to restart
+     * into (verified against downlords-faf-client and java-ice-adapter — see class javadoc for this
+     * card), so every post-launch state tears down rather than hanging. Pre-launch failures are
+     * already handled by {@link #launchGame}'s own exception handling and never reach this event.
+     * Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
+     * limit.
+     */
+    private void registerAdapterExitedTransitions() {
+        states.get(ClientState.STARTING_GAME)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.JOINING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.PLAYING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
     }
 
     /**
@@ -472,6 +507,61 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * {@link #gameExit} completion handler (#211): classifies the exit locally, then sends the
+     * lobby the same generic {@code GameState Ended} frame the real client sends on every
+     * termination (clean or crashed; see faf-client's {@code GameRunner.notifyGameEnded}), before
+     * posting {@link GameExited} so the frame leaves before teardown closes the connection. Crash
+     * detail itself never reaches the server — only this local log line carries it, per the card's
+     * source verification (no crash-report command exists in the protocol).
+     *
+     * <p>Classification: INFO on a zero exit; INFO (not WARN) on a non-zero exit once {@link
+     * #teardown}'s {@link SessionTeardown#hasRun()} is {@code true}, since {@link
+     * SessionTeardown#run()} sets that flag before it sends the SIGTERM that produces exactly this
+     * exit code (143 on POSIX, 1 on Windows) on every ordinary shutdown, not just the #192 safety
+     * net — the real client's {@code gameKilled} flag suppresses the same false crash. Otherwise
+     * WARN with the code. A genuine crash is unaffected: it completes {@link #gameExit} — and so
+     * this handler — before teardown ever runs, so the flag is still false.
+     *
+     * @param exitCode the game process's exit code.
+     */
+    private void onGameProcessExit(int exitCode) {
+        if (exitCode == 0) {
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
+        } else if (teardown.hasRun()) {
+            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
+        } else {
+            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
+        }
+        sendGameStateEnded();
+        machine.receiveEvent(new GameExited(exitCode));
+    }
+
+    /**
+     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby — the
+     * exact envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send
+     * for a {@code GameState Ended} GPGNet frame. Sent directly here rather than through the
+     * forwarder because a crashed/killed game process never emits this frame to the adapter itself.
+     * Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
+     * ignored, since a dead lobby connection surfaces through the connection's own disconnect
+     * listener.
+     */
+    private void sendGameStateEnded() {
+        ObjectNode envelope = mapper.createObjectNode();
+        envelope.put("command", "GameState");
+        envelope.put("target", "game");
+        envelope.putArray("args").add("Ended");
+        lobby.send(envelope)
+                .whenComplete(
+                        (ok, error) -> {
+                            if (error != null) {
+                                LOG.warn(
+                                        "failed to send GameState Ended to lobby: {}",
+                                        error.getMessage());
+                            }
+                        });
+    }
+
+    /**
      * {@link AdapterExited} transition action for STARTING_GAME/HOSTING/JOINING/PLAYING →
      * TERMINATED (#214): classifies the adapter's own exit the way the real client's {@code
      * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise — except once
@@ -483,7 +573,7 @@ public final class MockClientLifecycle {
      */
     private void onAdapterExited(Event event) {
         int exitCode = ((AdapterExited) event).exitCode();
-        if (teardown.isTearingDown()) {
+        if (teardown.hasRun()) {
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else if (exitCode == 0) {
             LOG.info("ICE adapter terminated normally");
