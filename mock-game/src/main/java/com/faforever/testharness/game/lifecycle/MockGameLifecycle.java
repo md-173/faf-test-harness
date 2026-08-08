@@ -44,7 +44,7 @@ public final class MockGameLifecycle {
     /** Send messages to the GpgNet server. */
     private final GpgNetSender gpgnetSender;
 
-    /** Receive messages from the GpgNet serveer. */
+    /** Receive messages from the GpgNet server. */
     private final GpgNetDispatcher gpgnetDispatcher;
 
     /** A timeout for the GpgNet connection, in milliseconds. */
@@ -101,17 +101,17 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Instruct the lifecycle to launch the match. Idempotent outside of the LAUNCHING and JOINING
+     * Instruct the lifecycle to launch the match. Ignored outside of the HOSTING and JOINING
      * states.
      */
     public void launchMatch() {
-        LOG.info("Launching match");
+        LOG.info("Manually instructed to launch match");
         machine.receiveEvent(new LaunchMatch());
     }
 
-    /** Instruct the lifecycle to end the match. Idempotent outside of the LIVE state. */
+    /** Instruct the lifecycle to end the match. Ignored outside of the LIVE state. */
     public void endMatch() {
-        LOG.info("Ending match");
+        LOG.info("Manually instructed to end match");
         machine.receiveEvent(new GameEnded());
     }
 
@@ -238,8 +238,8 @@ public final class MockGameLifecycle {
                 LOG.warn(
                         "CreateLobby lobby port ({}) differ "
                                 + "from config lobby port ({}), might cause connection issues",
-                        config.lobbyPort(),
-                        port);
+                        port,
+                        config.lobbyPort());
             }
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.warn("CreateLobby frame did not have a GpgNet port argument");
