@@ -331,8 +331,12 @@ public final class MockClientLifecycle {
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
 
-        // Wire the game exiting to the appropriate event.
-        gameExit.thenAccept(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
+        // Wire the game exiting to the appropriate event. Async for the same reason as the
+        // adapter's wiring below (#214): GameExited's TERMINATED entry hook synchronously
+        // terminates the adapter and awaits its exit, and that await needs the JDK's process-
+        // reaper machinery free to observe the adapter's death — a synchronous thenAccept here
+        // would tie up that same machinery with this event's handling instead.
+        gameExit.thenAcceptAsync(exitCode -> machine.receiveEvent(new GameExited(exitCode)));
     }
 
     /**
@@ -502,9 +506,17 @@ public final class MockClientLifecycle {
             // connection's onDisconnect fires for the same death; that channel is deliberately
             // left unwired here (3.1.2.5 owns adapter exit-signal exposure and relocates this
             // subscriber onto its shared future, the way 3.1.2.6 reads R26's game signal).
+            //
+            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run
+            // synchronously on the JDK's internal process-reaper machinery by default, and this
+            // event's handling can itself block on that same machinery (TERMINATED's entry hook
+            // synchronously terminates subprocesses via SessionTeardown, which awaits their exit
+            // futures). A synchronous thenAccept here ties up the reaper thread that a concurrent
+            // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
+            // a full termination grace. thenAcceptAsync moves the event post off that thread.
             iceAdapter
                     .onExit()
-                    .thenAccept(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
+                    .thenAcceptAsync(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
             iceConnection.connect().get();
             iceConnection
                     .call(
