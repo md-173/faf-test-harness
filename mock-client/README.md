@@ -383,11 +383,16 @@ INSTANCE_NAME=peer-b ./gradlew :mock-client:run --args="\
 
 `INSTANCE_NAME` and `--log-file` are the multi-instance convention: the label
 identifies the instance inside each record, the file separates the streams.
-Use the environment variable rather than `-DINSTANCE_NAME`, because the value
-is inherited by the `faf-ice-adapter` and `mock-game` subprocesses this client
-launches, so their own logs carry the same label. A system property would not
-cross the process boundary. Leaving it unset is the normal single-instance
-case and changes nothing about the output.
+Leaving it unset is the normal single-instance case and changes nothing about
+the output.
+
+Use the environment variable rather than `-DINSTANCE_NAME`. The value is
+inherited by the subprocesses this client launches, so `mock-game` reads it at
+its own startup and self-labels its own log file with it; a system property
+would not cross the process boundary. `faf-ice-adapter` is a third-party
+binary that knows nothing about the variable, so its output is labelled only
+in the records this client captures from its stdout and stderr, not in any log
+the adapter writes itself.
 
 ## Harness log contract
 

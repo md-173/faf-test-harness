@@ -56,10 +56,11 @@ public final class LoggingSetup {
 
     /**
      * Environment variable naming this instance of the component. Use a real environment variable
-     * to reach subprocesses. {@code ProcessBuilder} inherits the parent environment, so a spawner's
-     * value propagates to the mock game and adapter this process launches and their own logs
-     * self-label with it. A {@code -D} system property of the same name is honoured for this JVM
-     * only and does not cross a process boundary.
+     * rather than a {@code -D} system property. {@code ProcessBuilder} inherits the parent
+     * environment, so a spawner's value reaches the mock game this process launches and its own
+     * logs self-label with it. A system property is honoured for this JVM only and does not cross
+     * a process boundary. The third-party ICE adapter knows nothing of this variable, so its
+     * output carries the label only where this process captures it.
      */
     public static final String INSTANCE_NAME_ENV = "INSTANCE_NAME";
 

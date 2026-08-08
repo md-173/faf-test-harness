@@ -103,7 +103,7 @@ final class HarnessLogContractTest {
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
     private ListAppender<ILoggingEvent> appender;
-    private Logger logger;
+    private List<Logger> loggers;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -114,21 +114,27 @@ final class HarnessLogContractTest {
         server.awaitFirstClient();
 
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
-        logger = context.getLogger(MockClientLifecycle.class);
         appender = new ListAppender<>();
         // The lifecycle also logs from lobby and adapter callback threads, so the default
         // ArrayList would be mutated while a test iterates it.
         appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(context);
         appender.start();
-        logger.addAppender(appender);
+        // One appender on both loggers, so entries land in a single list in emission order. That
+        // is what makes the state line's position relative to teardown's own output observable;
+        // teardown logs under its own class, not the lifecycle's.
+        loggers =
+                List.of(
+                        context.getLogger(MockClientLifecycle.class),
+                        context.getLogger(SessionTeardown.class));
+        loggers.forEach(l -> l.addAppender(appender));
     }
 
     @AfterEach
     void tearDown() throws Exception {
         if (appender != null) {
             appender.stop();
-            logger.detachAppender(appender);
+            loggers.forEach(l -> l.detachAppender(appender));
         }
         if (lobby != null) {
             try {
@@ -243,13 +249,35 @@ final class HarnessLogContractTest {
         lifecycle.shutdown();
 
         List<String> captured = messages();
+        int stateLine = captured.indexOf("state entry: TERMINATED");
+        int sideEffect = captured.indexOf("tearing down session");
+        assertTrue(stateLine >= 0, "TERMINATED must be reported: " + captured);
+        assertTrue(sideEffect >= 0, "sanity: teardown runs on TERMINATED entry: " + captured);
         assertTrue(
-                captured.indexOf("state entry: TERMINATED")
-                        > captured.indexOf("Manual shutdown" + " requested"),
-                "sanity: shutdown precedes the state it drives to");
-        assertTrue(
-                captured.contains("state entry: TERMINATED"),
-                "teardown must not swallow the state line");
+                stateLine < sideEffect,
+                "the state line must precede that state's side effects: " + captured);
+    }
+
+    @Test
+    void reportsTerminatedOnceWhenLaunchFails() {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyGameLauncher(MINIMAL_CONFIG),
+                        new DummyIceLauncher(MINIMAL_CONFIG, true),
+                        new SessionTeardown(lobby));
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertEquals(
+                List.of("state entry: CONNECTING", "state entry: IDLE", "state entry: TERMINATED"),
+                messages().stream().filter(m -> m.startsWith("state entry:")).toList(),
+                "a failed launch reports the state it lands in, and never entered STARTING_GAME");
     }
 
     @Test

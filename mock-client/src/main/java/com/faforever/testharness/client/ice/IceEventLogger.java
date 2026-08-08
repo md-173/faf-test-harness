@@ -22,8 +22,8 @@ import org.slf4j.LoggerFactory;
  * adapter's {@code RPCService} signatures. The spec table calls them ints, which is wrong.
  *
  * <p>Malformed notifications are logged at WARN and dropped, per the codebase's log-and-drop
- * convention. Handlers run on the adapter's reader thread and only format strings, so they never
- * block it.
+ * convention. Handlers run on the adapter's reader thread and do nothing but log, matching what
+ * that thread already does elsewhere.
  */
 public final class IceEventLogger {
 
@@ -130,10 +130,13 @@ public final class IceEventLogger {
 
     /**
      * Checks that a params array carries the two player ids both peer notifications start with. The
-     * ids are longs on the wire, so an int-only check would reject valid values.
+     * ids are longs on the wire, so an int-only check would reject valid values. The range check is
+     * deliberately all this does. The adapter only ever sends integral ids, and a stricter guard
+     * would buy nothing.
      *
      * @param params the {@code params} node, possibly {@code null}
-     * @return {@code true} if the two leading ids and a third element are present and well typed
+     * @return {@code true} if the two leading ids and a third element are present, with ids in long
+     *     range
      */
     private static boolean hasPeerIds(final JsonNode params) {
         return params != null
