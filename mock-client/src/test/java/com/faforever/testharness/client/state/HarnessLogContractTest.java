@@ -185,16 +185,23 @@ final class HarnessLogContractTest {
     }
 
     private MockClientLifecycle newLifecycle() {
-        return newLifecycle(new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()));
+        return newLifecycle(
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                new DummyGameLauncher(MINIMAL_CONFIG));
     }
 
     private MockClientLifecycle newLifecycle(DummyIceAdapterConnection adapter) {
+        return newLifecycle(adapter, new DummyGameLauncher(MINIMAL_CONFIG));
+    }
+
+    private MockClientLifecycle newLifecycle(
+            DummyIceAdapterConnection adapter, DummyGameLauncher gameLauncher) {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         return new MockClientLifecycle(
                 MINIMAL_CONFIG,
                 session,
                 adapter,
-                new DummyGameLauncher(MINIMAL_CONFIG),
+                gameLauncher,
                 new DummyIceLauncher(MINIMAL_CONFIG),
                 new SessionTeardown(lobby));
     }
@@ -232,7 +239,17 @@ final class HarnessLogContractTest {
 
     @Test
     void emitsNoDuplicateStateLineWhenStayingInState() {
-        MockClientLifecycle lifecycle = newLifecycle();
+        // A game process that outlives the test. The default launcher runs "echo", which exits at
+        // once: its GameExited lands while the FSM is still in HOSTING, where that event is
+        // unregistered and silently dropped, so PLAYING is never genuinely exposed to it. Under
+        // load the same exit can instead land in PLAYING and drive the session to TERMINATED,
+        // failing the assertion below. LobbyDisconnectPlayingTest keeps its game alive for the
+        // same reason.
+        MockClientLifecycle lifecycle =
+                newLifecycle(
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyGameLauncher(
+                                MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "10")));
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
@@ -246,6 +263,9 @@ final class HarnessLogContractTest {
                 1,
                 messages().stream().filter(m -> m.equals("state entry: PLAYING")).count(),
                 "a stay-in-state transition must not look like a fresh entry");
+
+        // The session never reaches TERMINATED here, so nothing else would reap the game.
+        lifecycle.shutdown();
     }
 
     @Test
@@ -301,6 +321,9 @@ final class HarnessLogContractTest {
                 List.of("state entry: CONNECTING", "state entry: IDLE", "state entry: TERMINATED"),
                 messages().stream().filter(m -> m.startsWith("state entry:")).toList(),
                 "a failed launch reports the state it lands in, and never entered STARTING_GAME");
+        assertTrue(
+                messages().stream().noneMatch(m -> m.startsWith("game launch:")),
+                "a failed launch must not publish a join target for a session that never came up");
     }
 
     @Test

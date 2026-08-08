@@ -382,17 +382,26 @@ INSTANCE_NAME=peer-b ./gradlew :mock-client:run --args="\
 ```
 
 `INSTANCE_NAME` and `--log-file` are the multi-instance convention: the label
-identifies the instance inside each record, the file separates the streams.
-Leaving it unset is the normal single-instance case and changes nothing about
-the output.
+identifies the instance inside each record, the file separates the two
+clients' own streams. Leaving it unset is the normal single-instance case and
+changes nothing about the output.
 
-Use the environment variable rather than `-DINSTANCE_NAME`. The value is
-inherited by the subprocesses this client launches, so `mock-game` reads it at
-its own startup and self-labels its own log file with it; a system property
-would not cross the process boundary. `faf-ice-adapter` is a third-party
-binary that knows nothing about the variable, so its output is labelled only
-in the records this client captures from its stdout and stderr, not in any log
-the adapter writes itself.
+`--log-file` separates the clients but not their children. It is a CLI flag,
+so it becomes a system property, and system properties do not cross a process
+boundary. Every `mock-game` therefore falls back to its own default and **both
+instances' games append to the same `logs/mockgame.jsonl`**. `INSTANCE_NAME` is
+what keeps those interleaved records attributable, which is the main reason the
+label exists. Do not export `LOG_FILE` to work around this: the child inherits
+it and two writers end up on one rolling file (see `MockGameLauncher`, which
+deliberately sets no `LOG_FILE` on the child).
+
+Supply `INSTANCE_NAME` as an environment variable rather than
+`-DINSTANCE_NAME`, for the same inheritance reason: the value reaches the
+subprocesses this client launches, so `mock-game` reads it at its own startup
+and labels its own records with it. `faf-ice-adapter` is a third-party binary
+that knows nothing about the variable, so its output is labelled only in the
+records this client captures from its stdout and stderr, not in any log the
+adapter writes itself.
 
 ## Harness log contract
 
@@ -401,8 +410,9 @@ log records alone (WBS-3.1.6.2). There is no health port and no readiness
 message — see the note at the end of this section. The formats below are a
 documented interface consumed by the N-client spawner (WBS 4.2.2) and the
 fault-injection cards (Phase 5). **Changing any of them is a breaking change**
-for those cards, and each is pinned by a test that parses real JSONL records
-(`HarnessLogContractTest`, `IceEventLoggerTest`).
+for those cards, and each is pinned by a test: `HarnessLogContractTest` and
+`IceEventLoggerTest` parse real JSONL records, and `WelcomeStateSyncTest` pins
+the `session ready` fields.
 
 Read the JSONL file rather than the console: every record is one line of JSON
 with a millisecond `timestamp`, a `component`, and an `instance` when one is
@@ -427,7 +437,7 @@ appears before teardown output.
 | Line | Meaning |
 |---|---|
 | `session ready: id=<id> login=<login>` | The lobby assigned this client its player ID and login in the `welcome` frame. |
-| `game launch: uid=<uid> mod=<mod> name=<name>` | This client entered the game with lobby-assigned `<uid>`. The uid is what a second instance needs as its join target. Emitted by host and joiner alike. `name` is free text and always last. |
+| `game launch: uid=<uid> mod=<mod> name=<name>` | This client entered the game with lobby-assigned `<uid>`, and its adapter and game are up. The uid is what a second instance needs as its join target. Emitted by host and joiner alike, and only on a launch that succeeded, so a failed launch reports `state entry: TERMINATED` with no uid. `name` is free text and always last. |
 
 ### Connection state
 

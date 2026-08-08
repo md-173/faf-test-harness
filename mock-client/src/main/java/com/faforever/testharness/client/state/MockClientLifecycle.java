@@ -633,17 +633,6 @@ public final class MockClientLifecycle {
         // into the CreateLobby frame that tells the game who it is.
         LaunchIdentity identity =
                 new LaunchIdentity(sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
-        // Harness-facing identity line (WBS-3.1.6.2). The uid is what a second instance needs as
-        // its join target, and it reaches no other output. Logged from the transition action
-        // rather than from GameLaunchHandler so it reports the game this client actually entered,
-        // not every game_launch frame that arrived. Host and joiner both receive game_launch, so
-        // one line serves both roles. The free-text name is last, keeping the fields ahead of it
-        // unambiguous to parse.
-        LOG.info(
-                "game launch: uid={} mod={} name={}",
-                gameConfig.uid(),
-                gameConfig.mod(),
-                gameConfig.name());
         try {
             SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
@@ -702,6 +691,19 @@ public final class MockClientLifecycle {
             // subscribe via gameExit(); nothing else touches the manager's onExit.
             teardown.registerGameProcess(gameBinary);
             gameBinary.onExit().thenAccept(gameExit::complete);
+            // Harness-facing identity line (WBS-3.1.6.2). The uid is what a second instance needs
+            // as its join target, and it reaches no other output. Emitted last, once the adapter
+            // and game are actually up, so a harness never receives a join target for a session
+            // that failed on the way in; a failed launch reports state entry: TERMINATED instead.
+            // Logged here rather than in GameLaunchHandler so it reports the game this client
+            // entered, not every game_launch frame that arrived. Host and joiner both receive
+            // game_launch, so one line serves both roles. The free-text name is last, keeping the
+            // fields ahead of it unambiguous to parse.
+            LOG.info(
+                    "game launch: uid={} mod={} name={}",
+                    gameConfig.uid(),
+                    gameConfig.mod(),
+                    gameConfig.name());
         } catch (IceAdapterLaunchException e) {
             LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
