@@ -99,6 +99,12 @@ final class PlayingTransitionTest {
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
 
+    // #211: these tests assert HOSTING/PLAYING without ever reaching TERMINATED, so
+    // SessionTeardown never runs to reap the hanging "game"/"ICE adapter" subprocesses started
+    // below (see the DummyGameLauncher/DummyIceLauncher javadoc for why they hang). Tracked here so
+    // tearDown can terminate them itself.
+    private final List<SubprocessManager> subprocesses = new ArrayList<>();
+
     @BeforeEach
     void setUp() throws Exception {
         server = new ScriptedWebSocketServer();
@@ -111,6 +117,9 @@ final class PlayingTransitionTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        for (SubprocessManager subprocess : subprocesses) {
+            subprocess.terminate(Duration.ofSeconds(1));
+        }
         if (lobby != null) {
             try {
                 lobby.close().get(2, TimeUnit.SECONDS);
@@ -309,6 +318,10 @@ final class PlayingTransitionTest {
         public void close() {}
     }
 
+    // #211: HOSTING now drives to TERMINATED on GameExited, so a subprocess that exits on its own
+    // would race that transition against whatever HOSTING/PLAYING assertion the test is making.
+    // "sort" with no arguments blocks on stdin EOF on both Windows and POSIX, keeping the process
+    // alive for the test's duration; tearDown() reaps it via the outer class's subprocesses list.
     private class DummyGameLauncher extends MockGameLauncher {
         DummyGameLauncher(MockClientConfig config) {
             super(config);
@@ -317,8 +330,13 @@ final class PlayingTransitionTest {
         @Override
         public SubprocessManager start() throws MockGameLaunchException {
             try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+                SubprocessManager manager =
+                        SubprocessManager.start(
+                                new ProcessBuilder("sort"),
+                                "DUMMY SUBPROCESS",
+                                Duration.ofSeconds(5));
+                subprocesses.add(manager);
+                return manager;
             } catch (IOException e) {
                 throw new MockGameLaunchException(e.getMessage());
             }
@@ -333,8 +351,13 @@ final class PlayingTransitionTest {
         @Override
         public SubprocessManager start() throws IceAdapterLaunchException {
             try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+                SubprocessManager manager =
+                        SubprocessManager.start(
+                                new ProcessBuilder("sort"),
+                                "DUMMY SUBPROCESS",
+                                Duration.ofSeconds(5));
+                subprocesses.add(manager);
+                return manager;
             } catch (IOException e) {
                 throw new IceAdapterLaunchException(e.getMessage());
             }
