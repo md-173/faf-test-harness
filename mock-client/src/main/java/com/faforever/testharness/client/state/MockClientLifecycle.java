@@ -325,8 +325,13 @@ public final class MockClientLifecycle {
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
 
-        // Wire the game exiting to the appropriate event.
-        gameExit.thenAccept(this::onGameProcessExit);
+        // Wire the game exiting to the appropriate event. Async (#211): a game that exits
+        // near-instantly can complete gameExit on the same thread that is still inside
+        // launchGame()/StateMachine#receiveEvent, before the LaunchGame transition has installed
+        // STARTING_GAME as the current state. receiveEvent is synchronized and publishes the new
+        // state before releasing its lock, so hopping to the common pool here guarantees this
+        // continuation cannot run until that transition has actually completed.
+        gameExit.thenAcceptAsync(this::onGameProcessExit);
     }
 
     /**
@@ -462,21 +467,30 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * {@link #gameExit} completion handler (#211): classifies the exit locally — WARN with the exit
-     * code on non-zero, INFO on zero — then sends the lobby the same generic {@code GameState
-     * Ended} frame the real client sends on every termination (clean or crashed; see faf-client's
-     * {@code GameRunner.notifyGameEnded}), before posting {@link GameExited} so the frame leaves
-     * before teardown closes the connection. Crash detail itself never reaches the server — only
-     * this local log line carries it, per the card's source verification (no crash-report command
-     * exists in the protocol).
+     * {@link #gameExit} completion handler (#211): classifies the exit locally, then sends the
+     * lobby the same generic {@code GameState Ended} frame the real client sends on every
+     * termination (clean or crashed; see faf-client's {@code GameRunner.notifyGameEnded}), before
+     * posting {@link GameExited} so the frame leaves before teardown closes the connection. Crash
+     * detail itself never reaches the server — only this local log line carries it, per the card's
+     * source verification (no crash-report command exists in the protocol).
+     *
+     * <p>Classification: INFO on a zero exit; INFO (not WARN) on a non-zero exit once {@link
+     * #teardown}'s {@link SessionTeardown#hasRun()} is {@code true}, since {@link
+     * SessionTeardown#run()} sets that flag before it sends the SIGTERM that produces exactly this
+     * exit code (143 on POSIX, 1 on Windows) on every ordinary shutdown, not just the #192 safety
+     * net — the real client's {@code gameKilled} flag suppresses the same false crash. Otherwise
+     * WARN with the code. A genuine crash is unaffected: it completes {@link #gameExit} — and so
+     * this handler — before teardown ever runs, so the flag is still false.
      *
      * @param exitCode the game process's exit code.
      */
     private void onGameProcessExit(int exitCode) {
         if (exitCode == 0) {
-            LOG.info("mock-game exited cleanly; exit code {}", exitCode);
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
+        } else if (teardown.hasRun()) {
+            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else {
-            LOG.warn("mock-game exited abnormally; exit code {}", exitCode);
+            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
         }
         sendGameStateEnded();
         machine.receiveEvent(new GameExited(exitCode));

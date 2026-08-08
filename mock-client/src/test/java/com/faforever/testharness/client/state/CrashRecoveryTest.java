@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
@@ -26,7 +27,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -85,9 +88,17 @@ final class CrashRecoveryTest {
                     null,
                     null);
 
+    /**
+     * A subprocess that hangs reading from its (never-written, never-closed) stdin pipe, so a test
+     * can drive its exit explicitly (e.g. via {@link MockClientLifecycle#shutdown()}) instead of
+     * racing a real one. See {@code GameEndReportingTest}'s identical fixture.
+     */
+    private static final ProcessBuilder HANGING_PROCESS = new ProcessBuilder("sort");
+
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
     private ChildGameLauncher gameLauncher;
+    private DummyIceLauncher iceLauncher;
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
 
@@ -115,6 +126,9 @@ final class CrashRecoveryTest {
         if (gameLauncher != null && gameLauncher.manager != null) {
             gameLauncher.manager.terminate(Duration.ofSeconds(1));
         }
+        if (iceLauncher != null && iceLauncher.getSubprocess() != null) {
+            iceLauncher.getSubprocess().terminate(Duration.ofSeconds(1));
+        }
         if (lobby != null) {
             try {
                 lobby.close().get(2, TimeUnit.SECONDS);
@@ -141,8 +155,14 @@ final class CrashRecoveryTest {
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        // Teardown's TERMINATED entry hook must have run: the lobby it closes is now shut.
-        assertTrue(lobby.close().isDone(), "teardown should already have closed the lobby");
+        // Only teardown kills the ICE launcher's subprocess, and teardown completes before
+        // stateReached(TERMINATED) resolves (the TERMINATED entry hook runs synchronously in
+        // receiveEvent) — so a dead subprocess here proves teardown actually ran, unlike asserting
+        // on the lobby socket, which would look closed either way (LobbyDisconnectPlayingTest:153
+        // uses the same check).
+        assertFalse(
+                iceLauncher.getSubprocess().isAlive(),
+                "teardown should already have killed the ICE adapter subprocess");
     }
 
     @Test
@@ -192,6 +212,55 @@ final class CrashRecoveryTest {
     }
 
     @Test
+    void shutdownFromHostingProducesNoWarn() throws Exception {
+        // A hanging process, not exitingWith(...): the exit here must be the harness's own
+        // teardown-initiated SIGTERM, not the child's own quick exit, to exercise the
+        // teardown.hasRun() branch instead of racing it.
+        gameLauncher = new ChildGameLauncher(HANGING_PROCESS);
+        MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+
+        lifecycle.shutdown();
+        lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
+
+        boolean falseCrashWarned =
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage().contains("mock-game"));
+        assertFalse(
+                falseCrashWarned,
+                "a harness-initiated kill must not be logged as a crash. captured: "
+                        + appender.list);
+    }
+
+    @Test
+    void fastExitDuringLaunchStillReachesTerminated() throws Exception {
+        // Forces the game to have already exited before launchGame() returns, so gameExit
+        // completes on the same (synchronized, still-inside-receiveEvent) thread that is
+        // processing the LaunchGame transition — deterministically exercising the #211
+        // thenAcceptAsync fix instead of leaving it to chance.
+        ImmediatelyExitingGameLauncher launcher =
+                new ImmediatelyExitingGameLauncher(exitingWith(1));
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        launcher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+
+        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        lifecycle.stateReached(ClientState.TERMINATED).get(10, TimeUnit.SECONDS);
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+    }
+
+    @Test
     void lateGameExitedAfterTerminatedIsNoOp() throws Exception {
         gameLauncher = new ChildGameLauncher(exitingWith(1));
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
@@ -207,13 +276,14 @@ final class CrashRecoveryTest {
     private MockClientLifecycle hostingLifecycle(
             ChildGameLauncher launcher, SessionTeardown teardown) {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
                         new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
                         launcher,
-                        new DummyIceLauncher(MINIMAL_CONFIG),
+                        iceLauncher,
                         teardown);
 
         lifecycle.post(new WelcomeReceived(null));
@@ -246,6 +316,32 @@ final class CrashRecoveryTest {
                 manager = SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));
                 return manager;
             } catch (IOException e) {
+                throw new MockGameLaunchException(e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Like {@link ChildGameLauncher}, but blocks inside {@link #start()} until the child has
+     * actually exited before returning its manager — guaranteeing {@code gameExit} completes within
+     * {@code launchGame()}'s own call stack instead of racing it.
+     */
+    private final class ImmediatelyExitingGameLauncher extends MockGameLauncher {
+        private final ProcessBuilder builder;
+
+        ImmediatelyExitingGameLauncher(ProcessBuilder builder) {
+            super(MINIMAL_CONFIG);
+            this.builder = builder;
+        }
+
+        @Override
+        public SubprocessManager start() throws MockGameLaunchException {
+            try {
+                SubprocessManager manager =
+                        SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));
+                manager.onExit().get(5, TimeUnit.SECONDS);
+                return manager;
+            } catch (IOException | InterruptedException | ExecutionException | TimeoutException e) {
                 throw new MockGameLaunchException(e.getMessage());
             }
         }
