@@ -79,8 +79,20 @@ final class AdapterCrashRecoveryTest {
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
-                    42, "faf", "Test Game Name", 0, "custom", "global", null, null, null, null,
-                    null, null, null, null);
+                    42,
+                    "faf",
+                    "Test Game Name",
+                    0,
+                    "custom",
+                    "global",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
 
     private static final JsonNode HOST_GAME_MESSAGE;
     private static final String LAUNCHING_NOTIFICATION =
@@ -88,11 +100,7 @@ final class AdapterCrashRecoveryTest {
                     + "\"params\": [\"GameState\", [\"Launching\"]]}";
 
     static {
-        var node =
-                MAPPER
-                        .createObjectNode()
-                        .put("command", "HostGame")
-                        .put("target", "game");
+        var node = MAPPER.createObjectNode().put("command", "HostGame").put("target", "game");
         node.set("args", MAPPER.createArrayNode().add("scmp_007"));
         HOST_GAME_MESSAGE = node;
     }
@@ -102,6 +110,10 @@ final class AdapterCrashRecoveryTest {
     private DummyIceLauncher iceLauncher;
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
+
+    // Stashed by RecordingIceAdapterConnection's constructor so firePlayingNotification can reach
+    // it after it's been handed off to the lifecycle.
+    private RecordingIceAdapterConnection connection;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -145,8 +157,12 @@ final class AdapterCrashRecoveryTest {
 
         lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        ILoggingEvent warn = findEvent(e -> e.getLevel() == Level.WARN
-                && e.getFormattedMessage().contains("ICE adapter exited abnormally"));
+        ILoggingEvent warn =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.WARN
+                                        && e.getFormattedMessage()
+                                                .contains("ICE adapter exited abnormally"));
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
@@ -162,8 +178,12 @@ final class AdapterCrashRecoveryTest {
 
         lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        ILoggingEvent warn = findEvent(e -> e.getLevel() == Level.WARN
-                && e.getFormattedMessage().contains("ICE adapter exited abnormally"));
+        ILoggingEvent warn =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.WARN
+                                        && e.getFormattedMessage()
+                                                .contains("ICE adapter exited abnormally"));
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
@@ -235,10 +255,6 @@ final class AdapterCrashRecoveryTest {
         assertEquals(ClientState.HOSTING, lifecycle.getState());
         return lifecycle;
     }
-
-    // Stashed by RecordingIceAdapterConnection's constructor so firePlayingNotification can reach
-    // it after it's been handed off to the lifecycle.
-    private RecordingIceAdapterConnection connection;
 
     private void firePlayingNotification() throws Exception {
         connection.fireNotification(

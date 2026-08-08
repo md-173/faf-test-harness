@@ -123,10 +123,9 @@ public final class SessionTeardown {
     }
 
     /**
-     * Whether {@link #run()} has started (and therefore, since {@link #done} is set before any
-     * step executes, always has by the time a teardown-initiated subprocess exit is observed).
-     * Read by adapter-exit classification (#214) so a SIGTERM this instance sent is not logged as
-     * a crash.
+     * Whether {@link #run()} has started (and therefore, since {@link #done} is set before any step
+     * executes, always has by the time a teardown-initiated subprocess exit is observed). Read by
+     * adapter-exit classification (#214) so a SIGTERM this instance sent is not logged as a crash.
      *
      * @return {@code true} once {@link #run()} has been entered
      */

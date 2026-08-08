@@ -473,8 +473,7 @@ public final class MockClientLifecycle {
      * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise — except once
      * this session's teardown has already started, since every clean run terminates the adapter
      * itself and that expected SIGTERM must not be logged as a crash. The TERMINATED entry hook
-     * (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
-     * logs.
+     * (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only logs.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
