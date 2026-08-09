@@ -30,9 +30,10 @@ import org.slf4j.MDC;
  * {@code logs/test-harness.jsonl}.
  *
  * <p>The optional {@value #INSTANCE_NAME_ENV} environment variable names which instance of a
- * component this process is (WBS-3.1.6.2). Several instances then stay attributable line by line.
- * It pairs with {@value #LOG_FILE_ENV}. Give each instance its own label and its own file. When it
- * is unset no {@value #INSTANCE_MDC_KEY} field is emitted, so existing output is unchanged. See
+ * component this process is (WBS-3.1.6.2). Several instances then stay attributable line by line. A
+ * named instance also gets its own default log file, {@code logs/<component>-<instance>.jsonl}, so
+ * concurrent instances never share one rolling file. An explicit {@value #LOG_FILE_ENV} still wins.
+ * When no instance is named nothing changes, neither the default path nor the record shape. See
  * {@code mock-client/README.md} § "Harness log contract".
  */
 public final class LoggingSetup {
@@ -71,18 +72,28 @@ public final class LoggingSetup {
      *
      * <p>Sets the SLF4J MDC {@value #COMPONENT_MDC_KEY} key so every subsequent log record is
      * tagged with {@code componentName} and sets the JSONL file output name to {@code
-     * logs/<componentName>.jsonl}. Logback picks up {@value #LOG_LEVEL_ENV} and {@value
-     * #LOG_FILE_ENV} on its own via {@code ${…}} substitution in {@code logback.xml}.
+     * logs/<componentName>.jsonl}, or {@code logs/<componentName>-<instance>.jsonl} when an
+     * instance is named. Logback picks up {@value #LOG_LEVEL_ENV} and {@value #LOG_FILE_ENV} on its
+     * own via {@code ${…}} substitution in {@code logback.xml}.
      *
      * @param componentName label that appears in every log line, e.g. {@code "MockClient"} or
      *     {@code "MockGame"}
      */
     public static void configure(final String componentName) {
 
+        String instanceName = resolveInstanceName();
+
         // Must run in a static call in every Main class so that ${LOG_FILE} in logback.xml picks
         // it up. An explicit env var or -D overrides this.
+        //
+        // A named instance gets its own default file. Without this, two concurrently running
+        // instances of a component would share one rolling file and contend on rollover, which
+        // matters most for the subprocesses a client launches: LOG_FILE is not forwarded to them
+        // (see MockGameLauncher), so every mock game would otherwise land in logs/mockgame.jsonl.
         if (System.getenv(LOG_FILE_ENV) == null && System.getProperty(LOG_FILE_ENV) == null) {
-            System.setProperty(LOG_FILE_ENV, "logs/" + componentName.toLowerCase() + ".jsonl");
+            String suffix = instanceName.isEmpty() ? "" : "-" + fileSafe(instanceName);
+            System.setProperty(
+                    LOG_FILE_ENV, "logs/" + componentName.toLowerCase() + suffix + ".jsonl");
         }
 
         MDC.put(COMPONENT_MDC_KEY, componentName);
@@ -99,11 +110,23 @@ public final class LoggingSetup {
         // subprocess capture threads in ProcessOutputLogger and the adapter's reader thread never
         // see the value put above, and those are exactly the lines a multi-instance harness needs
         // to attribute.
-        String instanceName = resolveInstanceName();
         if (!instanceName.isEmpty()) {
             MDC.put(INSTANCE_MDC_KEY, instanceName);
             context.putProperty(INSTANCE_MDC_KEY, instanceName);
         }
+    }
+
+    /**
+     * Reduces a label to characters that are safe in a file name, so an instance name only ever
+     * contributes a single path segment. Anything outside letters, digits, dot, underscore and
+     * hyphen becomes a hyphen. Only the file name is affected. Log records always carry the label
+     * exactly as supplied.
+     *
+     * @param instanceName the raw label
+     * @return the label with unsafe characters replaced
+     */
+    private static String fileSafe(final String instanceName) {
+        return instanceName.replaceAll("[^A-Za-z0-9._-]", "-");
     }
 
     /**

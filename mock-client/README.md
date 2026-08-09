@@ -381,19 +381,21 @@ INSTANCE_NAME=peer-b ./gradlew :mock-client:run --args="\
   --log-file logs/client-2.jsonl" &
 ```
 
-`INSTANCE_NAME` and `--log-file` are the multi-instance convention: the label
-identifies the instance inside each record, the file separates the two
-clients' own streams. Leaving it unset is the normal single-instance case and
-changes nothing about the output.
+`INSTANCE_NAME` is the multi-instance convention. It labels every record with
+the instance that emitted it, and it gives each instance its own default log
+file, `logs/<component>-<instance>.jsonl`. Leaving it unset is the normal
+single-instance case and changes nothing, neither the default path nor the
+record shape.
 
-`--log-file` separates the clients but not their children. It is a CLI flag,
-so it becomes a system property, and system properties do not cross a process
-boundary. Every `mock-game` therefore falls back to its own default and **both
-instances' games append to the same `logs/mockgame.jsonl`**. `INSTANCE_NAME` is
-what keeps those interleaved records attributable, which is the main reason the
-label exists. Do not export `LOG_FILE` to work around this: the child inherits
-it and two writers end up on one rolling file (see `MockGameLauncher`, which
-deliberately sets no `LOG_FILE` on the child).
+That default is what separates the subprocesses. `--log-file` is a CLI flag, so
+it becomes a system property and does not cross a process boundary; the
+launchers deliberately pass no `LOG_FILE` to their children (see
+`MockGameLauncher`). Without a per-instance default, every `mock-game` would
+fall back to `logs/mockgame.jsonl` and both instances' games would contend on
+one rolling file. With `INSTANCE_NAME` set, each writes
+`logs/mockgame-<instance>.jsonl` on its own, and its records carry the label
+too. Prefer this to exporting `LOG_FILE`, which would put a client and its own
+child in one file.
 
 Supply `INSTANCE_NAME` as an environment variable rather than
 `-DINSTANCE_NAME`, for the same inheritance reason: the value reaches the
@@ -439,6 +441,12 @@ appears before teardown output.
 | `session ready: id=<id> login=<login>` | The lobby assigned this client its player ID and login in the `welcome` frame. |
 | `game launch: uid=<uid> mod=<mod> name=<name>` | This client entered the game with lobby-assigned `<uid>`, and its adapter and game are up. The uid is what a second instance needs as its join target. Emitted by host and joiner alike, and only on a launch that succeeded, so a failed launch reports `state entry: TERMINATED` with no uid. `name` is free text and always last. |
 
+Note the ordering: `game launch` is emitted **before** `state entry:
+STARTING_GAME`, because the launch happens in the FSM transition action and the
+state line is emitted when the target state is entered. A harness that waits
+for `STARTING_GAME` and only then begins scanning will miss the uid. Wait for
+the `game launch` line itself.
+
 ### Connection state
 
 Three distinct signals. They are **not** interchangeable, and only the peer
@@ -447,10 +455,25 @@ ones move during ICE negotiation:
 | Line | Meaning |
 |---|---|
 | `gpgnet link: state=<state>` | The local mock game connected to or disconnected from this client's adapter over GPGNet. Not a peer signal. |
-| `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer, mirroring `RTCPeerConnection.iceConnectionState` (`new`, `checking`, `connected`, `completed`, `failed`, `disconnected`, `closed`). These are the transitions delayed-negotiation tests measure. |
+| `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer. These are the transitions delayed-negotiation tests measure. |
 | `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal. |
 
-Player IDs are 64-bit, matching the adapter's `RPCService` signatures.
+`<state>` is the adapter's own `IceState` vocabulary, not the WebRTC IDL set
+the upstream README implies. Verified against the shipped jar (3.3.14), the
+values a harness can actually observe are:
+
+```text
+new  gathering  awaitingCandidates  checking  connected  disconnected
+```
+
+`gathering` and `awaitingCandidates` are where a delayed-negotiation fault
+parks, so match on them rather than waiting for a terminal state. Do not match
+on `failed` or `closed`, which the adapter never emits, or on `completed`,
+which the enum defines but no code path sets. Treat `connected`, or
+`peer connected: … connected=true`, as peer ready.
+
+Player IDs are declared 64-bit in the adapter's `RPCService` signatures and are
+parsed as such, though the values it emits today are widened from `int`.
 
 A malformed notification is logged at WARN with the prefix
 `dropping malformed <method>` and produces no contract line.

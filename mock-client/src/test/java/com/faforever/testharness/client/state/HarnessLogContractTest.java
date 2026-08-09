@@ -239,12 +239,11 @@ final class HarnessLogContractTest {
 
     @Test
     void emitsNoDuplicateStateLineWhenStayingInState() {
-        // A game process that outlives the test. The default launcher runs "echo", which exits at
-        // once: its GameExited lands while the FSM is still in HOSTING, where that event is
-        // unregistered and silently dropped, so PLAYING is never genuinely exposed to it. Under
-        // load the same exit can instead land in PLAYING and drive the session to TERMINATED,
-        // failing the assertion below. LobbyDisconnectPlayingTest keeps its game alive for the
-        // same reason.
+        // A game process that outlives the test, stated explicitly rather than relying on the
+        // launcher default. A game that exits on its own races this test: its GameExited can land
+        // in PLAYING and drive the session to TERMINATED before the assertion below runs.
+        // #211 made the default hang for the same reason, but a test whose whole point is
+        // determinism should not depend on another card's choice of default.
         MockClientLifecycle lifecycle =
                 newLifecycle(
                         new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
@@ -299,6 +298,9 @@ final class HarnessLogContractTest {
         assertTrue(
                 messages().contains("peer connected: local=1 remote=2 connected=true"),
                 "a launched session must wire the adapter event logger, not merely define it");
+
+        // The launch started a game process, and this session never reaches TERMINATED on its own.
+        lifecycle.shutdown();
     }
 
     @Test
@@ -333,9 +335,21 @@ final class HarnessLogContractTest {
         lifecycle.post(new WelcomeReceived(null));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
+        List<String> captured = messages();
         assertTrue(
-                messages().contains("game launch: uid=12345 mod=faf name=Test Game Name"),
+                captured.contains("game launch: uid=12345 mod=faf name=Test Game Name"),
                 "the uid is the join target a second instance needs, and reaches no other output");
+        // The uid line comes from the transition action, which the framework runs before the
+        // target state's entry hooks. A harness that waits for STARTING_GAME and only then starts
+        // scanning would miss it, so the documented order is pinned here.
+        assertTrue(
+                captured.indexOf("game launch: uid=12345 mod=faf name=Test Game Name")
+                        < captured.indexOf("state entry: STARTING_GAME"),
+                "the uid line precedes the state entry line for the state it launches into: "
+                        + captured);
+
+        // The launch started a game process, and this session never reaches TERMINATED on its own.
+        lifecycle.shutdown();
     }
 
     /**
