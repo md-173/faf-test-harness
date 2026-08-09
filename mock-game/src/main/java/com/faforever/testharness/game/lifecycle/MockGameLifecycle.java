@@ -90,8 +90,10 @@ public final class MockGameLifecycle {
      *
      * @param config the configuration options given to the mock game.
      * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
-     * @param launchDelay the delay before initiating a match after all configuration is done.
-     * @param matchDuration the total duration of the match, after which it is ended.
+     * @param launchDelay the delay before initiating a match after all configuration is done, or
+     *     {@code null} if it will be driven entirely manually.
+     * @param matchDuration the total duration of the match, after which it is ended, or {@code
+     *     null} if it will be driven entirely manually.
      */
     public MockGameLifecycle(
             MockGameConfig config,
@@ -106,9 +108,11 @@ public final class MockGameLifecycle {
      *
      * @param config the configuration options given to the mock game.
      * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
-     * @param gpgnetConnectionTimeout the timeout to wait on a GpgNet connection for, in
-     * @param launchDelay the delay before initiating a match after all configuration is done.
-     * @param matchDuration the total duration of the match, after which it is ended. milliseconds.
+     * @param gpgnetConnectionTimeout the timeout to wait on a GpgNet connection for.
+     * @param launchDelay the delay before initiating a match after all configuration is done, or
+     *     {@code null} if it will be driven entirely manually.
+     * @param matchDuration the total duration of the match, after which it is ended, or {@code
+     *     null} if it will be driven entirely manually.
      */
     MockGameLifecycle(
             MockGameConfig config,
@@ -305,10 +309,14 @@ public final class MockGameLifecycle {
     private void beginHosting(Event event) throws FailedTransitionException {
         LOG.info("Setting up game as host");
         // TODO: Game options here
-        scheduler.schedule(
-                () -> machine.receiveEvent(new LaunchMatch()),
-                launchDelay.toMillis(),
-                TimeUnit.MILLISECONDS);
+
+        // Set up the scheduler if configured.
+        if (launchDelay != null) {
+            scheduler.schedule(
+                    () -> machine.receiveEvent(new LaunchMatch()),
+                    launchDelay.toMillis(),
+                    TimeUnit.MILLISECONDS);
+        }
     }
 
     /* Transition action for LOBBY -> JOIN. */
@@ -328,10 +336,13 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        scheduler.schedule(
-                () -> machine.receiveEvent(new LaunchMatch()),
-                launchDelay.toMillis(),
-                TimeUnit.MILLISECONDS);
+        // Set up the scheduler if configured.
+        if (launchDelay != null) {
+            scheduler.schedule(
+                    () -> machine.receiveEvent(new LaunchMatch()),
+                    launchDelay.toMillis(),
+                    TimeUnit.MILLISECONDS);
+        }
     }
 
     /* Transition action for HOSTING/JOINING -> LIVE. */
@@ -342,10 +353,13 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        scheduler.schedule(
-                () -> machine.receiveEvent(new GameEnded()),
-                matchDuration.toMillis(),
-                TimeUnit.MILLISECONDS);
+        // Set up the scheduler if configured.
+        if (matchDuration != null) {
+            scheduler.schedule(
+                    () -> machine.receiveEvent(new GameEnded()),
+                    matchDuration.toMillis(),
+                    TimeUnit.MILLISECONDS);
+        }
     }
 
     /* Transition action for peer request messages. */
