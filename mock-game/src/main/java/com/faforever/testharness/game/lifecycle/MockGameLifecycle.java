@@ -11,9 +11,14 @@ import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,8 +31,8 @@ public final class MockGameLifecycle {
     /** Logger for this class. */
     private static final Logger LOG = LoggerFactory.getLogger(MockGameLifecycle.class);
 
-    /** The default timeout length for the GpgNet connection, in milliseconds. */
-    private static final int DEFAULT_GPGNET_CONNECTION_TIMEOUT = 30 * 1000;
+    /** The default timeout length for the GpgNet connection,. */
+    private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
     /**
      * A delay to wait before sending messages to the GpgNet server on first connection, in
@@ -47,11 +52,32 @@ public final class MockGameLifecycle {
     /** Receive messages from the GpgNet server. */
     private final GpgNetDispatcher gpgnetDispatcher;
 
-    /** A timeout for the GpgNet connection, in milliseconds. */
-    private final int gpgnetConnectionTimeout;
+    /** A timeout for the GpgNet connection. */
+    private final Duration gpgnetConnectionTimeout;
 
     /** A copy of the configuration settings given to the mock game. */
     private final MockGameConfig config;
+
+    /** A scheduler used to make certain transitions occur after a configurable delay. */
+    private final ScheduledExecutorService scheduler;
+
+    /** The delay before initiating a match after all configuration is done. */
+    private final Duration launchDelay;
+
+    /** The total duration of the match, after which it is ended. */
+    private final Duration matchDuration;
+
+    /**
+     * A future that upon completion, drives the state machine to launch the match. Created by the
+     * {@code scheduler}.
+     */
+    private Future launchFuture;
+
+    /**
+     * A future that upon completion, drives the state machine to end the match. Created by the
+     * {@code scheduler}.
+     */
+    private Future matchEndFuture;
 
     /**
      * A mapping from the {@link GameState} enum to the actual state objects used by {@code
@@ -64,9 +90,15 @@ public final class MockGameLifecycle {
      *
      * @param config the configuration options given to the mock game.
      * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
+     * @param launchDelay the delay before initiating a match after all configuration is done.
+     * @param matchDuration the total duration of the match, after which it is ended.
      */
-    public MockGameLifecycle(MockGameConfig config, GpgNetConnection gpgnetServer) {
-        this(config, gpgnetServer, DEFAULT_GPGNET_CONNECTION_TIMEOUT);
+    public MockGameLifecycle(
+            MockGameConfig config,
+            GpgNetConnection gpgnetServer,
+            Duration launchDelay,
+            Duration matchDuration) {
+        this(config, gpgnetServer, DEFAULT_GPGNET_CONNECTION_TIMEOUT, launchDelay, matchDuration);
     }
 
     /**
@@ -75,13 +107,22 @@ public final class MockGameLifecycle {
      * @param config the configuration options given to the mock game.
      * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
      * @param gpgnetConnectionTimeout the timeout to wait on a GpgNet connection for, in
-     *     milliseconds.
+     * @param launchDelay the delay before initiating a match after all configuration is done.
+     * @param matchDuration the total duration of the match, after which it is ended. milliseconds.
      */
     MockGameLifecycle(
-            MockGameConfig config, GpgNetConnection gpgnetServer, int gpgnetConnectionTimeout) {
+            MockGameConfig config,
+            GpgNetConnection gpgnetServer,
+            Duration gpgnetConnectionTimeout,
+            Duration launchDelay,
+            Duration matchDuration) {
         this.config = config;
         this.gpgnet = gpgnetServer;
         this.gpgnetConnectionTimeout = gpgnetConnectionTimeout;
+        // Only one delay should be scheduled at a time, so one thread is enough.
+        this.scheduler = Executors.newScheduledThreadPool(1);
+        this.launchDelay = launchDelay;
+        this.matchDuration = matchDuration;
 
         // Create the sender and receiver objects from the server.
         this.gpgnetSender = new GpgNetSender(gpgnetServer);
@@ -106,12 +147,20 @@ public final class MockGameLifecycle {
      */
     public void launchMatch() {
         LOG.info("Manually instructed to launch match");
+        // Prevents the delayed future from firing if a manual launch is called.
+        if (launchFuture != null && !launchFuture.isDone()) {
+            launchFuture.cancel(true);
+        }
         machine.receiveEvent(new LaunchMatch());
     }
 
     /** Instruct the lifecycle to end the match. Ignored outside of the LIVE state. */
     public void endMatch() {
         LOG.info("Manually instructed to end match");
+        // Prevents the delayed future from firing if a manual end is called.
+        if (matchEndFuture != null && !matchEndFuture.isDone()) {
+            matchEndFuture.cancel(true);
+        }
         machine.receiveEvent(new GameEnded());
     }
 
@@ -202,7 +251,7 @@ public final class MockGameLifecycle {
         gpgnet.onDisconnect(ignored -> machine.receiveEvent(new ServerDisconnected()));
 
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
-        machine.setTimeout(gpgnetConnectionTimeout, states.get(GameState.ENDED));
+        machine.setTimeout(gpgnetConnectionTimeout.toMillis(), states.get(GameState.ENDED));
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
     }
 
@@ -256,15 +305,10 @@ public final class MockGameLifecycle {
     private void beginHosting(Event event) throws FailedTransitionException {
         LOG.info("Setting up game as host");
         // TODO: Game options here
-    }
-
-    /* Transition action for HOSTING/JOINING -> LIVE. */
-    private void matchBegins(Event event) throws FailedTransitionException {
-        try {
-            gpgnetSender.gameState("Launching");
-        } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
-        }
+        scheduler.schedule(
+                () -> machine.receiveEvent(new LaunchMatch()),
+                launchDelay.toMillis(),
+                TimeUnit.MILLISECONDS);
     }
 
     /* Transition action for LOBBY -> JOIN. */
@@ -283,6 +327,25 @@ public final class MockGameLifecycle {
             LOG.error("JoinGame frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
+
+        scheduler.schedule(
+                () -> machine.receiveEvent(new LaunchMatch()),
+                launchDelay.toMillis(),
+                TimeUnit.MILLISECONDS);
+    }
+
+    /* Transition action for HOSTING/JOINING -> LIVE. */
+    private void matchBegins(Event event) throws FailedTransitionException {
+        try {
+            gpgnetSender.gameState("Launching");
+        } catch (IOException e) {
+            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
+
+        scheduler.schedule(
+                () -> machine.receiveEvent(new GameEnded()),
+                matchDuration.toMillis(),
+                TimeUnit.MILLISECONDS);
     }
 
     /* Transition action for peer request messages. */

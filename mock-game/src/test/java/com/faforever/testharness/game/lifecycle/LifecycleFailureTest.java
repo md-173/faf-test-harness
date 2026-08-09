@@ -5,6 +5,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -33,7 +34,12 @@ public final class LifecycleFailureTest {
         gpgnet.stop();
         // Set the timeout to 1 second.
         MockGameLifecycle lifecycle =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()), 1000);
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG,
+                        new GpgNetConnection(gpgnet.port()),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1));
         // Wait for 2 seconds, timeout should occur.
         lifecycle.stateReached(GameState.ENDED).get(2, TimeUnit.SECONDS);
     }
@@ -41,7 +47,11 @@ public final class LifecycleFailureTest {
     @Test
     void serverDisconnection() throws Exception {
         MockGameLifecycle lifecycle =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG,
+                        new GpgNetConnection(gpgnet.port()),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1));
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
         gpgnet.stop();
         lifecycle.stateReached(GameState.ENDED).get(10, TimeUnit.SECONDS);
@@ -53,14 +63,22 @@ public final class LifecycleFailureTest {
         gpgnet.stop();
         // GpgNetConnection.start fails after 10 tries (default) and sends a ServerDisconnected.
         MockGameLifecycle lifecycle =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG,
+                        new GpgNetConnection(gpgnet.port()),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1));
         lifecycle.stateReached(GameState.ENDED).get(3, TimeUnit.SECONDS);
     }
 
     @Test
     void malformedJoinGameCommand() throws Exception {
         MockGameLifecycle lifecycle =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG,
+                        new GpgNetConnection(gpgnet.port()),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1));
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
         gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
         lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);

@@ -7,6 +7,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -23,7 +24,12 @@ public final class LifecycleSetupTest {
     @BeforeEach
     void setup() throws IOException {
         gpgnet = new ScriptedGpgNetServer();
-        lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()));
+        lifecycle =
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG,
+                        new GpgNetConnection(gpgnet.port()),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1));
     }
 
     @AfterEach
@@ -125,5 +131,26 @@ public final class LifecycleSetupTest {
         assertEquals("Ended", received.args().get(0));
 
         lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void delayedStartAndEnd() throws Exception {
+        gpgnet.start();
+        gpgnet.awaitClient();
+
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        // No need to send command, should become LIVE within 1 second (2 for error).
+        lifecycle.stateReached(GameState.LIVE).get(2, TimeUnit.SECONDS);
+
+        // No need to send command, should become ENDED within 1 second (2 for error).
+        lifecycle.stateReached(GameState.ENDED).get(2, TimeUnit.SECONDS);
     }
 }
