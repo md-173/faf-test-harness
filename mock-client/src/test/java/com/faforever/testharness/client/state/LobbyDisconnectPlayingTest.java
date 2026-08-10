@@ -136,7 +136,7 @@ final class LobbyDisconnectPlayingTest {
                         iceLauncher,
                         teardown);
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new StartMatch());
@@ -169,7 +169,7 @@ final class LobbyDisconnectPlayingTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new StartMatch());
@@ -202,7 +202,7 @@ final class LobbyDisconnectPlayingTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         lifecycle.post(simulatedLobbyDrop());

@@ -10,6 +10,7 @@ import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
@@ -146,7 +147,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         String node =
@@ -172,7 +173,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new JoinGame(JOIN_GAME_MESSAGE));
         String node =
@@ -198,7 +199,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         ObjectNode node = MAPPER.createObjectNode().put("method", "onGpgNetMessageReceived");
@@ -233,7 +234,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         String node =
@@ -260,7 +261,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
 
@@ -328,7 +329,7 @@ final class PlayingTransitionTest {
         }
 
         @Override
-        public SubprocessManager start() throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
             try {
                 SubprocessManager manager =
                         SubprocessManager.start(
@@ -349,7 +350,7 @@ final class PlayingTransitionTest {
         }
 
         @Override
-        public SubprocessManager start() throws IceAdapterLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws IceAdapterLaunchException {
             try {
                 SubprocessManager manager =
                         SubprocessManager.start(

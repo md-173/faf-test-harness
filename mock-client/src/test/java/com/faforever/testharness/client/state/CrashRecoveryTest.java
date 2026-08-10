@@ -14,6 +14,7 @@ import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
@@ -254,7 +255,7 @@ final class CrashRecoveryTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         lifecycle.stateReached(ClientState.TERMINATED).get(10, TimeUnit.SECONDS);
@@ -287,7 +288,7 @@ final class CrashRecoveryTest {
                         iceLauncher,
                         teardown);
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(hostGameMessage()));
         assertEquals(ClientState.HOSTING, lifecycle.getState());
@@ -322,7 +323,7 @@ final class CrashRecoveryTest {
         }
 
         @Override
-        public SubprocessManager start() throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
             try {
                 manager = SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));
                 return manager;
@@ -346,7 +347,7 @@ final class CrashRecoveryTest {
         }
 
         @Override
-        public SubprocessManager start() throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
             try {
                 SubprocessManager manager =
                         SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));

@@ -14,6 +14,7 @@ import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
@@ -119,6 +120,13 @@ public final class MockClientLifecycle {
     private final Duration safetyNetWindow;
 
     /**
+     * The lobby-assigned identity for this session (WBS-3.1.2.9), captured from the {@code welcome}
+     * on the CONNECTING to IDLE edge. Non-null from IDLE onwards, because that is the only edge
+     * into IDLE and {@link WelcomeReceived} rejects a null state.
+     */
+    private SessionState sessionIdentity;
+
+    /**
      * Build and initialise the mock client's lifecycle. This constructor will set up all
      * transitions on the internal state machine and subscribe to all relevant events from the
      * session and its transport.
@@ -214,7 +222,11 @@ public final class MockClientLifecycle {
     private void setupStateMachine() {
         // Transitions between states, caused by internal events.
         states.get(ClientState.CONNECTING)
-                .registerTransition(WelcomeReceived.class, states.get(ClientState.IDLE));
+                .registerTransition(
+                        WelcomeReceived.class,
+                        states.get(ClientState.IDLE),
+                        this::onWelcomeReceived,
+                        null);
         states.get(ClientState.CONNECTING)
                 .registerTransition(AuthFailed.class, states.get(ClientState.TERMINATED));
 
@@ -582,14 +594,32 @@ public final class MockClientLifecycle {
         }
     }
 
+    /**
+     * CONNECTING to IDLE transition action (WBS-3.1.2.9). Caches the lobby-assigned identity so
+     * {@link #launchGame} can hand it to both subprocesses instead of the config defaults they used
+     * before.
+     *
+     * @param event the {@link WelcomeReceived} event that triggered this transition.
+     */
+    private void onWelcomeReceived(Event event) {
+        // Deliberately not logged here. RunCommand already reports the authenticated identity on
+        // reaching IDLE, and each launcher logs the full argv it spawns with.
+        sessionIdentity = ((WelcomeReceived) event).state();
+    }
+
     private void launchGame(Event message) throws FailedTransitionException {
         if (!(message instanceof LaunchGame)) {
             throw new AssertionError(
                     "launchGame method called without a LaunchGame event, should be impossible");
         }
         GameConfig gameConfig = ((LaunchGame) message).config();
+        // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults. The
+        // adapter half is what matters, since faf-ice-adapter copies its --id and --login straight
+        // into the CreateLobby frame that tells the game who it is.
+        LaunchIdentity identity =
+                new LaunchIdentity(sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
         try {
-            SubprocessManager iceAdapter = iceLauncher.start();
+            SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
             // #214: single detection channel for adapter death — the process exit. The RPC
@@ -634,7 +664,7 @@ public final class MockClientLifecycle {
             // clean-end signal and records it. Sends nothing and tears down nothing directly; R72's
             // frame forwarding (above) is the reporting, R59b's TERMINATED action is the teardown.
             iceConnection.registerNotification("onGpgNetMessageReceived", this::onGpgNetMessage);
-            SubprocessManager gameBinary = gameLauncher.start();
+            SubprocessManager gameBinary = gameLauncher.start(identity);
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
             // subscribe via gameExit(); nothing else touches the manager's onExit.

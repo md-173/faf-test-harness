@@ -131,6 +131,35 @@ final class IceAdapterLauncherTest {
     }
 
     @Test
+    void orchestratedArgvCarriesSessionIdentityNotConfig() throws Exception {
+        Path binary = createStub("adapter", "#!/bin/sh\nexit 0\n");
+        LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
+
+        List<String> argv =
+                new IceAdapterLauncher(configWithBinary(binary)).buildArgv(binary, identity);
+
+        // The config this launcher holds would give id 1, login "mock-client", game-id 0.
+        assertEquals("9001", valueAfter(argv, "--id"));
+        assertEquals("welcome-login", valueAfter(argv, "--login"));
+        assertEquals("4242", valueAfter(argv, "--game-id"));
+    }
+
+    @Test
+    void orchestratedIdentityBeatsPlayerIdOverride() throws Exception {
+        Path binary = createStub("adapter", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config = configWithBinaryAndPlayerId(binary, 42);
+
+        List<String> argv =
+                new IceAdapterLauncher(config)
+                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242));
+
+        assertEquals(
+                "9001",
+                valueAfter(argv, "--id"),
+                "a session launch is bound to the lobby id, so the override must not apply");
+    }
+
+    @Test
     void playerIdOverrideSuppliesAdapterId() throws Exception {
         Path binary = createStub("adapter", "#!/bin/sh\nexit 0\n");
         MockClientConfig config = configWithBinaryAndPlayerId(binary, 42);

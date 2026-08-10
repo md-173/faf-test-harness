@@ -121,8 +121,8 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
 | `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | no | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
-| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login`; used by the `launch-ice` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this
@@ -262,7 +262,10 @@ binary in at a fixed location).
 
 Spawns the adapter, runs it for `--duration-seconds` (default `10`), terminates
 it, and logs the exit code. The adapter's output appears in the logs tagged
-`[ICEAdapter]`.
+`[ICEAdapter]`. Having no lobby, this diagnostic takes `--id`, `--login`, and
+`--game-id` from `playerIdOverride`, `playerLogin`, and `iceAdapterGameId`
+(default `0`, meaning no session) rather than from the lobby `welcome` and
+`game_launch` a full `run` uses.
 
 ```bash
 ./gradlew :mock-client:run --args="\
@@ -281,10 +284,12 @@ and exits `70` (`RUNTIME`) — no stack trace.
 
 Spawns `mock-game`, runs it for `--duration-seconds` (default `10`), terminates
 it, and logs the exit code. The game's output appears in the logs tagged
-`[MockGame]`. The argv is the config-derivable subset of
-`subprocess-orchestration-spec` §2.8 (`--gpgnet-port`, `--lobby-port`,
-`--player-id`, `--player-login`); the `game_launch`-derived flags (uid, mod,
-map, faction, team) are FSM scope and arrive with orchestration.
+`[MockGame]`. The argv is `subprocess-orchestration-spec` §2.8
+(`--gpgnet-port`, `--lobby-port`, `--player-id`, `--player-login`,
+`--game-uid`). Having no lobby, this diagnostic takes the identity from
+`playerIdOverride`, `playerLogin`, and `iceAdapterGameId` (default `0`, meaning
+no session) rather than from the lobby `welcome` and `game_launch` a full `run`
+uses.
 
 ```bash
 ./gradlew :mock-client:run --args="\

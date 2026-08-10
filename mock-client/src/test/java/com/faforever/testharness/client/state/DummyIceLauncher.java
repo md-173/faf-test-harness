@@ -3,6 +3,7 @@ package com.faforever.testharness.client.state;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
 import java.time.Duration;
@@ -11,6 +12,7 @@ class DummyIceLauncher extends IceAdapterLauncher {
     private final boolean throwException;
     private final ProcessBuilder builder;
     private SubprocessManager subprocess;
+    private LaunchIdentity identity;
 
     // #211: see DummyGameLauncher's matching constructors for why the default builder must not
     // exit on its own.
@@ -26,6 +28,12 @@ class DummyIceLauncher extends IceAdapterLauncher {
         super(config);
         this.throwException = throwException;
         this.builder = builder;
+    }
+
+    @Override
+    public SubprocessManager start(LaunchIdentity launchIdentity) throws IceAdapterLaunchException {
+        this.identity = launchIdentity;
+        return start();
     }
 
     @Override
@@ -48,5 +56,10 @@ class DummyIceLauncher extends IceAdapterLauncher {
 
     public boolean subprocessStarted() {
         return subprocess != null;
+    }
+
+    /** The identity the lifecycle launched under, or null if only the diagnostic path was used. */
+    public LaunchIdentity getIdentity() {
+        return identity;
     }
 }

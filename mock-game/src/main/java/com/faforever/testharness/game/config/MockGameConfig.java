@@ -16,5 +16,10 @@ package com.faforever.testharness.game.config;
  *     port
  * @param playerId FAF player id of the owning client's session
  * @param playerLogin FAF player login of the owning client's session
+ * @param gameUid id of the game being played, from the lobby's {@code game_launch.uid}. Zero means
+ *     no orchestrated session, which is what the standalone {@code launch-game} diagnostic passes.
+ *     A mock adaptation, since the real client hands Forged Alliance its game uid inside the {@code
+ *     /savereplay} URL and the {@code /log} filename rather than as its own flag
  */
-public record MockGameConfig(int gpgNetPort, int lobbyPort, int playerId, String playerLogin) {}
+public record MockGameConfig(
+        int gpgNetPort, int lobbyPort, int playerId, String playerLogin, int gameUid) {}
