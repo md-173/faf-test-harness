@@ -20,9 +20,9 @@ import picocli.CommandLine.ParameterException;
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
  * }</pre>
  *
- * <p>Failures throw picocli's {@link ParameterException}; friendly error messages, usage text, and
- * exit codes are the CLI framework card's job (WBS-3.2.1.2). This card only guarantees the game
- * cannot boot on bad input.
+ * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
+ * PrintStream)} (WBS-3.2.1.2) catches it, prints the error and usage text to stderr, and returns a
+ * stable exit code from {@link ExitCodes}.
  */
 @Command(name = "mock-game")
 public final class MockGameCli {

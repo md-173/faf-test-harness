@@ -10,6 +10,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /**
  * Tests for {@link MockGameCli#parseOrReport}: the exit-code contract and the stderr diagnostics.
@@ -33,6 +35,16 @@ final class MockGameCliReportTest {
         return errBuffer.toString(StandardCharsets.UTF_8);
     }
 
+    /**
+     * The error message alone. The usage text printed after it lists every option, so asserting
+     * against the whole of stderr would match any option name no matter what the error says.
+     *
+     * @return the first line of stderr, or an empty string if nothing was written
+     */
+    private String errorLine() {
+        return stderr().lines().findFirst().orElse("");
+    }
+
     @Test
     void validArgsReturnOkWithConfigAndNoOutput() {
         ParseOutcome outcome = MockGameCli.parseOrReport(VALID_ARGS, err);
@@ -52,7 +64,8 @@ final class MockGameCliReportTest {
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config(), "no partial config on a usage error");
-        assertTrue(stderr().contains("--player-login"), "message must name the missing argument");
+        assertTrue(
+                errorLine().contains("--player-login"), "message must name the missing argument");
         assertTrue(stderr().contains("Usage:"), "usage text must be printed");
     }
 
@@ -67,54 +80,34 @@ final class MockGameCliReportTest {
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());
-        assertTrue(stderr().contains("--game-uid"), "message must name the unknown argument");
+        assertTrue(errorLine().contains("--game-uid"), "message must name the unknown argument");
     }
 
-    @Test
-    void outOfRangePortReturnsUsageNamingTheArgument() {
+    /**
+     * One bad value at a time — out of range, non-positive, blank, malformed — each rejected with
+     * the usage code and an error line naming the argument at fault.
+     *
+     * @param index the position of the value in {@link #VALID_ARGS}
+     * @param value the bad value to substitute
+     * @param name the option name the error line must contain
+     */
+    @ParameterizedTest
+    @CsvSource({
+        "1, 70000,      --gpgnet-port",
+        "3, 70000,      --lobby-port",
+        "5, 0,          --player-id",
+        "7, '   ',      --player-login",
+        "1, not-a-port, --gpgnet-port",
+    })
+    void rejectionNamesTheArgumentOnTheErrorLine(
+            final int index, final String value, final String name) {
         String[] args = VALID_ARGS.clone();
-        args[1] = "70000";
+        args[index] = value;
 
         ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());
-        assertTrue(stderr().contains("--gpgnet-port"), "message must name the out-of-range port");
-    }
-
-    @Test
-    void nonPositivePlayerIdReturnsUsageNamingTheArgument() {
-        String[] args = VALID_ARGS.clone();
-        args[5] = "0";
-
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
-
-        assertEquals(ExitCodes.USAGE, outcome.exitCode());
-        assertNull(outcome.config());
-        assertTrue(stderr().contains("--player-id"), "message must name the bad player id");
-    }
-
-    @Test
-    void blankLoginReturnsUsageNamingTheArgument() {
-        String[] args = VALID_ARGS.clone();
-        args[7] = "   ";
-
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
-
-        assertEquals(ExitCodes.USAGE, outcome.exitCode());
-        assertNull(outcome.config());
-        assertTrue(stderr().contains("--player-login"), "message must name the blank login");
-    }
-
-    @Test
-    void malformedPortReturnsUsage() {
-        String[] args = VALID_ARGS.clone();
-        args[1] = "not-a-port";
-
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
-
-        assertEquals(ExitCodes.USAGE, outcome.exitCode());
-        assertNull(outcome.config());
-        assertTrue(stderr().contains("--gpgnet-port"), "message must name the malformed port");
+        assertTrue(errorLine().contains(name), "error line must name " + name);
     }
 }
