@@ -124,7 +124,16 @@ public final class MockGameLifecycle {
         this.gpgnet = gpgnetServer;
         this.gpgnetConnectionTimeout = gpgnetConnectionTimeout;
         // Only one delay should be scheduled at a time, so one thread is enough.
-        this.scheduler = Executors.newScheduledThreadPool(1);
+        // Uses a daemon thread, so that it doesn't keep the JVM up after the the main thread(s)
+        // finish executing.
+        this.scheduler =
+                Executors.newScheduledThreadPool(
+                        1,
+                        r -> {
+                            Thread t = new Thread(r, "game-scheduler");
+                            t.setDaemon(true);
+                            return t;
+                        });
         this.launchDelay = launchDelay;
         this.matchDuration = matchDuration;
 
