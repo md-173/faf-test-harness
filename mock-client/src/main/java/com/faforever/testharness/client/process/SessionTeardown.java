@@ -125,7 +125,8 @@ public final class SessionTeardown {
     /**
      * Whether {@link #run()} has started. Since {@link #done} is set before any subprocess is
      * killed, this is already {@code true} by the time a teardown-initiated exit can be observed —
-     * read by exit classification (#211) so a SIGTERM this instance sent is not logged as a crash.
+     * read by both the game's (#211) and the ICE adapter's (#214) exit classification so a SIGTERM
+     * this instance sent is not logged as a crash.
      *
      * @return {@code true} once {@link #run()} has been entered
      */

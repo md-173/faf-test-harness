@@ -239,6 +239,8 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
+        registerAdapterExitedTransitions();
+
         // Disconnection on any of these states results in termination.
         states.get(ClientState.CONNECTING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
@@ -325,13 +327,51 @@ public final class MockClientLifecycle {
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
 
-        // Wire the game exiting to the appropriate event. Async (#211): a game that exits
-        // near-instantly can complete gameExit on the same thread that is still inside
-        // launchGame()/StateMachine#receiveEvent, before the LaunchGame transition has installed
-        // STARTING_GAME as the current state. receiveEvent is synchronized and publishes the new
-        // state before releasing its lock, so hopping to the common pool here guarantees this
-        // continuation cannot run until that transition has actually completed.
+        // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
+        // #214): a game that exits near-instantly can complete gameExit on the same thread that
+        // is still inside launchGame()/StateMachine#receiveEvent, before the LaunchGame transition
+        // has installed STARTING_GAME as the current state — receiveEvent is synchronized and
+        // publishes the new state before releasing its lock, so hopping to the common pool here
+        // guarantees this continuation cannot run until that transition has actually completed.
+        // It also keeps GameExited's TERMINATED entry hook (which synchronously terminates the
+        // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
+        // own exit wiring below needs free to observe that death.
         gameExit.thenAcceptAsync(this::onGameProcessExit);
+    }
+
+    /**
+     * Registers the ICE adapter death edges (#214): no session survives an adapter exit to restart
+     * into (verified against downlords-faf-client and java-ice-adapter — see class javadoc for this
+     * card), so every post-launch state tears down rather than hanging. Pre-launch failures are
+     * already handled by {@link #launchGame}'s own exception handling and never reach this event.
+     * Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
+     * limit.
+     */
+    private void registerAdapterExitedTransitions() {
+        states.get(ClientState.STARTING_GAME)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.JOINING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
+        states.get(ClientState.PLAYING)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onAdapterExited,
+                        null);
     }
 
     /**
@@ -521,6 +561,27 @@ public final class MockClientLifecycle {
                         });
     }
 
+    /**
+     * {@link AdapterExited} transition action for STARTING_GAME/HOSTING/JOINING/PLAYING →
+     * TERMINATED (#214): classifies the adapter's own exit the way the real client's {@code
+     * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise — except once
+     * this session's teardown has already started, since every clean run terminates the adapter
+     * itself and that expected SIGTERM must not be logged as a crash. The TERMINATED entry hook
+     * (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only logs.
+     *
+     * @param event the {@link AdapterExited} event that triggered this transition.
+     */
+    private void onAdapterExited(Event event) {
+        int exitCode = ((AdapterExited) event).exitCode();
+        if (teardown.hasRun()) {
+            LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
+        } else if (exitCode == 0) {
+            LOG.info("ICE adapter terminated normally");
+        } else {
+            LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
+        }
+    }
+
     private void launchGame(Event message) throws FailedTransitionException {
         if (!(message instanceof LaunchGame)) {
             throw new AssertionError(
@@ -531,6 +592,21 @@ public final class MockClientLifecycle {
             SubprocessManager iceAdapter = iceLauncher.start();
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
+            // #214: single detection channel for adapter death — the process exit. The RPC
+            // connection's onDisconnect fires for the same death; that channel is deliberately
+            // left unwired here (3.1.2.5 owns adapter exit-signal exposure and relocates this
+            // subscriber onto its shared future, the way 3.1.2.6 reads R26's game signal).
+            //
+            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run
+            // synchronously on the JDK's internal process-reaper machinery by default, and this
+            // event's handling can itself block on that same machinery (TERMINATED's entry hook
+            // synchronously terminates subprocesses via SessionTeardown, which awaits their exit
+            // futures). A synchronous thenAccept here ties up the reaper thread that a concurrent
+            // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
+            // a full termination grace. thenAcceptAsync moves the event post off that thread.
+            iceAdapter
+                    .onExit()
+                    .thenAcceptAsync(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
             iceConnection.connect().get();
             iceConnection
                     .call(
