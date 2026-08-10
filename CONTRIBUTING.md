@@ -279,12 +279,18 @@ Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and ta
 | Console (stdout)                                          | `[2026-04-17 12:00:00.000] [MockClient] [INFO ] Connected.`                                     | Human-readable during development |
 | File (`logs/<component>.jsonl;` `LOG_FILE env`/`-D` overrides) | `{"timestamp":"…","component":"MockClient","level":"INFO","logger":"…","message":"Connected."}` | Programmatic parsing by the test suite |
 
+When `INSTANCE_NAME` is set, both formats carry the label: the console renders
+`[MockClient] [peer-a]` and the JSONL record gains an `"instance":"peer-a"`
+field after `component`. Leaving it unset omits the field entirely, so
+single-instance output is unchanged.
+
 ### Configuration
 
 | Variable | Default                  | Description |
 | :--- |:-------------------------| :--- |
 | `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
+| `INSTANCE_NAME` | unset                    | Labels one of several concurrent instances of a component. Pairs with `LOG_FILE`; see `mock-client/README.md` § "Harness log contract". Set it as an environment variable so subprocesses inherit it. |
 
 
 ## 8. When in doubt

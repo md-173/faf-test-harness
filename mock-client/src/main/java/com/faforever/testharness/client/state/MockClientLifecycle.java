@@ -4,6 +4,7 @@ import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.ice.IceEventLogger;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameJoinSender;
@@ -217,9 +218,23 @@ public final class MockClientLifecycle {
                 new StateMachine(
                         states.get(ClientState.CONNECTING), InvalidTransitionPolicy.IGNORE);
         setupStateMachine();
+
+        // The framework assigns the initial state directly and never runs its entry hooks, so the
+        // hook registered in setupStateMachine cannot report CONNECTING. Emit it here instead,
+        // otherwise a harness reading the log would never see the state the client starts in
+        // (WBS-3.1.6.2).
+        logStateEntry(ClientState.CONNECTING);
     }
 
     private void setupStateMachine() {
+        // Harness-facing state reporting (WBS-3.1.6.2). Registered before every other entry hook
+        // so the line precedes that state's side effects, such as the game_host send on IDLE and
+        // teardown on TERMINATED. Self-loops skip entry hooks, so a stay-in-state transition such
+        // as the lobby-loss path on PLAYING does not emit a duplicate line.
+        for (var s : ClientState.values()) {
+            states.get(s).onEntry(() -> logStateEntry(s));
+        }
+
         // Transitions between states, caused by internal events.
         states.get(ClientState.CONNECTING)
                 .registerTransition(
@@ -637,6 +652,12 @@ public final class MockClientLifecycle {
             iceAdapter
                     .onExit()
                     .thenAcceptAsync(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
+            // Harness-facing connection-state reporting (WBS-3.1.6.2). Read-only observer on the
+            // adapter fan-out: it reports the GPGNet link and the per-peer ICE transitions the
+            // Phase 5 fault-injection tests measure, and sends nothing. Registered before connect
+            // so no notification can arrive before its handlers exist; registration needs the
+            // connection to exist, not to be connected.
+            new IceEventLogger(iceConnection).start();
             iceConnection.connect().get();
             iceConnection
                     .call(
@@ -670,6 +691,19 @@ public final class MockClientLifecycle {
             // subscribe via gameExit(); nothing else touches the manager's onExit.
             teardown.registerGameProcess(gameBinary);
             gameBinary.onExit().thenAccept(gameExit::complete);
+            // Harness-facing identity line (WBS-3.1.6.2). The uid is what a second instance needs
+            // as its join target, and it reaches no other output. Emitted last, once the adapter
+            // and game are actually up, so a harness never receives a join target for a session
+            // that failed on the way in; a failed launch reports state entry: TERMINATED instead.
+            // Logged here rather than in GameLaunchHandler so it reports the game this client
+            // entered, not every game_launch frame that arrived. Host and joiner both receive
+            // game_launch, so one line serves both roles. The free-text name is last, keeping the
+            // fields ahead of it unambiguous to parse.
+            LOG.info(
+                    "game launch: uid={} mod={} name={}",
+                    gameConfig.uid(),
+                    gameConfig.mod(),
+                    gameConfig.name());
         } catch (IceAdapterLaunchException e) {
             LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
@@ -792,6 +826,17 @@ public final class MockClientLifecycle {
         GameJoinConfig joinConfig = config.joinConfig().get();
         LOG.info("Sending game_join for uid={}", joinConfig.targetGameId());
         new GameJoinSender(lobby).sendGameJoin(joinConfig);
+    }
+
+    /**
+     * Emits the harness-facing state line for one state entry (WBS-3.1.6.2). The format is a
+     * documented interface, described in {@code mock-client/README.md} § "Harness log contract".
+     * Changing it breaks the harness cards that parse it.
+     *
+     * @param state the state that was just entered.
+     */
+    private void logStateEntry(ClientState state) {
+        LOG.info("state entry: {}", state);
     }
 
     /**

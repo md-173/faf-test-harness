@@ -24,6 +24,9 @@ import java.time.format.DateTimeFormatter;
  *   <li>{@code component} – component label resolved by {@link ComponentConverter#resolve} (MDC →
  *       {@code LoggerContext} → {@code "Unknown"}), both populated by {@link
  *       LoggingSetup#configure}
+ *   <li>{@code instance} – (present only when {@value LoggingSetup#INSTANCE_NAME_ENV} is set)
+ *       instance label resolved by {@link InstanceConverter#resolve}, identifying which of several
+ *       concurrent instances of a component emitted the record
  *   <li>{@code level} – log level string ({@code DEBUG}, {@code INFO}, …)
  *   <li>{@code logger} – fully-qualified logger name
  *   <li>{@code thread} – thread name
@@ -52,6 +55,9 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
 
     /** JSON field name for the source component tag. */
     private static final String FIELD_COMPONENT = "component";
+
+    /** JSON field name for the optional instance label. */
+    private static final String FIELD_INSTANCE = "instance";
 
     /** JSON field name for the log level. */
     private static final String FIELD_LEVEL = "level";
@@ -116,12 +122,30 @@ public final class JsonLineEncoder extends EncoderBase<ILoggingEvent> {
                 FIELD_TIMESTAMP,
                 TIMESTAMP_FORMAT.format(Instant.ofEpochMilli(event.getTimeStamp())));
         gen.writeStringField(FIELD_COMPONENT, ComponentConverter.resolve(event));
+        writeInstance(gen, event);
         gen.writeStringField(FIELD_LEVEL, event.getLevel().toString());
         gen.writeStringField(FIELD_LOGGER, event.getLoggerName());
         gen.writeStringField(FIELD_THREAD, event.getThreadName());
         gen.writeStringField(FIELD_MESSAGE, event.getFormattedMessage());
         writeException(gen, event.getThrowableProxy());
         gen.writeEndObject();
+    }
+
+    /**
+     * Writes the {@code instance} field when this process runs as a named instance. The field is
+     * omitted entirely for a single-instance run, so output produced without {@value
+     * LoggingSetup#INSTANCE_NAME_ENV} keeps the record shape it had before WBS-3.1.6.2.
+     *
+     * @param gen the open Jackson generator to write into
+     * @param event the log event supplying the label
+     * @throws IOException if the generator encounters an I/O error
+     */
+    private static void writeInstance(final JsonGenerator gen, final ILoggingEvent event)
+            throws IOException {
+        String instance = InstanceConverter.resolve(event);
+        if (!instance.isEmpty()) {
+            gen.writeStringField(FIELD_INSTANCE, instance);
+        }
     }
 
     /**

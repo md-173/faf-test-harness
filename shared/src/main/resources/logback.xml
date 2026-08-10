@@ -11,6 +11,15 @@
                     converterClass="com.faforever.testharness.shared.logging.ComponentConverter" />
 
     <!--
+      Custom pattern word %instance — resolves MDC, then LoggerContext, then renders nothing.
+      Set the INSTANCE_NAME env var to label one of several concurrent instances of a component
+      (WBS-3.1.6.2); a single-instance run leaves it unset and the segment disappears entirely.
+      The converter emits its own " [label]" brackets so nothing is left behind when unset.
+    -->
+    <conversionRule conversionWord="instance"
+                    converterClass="com.faforever.testharness.shared.logging.InstanceConverter" />
+
+    <!--
       Log level: set LOG_LEVEL env var (DEBUG, INFO, WARN, ERROR).
       Default: INFO.
     -->
@@ -27,11 +36,13 @@
         <encoder>
             <!--
               Format: [2026-04-17 12:00:00] [MockClient] [INFO ] Connected.
+              With INSTANCE_NAME set: [2026-04-17 12:00:00] [MockClient] [peer-a] [INFO ] Connected.
               %component is defined by ComponentConverter (see <conversionRule> above) and
               falls back to the LoggerContext property when the thread-local MDC is empty,
               so log lines emitted from async workers stay tagged with the right component.
+              %instance behaves the same way but renders nothing when no instance is named.
             -->
-            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%component] [%-5level] %msg%n</pattern>
+            <pattern>[%d{yyyy-MM-dd HH:mm:ss.SSS}] [%component]%instance [%-5level] %msg%n</pattern>
         </encoder>
     </appender>
 
