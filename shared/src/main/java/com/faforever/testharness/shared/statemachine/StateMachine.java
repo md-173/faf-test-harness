@@ -141,8 +141,20 @@ public class StateMachine implements EventListener {
      * @param to the new state to go to.
      */
     public synchronized void setTimeout(long millis, State to) {
+        setTimeout(millis, to, null);
+    }
+
+    /**
+     * Sets up a timeout that will cause a transition to state {@code to} if no other transition
+     * after {@code millis} elapses. This transition causes {@code action} to fire.
+     *
+     * @param millis the time in milliseconds to wait before changing states.
+     * @param to the new state to go to.
+     * @param action the action to fire when the timeout occurs.
+     */
+    public synchronized void setTimeout(long millis, State to, TransitionAction action) {
         LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
-        UpdateStateTask task = new UpdateStateTask(to);
+        UpdateStateTask task = new UpdateStateTask(to, action);
         timeouts.add(task);
         timeoutTimer.schedule(task, millis);
     }
@@ -166,11 +178,11 @@ public class StateMachine implements EventListener {
         /** Transition to fire when the timeout finishes. */
         private final Transition transition;
 
-        UpdateStateTask(State to) {
+        UpdateStateTask(State to, TransitionAction action) {
             // Wrap state in a transition so that entry and exit hooks are performed correctly.
             // Safe to give current `state` as `from` parameter as the task will be cancelled if
             // state changes.
-            this.transition = new Transition(state, to, null, null);
+            this.transition = new Transition(state, to, action, null);
         }
 
         @Override

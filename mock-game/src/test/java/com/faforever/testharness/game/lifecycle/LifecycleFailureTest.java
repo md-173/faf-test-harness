@@ -1,5 +1,7 @@
 package com.faforever.testharness.game.lifecycle;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
@@ -42,6 +44,7 @@ public final class LifecycleFailureTest {
                         Duration.ofSeconds(1));
         // Wait for 2 seconds, timeout should occur.
         lifecycle.stateReached(GameState.ENDED).get(2, TimeUnit.SECONDS);
+        assertEquals(MockGameLifecycle.ExitStatus.SERVER_NOT_CONNECTED, lifecycle.getExitStatus());
     }
 
     @Test
@@ -55,6 +58,8 @@ public final class LifecycleFailureTest {
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
         gpgnet.stop();
         lifecycle.stateReached(GameState.ENDED).get(10, TimeUnit.SECONDS);
+        assertEquals(
+                MockGameLifecycle.ExitStatus.SERVER_CONNECTION_LOST, lifecycle.getExitStatus());
     }
 
     @Test
@@ -69,6 +74,7 @@ public final class LifecycleFailureTest {
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
         lifecycle.stateReached(GameState.ENDED).get(3, TimeUnit.SECONDS);
+        assertEquals(MockGameLifecycle.ExitStatus.SERVER_NOT_CONNECTED, lifecycle.getExitStatus());
     }
 
     @Test
