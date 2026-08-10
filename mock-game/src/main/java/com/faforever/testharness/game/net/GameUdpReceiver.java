@@ -126,8 +126,9 @@ public final class GameUdpReceiver {
     }
 
     /**
-     * Sequence discontinuities (forward gaps) counted from {@code senderId}. Reordering does not
-     * count; only a sequence that skips past the expected next one does.
+     * Sequence discontinuities (forward gaps) counted from {@code senderId}. One increment per
+     * forward jump past the expected next sequence. A late arrival does not decrement, so a
+     * reordered stream still reports gaps.
      *
      * @param senderId a payload sender id
      * @return the gap count, or {@code 0} if nothing has been received from that sender
@@ -212,7 +213,6 @@ public final class GameUdpReceiver {
             stats.put(senderId, s);
         }
 
-        long count = s.received.incrementAndGet();
         long previousHighest = s.highestSequence.get();
         if (previousHighest >= 0 && sequence > previousHighest + 1) {
             s.discontinuities.incrementAndGet();
@@ -220,6 +220,10 @@ public final class GameUdpReceiver {
         if (sequence > previousHighest) {
             s.highestSequence.set(sequence);
         }
+        // Published last, after the values a reader reaches for once the count moves: a poller
+        // that awaits on received() would otherwise see the new count with the previous
+        // datagram's highest sequence and gap count.
+        long count = s.received.incrementAndGet();
 
         if (first) {
             LOG.info("first datagram from sender {} (seq {}) at {}", senderId, sequence, source);
