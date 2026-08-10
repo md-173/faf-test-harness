@@ -55,7 +55,7 @@ Every row was exercised on a dev machine as part of this card. Environment: **ma
 | # | Row | Ran here? | Result |
 |---|---|---|---|
 | 1 | Client ↔ lobby — offline (`LobbyConnectionTest`) | ✅ | **11 passed, 0 failed** |
-| 1 | Client ↔ lobby — live (`LobbyConnectionLiveSmokeTest`) | ⏭️ | Not run here — requires network to `wss://lobby.faforever.xyz` (FAF allowlist/VPN) + optional `.secrets/refresh_token.txt`; self-skips off-net |
+| 1 | Client ↔ lobby — live (`LobbyConnectionLiveSmokeTest`) | ⏭️ | Not run here — requires network + optional `.secrets/refresh_token.txt`; self-skips off-net |
 | 2 | Client ↔ adapter — offline (`IceAdapterConnectionTest`) | ✅ | **16 passed, 0 failed** |
 | 2 | Client ↔ adapter — live (`IceAdapterConnectionLiveSmokeTest`) | ⏭️ | Not run here — requires the real `faf-ice-adapter.jar` (R74) + network; self-skips when the jar is absent |
 | 3 | Game ↔ adapter — offline (`GpgNetConnectionTest`) | ✅ | **10 passed, 0 failed** |
@@ -102,20 +102,21 @@ game); any syntactically valid placeholders work — same convention as `launch-
 # process exit: 70 (RUNTIME)
 ```
 
-**Pass condition for this row is a `RUNTIME` (`70`) coded exit, not `OK`.** `launch-game` returns
-`RUNTIME` whenever the game exits before the run window elapses. Today `mock-game`'s `main` is still
-a stub that logs one line and exits `0` immediately, so the window is never reached — the subcommand
-correctly surfaces that as `RUNTIME`. **Once 3.2.5.1 lands** (the game's bounded adapter-connect
-window), a `launch-game` run **without** an adapter will run that window, fail to connect, and exit
-with the same runtime code — the coded exit is unchanged, so this row's documented pass condition
-holds across that change.
+**Pass condition for this row is a `RUNTIME` (`70`) coded exit together with the two launch lines
+above, not the exit code alone.** `launch-game` returns `RUNTIME` whenever the game exits before the
+run window elapses, and also when the binary cannot be launched at all. Today `mock-game`'s `main`
+is still a stub that logs one line and exits `0` immediately, so the window is never reached — the
+subcommand correctly surfaces that as `RUNTIME`. **Once 3.2.5.1 lands** (the game's bounded
+adapter-connect window), a `launch-game` run **without** an adapter will run that window, fail to
+connect, and exit with the same runtime code — the coded exit is unchanged, so this row's documented
+pass condition holds across that change.
 
 ## Reproducing the offline runs
 
 All offline rows are network-free and deterministic. Scope Gradle to the relevant module — the
 `shared` module has a pre-existing `/bin/true`-style test that fails on macOS
-(`SubprocessManagerStartTest > fastExitingChildDoesNotLeakIntoRegistry`), unrelated to any row here;
-run per-module test filters rather than the whole `build` when validating on a Mac.
+(`SubprocessManagerStartTest > fastExitingChildDoesNotLeakIntoRegistry`, tracked as #227), unrelated
+to any row here; run per-module test filters rather than the whole `build` when validating on a Mac.
 
 ```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
@@ -142,9 +143,9 @@ demo) need the **real** `faf-ice-adapter` jar and/or the FAF `.xyz` network:
 - **Adapter jar:** provision per [`ice-adapter-setup.md`](ice-adapter-setup.md) (R74) —
   `./gradlew downloadIceAdapter`, or set `FAF_ICE_ADAPTER_JAR`. The `integration`-tagged tests
   self-skip cleanly when no jar resolves, so they merge green before the jar is provisioned.
-- **Network:** the lobby live smoke test targets `wss://lobby.faforever.xyz`, reachable only from a
-  FAF-allowlisted host/VPN, and self-skips (does not fail) elsewhere. The `run` demo additionally
-  needs a bootstrapped `.secrets/refresh_token.txt` and the `faf-uid` binary — see
+- **Network:** the lobby live smoke test needs network access to the FAF test lobby and self-skips
+  (does not fail) when it is unreachable. The `run` demo additionally needs a bootstrapped
+  `.secrets/refresh_token.txt` and the `faf-uid` binary — see
   [`demos/README.md`](../demos/README.md).
 
 None of these were run on this (off-network, un-provisioned) machine; their documented pass
