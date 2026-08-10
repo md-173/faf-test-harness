@@ -1,5 +1,6 @@
 package com.faforever.testharness.game.config;
 
+import java.io.PrintStream;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -19,9 +20,9 @@ import picocli.CommandLine.ParameterException;
  * --game-uid <uid>
  * }</pre>
  *
- * <p>Failures throw picocli's {@link ParameterException}; friendly error messages, usage text, and
- * exit codes are the CLI framework card's job (WBS-3.2.1.2). This card only guarantees the game
- * cannot boot on bad input.
+ * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
+ * PrintStream)} (WBS-3.2.1.2) catches it, prints the error and usage text to stderr, and returns a
+ * stable exit code from {@link ExitCodes}.
  */
 @Command(name = "mock-game")
 public final class MockGameCli {
@@ -69,6 +70,43 @@ public final class MockGameCli {
         cli.validate(commandLine);
         return new MockGameConfig(
                 cli.gpgNetPort, cli.lobbyPort, cli.playerId, cli.playerLogin, cli.gameUid);
+    }
+
+    /**
+     * The outcome of {@link #parseOrReport(String[], PrintStream)}: an exit code, plus the parsed
+     * config on success.
+     *
+     * @param exitCode {@link ExitCodes#OK} on success, {@link ExitCodes#USAGE} on a bad argument
+     * @param config the parsed config on success, or {@code null} on a usage error
+     */
+    public record ParseOutcome(int exitCode, MockGameConfig config) {}
+
+    /**
+     * Parses the launch argv the way the machine caller expects, turning {@link #parse(String[])}'s
+     * exception into a diagnostic and a stable exit code. On a bad argument it writes picocli's
+     * error message and the generated usage text to {@code err}, then returns {@link
+     * ExitCodes#USAGE} with a {@code null} config. On success it returns {@link ExitCodes#OK} with
+     * the config and writes nothing — a valid set passes through silently.
+     *
+     * <p>It returns the code rather than calling {@link System#exit(int)} so it stays
+     * unit-testable; the bootstrap (WBS-3.2.5.1) maps the code to the process exit status. The
+     * error goes to {@code err} (normally {@code System.err}) because that is where the Mock Client
+     * captures it, tagged {@code [MockGame]}, for a developer reading logs after a failed run.
+     *
+     * @param args the raw argv as passed to {@code main}
+     * @param err the stream bad-argument diagnostics are written and flushed to
+     * @return {@link ExitCodes#OK} with the config, or {@link ExitCodes#USAGE} with a {@code null}
+     *     config
+     */
+    public static ParseOutcome parseOrReport(final String[] args, final PrintStream err) {
+        try {
+            return new ParseOutcome(ExitCodes.OK, parse(args));
+        } catch (ParameterException e) {
+            err.println(e.getMessage());
+            e.getCommandLine().usage(err);
+            err.flush();
+            return new ParseOutcome(ExitCodes.USAGE, null);
+        }
     }
 
     /**
