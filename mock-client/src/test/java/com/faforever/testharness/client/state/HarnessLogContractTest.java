@@ -219,7 +219,7 @@ final class HarnessLogContractTest {
     void reportsEveryStateEntryInOrder() {
         MockClientLifecycle lifecycle = newLifecycle();
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new StartMatch());
@@ -249,7 +249,7 @@ final class HarnessLogContractTest {
                         new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
                         new DummyGameLauncher(
                                 MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "10")));
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new StartMatch());
@@ -288,7 +288,7 @@ final class HarnessLogContractTest {
         DummyIceAdapterConnection adapter =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
         MockClientLifecycle lifecycle = newLifecycle(adapter);
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         ObjectNode notification = MAPPER.createObjectNode();
@@ -315,7 +315,7 @@ final class HarnessLogContractTest {
                         new DummyIceLauncher(MINIMAL_CONFIG, true),
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
@@ -332,7 +332,7 @@ final class HarnessLogContractTest {
     void reportsTheGameUidOnLaunch() {
         MockClientLifecycle lifecycle = newLifecycle();
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         List<String> captured = messages();
