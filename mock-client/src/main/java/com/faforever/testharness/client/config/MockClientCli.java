@@ -255,7 +255,10 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--player-id-override",
             scope = ScopeType.INHERIT,
-            description = "Optional player ID override for deterministic local testing.")
+            description =
+                    "Optional player ID override for deterministic local testing. Used by the "
+                            + "launch-ice / launch-game / ice-smoke diagnostics; a full 'run' "
+                            + "session uses the lobby welcome identity instead.")
     private Integer playerIdOverride;
 
     /** Local player login passed to faf-ice-adapter as {@code --login}. */

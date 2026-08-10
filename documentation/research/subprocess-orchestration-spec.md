@@ -150,6 +150,29 @@ upstream synopsis. The `.jar` adapter additionally needs a
 `-Dlogback.configurationFile` override to run headless (see §2.7 and
 json-rpc-spec §8).
 
+Those three identity values have two sources (WBS-3.1.2.9, implemented).
+An orchestrated `run` passes a `LaunchIdentity` built from `welcome.me.id`,
+`welcome.me.login`, and `game_launch.uid`. The standalone `launch-ice`
+diagnostic has no lobby, so it falls back to `playerIdOverride`,
+`playerLogin`, and `iceAdapterGameId` (default 0). That fallback is the only
+place `playerIdOverride` applies, because a session launch is bound to the
+identity the lobby assigned.
+
+The adapter half is the one that matters. faf-ice-adapter copies `--login`
+and `--id` straight into the GPGNet `CreateLobby(initMode, lobbyPort, login,
+id, 1)` frame it sends the game (verified in java-ice-adapter 3.3.14,
+`GPGNetServer`), which is the game's authoritative view of its own identity,
+and it keys its telemetry on the same pair. It does **not** affect `ice_msg`
+routing. The lobby server stamps the sender from its own authenticated
+session and the client routes on the peer id from `ConnectToPeer`, so a
+wrong `--id` cannot misdirect signalling.
+
+Caveat worth knowing when handling launch failures. On a usage error the
+adapter prints usage and exits **0**, because its `main` discards picocli's
+return value rather than calling `System.exit`. A missing `--game-id`
+therefore never shows up as a non-zero exit code. Detect a failed launch by
+the RPC connect timeout instead.
+
 ### 2.7 ICE adapter startup sequence
 
 The example below mirrors json-rpc-spec §9 phases A–B.
@@ -195,18 +218,40 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
   "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
   "--player-id",   welcome.me.id,
-  "--player-login", welcome.me.login,
-  "--game-uid",    game_launch.uid,
-  ... game_launch-derived flags (mod, map, faction, team) ]
+  "--player-login", welcome.me.login ]
 ```
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
 (WBS-3.2.1.1): strict, every argument required, unknown arguments rejected.
-`MockGameLauncher` currently emits only the config-derivable subset
-(`--gpgnet-port`, `--lobby-port`, `--player-id`, `--player-login`); the
-`--game-uid` and `game_launch`-derived flags arrive when orchestration extends
-both ends together. The Subprocess Execution Controller treats the argv as
-opaque except for the two ports it shares with the adapter.
+
+`--player-id` and `--player-login` have the same two sources as the adapter's
+(WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity,
+and the standalone `launch-game` diagnostic falls back to `playerIdOverride`
+and `playerLogin`.
+
+An earlier draft of this section also listed a `--game-uid` and
+`game_launch`-derived mod, map, faction, and team flags. None are emitted and
+none exist in the parser, for two separate reasons.
+
+- `--game-uid` was a harness invention with no reader. Nothing in mock-game
+  consumes a game uid, and GPGNet carries no field for one. The real client
+  does hand the uid to Forged Alliance, but inside the
+  `/savereplay gpgnet://<ip>:<port>/<uid>/<login>.SCFAreplay` URL and in the
+  `/log` filename, not as an identity flag. Revisit this when a reader exists,
+  most likely log correlation (WBS-3.1.6.2).
+- The other four came from a wrong reading of the real client. Verified
+  against downlords-faf-client v2026.7.1, `LaunchCommandBuilder` has no mod
+  argument at all, and its `/map` is set only by `launchOfflineGame`, so no
+  online game receives one. Team, expected players, start spot, and faction
+  are passed for every online game, and the client never branches on
+  matchmaker. It forwards whatever `game_launch` carried, and the FAF server
+  is what leaves those fields null for a custom game (`GameLaunchOptions`
+  defaults them all to `None`, and `_prepare_launch_game` strips every `None`
+  before sending) and fills them for a matchmaker one. Fidelity here therefore
+  belongs to whatever drives `game_launch`, not to the launcher.
+
+The Subprocess Execution Controller treats the argv as opaque except for the
+two ports it shares with the adapter.
 
 ## 3. Port allocation
 

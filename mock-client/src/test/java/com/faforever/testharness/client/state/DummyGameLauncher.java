@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -11,6 +12,7 @@ class DummyGameLauncher extends MockGameLauncher {
     private final boolean throwException;
     private final ProcessBuilder builder;
     private SubprocessManager subprocess;
+    private LaunchIdentity identity;
 
     // #211: HOSTING/JOINING/STARTING_GAME now drive to TERMINATED on GameExited, so a launcher
     // whose default subprocess exits on its own would race that transition against whatever state
@@ -29,6 +31,12 @@ class DummyGameLauncher extends MockGameLauncher {
         super(config);
         this.throwException = throwException;
         this.builder = builder;
+    }
+
+    @Override
+    public SubprocessManager start(LaunchIdentity launchIdentity) throws MockGameLaunchException {
+        this.identity = launchIdentity;
+        return start();
     }
 
     @Override
@@ -51,5 +59,10 @@ class DummyGameLauncher extends MockGameLauncher {
 
     public boolean subprocessStarted() {
         return subprocess != null;
+    }
+
+    /** The identity the lifecycle launched under, or null if only the diagnostic path was used. */
+    public LaunchIdentity getIdentity() {
+        return identity;
     }
 }

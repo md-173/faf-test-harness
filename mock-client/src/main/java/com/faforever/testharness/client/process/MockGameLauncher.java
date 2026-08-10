@@ -31,13 +31,21 @@ import org.slf4j.LoggerFactory;
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
- * iceAdapterLobbyPort}) — spec §2.8 requires the values to match between adapter and game.
+ * iceAdapterLobbyPort}), because spec §2.8 requires the values to match between adapter and game.
  *
- * <p>The full §2.8 argv also includes {@code --game-uid} plus {@code game_launch}-derived flags
- * (mod, map, faction, team). Those are session-derived and only meaningful inside an orchestrated
- * lobby session; the standalone {@code launch-game} diagnostic has no lobby, so this launcher emits
- * only the config-derivable subset. Orchestration will extend the argv when the FSM that owns
- * {@code game_launch} parsing arrives.
+ * <p>The player identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is the
+ * orchestrated path and takes the id and login the lobby assigned. {@link #start()} is the {@code
+ * launch-game} diagnostic path and falls back to config values, which is also the only place {@code
+ * playerIdOverride} applies.
+ *
+ * <p>Spec §2.8 also sketches a {@code --game-uid} and {@code game_launch}-derived mod, map,
+ * faction, and team flags. None are emitted, and none exist in mock-game's parser. Verified against
+ * downlords-faf-client v2026.7.1, that sketch was wrong about the real client. {@code
+ * LaunchCommandBuilder} has no mod argument at all, and its {@code /map} is set only by {@code
+ * launchOfflineGame}, so no online game receives one. Team, expected players, start spot, and
+ * faction are passed for every online game, but the client never branches on matchmaker. It always
+ * forwards what {@code game_launch} carried, and the FAF server is what leaves those fields null
+ * for a custom game and fills them for a matchmaker one.
  *
  * <p>If the configured binary path ends in {@code .jar} it is launched via {@code java -jar} on the
  * same JRE as the parent (spec §2.2); otherwise it is executed directly. Log level is forwarded to
@@ -96,8 +104,24 @@ public class MockGameLauncher {
      *     or the process could not be started ("binary failed to start")
      */
     public SubprocessManager start() throws MockGameLaunchException {
+        return start(configIdentity());
+    }
+
+    /**
+     * Launches mock-game under {@code identity} rather than under the config defaults.
+     *
+     * <p>This is the orchestrated path (WBS-3.1.2.9). The lifecycle calls it once the lobby has
+     * answered with a {@code welcome}, so the game is started as the player the lobby actually
+     * authenticated. Everything else about the launch is identical to {@link #start()}.
+     *
+     * @param identity the session identity to launch under; must not be {@code null}
+     * @return the manager wrapping the started mock-game process
+     * @throws MockGameLaunchException if the binary path is not a regular file ("binary not found")
+     *     or the process could not be started ("binary failed to start")
+     */
+    public SubprocessManager start(final LaunchIdentity identity) throws MockGameLaunchException {
         Path binary = resolveBinary();
-        List<String> argv = buildArgv(binary);
+        List<String> argv = buildArgv(binary, identity);
 
         ProcessBuilder pb = new ProcessBuilder(argv);
         // Forward LOG_LEVEL so mock-game's LoggingSetup observes the same level as the harness.
@@ -138,17 +162,44 @@ public class MockGameLauncher {
     }
 
     /**
-     * Builds the mock-game argument list for {@code binary} from {@link MockClientConfig}.
+     * The identity the diagnostic launch path uses, assembled from {@link MockClientConfig}. {@code
+     * playerIdOverride} is honoured here and only here, since a session launch is bound to the
+     * identity the lobby assigned.
+     *
+     * @return the config-derived launch identity
+     */
+    LaunchIdentity configIdentity() {
+        return LaunchIdentity.fromConfig(config, DEFAULT_PLAYER_ID);
+    }
+
+    /**
+     * Builds the mock-game argument list for {@code binary} under the config identity.
      *
      * @param binary the resolved mock-game binary path
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
-        // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly.
+        return buildArgv(binary, configIdentity());
+    }
+
+    /**
+     * Builds the mock-game argument list for {@code binary} under {@code identity}.
+     *
+     * <p>{@link LaunchIdentity#gameUid()} is deliberately not emitted. mock-game has no {@code
+     * --game-uid} option and nothing in it reads a game uid, so passing one would only be rejected
+     * by {@code MockGameCli}'s strict parser. The real client does hand the uid to Forged Alliance,
+     * but as part of the {@code /savereplay gpgnet://.../uid/login.SCFAreplay} URL rather than as
+     * an identity flag, so there is no argv shape here to copy either.
+     *
+     * @param binary the resolved mock-game binary path
+     * @param identity the identity mock-game is launched under
+     * @return the argv list, ready to hand to {@link ProcessBuilder}
+     */
+    List<String> buildArgv(final Path binary, final LaunchIdentity identity) {
+        // Spec §2.2, JAR runs via java -jar on the same JRE and a native binary is exec'd directly.
         List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary));
 
-        int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
-        // Spec §2.8 order: --gpgnet-port, --lobby-port, --player-id, --player-login. mock-game's
+        // Spec §2.8 order, --gpgnet-port, --lobby-port, --player-id, --player-login. mock-game's
         // CLI parser is ours (MockGameCli, WBS 3.2.1.1), no positional-prefix constraint like the
         // upstream adapter has.
         argv.add("--gpgnet-port");
@@ -156,9 +207,9 @@ public class MockGameLauncher {
         argv.add("--lobby-port");
         argv.add(Integer.toString(config.iceAdapterLobbyPort()));
         argv.add("--player-id");
-        argv.add(Integer.toString(playerId));
+        argv.add(Integer.toString(identity.playerId()));
         argv.add("--player-login");
-        argv.add(config.playerLogin());
+        argv.add(identity.login());
         return argv;
     }
 }

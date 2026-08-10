@@ -10,6 +10,7 @@ import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
@@ -112,7 +113,7 @@ final class GameProcessTest {
         gameLauncher = new ChildGameLauncher("sh", "-c", "exit 7");
         MockClientLifecycle lifecycle = lifecycleWith(gameLauncher, teardown());
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(7, lifecycle.gameExit().get(5, TimeUnit.SECONDS));
@@ -123,7 +124,7 @@ final class GameProcessTest {
         gameLauncher = new ChildGameLauncher("sleep", "60");
         MockClientLifecycle lifecycle = lifecycleWith(gameLauncher, teardown());
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         gameLauncher.manager.terminate();
@@ -139,7 +140,7 @@ final class GameProcessTest {
         gameLauncher = new ChildGameLauncher("sh", "-c", "exit 3");
         MockClientLifecycle lifecycle = lifecycleWith(gameLauncher, teardown());
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         // Let the process die before anyone subscribes.
@@ -158,7 +159,7 @@ final class GameProcessTest {
         SessionTeardown teardown = teardown();
         MockClientLifecycle lifecycle = lifecycleWith(gameLauncher, teardown);
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         assertTrue(gameLauncher.manager.isAlive());
 
@@ -196,7 +197,7 @@ final class GameProcessTest {
         }
 
         @Override
-        public SubprocessManager start() throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
             try {
                 manager =
                         SubprocessManager.start(

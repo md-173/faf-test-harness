@@ -48,7 +48,10 @@ import java.util.OptionalInt;
  *     the lobby {@code game_launch.uid} during a full {@code run} session
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
- * @param playerIdOverride optional player ID override for deterministic local testing
+ * @param playerIdOverride optional player ID override for deterministic local testing. Applies to
+ *     the standalone {@code launch-ice} / {@code launch-game} / {@code ice-smoke} diagnostics only.
+ *     A full {@code run} session launches under the lobby {@code welcome.me.id} instead, since the
+ *     adapter's {@code --id} is what tells the game its own identity (WBS-3.1.2.9)
  * @param playerLogin local player login passed to faf-ice-adapter as {@code --login}. Used directly
  *     by the standalone {@code launch-ice} / {@code ice-smoke} diagnostics; during a full {@code
  *     run} session the lobby {@code welcome.me.login} is the authoritative identity (json-rpc-spec

@@ -25,6 +25,7 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -202,8 +203,16 @@ final class AdapterCrashRecoveryTest {
         iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
         assertFalse(iceLauncher.getSubprocess().isAlive());
 
+        // Snapshot under the appender's monitor before streaming. Teardown threads are still free
+        // to log at this point, and logback's ListAppender is backed by a plain ArrayList, so
+        // streaming it live races them into a ConcurrentModificationException. Same guard the
+        // findEvent helper below already uses.
+        ILoggingEvent[] captured;
+        synchronized (appender) {
+            captured = appender.list.toArray(new ILoggingEvent[0]);
+        }
         boolean crashWarned =
-                appender.list.stream()
+                Arrays.stream(captured)
                         .anyMatch(
                                 e ->
                                         e.getLevel() == Level.WARN
@@ -249,7 +258,7 @@ final class AdapterCrashRecoveryTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         assertEquals(ClientState.HOSTING, lifecycle.getState());

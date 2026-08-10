@@ -22,13 +22,18 @@ import org.slf4j.LoggerFactory;
  * teardown. Lifecycle decisions ("launch the adapter when entering matchmaking") belong to the FSM
  * orchestration tasks and are deliberately out of scope here.
  *
- * <p>Argument list (subprocess-orchestration-spec §2.6, json-rpc-spec §8); {@code --id} and {@code
- * --login} are emitted first because the upstream parser is positional-prefix:
+ * <p>Argument list (subprocess-orchestration-spec §2.6, json-rpc-spec §8). {@code --id} and {@code
+ * --login} are emitted first because the upstream synopsis lists them first.
  *
  * <pre>{@code
- * <binary> --id <id> --login <login>
+ * <binary> --id <id> --login <login> --game-id <uid>
  *          --rpc-port <rpc> --gpgnet-port <gpgnet> --lobby-port <lobby>
  * }</pre>
+ *
+ * <p>Those three identity values have two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is
+ * the orchestrated path and takes the id, login, and game uid the lobby assigned. {@link #start()}
+ * is the {@code launch-ice} diagnostic path and falls back to config values, which is also the only
+ * place {@code playerIdOverride} applies.
  *
  * <p>If the configured binary path ends in {@code .jar} it is launched via {@code java -jar} on the
  * same JRE as the parent (spec §2.2); otherwise it is executed directly. Log level is passed to the
@@ -121,8 +126,25 @@ public class IceAdapterLauncher {
      *     found") or the process could not be started ("binary failed to start")
      */
     public SubprocessManager start() throws IceAdapterLaunchException {
+        return start(configIdentity());
+    }
+
+    /**
+     * Launches the adapter under {@code identity} rather than under the config defaults.
+     *
+     * <p>This is the orchestrated path (WBS-3.1.2.9). The lifecycle calls it once the lobby has
+     * answered with a {@code welcome} and a {@code game_launch}, so the adapter is started as the
+     * player the lobby actually authenticated, for the game the lobby actually assigned. Everything
+     * else about the launch is identical to {@link #start()}.
+     *
+     * @param identity the session identity to launch under; must not be {@code null}
+     * @return the manager wrapping the started adapter process
+     * @throws IceAdapterLaunchException if the binary path is not a regular file ("binary not
+     *     found") or the process could not be started ("binary failed to start")
+     */
+    public SubprocessManager start(final LaunchIdentity identity) throws IceAdapterLaunchException {
         Path binary = resolveBinary();
-        List<String> argv = buildArgv(binary);
+        List<String> argv = buildArgv(binary, identity);
 
         ProcessBuilder pb = new ProcessBuilder(argv);
         // Spec §2.3: per-child LOG_DIR, and LOG_LEVEL sourced from the harness config so the
@@ -169,12 +191,34 @@ public class IceAdapterLauncher {
     }
 
     /**
-     * Builds the adapter argument list for {@code binary} from {@link MockClientConfig}.
+     * The identity the diagnostic launch path uses, assembled from {@link MockClientConfig}. {@code
+     * playerIdOverride} is honoured here and only here, since a session launch is bound to the
+     * identity the lobby assigned.
+     *
+     * @return the config-derived launch identity
+     */
+    LaunchIdentity configIdentity() {
+        return LaunchIdentity.fromConfig(config, DEFAULT_PLAYER_ID);
+    }
+
+    /**
+     * Builds the adapter argument list for {@code binary} under the config identity.
      *
      * @param binary the resolved adapter binary path
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
+        return buildArgv(binary, configIdentity());
+    }
+
+    /**
+     * Builds the adapter argument list for {@code binary} under {@code identity}.
+     *
+     * @param binary the resolved adapter binary path
+     * @param identity the identity the adapter is launched under
+     * @return the argv list, ready to hand to {@link ProcessBuilder}
+     */
+    List<String> buildArgv(final Path binary, final LaunchIdentity identity) {
         // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly. The headless
         // logback override is handed to commandPrefix so it lands right after the `java` token —
         // robust against a future setpriv/setsid launch prefix (spec §7.3) that shifts argv[0].
@@ -184,15 +228,16 @@ public class IceAdapterLauncher {
                         : List.of();
         List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary, jvmArgs));
 
-        int playerId = config.playerIdOverride().orElse(DEFAULT_PLAYER_ID);
-        // Spec §2.6: --id and --login must precede every other flag.
+        // Spec §2.6, --id and --login must precede every other flag.
         argv.add("--id");
-        argv.add(Integer.toString(playerId));
+        argv.add(Integer.toString(identity.playerId()));
         argv.add("--login");
-        argv.add(config.playerLogin());
-        // Required by faf-ice-adapter 3.3.x+; without it the adapter prints usage and exits.
+        argv.add(identity.login());
+        // Required by faf-ice-adapter 3.3.x and later. Without it the adapter prints usage and
+        // exits, and exits 0 while doing so (its main discards picocli's return value), so a
+        // missing --game-id never surfaces as a non-zero exit code.
         argv.add("--game-id");
-        argv.add(Integer.toString(config.iceAdapterGameId()));
+        argv.add(Integer.toString(identity.gameUid()));
         argv.add("--rpc-port");
         argv.add(Integer.toString(config.iceAdapterRpcPort()));
         argv.add("--gpgnet-port");

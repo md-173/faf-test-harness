@@ -209,7 +209,7 @@ final class GameEndReportingTest {
                         new SessionTeardown(lobby),
                         safetyNetWindow);
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(hostGameMessage()));
         lifecycle.post(new StartMatch());
