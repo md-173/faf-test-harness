@@ -26,6 +26,7 @@ final class MockGameCliReportTest {
         "--lobby-port", "6112",
         "--player-id", "42",
         "--player-login", "Rhiza",
+        "--game-uid", "9001",
     };
 
     private final ByteArrayOutputStream errBuffer = new ByteArrayOutputStream();
@@ -73,14 +74,14 @@ final class MockGameCliReportTest {
     void unknownArgumentReturnsUsageAndNamesIt() {
         String[] args = new String[VALID_ARGS.length + 2];
         System.arraycopy(VALID_ARGS, 0, args, 0, VALID_ARGS.length);
-        args[VALID_ARGS.length] = "--game-uid";
-        args[VALID_ARGS.length + 1] = "9001";
+        args[VALID_ARGS.length] = "--faction";
+        args[VALID_ARGS.length + 1] = "3";
 
         ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());
-        assertTrue(errorLine().contains("--game-uid"), "message must name the unknown argument");
+        assertTrue(errorLine().contains("--faction"), "message must name the unknown argument");
     }
 
     /**
@@ -97,6 +98,7 @@ final class MockGameCliReportTest {
         "3, 70000,      --lobby-port",
         "5, 0,          --player-id",
         "7, '   ',      --player-login",
+        "9, -1,         --game-uid",
         "1, not-a-port, --gpgnet-port",
     })
     void rejectionNamesTheArgumentOnTheErrorLine(
