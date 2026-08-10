@@ -26,26 +26,27 @@ import org.slf4j.LoggerFactory;
  *
  * <pre>{@code
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
- *          --player-id <id> --player-login <login>
+ *          --player-id <id> --player-login <login> --game-uid <uid>
  * }</pre>
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
  * iceAdapterLobbyPort}), because spec §2.8 requires the values to match between adapter and game.
  *
- * <p>The player identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is the
- * orchestrated path and takes the id and login the lobby assigned. {@link #start()} is the {@code
- * launch-game} diagnostic path and falls back to config values, which is also the only place {@code
- * playerIdOverride} applies.
+ * <p>The identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is the orchestrated
+ * path and takes the id and login the lobby assigned plus the {@code game_launch} uid. {@link
+ * #start()} is the {@code launch-game} diagnostic path and falls back to config values, which is
+ * also the only place {@code playerIdOverride} applies. Its uid is {@code iceAdapterGameId},
+ * default 0, meaning no session.
  *
- * <p>Spec §2.8 also sketches a {@code --game-uid} and {@code game_launch}-derived mod, map,
- * faction, and team flags. None are emitted, and none exist in mock-game's parser. Verified against
- * downlords-faf-client v2026.7.1, that sketch was wrong about the real client. {@code
- * LaunchCommandBuilder} has no mod argument at all, and its {@code /map} is set only by {@code
- * launchOfflineGame}, so no online game receives one. Team, expected players, start spot, and
- * faction are passed for every online game, but the client never branches on matchmaker. It always
- * forwards what {@code game_launch} carried, and the FAF server is what leaves those fields null
- * for a custom game and fills them for a matchmaker one.
+ * <p>Spec §2.8 also sketched {@code game_launch}-derived mod, map, faction, and team flags. None
+ * are emitted, for two different reasons. Verified against downlords-faf-client v2026.7.1, {@code
+ * LaunchCommandBuilder} has no mod argument at all and its {@code /map} is set only by {@code
+ * launchOfflineGame}, so no online game receives either. Faction, team, expected players, and start
+ * spot are genuinely passed on every online launch, but the client does not branch on matchmaker.
+ * It forwards whatever {@code game_launch} carried, and the FAF server is what leaves those fields
+ * null for a custom game and fills them for a matchmaker one. Those four are deferred rather than
+ * dismissed, and are tracked in spec §2.8.
  *
  * <p>If the configured binary path ends in {@code .jar} it is launched via {@code java -jar} on the
  * same JRE as the parent (spec §2.2); otherwise it is executed directly. Log level is forwarded to
@@ -185,11 +186,10 @@ public class MockGameLauncher {
     /**
      * Builds the mock-game argument list for {@code binary} under {@code identity}.
      *
-     * <p>{@link LaunchIdentity#gameUid()} is deliberately not emitted. mock-game has no {@code
-     * --game-uid} option and nothing in it reads a game uid, so passing one would only be rejected
-     * by {@code MockGameCli}'s strict parser. The real client does hand the uid to Forged Alliance,
-     * but as part of the {@code /savereplay gpgnet://.../uid/login.SCFAreplay} URL rather than as
-     * an identity flag, so there is no argv shape here to copy either.
+     * <p>{@code --game-uid} is a mock adaptation rather than a copy of an upstream flag. The real
+     * client hands Forged Alliance its game uid inside the {@code /savereplay
+     * gpgnet://.../uid/login.SCFAreplay} URL and the {@code /log} filename, with no flag of its
+     * own. mock-game has neither, so it takes the uid directly.
      *
      * @param binary the resolved mock-game binary path
      * @param identity the identity mock-game is launched under
@@ -210,6 +210,8 @@ public class MockGameLauncher {
         argv.add(Integer.toString(identity.playerId()));
         argv.add("--player-login");
         argv.add(identity.login());
+        argv.add("--game-uid");
+        argv.add(Integer.toString(identity.gameUid()));
         return argv;
     }
 }

@@ -22,6 +22,7 @@ final class MockGameCliTest {
         "--lobby-port", "6112",
         "--player-id", "42",
         "--player-login", "Rhiza",
+        "--game-uid", "9001",
     };
 
     @Test
@@ -32,10 +33,35 @@ final class MockGameCliTest {
         assertEquals(6112, config.lobbyPort());
         assertEquals(42, config.playerId());
         assertEquals("Rhiza", config.playerLogin());
+        assertEquals(9001, config.gameUid());
+    }
+
+    @Test
+    void zeroGameUidIsAcceptedAsNoSession() {
+        String[] args = VALID_ARGS.clone();
+        args[9] = "0";
+
+        // What the standalone launch-game diagnostic passes, having no lobby session.
+        assertEquals(0, MockGameCli.parse(args).gameUid());
+    }
+
+    @Test
+    void negativeGameUidFailsTheParse() {
+        String[] args = VALID_ARGS.clone();
+        args[9] = "-1";
+
+        assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"--gpgnet-port", "--lobby-port", "--player-id", "--player-login"})
+    @ValueSource(
+            strings = {
+                "--gpgnet-port",
+                "--lobby-port",
+                "--player-id",
+                "--player-login",
+                "--game-uid"
+            })
     void missingAnyRequiredArgumentFailsTheParse(final String omitted) {
         List<String> args = new ArrayList<>();
         for (int i = 0; i < VALID_ARGS.length; i += 2) {
@@ -51,7 +77,7 @@ final class MockGameCliTest {
 
     @Test
     void unknownArgumentFailsTheParse() {
-        String[] args = withExtra(VALID_ARGS, "--game-uid", "9001");
+        String[] args = withExtra(VALID_ARGS, "--faction", "3");
 
         assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }

@@ -218,37 +218,50 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
   "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
   "--player-id",   welcome.me.id,
-  "--player-login", welcome.me.login ]
+  "--player-login", welcome.me.login,
+  "--game-uid",    game_launch.uid ]
 ```
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
 (WBS-3.2.1.1): strict, every argument required, unknown arguments rejected.
 
-`--player-id` and `--player-login` have the same two sources as the adapter's
-(WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity,
-and the standalone `launch-game` diagnostic falls back to `playerIdOverride`
-and `playerLogin`.
+All three identity values have the same two sources as the adapter's
+(WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity
+and the `game_launch` uid. The standalone `launch-game` diagnostic falls back
+to `playerIdOverride`, `playerLogin`, and `iceAdapterGameId` (default 0,
+meaning no session). `--game-uid` accepts 0 and rejects a negative value.
 
-An earlier draft of this section also listed a `--game-uid` and
-`game_launch`-derived mod, map, faction, and team flags. None are emitted and
-none exist in the parser, for two separate reasons.
+`--game-uid` is a mock adaptation, not a copy of an upstream flag. The real
+client hands Forged Alliance its game uid inside the
+`/savereplay gpgnet://<ip>:<port>/<uid>/<login>.SCFAreplay` URL and the `/log`
+filename, with no flag of its own. mock-game has neither, so it takes the uid
+directly.
 
-- `--game-uid` was a harness invention with no reader. Nothing in mock-game
-  consumes a game uid, and GPGNet carries no field for one. The real client
-  does hand the uid to Forged Alliance, but inside the
-  `/savereplay gpgnet://<ip>:<port>/<uid>/<login>.SCFAreplay` URL and in the
-  `/log` filename, not as an identity flag. Revisit this when a reader exists,
-  most likely log correlation (WBS-3.1.6.2).
-- The other four came from a wrong reading of the real client. Verified
-  against downlords-faf-client v2026.7.1, `LaunchCommandBuilder` has no mod
-  argument at all, and its `/map` is set only by `launchOfflineGame`, so no
-  online game receives one. Team, expected players, start spot, and faction
-  are passed for every online game, and the client never branches on
-  matchmaker. It forwards whatever `game_launch` carried, and the FAF server
-  is what leaves those fields null for a custom game (`GameLaunchOptions`
-  defaults them all to `None`, and `_prepare_launch_game` strips every `None`
-  before sending) and fills them for a matchmaker one. Fidelity here therefore
-  belongs to whatever drives `game_launch`, not to the launcher.
+#### Deferred `game_launch`-derived flags
+
+An earlier draft of this section listed mod, map, faction, and team as flags
+to pass. None are emitted. Verified against downlords-faf-client v2026.7.1 and
+FAForever/server, they fall into three groups.
+
+- **`mod` has no argv representation, but is a real `game_launch` field.**
+  `_prepare_launch_game` sets `"mod": game.game_mode` as a top-level field, so
+  it is always populated and never stripped. The client consumes it to select
+  featured-mod binaries, patching, and the init file, which is why it never
+  becomes a Forged Alliance argument. Do not read "no flag" as "irrelevant".
+  It is the field that matters the moment featured-mod fidelity does.
+- **`map` is never passed for an online game.** `LaunchCommandBuilder`'s
+  `/map` is reached only from `launchOfflineGame`. The `game_launch` mapname
+  is used to pre-download the map, after which FA gets it through the lobby.
+- **Faction, team, expected players, start spot, game options, and additional
+  args are a real conditional handoff, deferred rather than dismissed.**
+  `ForgedAllianceLaunchService.launchOnlineGame` passes all of them on every
+  online launch, and `build()` emits each only when non-null. The client does
+  not branch on matchmaker. The FAF server produces the difference, since
+  `GameLaunchOptions` defaults every field to `None` and `_prepare_launch_game`
+  strips every `None` before sending, while ladder and team matchmaking fill
+  them in. Track these against whatever grows mock-game's lobby-option
+  fidelity. Passing them through the launcher is the mechanism the real client
+  uses, so this is a scope decision, not a correctness one.
 
 The Subprocess Execution Controller treats the argv as opaque except for the
 two ports it shares with the adapter.
