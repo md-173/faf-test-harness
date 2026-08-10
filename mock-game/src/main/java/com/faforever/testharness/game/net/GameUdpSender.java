@@ -95,9 +95,10 @@ public final class GameUdpSender {
     }
 
     /**
-     * Stops emission. Idempotent and terminal — no datagram is sent after this returns, and {@link
-     * #start()} afterwards is a no-op. Does not close the socket: it is shared with the receiver,
-     * so its lifecycle belongs to the owner (the shutdown sequence).
+     * Stops emission. Idempotent and terminal — no new send round starts after this returns (an
+     * in-flight round may complete concurrently), and {@link #start()} afterwards is a no-op. Does
+     * not close the socket: it is shared with the receiver, so its lifecycle belongs to the owner
+     * (the shutdown sequence).
      */
     public void stop() {
         ticker.stop();

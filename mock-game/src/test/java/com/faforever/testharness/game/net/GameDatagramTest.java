@@ -26,4 +26,9 @@ final class GameDatagramTest {
     void parseRejectsTruncatedInput() {
         assertThrows(IllegalArgumentException.class, () -> GameDatagram.parse(new byte[19], 19));
     }
+
+    @Test
+    void parseRejectsOversizedInput() {
+        assertThrows(IllegalArgumentException.class, () -> GameDatagram.parse(new byte[64], 64));
+    }
 }

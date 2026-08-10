@@ -41,12 +41,12 @@ public record GameDatagram(int senderId, long sequence, long timestampMillis) {
      * @param data the datagram's data buffer (e.g. {@code packet.getData()})
      * @param length the number of valid bytes (e.g. {@code packet.getLength()})
      * @return the decoded datagram
-     * @throws IllegalArgumentException if fewer than {@value #BYTES} bytes are present
+     * @throws IllegalArgumentException if {@code length} is not exactly {@value #BYTES}
      */
     public static GameDatagram parse(final byte[] data, final int length) {
-        if (length < BYTES) {
+        if (length != BYTES) {
             throw new IllegalArgumentException(
-                    "GameDatagram needs " + BYTES + " bytes, got " + length);
+                    "GameDatagram is exactly " + BYTES + " bytes, got " + length);
         }
         ByteBuffer buffer = ByteBuffer.wrap(data, 0, length);
         return new GameDatagram(buffer.getInt(), buffer.getLong(), buffer.getLong());
