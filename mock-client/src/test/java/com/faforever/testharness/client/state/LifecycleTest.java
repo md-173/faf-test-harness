@@ -113,7 +113,7 @@ final class LifecycleTest {
         MockClientLifecycle lifecycle = defaultLifecycle();
         assertEquals(ClientState.CONNECTING, lifecycle.getState());
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -146,7 +146,7 @@ final class LifecycleTest {
         MockClientLifecycle lifecycle =
                 lifecycleWithConfig(configWithHostConfig(Optional.of(hostConfig)));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         String received = server.pollReceived(2, TimeUnit.SECONDS);
@@ -159,7 +159,7 @@ final class LifecycleTest {
     void doesNotSendGameHostWhenNotConfigured() throws Exception {
         MockClientLifecycle lifecycle = defaultLifecycle();
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         assertThrows(
@@ -186,25 +186,25 @@ final class LifecycleTest {
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
 
         lifecycle = defaultLifecycle();
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new Disconnected(null));
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
 
         lifecycle = defaultLifecycle();
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new Disconnected(null));
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
 
         lifecycle = defaultLifecycle();
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new Disconnected(null));
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
 
         lifecycle = defaultLifecycle();
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         lifecycle.post(new StartMatch());

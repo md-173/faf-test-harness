@@ -12,12 +12,12 @@ import picocli.CommandLine.ParameterException;
  * (WBS-3.1.2.3) — so the contract is strict: every argument required, nothing defaulted, no
  * environment-variable or config-file fallbacks, and unknown arguments fail the parse.
  *
- * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8, the subset the launcher
- * currently emits — extend both ends together when orchestration adds the {@code game_launch}
- * -derived flags):
+ * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8). Extend both ends together if
+ * orchestration ever adds the remaining {@code game_launch}-derived flags.
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
+ * --game-uid <uid>
  * }</pre>
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
@@ -46,6 +46,13 @@ public final class MockGameCli {
     @Option(names = "--player-login", required = true, description = "FAF player login")
     private String playerLogin;
 
+    /** Id of the game being played; zero means no orchestrated session. */
+    @Option(
+            names = "--game-uid",
+            required = true,
+            description = "lobby game uid, 0 when launched without a session")
+    private int gameUid;
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -61,7 +68,8 @@ public final class MockGameCli {
         CommandLine commandLine = new CommandLine(cli);
         commandLine.parseArgs(args);
         cli.validate(commandLine);
-        return new MockGameConfig(cli.gpgNetPort, cli.lobbyPort, cli.playerId, cli.playerLogin);
+        return new MockGameConfig(
+                cli.gpgNetPort, cli.lobbyPort, cli.playerId, cli.playerLogin, cli.gameUid);
     }
 
     /**
@@ -115,6 +123,12 @@ public final class MockGameCli {
         }
         if (playerLogin.isBlank()) {
             throw new ParameterException(commandLine, "--player-login must not be blank");
+        }
+        // Zero is the documented "no orchestrated session" value the launch-game diagnostic passes,
+        // so it is allowed. Negative is never a game id.
+        if (gameUid < 0) {
+            throw new ParameterException(
+                    commandLine, "--game-uid must not be negative: " + gameUid);
         }
     }
 

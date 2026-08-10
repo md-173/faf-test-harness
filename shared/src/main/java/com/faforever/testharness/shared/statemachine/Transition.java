@@ -54,9 +54,13 @@ public class Transition {
                 }
             }
         }
-        // Run any registered hooks.
-        from.exit();
-        to.entry();
+        // A self-loop (from == to) is a stay-in-state action: the event is handled but no actual
+        // state change occurs, so exit/entry hooks must not re-fire (they would otherwise re-run
+        // side effects such as teardown that are only meant to happen once, on genuine entry).
+        if (from != to) {
+            from.exit();
+            to.entry();
+        }
         return to;
     }
 

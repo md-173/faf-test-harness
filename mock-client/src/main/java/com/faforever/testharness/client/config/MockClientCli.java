@@ -255,7 +255,10 @@ public final class MockClientCli implements Callable<Integer> {
     @Option(
             names = "--player-id-override",
             scope = ScopeType.INHERIT,
-            description = "Optional player ID override for deterministic local testing.")
+            description =
+                    "Optional player ID override for deterministic local testing. Used by the "
+                            + "launch-ice / launch-game / ice-smoke diagnostics; a full 'run' "
+                            + "session uses the lobby welcome identity instead.")
     private Integer playerIdOverride;
 
     /** Local player login passed to faf-ice-adapter as {@code --login}. */
@@ -264,9 +267,10 @@ public final class MockClientCli implements Callable<Integer> {
             scope = ScopeType.INHERIT,
             defaultValue = "mock-client",
             description =
-                    "Local player login passed to faf-ice-adapter as --login. Used by the "
-                            + "launch-ice / ice-smoke diagnostics; a full 'run' session uses the "
-                            + "lobby welcome identity instead.")
+                    "Local player login passed to faf-ice-adapter as --login and to mock-game as "
+                            + "--player-login. Used by the launch-ice / launch-game / ice-smoke "
+                            + "diagnostics; a full 'run' session uses the lobby welcome identity "
+                            + "instead.")
     private String playerLogin;
 
     /** ID of an existing game to join; when set the FSM sends {@code game_join} from IDLE. */

@@ -59,3 +59,5 @@ bin/
 
 # Provisioned faf-uid binary (download per documentation/demos/README.md; also .exe / -macos)
 /faf-uid*
+# Windows/WSL NTFS alternate-data-stream artifacts
+*Zone.Identifier

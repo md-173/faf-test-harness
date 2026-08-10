@@ -10,6 +10,7 @@ import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
+import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
@@ -22,7 +23,9 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -97,6 +100,12 @@ final class PlayingTransitionTest {
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
 
+    // #211: these tests assert HOSTING/PLAYING without ever reaching TERMINATED, so
+    // SessionTeardown never runs to reap the hanging "game"/"ICE adapter" subprocesses started
+    // below (see the DummyGameLauncher/DummyIceLauncher javadoc for why they hang). Tracked here so
+    // tearDown can terminate them itself.
+    private final List<SubprocessManager> subprocesses = new ArrayList<>();
+
     @BeforeEach
     void setUp() throws Exception {
         server = new ScriptedWebSocketServer();
@@ -109,6 +118,9 @@ final class PlayingTransitionTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        for (SubprocessManager subprocess : subprocesses) {
+            subprocess.terminate(Duration.ofSeconds(1));
+        }
         if (lobby != null) {
             try {
                 lobby.close().get(2, TimeUnit.SECONDS);
@@ -135,7 +147,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         String node =
@@ -161,7 +173,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new JoinGame(JOIN_GAME_MESSAGE));
         String node =
@@ -187,7 +199,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         ObjectNode node = MAPPER.createObjectNode().put("method", "onGpgNetMessageReceived");
@@ -222,7 +234,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
         String node =
@@ -249,7 +261,7 @@ final class PlayingTransitionTest {
                         iceLauncher,
                         new SessionTeardown(lobby));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
 
@@ -270,8 +282,10 @@ final class PlayingTransitionTest {
     }
 
     private class DummyIceAdapterConnection extends IceAdapterConnection {
-        // One handler per notification is enough for this test.
-        private Map<String, Consumer<JsonNode>> notificationHandlers = new HashMap<>();
+        // Mirrors IceAdapterConnection's real fan-out: MockClientLifecycle registers more than one
+        // handler under "onGpgNetMessageReceived" (#192's GameEnded consumer alongside the
+        // GameState/Launching one), so a single-handler map would silently drop earlier handlers.
+        private final Map<String, List<Consumer<JsonNode>>> notificationHandlers = new HashMap<>();
 
         DummyIceAdapterConnection(int port) {
             super(port);
@@ -289,12 +303,11 @@ final class PlayingTransitionTest {
 
         @Override
         public void registerNotification(final String name, final Consumer<JsonNode> handler) {
-            notificationHandlers.put(name, handler);
+            notificationHandlers.computeIfAbsent(name, ignored -> new ArrayList<>()).add(handler);
         }
 
         public void fireNotification(final String name, JsonNode value) {
-            Consumer<JsonNode> handler = notificationHandlers.get(name);
-            if (handler != null) {
+            for (Consumer<JsonNode> handler : notificationHandlers.getOrDefault(name, List.of())) {
                 handler.accept(value);
             }
         }
@@ -306,16 +319,25 @@ final class PlayingTransitionTest {
         public void close() {}
     }
 
+    // #211: HOSTING now drives to TERMINATED on GameExited, so a subprocess that exits on its own
+    // would race that transition against whatever HOSTING/PLAYING assertion the test is making.
+    // "sort" with no arguments blocks on stdin EOF on both Windows and POSIX, keeping the process
+    // alive for the test's duration; tearDown() reaps it via the outer class's subprocesses list.
     private class DummyGameLauncher extends MockGameLauncher {
         DummyGameLauncher(MockClientConfig config) {
             super(config);
         }
 
         @Override
-        public SubprocessManager start() throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
             try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+                SubprocessManager manager =
+                        SubprocessManager.start(
+                                new ProcessBuilder("sort"),
+                                "DUMMY SUBPROCESS",
+                                Duration.ofSeconds(5));
+                subprocesses.add(manager);
+                return manager;
             } catch (IOException e) {
                 throw new MockGameLaunchException(e.getMessage());
             }
@@ -328,10 +350,15 @@ final class PlayingTransitionTest {
         }
 
         @Override
-        public SubprocessManager start() throws IceAdapterLaunchException {
+        public SubprocessManager start(LaunchIdentity identity) throws IceAdapterLaunchException {
             try {
-                return SubprocessManager.start(
-                        new ProcessBuilder("echo"), "DUMMY SUBPROCESS", Duration.ofSeconds(5));
+                SubprocessManager manager =
+                        SubprocessManager.start(
+                                new ProcessBuilder("sort"),
+                                "DUMMY SUBPROCESS",
+                                Duration.ofSeconds(5));
+                subprocesses.add(manager);
+                return manager;
             } catch (IOException e) {
                 throw new IceAdapterLaunchException(e.getMessage());
             }

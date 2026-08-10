@@ -126,7 +126,7 @@ final class GameJoinTest {
         MockClientLifecycle lifecycle =
                 newLifecycle(Optional.of(new GameJoinConfig(42, Optional.of("s3cret"))));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
@@ -140,7 +140,7 @@ final class GameJoinTest {
         MockClientLifecycle lifecycle =
                 newLifecycle(Optional.of(new GameJoinConfig(7, Optional.empty())));
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
@@ -153,7 +153,7 @@ final class GameJoinTest {
     void idleSendsNothingWhenNoTargetGameConfigured() throws Exception {
         MockClientLifecycle lifecycle = newLifecycle(Optional.empty());
 
-        lifecycle.post(new WelcomeReceived(null));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
         assertThrows(AssertionError.class, () -> server.pollReceived(500, TimeUnit.MILLISECONDS));

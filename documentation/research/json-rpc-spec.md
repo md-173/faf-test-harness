@@ -156,14 +156,33 @@ Same as the WebRTC IDL — `{ "urls": [string], "username"?: string, "credential
 | `onConnectionStateChanged` | `state: "Connected" \| "Disconnected"` | The game has connected (or disconnected) to the adapter's internal GPGNet TCP server. |
 | `onGpgNetMessageReceived` | `header: string`, `chunks: array` | The game emitted a GPGNet frame; the adapter forwards it verbatim. |
 | `onIceMsg` | `localPlayerId: int`, `remotePlayerId: int`, `msg: object` | A local PeerRelay produced an ICE candidate / SDP for `remotePlayerId`. The Mock Client must forward this to the lobby (see §7). |
-| `onIceConnectionStateChanged` | `localPlayerId: int`, `remotePlayerId: int`, `state: string` | Mirrors `RTCPeerConnection.iceConnectionState` (`new` / `checking` / `connected` / `completed` / `failed` / `disconnected` / `closed`). |
-| `onConnected` | `localPlayerId: int`, `remotePlayerId: int`, `connected: bool` | High-level summary: the peer is reachable / unreachable. |
+| `onIceConnectionStateChanged` | `localPlayerId: long`, `remotePlayerId: long`, `state: string` | The adapter's own `IceState` (`new` / `gathering` / `awaitingCandidates` / `checking` / `connected` / `completed` / `disconnected`), *not* the WebRTC IDL set. See the note below. |
+| `onConnected` | `localPlayerId: long`, `remotePlayerId: long`, `connected: bool` | High-level summary: the peer is reachable / unreachable. |
+
+> **Player id width.** The two peer notifications above declare their ids as
+> `long`, not `int` — `RPCService.onIceConnectionStateChanged(long, long,
+> String)` and `RPCService.onConnected(long, long, boolean)`, verified against
+> the shipped adapter jar. `onIceMsg` uses `int` (`CandidatesMessage`).
+> Consumers of the peer notifications must parse with `asLong()`.
+
+> **ICE state vocabulary.** The upstream README describes this notification
+> as mirroring `RTCPeerConnection.iceConnectionState`, but the adapter sends
+> `IceState.getMessage()`, which is its own vocabulary. Verified against the
+> shipped jar (3.3.14): the enum defines `new`, `gathering`,
+> `awaitingCandidates`, `checking`, `connected`, `completed`, `disconnected`,
+> and `PeerIceModule.setState` is only ever called with `GATHERING`,
+> `AWAITING_CANDIDATES`, `CHECKING`, `CONNECTED`, `DISCONNECTED` (`NEW` is the
+> initial field value). The WebRTC states `failed` and `closed` do not exist in
+> the adapter at all, and `COMPLETED` has no `setState` call site, so a matcher
+> waiting on any of those three never fires. `gathering` and
+> `awaitingCandidates` are the states a delayed-negotiation fault parks in.
 
 > **Undocumented notification.** The README's "Example usage sequence"
 > mentions `onDatachannelOpen` as an alternative readiness indicator, but
 > the notification table does not list it. The Mock Client treats it as
-> informational; the contract for "peer ready" is
-> `onIceConnectionStateChanged → "connected" | "completed"`.
+> informational. Treat `onIceConnectionStateChanged → "connected"` as the
+> "peer ready" signal; `"completed"` is unreachable in 3.3.14, so a matcher
+> must not require it. `onConnected(…, true)` is the higher-level equivalent.
 
 > **Forward compatibility.** Any notification whose `method` is not in the
 > table above is logged at WARN with the full payload and discarded. The

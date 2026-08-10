@@ -110,6 +110,37 @@ final class MockGameLauncherTest {
         assertEquals("7237", valueAfter(argv, "--gpgnet-port"));
         assertEquals("7238", valueAfter(argv, "--lobby-port"));
         assertEquals("mock-client", valueAfter(argv, "--player-login"));
+        // iceAdapterGameId default, meaning no orchestrated session.
+        assertEquals("0", valueAfter(argv, "--game-uid"));
+    }
+
+    @Test
+    void orchestratedArgvCarriesSessionIdentityNotConfig() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
+
+        List<String> argv =
+                new MockGameLauncher(configWithBinary(binary)).buildArgv(binary, identity);
+
+        // The config this launcher holds would give player id 1 and login "mock-client".
+        assertEquals("9001", valueAfter(argv, "--player-id"));
+        assertEquals("welcome-login", valueAfter(argv, "--player-login"));
+        assertEquals("4242", valueAfter(argv, "--game-uid"));
+    }
+
+    @Test
+    void orchestratedIdentityBeatsPlayerIdOverride() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config = configWithBinaryAndPlayerId(binary, 42);
+
+        List<String> argv =
+                new MockGameLauncher(config)
+                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242));
+
+        assertEquals(
+                "9001",
+                valueAfter(argv, "--player-id"),
+                "a session launch is bound to the lobby id, so the override must not apply");
     }
 
     @Test

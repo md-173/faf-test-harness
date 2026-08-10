@@ -11,10 +11,11 @@ In this document (and in FAF development in general) `CamelCase` messages repres
 
 ## Game State Machine
 
-The mock game has 6 states:
+The mock game has 7 states:
 | State        | Description                         |
 |--------------|-------------------------------------|
 | INITIALIZING | Connecting to the server            |
+| IDLE         | Waiting to create for lobby config  |
 | LOBBY        | Waiting on instructions             |
 | HOSTING      | Hosting a game, waiting for players |
 | JOINING      | Joining a game                      |
@@ -25,8 +26,9 @@ The mock game has 6 states:
 ```mermaid
 stateDiagram-v2
     [*] --> INITIALIZING
-    INITIALIZING --> LOBBY : Connection to the GPGNet server established / Send GameState(Idle) and GameState(Lobby) messages
+    INITIALIZING --> IDLE : Connection to the GPGNet server established / Send GameState(Idle) message
     state "SETUP" as SETUP {
+        IDLE --> LOBBY : CreateLobby message from server / Send GameState(Lobby) message
         LOBBY --> HOSTING : HostGame message from server
         LOBBY --> JOINING : JoinGame message from server
 
@@ -42,7 +44,7 @@ stateDiagram-v2
         JOINING : Receive and handle ConnectToPeer messages
     }
     HOSTING --> LIVE : All players connected / Send GameState(Launching) message
-    JOINING --> LIVE : Host starts peer-to-peer communication
+    JOINING --> LIVE : Host starts peer-to-peer communication / Send GameState(Launching) message
 
     LIVE --> LIVE : Peer desynchronises [desyncs <= 20] / Send Desync message
     LIVE --> ENDED : Game finished / Send GameState(Ended) message
@@ -135,11 +137,11 @@ the server instructs the client to initiate the game binary (with the `game_lauc
 Afterwards, most state transitions (in both the game and client) are driven by GPGNet messages exchanged between game and server.
 Therefore, most states in the client after `STARTING_GAME` are highly coupled to states in the game:
 
-|Client                 | Game                       |
-|-----------------------|----------------------------|
-| `STARTING_GAME`       | `INITIALIZING` and `LOBBY` |
-| `HOSTING` / `JOINING` | `HOSTING` / `JOINING`      |
-| `PLAYING`             | `LIVE` and `ENDED`         |
+|Client                 | Game                                |
+|-----------------------|-------------------------------------|
+| `STARTING_GAME`       | `INITIALIZING`, `IDLE`, and `LOBBY` |
+| `HOSTING` / `JOINING` | `HOSTING` / `JOINING`               |
+| `PLAYING`             | `LIVE` and `ENDED`                  |
 
 The client is responsible for starting and managing the lifecycle of a game binary instance.
 Teardown of the game binary is always client-led, regardless of whether it is due to timeouts, disconnections, normal execution, or process exit.

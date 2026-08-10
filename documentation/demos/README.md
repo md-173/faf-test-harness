@@ -80,6 +80,11 @@ FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://ws.faforever.xyz \
 
 Each transition is logged on its own line (console + `logs/<component>.jsonl`):
 
+> This table is a reading aid for checking a demo run by eye. The
+> machine-readable formats an automated harness parses (state entries,
+> identity, peer connection state) are specified in `mock-client/README.md`
+> § "Harness log contract", which is the authoritative contract.
+
 | Stage | Log line (logger) |
 |-------|-------------------|
 | Transport up | `lobby WebSocket connected: wss://ws.faforever.xyz` (`LobbyConnection`) |

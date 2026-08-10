@@ -121,8 +121,8 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
 | `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | no | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing. |
-| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login`; used by the `launch-ice` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this
@@ -262,7 +262,10 @@ binary in at a fixed location).
 
 Spawns the adapter, runs it for `--duration-seconds` (default `10`), terminates
 it, and logs the exit code. The adapter's output appears in the logs tagged
-`[ICEAdapter]`.
+`[ICEAdapter]`. Having no lobby, this diagnostic takes `--id`, `--login`, and
+`--game-id` from `playerIdOverride`, `playerLogin`, and `iceAdapterGameId`
+(default `0`, meaning no session) rather than from the lobby `welcome` and
+`game_launch` a full `run` uses.
 
 ```bash
 ./gradlew :mock-client:run --args="\
@@ -281,10 +284,12 @@ and exits `70` (`RUNTIME`) — no stack trace.
 
 Spawns `mock-game`, runs it for `--duration-seconds` (default `10`), terminates
 it, and logs the exit code. The game's output appears in the logs tagged
-`[MockGame]`. The argv is the config-derivable subset of
-`subprocess-orchestration-spec` §2.8 (`--gpgnet-port`, `--lobby-port`,
-`--player-id`, `--player-login`); the `game_launch`-derived flags (uid, mod,
-map, faction, team) are FSM scope and arrive with orchestration.
+`[MockGame]`. The argv is `subprocess-orchestration-spec` §2.8
+(`--gpgnet-port`, `--lobby-port`, `--player-id`, `--player-login`,
+`--game-uid`). Having no lobby, this diagnostic takes the identity from
+`playerIdOverride`, `playerLogin`, and `iceAdapterGameId` (default `0`, meaning
+no session) rather than from the lobby `welcome` and `game_launch` a full `run`
+uses.
 
 ```bash
 ./gradlew :mock-client:run --args="\
@@ -354,11 +359,12 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ### Multiple clients on one box
 
 To simulate 2–4 players locally, give each instance its own ports, player ID,
-and log file. Public values come from the shared config file, per-client values
-come from CLI flags:
+log file, and instance name. Public values come from the shared config file,
+per-client values come from CLI flags and the `INSTANCE_NAME` environment
+variable:
 
 ```bash
-./gradlew :mock-client:run --args="\
+INSTANCE_NAME=peer-a ./gradlew :mock-client:run --args="\
   run \
   --config mock-client.json \
   --player-id-override 1 \
@@ -366,7 +372,7 @@ come from CLI flags:
   --ice-adapter-gpg-net-port 7237 \
   --log-file logs/client-1.jsonl" &
 
-./gradlew :mock-client:run --args="\
+INSTANCE_NAME=peer-b ./gradlew :mock-client:run --args="\
   run \
   --config mock-client.json \
   --player-id-override 2 \
@@ -374,6 +380,109 @@ come from CLI flags:
   --ice-adapter-gpg-net-port 7247 \
   --log-file logs/client-2.jsonl" &
 ```
+
+`INSTANCE_NAME` is the multi-instance convention. It labels every record with
+the instance that emitted it, and it gives each instance its own default log
+file, `logs/<component>-<instance>.jsonl`. Leaving it unset is the normal
+single-instance case and changes nothing, neither the default path nor the
+record shape.
+
+That default is what separates the subprocesses. `--log-file` is a CLI flag, so
+it becomes a system property and does not cross a process boundary; the
+launchers deliberately pass no `LOG_FILE` to their children (see
+`MockGameLauncher`). Without a per-instance default, every `mock-game` would
+fall back to `logs/mockgame.jsonl` and both instances' games would contend on
+one rolling file. With `INSTANCE_NAME` set, each writes
+`logs/mockgame-<instance>.jsonl` on its own, and its records carry the label
+too. Prefer this to exporting `LOG_FILE`, which would put a client and its own
+child in one file.
+
+Supply `INSTANCE_NAME` as an environment variable rather than
+`-DINSTANCE_NAME`, for the same inheritance reason: the value reaches the
+subprocesses this client launches, so `mock-game` reads it at its own startup
+and labels its own records with it. `faf-ice-adapter` is a third-party binary
+that knows nothing about the variable, so its output is labelled only in the
+records this client captures from its stdout and stderr, not in any log the
+adapter writes itself.
+
+## Harness log contract
+
+An automated harness observes a running client from the outside, through its
+log records alone (WBS-3.1.6.2). There is no health port and no readiness
+message — see the note at the end of this section. The formats below are a
+documented interface consumed by the N-client spawner (WBS 4.2.2) and the
+fault-injection cards (Phase 5). **Changing any of them is a breaking change**
+for those cards, and each is pinned by a test: `HarnessLogContractTest` and
+`IceEventLoggerTest` parse real JSONL records, and `WelcomeStateSyncTest` pins
+the `session ready` fields.
+
+Read the JSONL file rather than the console: every record is one line of JSON
+with a millisecond `timestamp`, a `component`, and an `instance` when one is
+named.
+
+### Lifecycle
+
+One record on entry to each FSM state. `CONNECTING` is emitted once when the
+lifecycle is constructed, because the initial state fires no entry hook. A
+transition that stays in the same state, such as losing the lobby while
+`PLAYING`, does not repeat the line.
+
+| Line | Meaning |
+|---|---|
+| `state entry: <STATE>` | The client entered `<STATE>`, one of `CONNECTING`, `IDLE`, `STARTING_GAME`, `HOSTING`, `JOINING`, `PLAYING`, `TERMINATED`. |
+
+The line precedes that state's side effects, so `state entry: TERMINATED`
+appears before teardown output.
+
+### Identity
+
+| Line | Meaning |
+|---|---|
+| `session ready: id=<id> login=<login>` | The lobby assigned this client its player ID and login in the `welcome` frame. |
+| `game launch: uid=<uid> mod=<mod> name=<name>` | This client entered the game with lobby-assigned `<uid>`, and its adapter and game are up. The uid is what a second instance needs as its join target. Emitted by host and joiner alike, and only on a launch that succeeded, so a failed launch reports `state entry: TERMINATED` with no uid. `name` is free text and always last. |
+
+Note the ordering: `game launch` is emitted **before** `state entry:
+STARTING_GAME`, because the launch happens in the FSM transition action and the
+state line is emitted when the target state is entered. A harness that waits
+for `STARTING_GAME` and only then begins scanning will miss the uid. Wait for
+the `game launch` line itself.
+
+### Connection state
+
+Three distinct signals. They are **not** interchangeable, and only the peer
+ones move during ICE negotiation:
+
+| Line | Meaning |
+|---|---|
+| `gpgnet link: state=<state>` | The local mock game connected to or disconnected from this client's adapter over GPGNet. Not a peer signal. |
+| `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer. These are the transitions delayed-negotiation tests measure. |
+| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal. |
+
+`<state>` is the adapter's own `IceState` vocabulary, not the WebRTC IDL set
+the upstream README implies. Verified against the shipped jar (3.3.14), the
+values a harness can actually observe are:
+
+```text
+new  gathering  awaitingCandidates  checking  connected  disconnected
+```
+
+`gathering` and `awaitingCandidates` are where a delayed-negotiation fault
+parks, so match on them rather than waiting for a terminal state. Do not match
+on `failed` or `closed`, which the adapter never emits, or on `completed`,
+which the enum defines but no code path sets. Treat `connected`, or
+`peer connected: … connected=true`, as peer ready.
+
+Player IDs are declared 64-bit in the adapter's `RPCService` signatures and are
+parsed as such, though the values it emits today are widened from `int`.
+
+A malformed notification is logged at WARN with the prefix
+`dropping malformed <method>` and produces no contract line.
+
+> **Why logs and not a health port.** The lobby protocol has no readiness
+> channel to be faithful to: faf-server's `command_match_ready` is an
+> unimplemented stub, and the only liveness mechanism is ping/pong. A harness
+> already has two capture channels, this JSONL file and the spawner's own
+> stdout capture, so a health port would have no consumer today.
 
 ## Failure mode
 
