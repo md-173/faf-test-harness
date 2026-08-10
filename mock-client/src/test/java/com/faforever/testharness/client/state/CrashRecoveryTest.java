@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.ExecutionException;
@@ -173,7 +174,7 @@ final class CrashRecoveryTest {
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
         boolean warned =
-                appender.list.stream()
+                getLogSnapshot().stream()
                         .anyMatch(
                                 e ->
                                         e.getLevel() == Level.WARN
@@ -189,7 +190,7 @@ final class CrashRecoveryTest {
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
         boolean infoLogged =
-                appender.list.stream()
+                getLogSnapshot().stream()
                         .anyMatch(
                                 e ->
                                         e.getLevel() == Level.INFO
@@ -222,16 +223,16 @@ final class CrashRecoveryTest {
         lifecycle.shutdown();
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
+        List<ILoggingEvent> snap = getLogSnapshot();
         boolean falseCrashWarned =
-                appender.list.stream()
+                snap.stream()
                         .anyMatch(
                                 e ->
                                         e.getLevel() == Level.WARN
                                                 && e.getFormattedMessage().contains("mock-game"));
         assertFalse(
                 falseCrashWarned,
-                "a harness-initiated kill must not be logged as a crash. captured: "
-                        + appender.list);
+                "a harness-initiated kill must not be logged as a crash. captured: " + snap);
     }
 
     @Test
@@ -298,6 +299,16 @@ final class CrashRecoveryTest {
                 MAPPER.createObjectNode().put("command", "HostGame").put("target", "game");
         node.set("args", MAPPER.createArrayNode().add("scmp_007"));
         return node;
+    }
+
+    // Get a snapshot of the log, which can be examined without ConcurrentModificationExceptions
+    // occuring.
+    private List<ILoggingEvent> getLogSnapshot() {
+        List<ILoggingEvent> snap;
+        synchronized (appender) {
+            snap = List.copyOf(appender.list);
+        }
+        return snap;
     }
 
     /** Launches a real child from the given builder and retains the manager for assertions. */
