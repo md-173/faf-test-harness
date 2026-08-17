@@ -73,6 +73,19 @@ public final class GpgNetSender {
     }
 
     /**
+     * Emit {@code PlayerOption(playerId, key, value)} — a per-player lobby option (§7.1).
+     *
+     * @param playerId the player id
+     * @param key the option key
+     * @param value the option value
+     * @throws IOException if the frame cannot be sent
+     */
+    public void playerOption(final int playerId, final String key, final int value)
+            throws IOException {
+        sink.send(GpgNetFrame.of("PlayerOption", playerId, key, value));
+    }
+
+    /**
      * Emit {@code GameMods(mode, args…)} — the variadic mods frame (§7.1). The two in-spec shapes
      * are {@code GameMods("activated", count)} and {@code GameMods("uids", spaceSeparatedUids)};
      * pass whichever shape the mode calls for as {@code args}. Args are passed through verbatim;

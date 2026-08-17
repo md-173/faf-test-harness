@@ -6,6 +6,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.GpgNetSender;
+import com.faforever.testharness.game.gpgnet.Peer;
 import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
@@ -13,7 +14,9 @@ import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -79,6 +82,9 @@ public final class MockGameLifecycle {
      * {@code scheduler}.
      */
     private Future matchEndFuture;
+
+    /** A record of all connected peers. */
+    private List<Peer> peers;
 
     /**
      * Status of the lifecycle. Used mainly to convert to a corresponding exit code. Initially
@@ -160,6 +166,8 @@ public final class MockGameLifecycle {
         this.gpgnetSender = new GpgNetSender(gpgnetServer);
         this.gpgnetDispatcher = new GpgNetDispatcher();
         this.gpgnet.onFrame(this.gpgnetDispatcher);
+
+        this.peers = new ArrayList<>();
 
         this.states = new HashMap<>();
         for (var s : GameState.values()) {
@@ -382,6 +390,18 @@ public final class MockGameLifecycle {
         LOG.info("Setting up game as host");
         // TODO: Game options here
 
+        try {
+            // Values for these will be 1 (peers list will be empty), but written like this for
+            // consistency and avoiding magic numbers.
+            gpgnetSender.playerOption(config.playerId(), "Army", peers.size() + 1);
+            gpgnetSender.playerOption(config.playerId(), "Team", peers.size() + 1);
+            gpgnetSender.playerOption(config.playerId(), "StartSpot", peers.size() + 1);
+            gpgnetSender.playerOption(config.playerId(), "Faction", peers.size() + 1);
+            gpgnetSender.playerOption(config.playerId(), "Color", peers.size() + 1);
+        } catch (IOException e) {
+            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
+
         // Set up the scheduler if configured.
         if (launchDelay != null) {
             scheduler.schedule(
@@ -401,8 +421,15 @@ public final class MockGameLifecycle {
         GpgNetFrame frame = ((JoinGame) event).frame();
         try {
             String address = frame.stringArg(0);
-            LOG.info("Joining game from host with address {}", address);
-            // TODO: Use the address to connect to a peer.
+            String login = frame.stringArg(1);
+            int playerId = frame.intArg(2);
+            LOG.info(
+                    "Joining game from host ({}, ID: {}) with address {}",
+                    login,
+                    playerId,
+                    address);
+            peers.add(new Peer(address, login, playerId));
+            // TODO: Initiate actual connection with peer
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("JoinGame frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
@@ -442,13 +469,36 @@ public final class MockGameLifecycle {
                             + "should be impossible");
         }
         GpgNetFrame frame = ((ConnectToPeer) event).frame();
+        Peer peer;
         try {
             String address = frame.stringArg(0);
-            LOG.info("New peer with address {}, attempting connection now", address);
-            // TODO: Use the address to connect to a peer.
+            String login = frame.stringArg(1);
+            int playerId = frame.intArg(2);
+            LOG.info(
+                    "New peer ({}, ID: {}) with address {}, attempting connection now",
+                    login,
+                    playerId,
+                    address);
+            peer = new Peer(address, login, playerId);
+            peers.add(peer);
+            // TODO: Initiate actual connection with peer
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
+
+        if (getState() == GameState.HOSTING) {
+            try {
+                // First peer assigned number 2, then 3, and so on.
+                // Each player is in a team of 1, i.e. free-for-all.
+                gpgnetSender.playerOption(peer.playerId(), "Army", peers.size() + 1);
+                gpgnetSender.playerOption(peer.playerId(), "Team", peers.size() + 1);
+                gpgnetSender.playerOption(peer.playerId(), "StartSpot", peers.size() + 1);
+                gpgnetSender.playerOption(peer.playerId(), "Faction", peers.size() + 1);
+                gpgnetSender.playerOption(peer.playerId(), "Color", peers.size() + 1);
+            } catch (IOException e) {
+                throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            }
         }
     }
 
