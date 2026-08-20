@@ -392,7 +392,6 @@ public final class MockGameLifecycle {
     /* Transition action for LOBBY -> HOST. */
     private void beginHosting(Event event) throws FailedTransitionException {
         LOG.info("Setting up game as host");
-        // TODO: Game options here
 
         try {
             // Values for these will be 1 (peers list will be empty), but written like this for
@@ -402,6 +401,11 @@ public final class MockGameLifecycle {
             gpgnetSender.playerOption(config.playerId(), "StartSpot", peers.size() + 1);
             gpgnetSender.playerOption(config.playerId(), "Faction", peers.size() + 1);
             gpgnetSender.playerOption(config.playerId(), "Color", peers.size() + 1);
+
+            // No game options are required, but any could be passed to test different properties.
+            for (var entry : config.gameOptions().entrySet()) {
+                gpgnetSender.gameOption(entry.getKey(), entry.getValue());
+            }
         } catch (IOException e) {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }

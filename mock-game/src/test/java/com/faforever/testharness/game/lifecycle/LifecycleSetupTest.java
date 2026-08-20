@@ -10,6 +10,7 @@ import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,7 +19,7 @@ import org.junit.jupiter.api.Test;
 public final class LifecycleSetupTest {
 
     private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001);
+            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of());
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 

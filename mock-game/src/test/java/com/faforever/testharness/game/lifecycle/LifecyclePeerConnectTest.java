@@ -15,6 +15,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -24,7 +25,7 @@ import org.slf4j.LoggerFactory;
 
 public final class LifecyclePeerConnectTest {
     private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001);
+            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of());
 
     private ScriptedGpgNetServer gpgnet;
 

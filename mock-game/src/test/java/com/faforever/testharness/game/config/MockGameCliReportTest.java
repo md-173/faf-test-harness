@@ -27,6 +27,7 @@ final class MockGameCliReportTest {
         "--player-id", "42",
         "--player-login", "Rhiza",
         "--game-uid", "9001",
+        "--game-options", "Victory=demoralization",
     };
 
     private final ByteArrayOutputStream errBuffer = new ByteArrayOutputStream();
@@ -54,6 +55,7 @@ final class MockGameCliReportTest {
         assertNotNull(outcome.config());
         assertEquals(42, outcome.config().playerId());
         assertEquals("Rhiza", outcome.config().playerLogin());
+        assertEquals("demoralization", outcome.config().gameOptions().get("Victory"));
         assertTrue(stderr().isEmpty(), "a valid set must pass through silently; got: " + stderr());
     }
 
