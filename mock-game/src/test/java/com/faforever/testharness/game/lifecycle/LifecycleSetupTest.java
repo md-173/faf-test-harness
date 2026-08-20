@@ -107,7 +107,9 @@ public final class LifecycleSetupTest {
 
         lifecycle.endMatch();
 
+        // Two GameResult messages as a joiner always has the host as a peer.
         assertMessage("GameResult", 1, "victory 10");
+        assertMessage("GameResult", 2, "defeat -10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -153,6 +155,50 @@ public final class LifecycleSetupTest {
 
         lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
         assertEquals(MockGameLifecycle.ExitStatus.OK, lifecycle.getExitStatus());
+    }
+
+    @Test
+    void perArmyGameResult() throws Exception {
+        gpgnet.start();
+        gpgnet.awaitClient();
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        // Drop PlayerOption frames
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of("127.0.0.4:4000", "Smith", 2)));
+        // Drop PlayerOption frames for new player
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        lifecycle.launchMatch();
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
+
+        lifecycle.endMatch();
+
+        // Two GameResults
+        assertMessage("GameResult", 1, "victory 10");
+        assertMessage("GameResult", 2, "defeat -10");
+        assertMessageCommand("JsonStats");
+        assertMessage("GameEnded");
+        assertMessage("GameState", "Ended");
+
+        lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
     }
 
     private void assertMessage(String expectedCommand, Object... expectedArgs) {

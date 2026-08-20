@@ -38,6 +38,10 @@ public final class MockGameLifecycle {
     /** The default timeout length for the GpgNet connection,. */
     private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
+    /** A mapping of result strings to numerical scores. */
+    private static final Map<String, Integer> SCORES =
+            Map.of("victory", 10, "defeat", -10, "draw", 10);
+
     /**
      * A delay to wait before sending messages to the GpgNet server on first connection, in
      * milliseconds. Necessary due to a race condition on the adapter.
@@ -506,7 +510,10 @@ public final class MockGameLifecycle {
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
             // TODO: Configurable values.
-            gpgnetSender.gameResult(1, "victory 10");
+            gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
+            for (int i = 2; i <= peers.size() + 1; i++) {
+                gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));
+            }
             gpgnetSender.jsonStats("{\"stats\": []}");
             gpgnetSender.gameEnded();
             gpgnetSender.gameState("Ended");

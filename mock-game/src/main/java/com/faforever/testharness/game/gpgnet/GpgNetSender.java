@@ -23,6 +23,9 @@ public final class GpgNetSender {
     private static final Set<String> VALID_GAME_STATES =
             Set.of("Idle", "Lobby", "Launching", "Ended");
 
+    /** The three valid {@code GameResult} values. */
+    private static final Set<String> VALID_GAME_RESULT = Set.of("victory", "defeat", "draw");
+
     /** Where built frames are sent — the transport's {@code send(frame)}. */
     private final GpgNetFrameSink sink;
 
@@ -108,11 +111,18 @@ public final class GpgNetSender {
      * 10")}.
      *
      * @param army the army number
-     * @param resultString the result string (e.g. {@code "victory 10"})
+     * @param result the result string (it can only be "victory", "defeat", or "draw").
+     * @param score an arbitrary integer score resulting from the result (e.g. positive for victory,
+     *     negative for defeat).
      * @throws IOException if the frame cannot be sent
      */
-    public void gameResult(final int army, final String resultString) throws IOException {
-        sink.send(GpgNetFrame.of("GameResult", army, resultString));
+    public void gameResult(final int army, final String result, final int score)
+            throws IOException {
+        if (!VALID_GAME_RESULT.contains(result)) {
+            throw new IllegalArgumentException(
+                    "invalid GameResult '" + result + "'; must be one of " + VALID_GAME_RESULT);
+        }
+        sink.send(GpgNetFrame.of("GameResult", army, String.format("%s %d", result, score)));
     }
 
     /**
