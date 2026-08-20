@@ -53,6 +53,7 @@ final class MockClientCliRecordSyncTest {
                     "hostVisibility",
                     "hostRatingMin",
                     "hostRatingMax",
+                    "hostGameOption",
                     "hostEnforceRatingRange",
                     "targetGameId",
                     "gameJoinPassword");
@@ -125,10 +126,10 @@ final class MockClientCliRecordSyncTest {
     void counts() {
         // sanity check: catches the case where both sets drift in lockstep. The gap between the
         // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
-        // .size() (7 host-* options collapse into 1 hostConfig record component, and 2 join
+        // .size() (8 host-* options collapse into 1 hostConfig record component, and 2 join
         // options collapse into 1 joinConfig component).
         long expectedRecordComponents = 23;
-        long expectedCliOptionsExcludingHelpers = 30;
+        long expectedCliOptionsExcludingHelpers = 31;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =

@@ -24,7 +24,7 @@ final class MockGameCliTest {
         "--player-id", "42",
         "--player-login", "Rhiza",
         "--game-uid", "9001",
-        "--game-options", "Victory=demoralization",
+        "--game-option", "Victory=demoralization",
     };
 
     @Test
@@ -50,7 +50,7 @@ final class MockGameCliTest {
 
     @Test
     void noGameOptionsAllowed() {
-        // Truncate the last two args (the --game-options)
+        // Truncate the last two args (the --game-option)
         String[] args = Arrays.copyOf(VALID_ARGS, VALID_ARGS.length - 2);
 
         assertEquals(0, MockGameCli.parse(args).gameOptions().size());

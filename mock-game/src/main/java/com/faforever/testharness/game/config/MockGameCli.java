@@ -60,7 +60,7 @@ public final class MockGameCli {
      * GpgNet server.
      */
     @Option(
-            names = "--game-options",
+            names = "--game-option",
             arity = "0..*",
             description = "Additional game options for the host to send")
     private Map<String, String> gameOptions = new HashMap<>();

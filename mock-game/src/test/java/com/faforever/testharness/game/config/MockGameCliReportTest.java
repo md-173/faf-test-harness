@@ -27,7 +27,7 @@ final class MockGameCliReportTest {
         "--player-id", "42",
         "--player-login", "Rhiza",
         "--game-uid", "9001",
-        "--game-options", "Victory=demoralization",
+        "--game-option", "Victory=demoralization",
     };
 
     private final ByteArrayOutputStream errBuffer = new ByteArrayOutputStream();

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -56,7 +57,8 @@ final class GameHostSenderTest {
                         "public",
                         Optional.empty(),
                         Optional.empty(),
-                        false);
+                        false,
+                        Map.of());
 
         new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
 
@@ -87,7 +89,8 @@ final class GameHostSenderTest {
                         "public",
                         Optional.of(800.0),
                         Optional.of(1500.0),
-                        true);
+                        true,
+                        Map.of());
 
         new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
 
@@ -112,7 +115,8 @@ final class GameHostSenderTest {
                         "friends",
                         Optional.empty(),
                         Optional.empty(),
-                        false);
+                        false,
+                        Map.of());
 
         new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
 
