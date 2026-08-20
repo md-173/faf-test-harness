@@ -1,6 +1,7 @@
 package com.faforever.testharness.game.lifecycle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -37,10 +38,50 @@ public final class LifecyclePeerConnectTest {
         gpgnet.stop();
     }
 
-    // Tests ConnectToPeer messages are received correctly. Currently, these produce no actual
-    // side-effect, so we must capture the log.
+    // Tests ConnectToPeer messages are received correctly from the host side.
     @Test
     void connectToPeer() throws Exception {
+        // No delay and match duration so that those don't interfere.
+        MockGameLifecycle lifecycle =
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()), null, null);
+
+        gpgnet.start();
+        gpgnet.awaitClient();
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
+        // Drop frame
+        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Army", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Team", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "StartSpot", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Faction", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Color", 1);
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of("127.0.0.4:4000", "Smith", 2)));
+        assertMessage("PlayerOption", 2, "Army", 2);
+        assertMessage("PlayerOption", 2, "Team", 2);
+        assertMessage("PlayerOption", 2, "StartSpot", 2);
+        assertMessage("PlayerOption", 2, "Faction", 2);
+        assertMessage("PlayerOption", 2, "Color", 2);
+
+        lifecycle.launchMatch();
+        lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
+
+        lifecycle.endMatch();
+        lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
+    }
+
+    // Tests ConnectToPeer messages are received correctly from the joiner side. Currently, these
+    // produce no actual
+    // side-effect, so we must capture the log.
+    @Test
+    void joinerConnectToPeer() throws Exception {
         // No delay and match duration so that those don't interfere.
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
@@ -56,27 +97,25 @@ public final class LifecyclePeerConnectTest {
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Army", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Team", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "StartSpot", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Faction", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Color", 1);
-        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of("127.0.0.1:4000", "Smith", 2)));
+        lifecycle.stateReached(GameState.JOINING).get(1, TimeUnit.SECONDS);
 
         // Start sending logs to list.
         root.addAppender(appender);
 
-        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of("127.0.0.4:4000", "Smith", 2)));
-        assertMessage("PlayerOption", 2, "Army", 2);
-        assertMessage("PlayerOption", 2, "Team", 2);
-        assertMessage("PlayerOption", 2, "StartSpot", 2);
-        assertMessage("PlayerOption", 2, "Faction", 2);
-        assertMessage("PlayerOption", 2, "Color", 2);
+        gpgnet.sendFrame(
+                new GpgNetFrame("ConnectToPeer", List.of("127.0.0.4:5000", "ProGamer", 3)));
+
+        // We should not receive any PlayerOption messages here (ScriptedGpgNetServer throws an
+        // AssertionError when it times out).
+        assertThrows(AssertionError.class, () -> assertMessage("PlayerOption"));
+
+        // // Waiting for the message to go through
+        // Thread.sleep(1000);
 
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
@@ -91,7 +130,7 @@ public final class LifecyclePeerConnectTest {
         Predicate<ILoggingEvent> pred =
                 e ->
                         e.getMessage().contains("New peer")
-                                && e.getArgumentArray()[2].equals("127.0.0.4:4000");
+                                && e.getArgumentArray()[2].equals("127.0.0.4:5000");
         assertTrue(appender.list.stream().anyMatch(pred));
     }
 
