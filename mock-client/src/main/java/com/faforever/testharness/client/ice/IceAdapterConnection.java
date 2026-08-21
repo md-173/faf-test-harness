@@ -399,8 +399,8 @@ public class IceAdapterConnection {
     }
 
     /**
-     * Whether the RPC connection is currently usable: {@link #connect()} succeeded and neither
-     * side has disconnected since. Read by {@link
+     * Whether the RPC connection is currently usable: {@link #connect()} succeeded and neither side
+     * has disconnected since. Read by {@link
      * com.faforever.testharness.client.process.SessionTeardown} (WBS-3.1.2.5) to decide whether a
      * quit-first RPC is worth attempting before falling back to killing the adapter process.
      *

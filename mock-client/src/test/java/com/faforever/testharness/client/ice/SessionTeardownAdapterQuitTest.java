@@ -57,7 +57,9 @@ final class SessionTeardownAdapterQuitTest {
     private SubprocessManager startSleeper() throws Exception {
         sleeper =
                 SubprocessManager.start(
-                        new ProcessBuilder("sleep", "60"), "adapter-quit-test", Duration.ofSeconds(2));
+                        new ProcessBuilder("sleep", "60"),
+                        "adapter-quit-test",
+                        Duration.ofSeconds(2));
         return sleeper;
     }
 
@@ -88,7 +90,10 @@ final class SessionTeardownAdapterQuitTest {
                                 }
                                 long id = extractId(frame);
                                 adapter.terminate(Duration.ofSeconds(1));
-                                server.send("{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}\n");
+                                server.send(
+                                        "{\"jsonrpc\":\"2.0\",\"id\":"
+                                                + id
+                                                + ",\"result\":null}\n");
                             } catch (Exception ignored) {
                                 // best effort; assertions below still catch a missed quit
                             }
@@ -108,8 +113,8 @@ final class SessionTeardownAdapterQuitTest {
     }
 
     /**
-     * A silent adapter (never answers, never exits) still gets torn down and teardown still
-     * returns promptly — the quit attempt is bounded and always falls through to the existing
+     * A silent adapter (never answers, never exits) still gets torn down and teardown still returns
+     * promptly — the quit attempt is bounded and always falls through to the existing
      * SIGTERM/SIGKILL path.
      */
     @Test

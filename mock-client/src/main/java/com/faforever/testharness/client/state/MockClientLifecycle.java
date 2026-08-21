@@ -612,14 +612,14 @@ public final class MockClientLifecycle {
      * {@link AdapterExited} transition action for STARTING_GAME/HOSTING/JOINING/PLAYING →
      * TERMINATED (#214): classifies the adapter's own exit the way the real client's {@code
      * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise. The exit-code
-     * check comes first (WBS-3.1.2.5): {@link SessionTeardown}'s adapter step now quits the
-     * adapter before ever signalling it, so a clean teardown produces the adapter's own exit(0)
-     * here, and that must still read as the real client's "terminated normally" INFO line, not be
-     * downgraded to DEBUG just because teardown happened to be running. Only a non-zero code
-     * observed once {@link SessionTeardown#hasRun()} falls back to DEBUG — that is the SIGTERM/
-     * SIGKILL fallback firing because quit didn't land, an expected shutdown code, not a crash. The
-     * TERMINATED entry hook (registered in {@link #setupStateMachine()}) runs the actual teardown;
-     * this method only logs.
+     * check comes first (WBS-3.1.2.5): {@link SessionTeardown}'s adapter step now quits the adapter
+     * before ever signalling it, so a clean teardown produces the adapter's own exit(0) here, and
+     * that must still read as the real client's "terminated normally" INFO line, not be downgraded
+     * to DEBUG just because teardown happened to be running. Only a non-zero code observed once
+     * {@link SessionTeardown#hasRun()} falls back to DEBUG — that is the SIGTERM/ SIGKILL fallback
+     * firing because quit didn't land, an expected shutdown code, not a crash. The TERMINATED entry
+     * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
+     * logs.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
