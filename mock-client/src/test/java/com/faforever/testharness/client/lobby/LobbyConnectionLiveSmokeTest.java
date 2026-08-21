@@ -32,8 +32,8 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Live smoke tests against the FAF public test environment, tagged {@code integration} so they
  * don't run under the default {@code ./gradlew test} task.
  *
- * <p>Two scenarios, both targeting the canonical {@code wss://ws.faforever.xyz} (served at the
- * host root {@code /}) and both reachability-gated so they self-skip when the FAF test env is
+ * <p>Two scenarios, both targeting the canonical {@code wss://ws.faforever.xyz} (served at the host
+ * root {@code /}) and both reachability-gated so they self-skip when the FAF test env is
  * unreachable from the current network:
  *
  * <ul>
@@ -67,13 +67,13 @@ final class LobbyConnectionLiveSmokeTest {
 
     /**
      * Canonical FAF test-env lobby endpoint, served natively at the host root ({@code /}) by the
-     * lobby server (the {@code .com}→{@code .xyz} swap of production {@code wss://ws.faforever.com};
-     * there is no {@code /ws} path — a {@code GET /ws} 404s, that was the retired {@code
-     * ws_bridge_rs} path). {@code wss://lobby.faforever.xyz}, read from downlords-faf-client's
-     * {@code application-test.yml}, times out from every network tried (WSL, native Windows, curl,
-     * an independent cloud egress, and a FAF maintainer) and is wrong in practice — see
-     * {@code documentation/research/lobby-protocol-spec.md} §1's 2026-06-18 correction. Confirmed
-     * empirically by a full live login through this test.
+     * lobby server (the {@code .com}→{@code .xyz} swap of production {@code
+     * wss://ws.faforever.com}; there is no {@code /ws} path — a {@code GET /ws} 404s, that was the
+     * retired {@code ws_bridge_rs} path). {@code wss://lobby.faforever.xyz}, read from
+     * downlords-faf-client's {@code application-test.yml}, times out from every network tried (WSL,
+     * native Windows, curl, an independent cloud egress, and a FAF maintainer) and is wrong in
+     * practice — see {@code documentation/research/lobby-protocol-spec.md} §1's 2026-06-18
+     * correction. Confirmed empirically by a full live login through this test.
      */
     private static final URI FAF_TEST_LOBBY = URI.create("wss://ws.faforever.xyz");
 
