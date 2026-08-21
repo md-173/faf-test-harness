@@ -218,8 +218,10 @@ Against the live lobby you also need `--uid-binary-path` pointing at the FAF
 `faf-uid` binary: the lobby's policy server rejects a placeholder `unique_id`
 (the login ends in `{"command":"invalid"}`), so the handshake runs `faf-uid` with
 the session to produce a real RSA-encrypted UID. See
-[`documentation/demos/README.md`](../documentation/demos/README.md) for the full
-recipe (endpoint, token bootstrap, and obtaining the binary).
+[`documentation/operations/harness-runbook.md`](../documentation/operations/harness-runbook.md)
+for the ordered setup path (prerequisites, credentials, config, and this
+command), or [`documentation/demos/README.md`](../documentation/demos/README.md)
+for the sprint-review evidence capture of this exact path.
 
 ### Providing the faf-ice-adapter binary
 
@@ -318,7 +320,7 @@ export FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT=https://hydra.faforever.xyz/oauth2/au
 export FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI=http://127.0.0.1
 export FAF_MOCK_CLIENT_OAUTH_SCOPES="openid offline lobby"
 export FAF_MOCK_CLIENT_OAUTH_CLIENT_ID=95ecec08-29c1-4c48-ae0a-b000ff349cb8
-export FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE=./.secrets/refresh-token
+export FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE=./.secrets/refresh_token.txt
 export FAF_MOCK_CLIENT_UNIQUE_ID=00000000-0000-0000-0000-000000000000
 export FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
 export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
@@ -337,7 +339,7 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
   --oauth-redirect-uri http://127.0.0.1 \
   --oauth-scopes 'openid offline lobby' \
   --oauth-client-id 95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
-  --oauth-refresh-token-file ./.secrets/refresh-token \
+  --oauth-refresh-token-file ./.secrets/refresh_token.txt \
   --unique-id 00000000-0000-0000-0000-000000000000 \
   --ice-adapter-binary-path /usr/local/bin/faf-ice-adapter \
   --mock-game-binary-path ./mock-game/build/install/mock-game/bin/mock-game"
