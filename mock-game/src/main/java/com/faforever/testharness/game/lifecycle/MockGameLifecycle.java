@@ -81,10 +81,10 @@ public final class MockGameLifecycle {
     private Future matchEndFuture;
 
     /**
-     * Status of the lifecycle. Used mainly to convert to a corresponding exit code. Initially OK,
-     * failures set it to other values.
+     * Status of the lifecycle. Used mainly to convert to a corresponding exit code. Initially
+     * FAILED, failures set it to other values. A successful ENDED sets it to OK.
      */
-    private ExitStatus status = ExitStatus.OK;
+    private ExitStatus status = ExitStatus.FAILED;
 
     /** Possible exit status of the lifecycle. */
     public enum ExitStatus {
@@ -93,7 +93,9 @@ public final class MockGameLifecycle {
         /** The server has disconnected. */
         SERVER_CONNECTION_LOST,
         /** Could not establish initial connection with the server. */
-        SERVER_NOT_CONNECTED
+        SERVER_NOT_CONNECTED,
+        /** Generic failure, obtained when no other failure applies. */
+        FAILED
     }
 
     /**
@@ -315,6 +317,10 @@ public final class MockGameLifecycle {
 
         gpgnet.onDisconnect(event -> machine.receiveEvent(new ServerDisconnected(event.reason())));
 
+        // Shutdown sequence
+        GameShutdown shutdown = new GameShutdown(machine, gpgnet);
+        states.get(GameState.ENDED).onEntry(shutdown::run);
+
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
         machine.setTimeout(
                 gpgnetConnectionTimeout.toMillis(),
@@ -323,10 +329,6 @@ public final class MockGameLifecycle {
                     status = ExitStatus.SERVER_NOT_CONNECTED;
                 });
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
-
-        // Shutdown sequence
-        GameShutdown shutdown = new GameShutdown(machine, gpgnet);
-        states.get(GameState.ENDED).onEntry(shutdown::run);
     }
 
     /* Transition action for INITIALIZING -> IDLE. */
@@ -461,5 +463,8 @@ public final class MockGameLifecycle {
         } catch (IOException e) {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
+
+        // This marks the end of the lifecycle through the correct/successful path.
+        status = ExitStatus.OK;
     }
 }
