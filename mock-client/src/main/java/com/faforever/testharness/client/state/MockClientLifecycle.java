@@ -99,6 +99,15 @@ public final class MockClientLifecycle {
      */
     private final CompletableFuture<Integer> gameExit = new CompletableFuture<>();
 
+    /**
+     * The session's single adapter-exit signal (WBS-3.1.2.5): completes with the ICE adapter
+     * process's exit code once the process launched by {@link #launchGame} exits. Never completes
+     * if no adapter launches. The R26 pattern applied to the adapter — single ownership, one
+     * exposed future with copy semantics — mirrors {@link #gameExit} exactly; see that field for
+     * the shared rationale.
+     */
+    private final CompletableFuture<Integer> adapterExit = new CompletableFuture<>();
+
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -462,6 +471,17 @@ public final class MockClientLifecycle {
         return gameExit.copy();
     }
 
+    /**
+     * The session's single adapter-exit signal: completes exactly once with the ICE adapter
+     * process's exit code, whether it quit cleanly or was killed. Same copy-semantics contract as
+     * {@link #gameExit()} — see there for the full details, which apply identically here.
+     *
+     * @return a future resolving to the adapter's exit code
+     */
+    public CompletableFuture<Integer> adapterExit() {
+        return adapterExit.copy();
+    }
+
     /** Performs the full shutdown of the lifecycle. Valid to call on any state. */
     public void shutdown() {
         LOG.info("Manual shutdown requested");
@@ -591,19 +611,24 @@ public final class MockClientLifecycle {
     /**
      * {@link AdapterExited} transition action for STARTING_GAME/HOSTING/JOINING/PLAYING →
      * TERMINATED (#214): classifies the adapter's own exit the way the real client's {@code
-     * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise — except once
-     * this session's teardown has already started, since every clean run terminates the adapter
-     * itself and that expected SIGTERM must not be logged as a crash. The TERMINATED entry hook
-     * (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only logs.
+     * IceAdapterImpl} does — INFO on a clean exit(0), WARN with the code otherwise. The exit-code
+     * check comes first (WBS-3.1.2.5): {@link SessionTeardown}'s adapter step now quits the
+     * adapter before ever signalling it, so a clean teardown produces the adapter's own exit(0)
+     * here, and that must still read as the real client's "terminated normally" INFO line, not be
+     * downgraded to DEBUG just because teardown happened to be running. Only a non-zero code
+     * observed once {@link SessionTeardown#hasRun()} falls back to DEBUG — that is the SIGTERM/
+     * SIGKILL fallback firing because quit didn't land, an expected shutdown code, not a crash. The
+     * TERMINATED entry hook (registered in {@link #setupStateMachine()}) runs the actual teardown;
+     * this method only logs.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
     private void onAdapterExited(Event event) {
         int exitCode = ((AdapterExited) event).exitCode();
-        if (teardown.hasRun()) {
-            LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
-        } else if (exitCode == 0) {
+        if (exitCode == 0) {
             LOG.info("ICE adapter terminated normally");
+        } else if (teardown.hasRun()) {
+            LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {
             LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
         }
@@ -637,10 +662,13 @@ public final class MockClientLifecycle {
             SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
-            // #214: single detection channel for adapter death — the process exit. The RPC
-            // connection's onDisconnect fires for the same death; that channel is deliberately
-            // left unwired here (3.1.2.5 owns adapter exit-signal exposure and relocates this
-            // subscriber onto its shared future, the way 3.1.2.6 reads R26's game signal).
+            // WBS-3.1.2.5: single ownership of the adapter process exit in the R26 pattern —
+            // exactly one subscriber on the raw process future, completing the shared adapterExit
+            // signal. The RPC connection's onDisconnect fires for the same death; that channel is
+            // deliberately left unwired, this process exit is the single detection channel.
+            iceAdapter.onExit().thenAccept(adapterExit::complete);
+            // #214: the FSM's adapter-death subscriber reads the shared signal instead of the
+            // process directly, the way 3.1.2.6 reads R26's game signal (gameExit()).
             //
             // Async is load-bearing, not a style choice: Process.onExit()'s dependents run
             // synchronously on the JDK's internal process-reaper machinery by default, and this
@@ -649,8 +677,7 @@ public final class MockClientLifecycle {
             // futures). A synchronous thenAccept here ties up the reaper thread that a concurrent
             // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
             // a full termination grace. thenAcceptAsync moves the event post off that thread.
-            iceAdapter
-                    .onExit()
+            adapterExit()
                     .thenAcceptAsync(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
             // Harness-facing connection-state reporting (WBS-3.1.6.2). Read-only observer on the
             // adapter fan-out: it reports the GPGNet link and the per-peer ICE transitions the

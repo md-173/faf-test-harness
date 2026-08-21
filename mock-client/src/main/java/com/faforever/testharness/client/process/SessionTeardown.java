@@ -24,6 +24,12 @@ import org.slf4j.LoggerFactory;
  * downlords-faf-client). Each step is exception-isolated — a failing step is logged and the
  * sequence continues.
  *
+ * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
+ * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
+ * iceAdapterProxy.quit()}) this teardown previously lacked. That always falls through to the
+ * existing SIGTERM→SIGKILL escalation below, which is a no-op once quit has already ended the
+ * process, so a quit that never lands still leaves the step (and teardown) bounded.
+ *
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
  * IceAdapterConnection#close()} is a synchronous socket close; the lobby close is awaited for at
@@ -49,6 +55,12 @@ public final class SessionTeardown {
 
     /** Bound on the clean lobby WebSocket close. */
     private static final Duration LOBBY_CLOSE_TIMEOUT = Duration.ofSeconds(5);
+
+    /** Bound on the quit RPC's response, before falling through to SIGTERM. */
+    private static final Duration ADAPTER_QUIT_RPC_TIMEOUT = Duration.ofSeconds(2);
+
+    /** Bound on awaiting the adapter's own exit once quit has been sent. */
+    private static final Duration ADAPTER_QUIT_EXIT_TIMEOUT = Duration.ofSeconds(2);
 
     /** Lobby connection; present from session startup. */
     private final LobbyConnection lobby;
@@ -146,10 +158,56 @@ public final class SessionTeardown {
         done = true;
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
-        terminate(adapterProcess, "ICE adapter");
+        terminateAdapter();
         closeAdapterRpc();
         closeLobby();
         LOG.info("session teardown complete");
+    }
+
+    /**
+     * Terminates the ICE adapter, quit-first (WBS-3.1.2.5): {@link #quitAdapterIfOpen()} gives the
+     * adapter a bounded chance to shut itself down gracefully via RPC, mirroring the real client's
+     * {@code iceAdapterProxy.quit()}. Unconditionally falls through to {@link
+     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, already a no-op once quit has
+     * ended the process — a quit that never lands still leaves this step bounded.
+     */
+    private void terminateAdapter() {
+        quitAdapterIfOpen();
+        terminate(adapterProcess, "ICE adapter");
+    }
+
+    /**
+     * Sends {@code quit} over the adapter RPC connection and briefly awaits the process actually
+     * exiting, but only while {@link IceAdapterConnection#isOpen()} — no RPC connection means
+     * nothing to send on, and this step is skipped exactly as it was before this card. Both the
+     * send and the exit-await are bounded, and every failure mode (no response, RPC error, process
+     * still alive after quit) is swallowed at DEBUG: {@link #terminateAdapter()}'s SIGTERM fallback
+     * covers all of them.
+     */
+    private void quitAdapterIfOpen() {
+        IceAdapterConnection connection = adapterRpc;
+        SubprocessManager process = adapterProcess;
+        if (connection == null || process == null || !connection.isOpen()) {
+            return;
+        }
+        try {
+            connection.call("quit").get(ADAPTER_QUIT_RPC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        } catch (ExecutionException | TimeoutException e) {
+            LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
+        }
+        try {
+            process.onExit().get(ADAPTER_QUIT_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            LOG.debug(
+                    "ICE adapter did not exit within {} of quit: {}",
+                    ADAPTER_QUIT_EXIT_TIMEOUT,
+                    e.getMessage());
+        }
     }
 
     /**
