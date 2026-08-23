@@ -1,3 +1,12 @@
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'application'
+    id 'checkstyle'
+    id('com.diffplug.spotless') version '8.4.0'
+    id('com.gradleup.shadow') version '9.3.2'
+}
+
 subprojects {
     apply plugin: 'java'
 

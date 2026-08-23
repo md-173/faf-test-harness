@@ -1,0 +1,50 @@
+# Workflow used for releases.
+# Must be manually triggered, given a version number as input, and genrates a set of shadow jar files.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version'
+        required: true
+
+jobs:
+  release:
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Create mock client shadow jars
+        run: ./gradlew -Pversion="${{ github.event.inputs.version }}" --stacktrace :mock-client:shadowJar
+
+      - name: Create mock game shadow jars
+        run: ./gradlew -Pversion="${{ github.event.inputs.version }}" --stacktrace :mock-game:shadowJar
+
+      - name: Create draft release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          commit: ${{ github.sha }}
+          tag: ${{ github.event.inputs.version }}
+          draft: true
+          prerelease: true
+          generateReleaseNotes: true
+          bodyFile: ".github/RELEASE_BODY.md"
+          artifacts: "mock-game/build/libs/mock-game-*.jar,mock-client/build/libs/mock-client-*.jar"
+
