@@ -25,13 +25,13 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
@@ -128,6 +128,8 @@ final class AdapterCrashRecoveryTest {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         appender = new ListAppender<>();
+        // Lifecycle and process-exit callbacks can append while the test thread reads the log.
+        appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
@@ -203,16 +205,8 @@ final class AdapterCrashRecoveryTest {
         iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
         assertFalse(iceLauncher.getSubprocess().isAlive());
 
-        // Snapshot under the appender's monitor before streaming. Teardown threads are still free
-        // to log at this point, and logback's ListAppender is backed by a plain ArrayList, so
-        // streaming it live races them into a ConcurrentModificationException. Same guard the
-        // findEvent helper below already uses.
-        ILoggingEvent[] captured;
-        synchronized (appender) {
-            captured = appender.list.toArray(new ILoggingEvent[0]);
-        }
         boolean crashWarned =
-                Arrays.stream(captured)
+                appender.list.stream()
                         .anyMatch(
                                 e ->
                                         e.getLevel() == Level.WARN
@@ -271,11 +265,9 @@ final class AdapterCrashRecoveryTest {
     }
 
     private ILoggingEvent findEvent(final Predicate<ILoggingEvent> matcher) {
-        synchronized (appender) {
-            for (ILoggingEvent e : appender.list) {
-                if (matcher.test(e)) {
-                    return e;
-                }
+        for (ILoggingEvent e : appender.list) {
+            if (matcher.test(e)) {
+                return e;
             }
         }
         fail("no log event matched. captured: " + appender.list);
