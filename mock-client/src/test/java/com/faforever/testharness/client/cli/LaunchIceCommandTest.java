@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +47,8 @@ final class LaunchIceCommandTest {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         appender = new ListAppender<>();
+        // Subprocess reader threads can append while the test thread reads captured events.
+        appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
@@ -136,11 +139,9 @@ final class LaunchIceCommandTest {
     }
 
     private ILoggingEvent findEvent(final java.util.function.Predicate<ILoggingEvent> matcher) {
-        synchronized (appender) {
-            for (ILoggingEvent e : appender.list) {
-                if (matcher.test(e)) {
-                    return e;
-                }
+        for (ILoggingEvent e : appender.list) {
+            if (matcher.test(e)) {
+                return e;
             }
         }
         fail("no log event matched. captured: " + appender.list);

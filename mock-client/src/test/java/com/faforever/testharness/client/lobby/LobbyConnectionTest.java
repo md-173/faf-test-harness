@@ -49,6 +49,8 @@ final class LobbyConnectionTest {
         // Attach a list appender so we can assert on the unhandled-command WARN path.
         Logger lobbyLogger = (Logger) LoggerFactory.getLogger(LobbyConnection.class);
         logAppender = new ListAppender<>();
+        // WebSocket callbacks can append while the test thread reads captured events.
+        logAppender.list = new CopyOnWriteArrayList<>();
         logAppender.start();
         lobbyLogger.addAppender(logAppender);
         lobbyLogger.setLevel(Level.DEBUG);

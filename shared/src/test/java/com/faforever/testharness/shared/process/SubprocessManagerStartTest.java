@@ -13,6 +13,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
 import java.util.OptionalInt;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -42,6 +43,9 @@ class SubprocessManagerStartTest {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         appender = new ListAppender<>();
+        // Subprocess output is captured asynchronously; the reader executor is shut down on process
+        // exit but not awaited, so reader threads can append while the test thread polls.
+        appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
@@ -190,11 +194,7 @@ class SubprocessManagerStartTest {
     private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {
         long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
         while (System.currentTimeMillis() < deadline) {
-            ILoggingEvent[] snap;
-            synchronized (appender) {
-                snap = appender.list.toArray(new ILoggingEvent[0]);
-            }
-            for (ILoggingEvent e : snap) {
+            for (ILoggingEvent e : appender.list) {
                 if (matcher.test(e)) {
                     return;
                 }

@@ -20,6 +20,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -51,6 +52,8 @@ final class MockGameLauncherTest {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         appender = new ListAppender<>();
+        // Subprocess reader threads can append while the test thread polls captured events.
+        appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
@@ -246,11 +249,7 @@ final class MockGameLauncherTest {
     private void awaitLog(final Predicate<ILoggingEvent> matcher) throws InterruptedException {
         long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
         while (System.currentTimeMillis() < deadline) {
-            ILoggingEvent[] snap;
-            synchronized (appender) {
-                snap = appender.list.toArray(new ILoggingEvent[0]);
-            }
-            for (ILoggingEvent e : snap) {
+            for (ILoggingEvent e : appender.list) {
                 if (matcher.test(e)) {
                     return;
                 }
