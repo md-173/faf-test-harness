@@ -5,8 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.game.config.ExitCodes;
+import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
+import com.faforever.testharness.game.lifecycle.GameState;
+import com.faforever.testharness.game.lifecycle.MockGameLifecycle;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -16,10 +20,13 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Integration-lite tests for the bootstrap (WBS-3.2.5.1): {@link Main#run} is driven in-JVM against
@@ -58,9 +65,11 @@ final class MainTest {
         adapter.awaitClient();
         assertEquals("Idle", nextGameState(), "the game announces itself as Idle once connected");
 
-        // The adapter answers GameState Idle with CreateLobby immediately (source-verified), so
-        // the inbound handlers must already be registered by the time the first frame goes out —
-        // a late registration would silently drop this reply and the handshake would stall here.
+        // The adapter answers GameState Idle with CreateLobby. This exercises the handshake, but
+        // note what it does not pin: by the time we send, registration has long since happened, and
+        // the lifecycle's 500ms pre-first-frame wait leaves so much slack that a late registration
+        // would still pass here. That handlers precede the first outbound frame is structural — the
+        // constructor registers them, and only then calls connect().
         adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
         assertEquals("Lobby", nextGameState(), "CreateLobby is handled and answered");
 
@@ -81,8 +90,8 @@ final class MainTest {
     @Test
     void badArgumentExitsWithUsageBeforeAnyConnectionAttempt() throws Exception {
         adapter.start();
-        String[] args = argv(adapter.port());
-        args[5] = "0"; // --player-id, rejected by MockGameCli's validation
+        // A player id of 0 is rejected by MockGameCli's validation.
+        String[] args = argv(adapter.port(), 0);
 
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         PrintStream originalErr = System.err;
@@ -128,12 +137,89 @@ final class MainTest {
                 "losing the adapter is distinct from both a clean exit and a boot failure");
     }
 
+    @Test
+    void shutdownHookTearsDownBeforeStoppingLogging() throws Exception {
+        adapter.start();
+        MockGameLifecycle lifecycle = lifecycleOn(adapter.port());
+        lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
+
+        List<String> order = new CopyOnWriteArrayList<>();
+        lifecycle.shutdown().registerConnection(recordingConnection(order));
+        Main.shutdownHook(lifecycle, () -> order.add("stop-logging")).run();
+
+        assertEquals(
+                List.of("close-connection", "stop-logging"),
+                order,
+                "logging must stop last, or the teardown's own log lines are swallowed");
+    }
+
+    /**
+     * The three phases a client-initiated SIGTERM can land in. The hook body must complete at each
+     * of them — pre-connect it has no socket to close at all, and mid-FSM it must not be blocked by
+     * a transition in flight.
+     */
+    @ParameterizedTest(name = "SIGTERM during {0}")
+    @ValueSource(strings = {"pre-connect", "connected", "in-fsm"})
+    void shutdownHookCompletesAtEveryPhase(final String phase) throws Exception {
+        MockGameLifecycle lifecycle;
+        if ("pre-connect".equals(phase)) {
+            // Nothing is listening, so the connection is still retrying: no socket exists yet.
+            lifecycle = lifecycleOn(closedPort());
+        } else {
+            adapter.start();
+            lifecycle = lifecycleOn(adapter.port());
+            lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
+            if ("in-fsm".equals(phase)) {
+                adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
+                lifecycle.stateReached(GameState.LOBBY).get(10, TimeUnit.SECONDS);
+                adapter.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+                lifecycle.stateReached(GameState.HOSTING).get(10, TimeUnit.SECONDS);
+            }
+        }
+
+        CompletableFuture<Void> ran = new CompletableFuture<>();
+        Thread hook =
+                new Thread(
+                        () -> {
+                            Main.shutdownHook(lifecycle, () -> {}).run();
+                            ran.complete(null);
+                        },
+                        "hook-" + phase);
+        hook.setDaemon(true);
+        hook.start();
+
+        // Generous, but the point is bounded-vs-hung: the real hook runs inside the client's
+        // SIGTERM->SIGKILL grace.
+        ran.get(10, TimeUnit.SECONDS);
+    }
+
+    /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
+    private static MockGameLifecycle lifecycleOn(final int gpgNetPort) {
+        return new MockGameLifecycle(
+                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001),
+                new GpgNetConnection(gpgNetPort),
+                TEST_LAUNCH_DELAY,
+                TEST_MATCH_DURATION);
+    }
+
+    /** A never-connected connection that records when the shutdown sequence closes it. */
+    private static GpgNetConnection recordingConnection(final List<String> order) {
+        GpgNetConnection connection = new GpgNetConnection(1);
+        connection.onDisconnect(event -> order.add("close-connection"));
+        return connection;
+    }
+
     /** The argv {@code MockGameLauncher} emits, pointed at {@code gpgNetPort}. */
     private static String[] argv(final int gpgNetPort) {
+        return argv(gpgNetPort, 42);
+    }
+
+    /** As {@link #argv(int)}, with the player id chosen — 0 is the invalid case. */
+    private static String[] argv(final int gpgNetPort, final int playerId) {
         return new String[] {
             "--gpgnet-port", Integer.toString(gpgNetPort),
             "--lobby-port", "6112",
-            "--player-id", "42",
+            "--player-id", Integer.toString(playerId),
             "--player-login", "Rhiza",
             "--game-uid", "9001",
         };

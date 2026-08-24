@@ -151,6 +151,7 @@ final class GameShutdownTest {
                 "the second caller must return while the first is still tearing down");
         releaseFirstRun.countDown();
         first.join(5_000);
+        assertFalse(first.isAlive(), "the first caller should finish once released");
     }
 
     @Test

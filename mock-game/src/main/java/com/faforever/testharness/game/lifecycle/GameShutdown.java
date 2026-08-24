@@ -13,10 +13,15 @@ import org.slf4j.LoggerFactory;
  * <ol>
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
  *       queued timeout fires a transition mid-teardown;
- *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol
- *       (the adapter treats a game disconnect as shutdown, drops this client's peers, tears down
- *       its ICE state, and keeps running); no farewell frame is sent.
+ *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
+ *       no farewell frame is sent.
  * </ol>
+ *
+ * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
+ * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
+ * {@code GameSession.close} — closing every peer relay and clearing the peer map. Its accept loop
+ * then goes back to waiting, so the adapter treats a game disconnect as that game's shutdown and
+ * keeps running.
  *
  * <p><b>Logging is deliberately not stopped here</b> (WBS-3.2.5.1). Flushing and stopping the
  * logging context is process-global and one-way: {@code LoggingSetup.shutdown()} detaches the root
@@ -31,10 +36,10 @@ import org.slf4j.LoggerFactory;
  * simple once-guard rather than a registry or multi-resource orchestrator.
  *
  * <p><b>Idempotent and convergent.</b> The first {@link #run()} wins; later calls return
- * immediately. The two callers — the FSM's ENDED phase (self-initiated exit) and the JVM shutdown
- * hook installed by the bootstrap (3.2.5.1, for {@code SIGTERM} / {@code Ctrl-C}) — share one
- * instance, so both paths converge here with no double-teardown. Each step is exception-isolated: a
- * failing step is logged and the rest continue.
+ * immediately. All three callers — the FSM's ENDED phase (self-initiated exit), the JVM shutdown
+ * hook installed by the bootstrap (3.2.5.1, for {@code SIGTERM} / {@code Ctrl-C}), and that
+ * bootstrap's own post-wait safety call — share one instance, so every path converges here with no
+ * double-teardown. Each step is exception-isolated: a failing step is logged and the rest continue.
  *
  * <p><b>The once-guard is lock-free on purpose.</b> A {@code synchronized run()} deadlocks the two
  * callers against each other: the ENDED entry hook runs inside {@link
@@ -43,9 +48,11 @@ import org.slf4j.LoggerFactory;
  * hook thread takes this monitor and then wants the StateMachine's inside {@link
  * StateMachine#cancel()}. The compare-and-set guard removes the second lock entirely, so the two
  * orders can no longer cross. The cost is that a losing caller returns while the winner is still
- * mid-teardown rather than waiting for it; on the only path where that happens — a {@code SIGTERM}
- * landing during the ENDED transition — the alternative was a hang, and both callers are tearing
- * down the same two resources anyway.
+ * mid-teardown rather than waiting for it. On the path where that actually happens — a {@code
+ * SIGTERM} landing during the ENDED transition — the loser is the JVM hook, which then stops
+ * logging and lets the JVM halt while the winner may still be inside this method. Both consequences
+ * are benign: the kernel closes the socket the winner was closing, and what is lost is two teardown
+ * INFO lines. The alternative was a deadlock.
  *
  * <p><b>Exit code.</b> This sequence does not call {@link System#exit(int)}; the exit code is the
  * bootstrap's, mapped from {@link MockGameLifecycle#getExitStatus()} once the FSM reaches ENDED. A

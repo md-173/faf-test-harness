@@ -32,10 +32,26 @@ import org.slf4j.LoggerFactory;
  *       lifecycle's one {@link com.faforever.testharness.game.lifecycle.GameShutdown} instance so a
  *       {@code SIGTERM} and a self-initiated exit converge on the same once-guarded teardown.
  *   <li><b>Wait for ENDED</b>, then map {@link MockGameLifecycle#getExitStatus()} onto the process
- *       exit code. Every failure path — connect failure, adapter loss, a failed transition — ends
- *       in ENDED, so this single wait covers them all and cannot hang: the FSM always has a timeout
- *       or a disconnect that drives it there.
+ *       exit code. Every failure the FSM models — connect failure, adapter loss, a failed
+ *       transition — ends in ENDED, so this one wait covers them all.
  * </ol>
+ *
+ * <p><b>Deviation from the card's step order.</b> The card asks for the hook to be installed before
+ * any resource opens. That is not reachable: the hook is the lifecycle's {@code GameShutdown},
+ * which needs the {@code StateMachine} at construction, and the {@code StateMachine} is built by
+ * {@link MockGameLifecycle} — whose constructor also calls {@code connect()}. So the connect
+ * attempt does start a few microseconds before any hook exists. Nothing leaks in that window: a
+ * signal there kills the JVM and the OS closes the socket; the only casualty is the final log
+ * flush.
+ *
+ * <p><b>The ENDED wait is not unconditionally hang-proof</b>, by design. The FSM arms one timeout,
+ * into ENDED, at construction, and {@code StateMachine} clears pending timeouts on every transition
+ * — so IDLE and LOBBY, which sit waiting on the adapter for {@code CreateLobby} and {@code
+ * HostGame}, have no timeout of their own. An adapter that accepts the socket and then goes quiet
+ * leaves the game waiting, exactly as the real game would; state-diagram.md gives a timeout only
+ * out of INITIALIZING and states that teardown of the game is always client-led. The card's no-hang
+ * criterion is about the <em>unreachable</em> adapter, which the bounded connect retry settles in
+ * about two seconds.
  *
  * <p>Stopping the logging context is the last thing this class does, on both exit paths. It is
  * process-global and one-way, so it belongs to whoever knows the process is ending — not to the
@@ -62,9 +78,12 @@ public final class Main {
     private static final Duration LAUNCH_DELAY = Duration.ofSeconds(5);
 
     /**
-     * How long the simulated match runs before the game reports its result and ends. Sized so a
-     * full session completes well inside the client's 30 s post-{@code GameEnded} safety net
-     * without making an end-to-end run cost a minute.
+     * How long the simulated match runs before the game reports its result and ends. Nothing
+     * constrains this value — the client's post-{@code GameEnded} safety net is armed only once
+     * {@code GameEnded} has been observed, so it bounds the exit, not the match. It is a plain
+     * judgement call: long enough that a session looks like a session in the logs, short enough
+     * that an end-to-end harness run does not cost a minute. Revisit it with a real workload rather
+     * than by argument.
      */
     private static final Duration MATCH_DURATION = Duration.ofSeconds(30);
 
@@ -117,13 +136,15 @@ public final class Main {
                         launchDelay,
                         matchDuration);
         Thread hook =
-                new Thread(
-                        () -> {
-                            lifecycle.shutdown().run();
-                            LoggingSetup.shutdown();
-                        },
-                        "mock-game-shutdown");
-        Runtime.getRuntime().addShutdownHook(hook);
+                new Thread(shutdownHook(lifecycle, LoggingSetup::shutdown), "mock-game-shutdown");
+        try {
+            Runtime.getRuntime().addShutdownHook(hook);
+        } catch (IllegalStateException e) {
+            // A signal landed while the lifecycle was being constructed. The JVM is already
+            // shutting down, so there is nothing left to register and nothing to wait for; fall
+            // through and let the teardown below run on the way out.
+            LOG.info("shutdown already in progress at boot; not installing the hook");
+        }
         try {
             lifecycle.stateReached(GameState.ENDED).join();
             ExitStatus status = lifecycle.getExitStatus();
@@ -131,11 +152,34 @@ public final class Main {
             LOG.info("mock game finished: status={}, exit code {}", status, exitCode);
             return exitCode;
         } finally {
-            // A no-op if the FSM's ENDED entry already ran it; the one case it does work is a
-            // failure that left the FSM short of ENDED.
+            // Belt and braces. Reaching here normally means the FSM's ENDED entry already ran the
+            // sequence, so this is a no-op; it earns its place only if the wait above ended by
+            // throwing.
             lifecycle.shutdown().run();
             removeHook(hook);
         }
+    }
+
+    /**
+     * The body of the JVM shutdown hook: tear the game down, then stop logging.
+     *
+     * <p>Extracted so the {@code SIGTERM} path is testable in-JVM at every phase — pre-connect,
+     * connected, and mid-FSM — which a lambda buried in {@link #run} was not. The log-stop step is
+     * a parameter for the same reason: a test injects a recording one, because the real {@code
+     * LoggingSetup.shutdown()} would detach the root appenders for the rest of the suite. That is
+     * the same hazard that got this step moved out of {@code GameShutdown} in the first place.
+     *
+     * <p>Order matters: teardown logs, so stopping logging first would swallow its output.
+     *
+     * @param lifecycle the running lifecycle, whose once-guarded shutdown sequence this shares
+     * @param logFlush the flush-and-stop-logging step; {@code LoggingSetup::shutdown} in production
+     * @return the hook body
+     */
+    static Runnable shutdownHook(final MockGameLifecycle lifecycle, final Runnable logFlush) {
+        return () -> {
+            lifecycle.shutdown().run();
+            logFlush.run();
+        };
     }
 
     /**
