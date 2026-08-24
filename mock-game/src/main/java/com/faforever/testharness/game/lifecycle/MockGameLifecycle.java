@@ -2,6 +2,7 @@ package com.faforever.testharness.game.lifecycle;
 
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
+import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.GpgNetSender;
@@ -78,6 +79,24 @@ public final class MockGameLifecycle {
      * {@code scheduler}.
      */
     private Future matchEndFuture;
+
+    /**
+     * Status of the lifecycle. Used mainly to convert to a corresponding exit code. Initially
+     * FAILED, failures set it to other values. A successful ENDED sets it to OK.
+     */
+    private ExitStatus status = ExitStatus.FAILED;
+
+    /** Possible exit status of the lifecycle. */
+    public enum ExitStatus {
+        /** No issue with the lifecycle. */
+        OK,
+        /** The server has disconnected. */
+        SERVER_CONNECTION_LOST,
+        /** Could not establish initial connection with the server. */
+        SERVER_NOT_CONNECTED,
+        /** Generic failure, obtained when no other failure applies. */
+        FAILED
+    }
 
     /**
      * A mapping from the {@link GameState} enum to the actual state objects used by {@code
@@ -187,6 +206,20 @@ public final class MockGameLifecycle {
     }
 
     /**
+     * Gets the exit status of the lifecycle.
+     *
+     * @return the exit status.
+     * @throws IllegalStateException if called before the lifecycle reaches ENDED.
+     */
+    public ExitStatus getExitStatus() {
+        if (machine.getState() != states.get(GameState.ENDED)) {
+            throw new IllegalStateException(
+                    "Tried to get the exit status before lifecycle has ENDED");
+        }
+        return status;
+    }
+
+    /**
      * Gives a future that completes when the state is reached.
      *
      * @param state the state to wait for.
@@ -248,7 +281,28 @@ public final class MockGameLifecycle {
         };
         for (var s : fromStates) {
             states.get(s).registerTransition(PeerDisconnected.class, states.get(GameState.ENDED));
-            states.get(s).registerTransition(ServerDisconnected.class, states.get(GameState.ENDED));
+            // Go to ENDED state when the server disconnects and it wasn't due to our shutdown
+            // sequence.
+            // Also set the correct status.
+            states.get(s)
+                    .registerTransition(
+                            ServerDisconnected.class,
+                            states.get(GameState.ENDED),
+                            event -> {
+                                switch (((ServerDisconnected) event).reason()) {
+                                    case REMOTE_CLOSE:
+                                        status = ExitStatus.SERVER_CONNECTION_LOST;
+                                        break;
+                                    case CONNECT_FAILED:
+                                        status = ExitStatus.SERVER_NOT_CONNECTED;
+                                        break;
+                                    default:
+                                        break;
+                                }
+                            },
+                            event ->
+                                    ((ServerDisconnected) event).reason()
+                                            != DisconnectReason.LOCAL_CLOSE);
         }
 
         // Set gpgnet message transitions.
@@ -261,10 +315,19 @@ public final class MockGameLifecycle {
         gpgnetDispatcher.registerHandler(
                 "ConnectToPeer", frame -> machine.receiveEvent(new ConnectToPeer(frame)));
 
-        gpgnet.onDisconnect(ignored -> machine.receiveEvent(new ServerDisconnected()));
+        gpgnet.onDisconnect(event -> machine.receiveEvent(new ServerDisconnected(event.reason())));
+
+        // Shutdown sequence
+        GameShutdown shutdown = new GameShutdown(machine, gpgnet);
+        states.get(GameState.ENDED).onEntry(shutdown::run);
 
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
-        machine.setTimeout(gpgnetConnectionTimeout.toMillis(), states.get(GameState.ENDED));
+        machine.setTimeout(
+                gpgnetConnectionTimeout.toMillis(),
+                states.get(GameState.ENDED),
+                ignored -> {
+                    status = ExitStatus.SERVER_NOT_CONNECTED;
+                });
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
     }
 
@@ -400,5 +463,8 @@ public final class MockGameLifecycle {
         } catch (IOException e) {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
+
+        // This marks the end of the lifecycle through the correct/successful path.
+        status = ExitStatus.OK;
     }
 }

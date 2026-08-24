@@ -153,4 +153,23 @@ public final class LifecycleSetupTest {
         // No need to send command, should become ENDED within 1 second (2 for error).
         lifecycle.stateReached(GameState.ENDED).get(2, TimeUnit.SECONDS);
     }
+
+    @Test
+    void cleanShutdown() throws Exception {
+        gpgnet.start();
+        gpgnet.awaitClient();
+
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        lifecycle.launchMatch();
+        lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
+
+        lifecycle.endMatch();
+
+        lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
+        assertEquals(MockGameLifecycle.ExitStatus.OK, lifecycle.getExitStatus());
+    }
 }
