@@ -345,7 +345,16 @@ public final class MockGameLifecycle {
         gpgnetDispatcher.registerHandler(
                 "ConnectToPeer", frame -> machine.receiveEvent(new ConnectToPeer(frame)));
 
-        gpgnet.onDisconnect(event -> machine.receiveEvent(new ServerDisconnected(event.reason())));
+        // A local close is our own shutdown sequence closing the socket, never news to the FSM: the
+        // transition guard below rejects it in every state, and in ENDED — where the shutdown
+        // sequence runs — there is no ServerDisconnected transition at all, so posting it there
+        // logged "No matching transitions" on every clean exit. Filter it at the source instead.
+        gpgnet.onDisconnect(
+                event -> {
+                    if (event.reason() != DisconnectReason.LOCAL_CLOSE) {
+                        machine.receiveEvent(new ServerDisconnected(event.reason()));
+                    }
+                });
 
         // Shutdown sequence, also handed to the bootstrap as its JVM shutdown hook (WBS-3.2.5.1)
         // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
