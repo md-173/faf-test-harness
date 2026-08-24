@@ -41,15 +41,20 @@ public class Transition {
     /**
      * Performs a transition, and all actions that occur due to it.
      *
-     * <p>Returns {@code null} exactly when no transition occurred: no exit/entry hooks fired and
-     * the machine must stay in {@link Transition#from}. That happens either because the action
-     * failed without naming a failure state, or because this is a self-loop (an internal
+     * <p>Returns {@code null} when no hooks fired and the machine stays in {@link Transition#from}:
+     * either the action failed without naming a failure state, or this is a self-loop (an internal
      * transition, where the event is handled but the state does not change). Callers must treat
      * {@code null} as "this event was handled, but nothing about the state changed" and skip
      * everything they would otherwise do on a state change.
      *
+     * <p>Note the one case where the state does not change and the return is still non-null: a
+     * {@link FailedTransitionException} whose failure state is {@code from} itself. That is a
+     * deliberate re-entry — {@code exit()} and {@code entry()} both fire — so it is reported as a
+     * real transition and callers will treat it as one, cancelling pending timeouts included. Use a
+     * null failure state, not {@code from}, to mean "stay put and change nothing".
+     *
      * @param event the event that triggers this transition.
-     * @return the new state, or {@code null} if no transition occurred.
+     * @return the new state, or {@code null} if no hooks fired and the state did not change.
      */
     public State transition(Event event) {
         if (action != null) {
@@ -66,7 +71,8 @@ public class Transition {
                             "Transition action out of {} failed ({}), staying in {}",
                             from.getName(),
                             e.getMessage(),
-                            from.getName());
+                            from.getName(),
+                            e);
                     return null;
                 }
             }
