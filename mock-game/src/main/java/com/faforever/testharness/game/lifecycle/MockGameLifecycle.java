@@ -60,6 +60,9 @@ public final class MockGameLifecycle {
     /** Receive messages from the GpgNet server. */
     private final GpgNetDispatcher gpgnetDispatcher;
 
+    /** The one shutdown sequence for this game; see {@link #shutdown()}. */
+    private final GameShutdown shutdown;
+
     /** A timeout for the GpgNet connection. */
     private final Duration gpgnetConnectionTimeout;
 
@@ -181,6 +184,7 @@ public final class MockGameLifecycle {
         this.machine =
                 new StateMachine(
                         states.get(GameState.INITIALIZING), InvalidTransitionPolicy.IGNORE);
+        this.shutdown = new GameShutdown(machine, gpgnet);
 
         setupStateMachine();
     }
@@ -229,6 +233,20 @@ public final class MockGameLifecycle {
                     "Tried to get the exit status before lifecycle has ENDED");
         }
         return status;
+    }
+
+    /**
+     * This game's shutdown sequence (WBS-3.2.5.2), already wired to run on entry to ENDED.
+     *
+     * <p>Exposed so the bootstrap can install the <em>same</em> instance as the JVM shutdown hook
+     * rather than build a second one: the sequence is once-guarded, so a self-initiated exit and a
+     * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase,
+     * including before the GPGNet connection ever opened.
+     *
+     * @return the shutdown sequence; never {@code null}.
+     */
+    public GameShutdown shutdown() {
+        return shutdown;
     }
 
     /**
@@ -329,8 +347,8 @@ public final class MockGameLifecycle {
 
         gpgnet.onDisconnect(event -> machine.receiveEvent(new ServerDisconnected(event.reason())));
 
-        // Shutdown sequence
-        GameShutdown shutdown = new GameShutdown(machine, gpgnet);
+        // Shutdown sequence, also handed to the bootstrap as its JVM shutdown hook (WBS-3.2.5.1)
+        // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
         states.get(GameState.ENDED).onEntry(shutdown::run);
 
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
