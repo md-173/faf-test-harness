@@ -54,7 +54,9 @@ it. A skip is not a pass — check for the `[3.1.2.7] skipping` line before beli
 > below.
 
 Roughly **45 seconds**, most of it the mock game's own simulated match
-(`Main.MATCH_DURATION`, 30 s) plus its lobby wait (`Main.LAUNCH_DELAY`, 5 s). Neither has a flag.
+(`Main.MATCH_DURATION`, 30 s) plus its lobby wait (`--launch-delay-seconds`,
+5 s by default). The match duration has no flag; the lobby wait grew one in
+WBS-4.3.1, and this test takes the default.
 The acceptance bar is three consecutive passes:
 
 ```bash

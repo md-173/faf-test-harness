@@ -73,14 +73,6 @@ public final class Main {
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     /**
-     * How long the game sits in the lobby before starting the match. There is no flag for it and
-     * none is planned: the real game launches when a human clicks, which a mock has to stand in for
-     * with a timer. Long enough that a peer's {@code ConnectToPeer} lands first, short enough not
-     * to pad every harness run.
-     */
-    private static final Duration LAUNCH_DELAY = Duration.ofSeconds(5);
-
-    /**
      * How long the simulated match runs before the game reports its result and ends. Nothing
      * constrains this value — the client's post-{@code GameEnded} safety net is armed only once
      * {@code GameEnded} has been observed, so it bounds the exit, not the match. It is a plain
@@ -100,7 +92,7 @@ public final class Main {
     public static void main(final String[] args) {
         int exitCode;
         try {
-            exitCode = run(args, LAUNCH_DELAY, MATCH_DURATION);
+            exitCode = run(args, MATCH_DURATION);
         } finally {
             // In a finally so an unchecked throw out of run still flushes and stops logging. It
             // does not catch: the JVM's uncaught-exception path still exits 1 either way, and
@@ -119,32 +111,42 @@ public final class Main {
      * scraping its exit status. It deliberately does not call {@link System#exit(int)} or stop
      * logging — both belong to {@code main}.
      *
+     * <p>The auto-launch delay is <em>not</em> a parameter: it is a launch argument ({@code
+     * --launch-delay-seconds}, WBS-4.3.1), so a test drives it the same way the launcher does. The
+     * match duration stays one, because nothing on the wire sets it and a test needs it short.
+     *
      * @param args the raw argv as passed to {@code main}
-     * @param launchDelay how long to sit in the lobby before starting the match
      * @param matchDuration how long the simulated match runs
      * @return the exit code this run should produce; see {@link ExitCodes}
      */
-    static int run(final String[] args, final Duration launchDelay, final Duration matchDuration) {
+    static int run(final String[] args, final Duration matchDuration) {
         MockGameCli.ParseOutcome outcome = MockGameCli.parseOrReport(args, System.err);
         if (outcome.exitCode() != ExitCodes.OK) {
             return outcome.exitCode();
         }
         MockGameConfig config = outcome.config();
+        // The launch policy is logged with the rest of the startup line, and in words rather than
+        // as the raw seconds, so a hand-run binary that took the default still says out loud
+        // whether it intends to launch on its own — the one case where the default decides
+        // anything (see MockGameCli's class javadoc).
         LOG.info(
                 "mock game started: playerId={} login={} gameUid={} "
-                        + "gpgNetPort={} lobbyPort={} gameOptions={}",
+                        + "gpgNetPort={} lobbyPort={} gameOptions={} launch={}",
                 config.playerId(),
                 config.playerLogin(),
                 config.gameUid(),
                 config.gpgNetPort(),
                 config.lobbyPort(),
-                config.gameOptions());
+                config.gameOptions(),
+                config.launchDelay()
+                        .map(delay -> "auto after " + delay.toSeconds() + "s")
+                        .orElse("manual only (auto-launch disabled)"));
 
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         config,
                         new GpgNetConnection(config.gpgNetPort()),
-                        launchDelay,
+                        config.launchDelay().orElse(null),
                         matchDuration);
         Thread hook =
                 new Thread(

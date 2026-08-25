@@ -128,7 +128,7 @@ final class MockClientCliRecordSyncTest {
         // two numbers is exactly GROUPED_CLI_FIELD_NAMES.size() - GROUPED_RECORD_COMPONENT_NAMES
         // .size() (8 host-* options collapse into 1 hostConfig record component, and 2 join
         // options collapse into 1 joinConfig component).
-        long expectedRecordComponents = 23;
+        long expectedRecordComponents = 24;
         long expectedCliOptionsExcludingHelpers = 31;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;

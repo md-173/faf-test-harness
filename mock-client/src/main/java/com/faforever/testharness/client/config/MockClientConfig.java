@@ -46,6 +46,11 @@ import java.util.OptionalInt;
  * @param iceAdapterGameId game ID passed to faf-ice-adapter as {@code --game-id} (required by the
  *     adapter); a default for the {@code launch-ice}/{@code ice-smoke} diagnostics, overridden by
  *     the lobby {@code game_launch.uid} during a full {@code run} session
+ * @param mockGameLaunchDelaySeconds how long mock-game sits in the lobby before starting the match
+ *     on its own, passed straight through as its {@code --launch-delay-seconds} (WBS-4.3.1).
+ *     Negative disables auto-launch, which is what a multi-peer session needs: the FAF server
+ *     refuses a {@code game_join} once the host has reported {@code GameState Launching}, so a host
+ *     on a timer makes itself unjoinable while the joiner is still booting
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
  * @param playerIdOverride optional player ID override for deterministic local testing. Applies to
@@ -82,6 +87,7 @@ public record MockClientConfig(
         int iceAdapterGpgNetPort,
         int iceAdapterLobbyPort,
         int iceAdapterGameId,
+        int mockGameLaunchDelaySeconds,
         String logLevel,
         Optional<Path> logFile,
         OptionalInt playerIdOverride,
