@@ -44,8 +44,14 @@ it. A skip is not a pass — check for the `[3.1.2.7] skipping` line before beli
 ### Run
 
 ```bash
-./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*'
+./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun
 ```
+
+> **`--rerun` is not optional.** Without it, a second invocation with no source changes prints
+> `Task :mock-client:integrationTest UP-TO-DATE` and `BUILD SUCCESSFUL in 765ms` — a green build
+> that executed nothing. `--rerun` is task-scoped (Gradle 7.6+); prefer it over `--rerun-tasks`,
+> which also re-runs compile, checkstyle, spotless and `installDist` and so inflates the timing
+> below.
 
 Roughly **45 seconds**, most of it the mock game's own simulated match
 (`Main.MATCH_DURATION`, 30 s) plus its lobby wait (`Main.LAUNCH_DELAY`, 5 s). Neither has a flag.
@@ -53,7 +59,7 @@ The acceptance bar is three consecutive passes:
 
 ```bash
 for i in 1 2 3; do
-  ./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun-tasks \
+  ./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun \
     || { echo "run $i FAILED"; break; }
 done
 ```
@@ -61,20 +67,38 @@ done
 ### What to look for in the logs
 
 `showStandardStreams` is on for this task, so the captured `[ICEAdapter]` and `[MockGame]`
-subprocess output is interleaved with the client's own lines. The checkpoints in order:
+subprocess output is interleaved with the client's own lines. The client's own lines are tagged
+`[Unknown]` rather than `[MockClient]` in this JVM — `LoggingSetup.configure` is only called from
+`Main`, and a test does not go through it — so the "Source" column below names the emitting logger,
+not the bracketed tag. Only `[ICEAdapter]` and `[MockGame]` appear as tags.
 
-| Stage | Log line | Component |
-|-------|----------|-----------|
+The FSM starts at `CONNECTING` (logged before the posted welcome) and the checkpoints then run in
+this order:
+
+| Stage | Log line | Source |
+|-------|----------|--------|
 | Adapter up, under the **session** identity | `Launching ICE adapter: … --id 9001 --login welcome-login` | `IceAdapterLauncher` |
 | RPC transport up | `connected to ICE adapter JSON-RPC at 127.0.0.1:<port>` | `IceAdapterConnection` |
 | Game up, same identity | `Launching mock-game: … --player-id 9001 --player-login welcome-login` | `MockGameLauncher` |
 | | `state entry: STARTING_GAME` | `MockClientLifecycle` |
-| Handshake | `Received GPGNet message: GameState Idle` → `Sent GPGNet message: CreateLobby …` → `Received GPGNet message: GameState Lobby` | `[ICEAdapter]` |
+| Handshake | `Sent GPGNet message: CreateLobby 0 <port> welcome-login 9001 1` → `Received GPGNet message: GameState Idle` → `Received GPGNet message: GameState Lobby` | `[ICEAdapter]` |
 | Host role taken | `Sent GPGNet message: HostGame scmp_007`, then `state entry: HOSTING` | `[ICEAdapter]` / `MockClientLifecycle` |
 | Match live | `Received GPGNet message: GameState Launching`, then `state entry: PLAYING` | `[ICEAdapter]` / `MockClientLifecycle` |
 | Result reported | `GameResult 1 victory 10` → `JsonStats` → `GameEnded`, **in that order** | `[ICEAdapter]` |
 | Clean self-exit | `mock game finished: status=OK, exit code 0`, then `mock-game exited cleanly with exit code 0` | `[MockGame]` / `MockClientLifecycle` |
 | Teardown | `state entry: TERMINATED` → `tearing down session` → `session teardown complete` | `MockClientLifecycle` |
+
+> **The handshake lines look out of order, and are not.** `CreateLobby` is logged *before* the
+> `Received … GameState Idle` that caused it. Upstream `GPGNetServer.processGpgnetMessage` (3.3.14)
+> sends `CreateLobby` from inside the `Idle` handler and only logs `Received GPGNet message` at the
+> *end* of the method, while `sendGpgnetMessage` logs at send time. Read it as "CreateLobby was the
+> reply to Idle", not as the adapter speaking first.
+
+> **`[MockGame]` output arrives in a lump.** The child's stdout is block-buffered, so game log lines
+> can surface tens of seconds after they were emitted — a line stamped at `t+2s` may not appear
+> until the game exits. On a run that fails *before* the game exits, the most recent `[MockGame]`
+> lines may be missing from the log entirely; read the `[ICEAdapter]` frame log for what the game
+> actually sent.
 
 The identity values (`9001` / `welcome-login`) are the fabricated session identity, and are
 deliberately unlike the config defaults the launchers would otherwise fall back on — seeing them in
