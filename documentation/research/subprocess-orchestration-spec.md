@@ -201,11 +201,41 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
    ← starts the process, drains both streams via ProcessOutputLogger,
      registers in SubprocessRegistry (installs JVM shutdown hook once).
-4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
-   max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop.
+4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 200 ms backoff,
+   max 100 attempts, total ≤ 20 s. See the correction note below.
 6. Once connected: setLobbyInitMode(...) → setIceServers(...).
 7. Spawn mock-game with the same gpgnetPort and lobbyUdpPort.
 ```
+
+> **Correction (WBS-3.1.2.7).** Step 4 previously read "250 ms backoff, max 10
+> attempts, total ≤ 2.5 s. Mirrors the real client's loop." The backoff was
+> right; the attempt count was not, and it did **not** mirror the real client.
+> Verified against `downlords-faf-client` v2026.7.1,
+> `src/main/java/com/faforever/client/fa/relay/ice/IceAdapterImpl.java`:
+>
+> ```java
+> private static final int CONNECTION_ATTEMPTS = 50;
+> private static final int CONNECTION_ATTEMPT_DELAY_MILLIS = 250;
+> ```
+>
+> — i.e. **50 attempts, ≈12.5 s**, five times the budget this spec claimed,
+> above a comment reading *"the socket fails too fast on unix/linux not giving
+> the adapter enough time to start."* `IceAdapterConnection` had faithfully
+> implemented the wrong figure (20 × 100 ms = 2 s); it is now 100 × 200 ms =
+> 20 s, deliberately a little above upstream's.
+>
+> Two upstream details worth knowing but **not** worth copying. On exhausting
+> its attempts, `initializeIceAdapterConnection` returns normally leaving
+> `peer` null, so the real client fails later and obscurely — our `connect()`
+> completes exceptionally instead. And upstream picks ports via
+> `new ServerSocket(0)` closed immediately before the adapter binds them, the
+> same benign TOCTOU race our live tests carry.
+>
+> Note the interaction with §2.6: the adapter exits **0** on a usage error, so
+> a mis-launch is detected by this connect timeout rather than by an exit code
+> — and that detection now costs up to 20 s, inside a `synchronized`
+> `StateMachine.receiveEvent`, during which no other event is processed. Same
+> shape as before, ten times the window.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is

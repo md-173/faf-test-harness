@@ -63,9 +63,14 @@ final class IceAdapterConnectionLiveSmokeTest {
     private static final String ADAPTER_JAR_ENV = "FAF_ICE_ADAPTER_JAR";
 
     /**
-     * The real adapter JVM is far slower to bind its RPC port than the in-process fixture, so widen
-     * the connect-retry window well past {@link IceAdapterConnection}'s 2 s default: 100 attempts ×
-     * 200 ms ≈ 20 s of cold-start headroom.
+     * The real adapter JVM is far slower to bind its RPC port than the in-process fixture, so this
+     * test has always asked for 100 attempts × 200 ms ≈ 20 s of cold-start headroom.
+     *
+     * <p>These are now identical to {@link IceAdapterConnection}'s own defaults — WBS-3.1.2.7
+     * widened them to this exact pair, so the production path gets the same headroom this test had
+     * been granting itself. They are still passed explicitly: this test's whole point is to pin the
+     * window it runs under, and inheriting it would let a future default change silently move the
+     * goalposts.
      */
     private static final int CONNECT_ATTEMPTS = 100;
 

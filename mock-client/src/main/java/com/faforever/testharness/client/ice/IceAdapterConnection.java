@@ -54,18 +54,36 @@ public class IceAdapterConnection {
      * Default max connect attempts while the adapter is still binding. With {@link
      * #DEFAULT_RETRY_DELAY} this is ≈20 s of cold-start headroom.
      *
-     * <p>The previous default was 20 × 100 ms = 2 s, which is not enough for the real thing: a
-     * freshly-spawned {@code faf-ice-adapter} JVM takes several seconds to bind its RPC port, and
-     * {@link com.faforever.testharness.client.state.MockClientLifecycle} — the only production
-     * caller — does {@code connect().get()} with no retry above it, so a timeout there fails the
-     * whole session straight to TERMINATED. The 100 × 200 ms figure is not a guess: it is what
-     * {@code IceAdapterConnectionLiveSmokeTest} (R71) measured against the real binary and has been
-     * passing explicitly ever since. Only the default was left behind, which WBS-3.1.2.7 found on
-     * its first end-to-end run.
+     * <p>The previous default was 20 × 100 ms = 2 s. That was not a reproduced failure — a real
+     * adapter on a developer machine binds in about a second, so 2 s usually worked — it was
+     * <em>margin</em>, and there was almost none. It mattered because {@link
+     * com.faforever.testharness.client.state.MockClientLifecycle}, the only production caller, does
+     * {@code connect().get()} with no retry above it: one slow cold start and the whole session
+     * fails straight to TERMINATED.
+     *
+     * <p>The number comes from the real client, verified against downlords-faf-client v2026.7.1.
+     * Its {@code IceAdapterImpl} does exactly what this class does — a blind TCP connect-retry
+     * loop, no readiness probe or liveness check to copy — with {@code CONNECTION_ATTEMPTS = 50} ×
+     * {@code CONNECTION_ATTEMPT_DELAY_MILLIS = 250} ≈ <b>12.5 s</b>, above a comment reading "the
+     * socket fails too fast on unix/linux not giving the adapter enough time to start". So a fixed
+     * window is the right shape and 2 s was five times under what the real client budgets; ours is
+     * deliberately a little above upstream's. It also matches what {@code
+     * IceAdapterConnectionLiveSmokeTest} (R71) has been passing explicitly since it was written.
+     *
+     * <p>{@code subprocess-orchestration-spec.md} §2.7 is why the old value looked right: it
+     * claimed "max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop", which the source
+     * above refutes. The spec has been corrected; this constant is the code half of that fix.
+     *
+     * <p>One upstream behaviour is deliberately <em>not</em> copied: on exhausting its attempts
+     * that loop swallows the failure and returns with a null peer, so the real client fails later
+     * and obscurely. {@link #connect()} completes exceptionally instead, and the FSM fails the
+     * transition at the point of failure.
      *
      * <p>Nothing gets slower as a result. The window is a <em>ceiling</em>, not a wait: a healthy
-     * adapter is connected on an early attempt, and every unit test that wants a fast connect
-     * failure already passes its own explicit values rather than relying on these.
+     * adapter connects on an early attempt. No existing test is affected either — the tests that
+     * want a fast connect failure pass their own explicit values ({@code IceAdapterConnectionTest}
+     * uses 3 × 20 ms against a dead port), and every lifecycle-level test overrides {@link
+     * #connect()} outright rather than opening a socket at all.
      */
     private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 
