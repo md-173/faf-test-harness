@@ -140,7 +140,7 @@ a successful response; blank means `null`.
 | `connectToPeer` | `remotePlayerLogin: string`, `remotePlayerId: int`, `offer: bool` | — | Create a PeerRelay and tell the game to connect to the remote peer in offer or answer mode. |
 | `disconnectFromPeer` | `remotePlayerId: int` | — | Destroy the PeerRelay and tell the game to disconnect from the remote peer. |
 | `setLobbyInitMode` | `lobbyInitMode: "normal" \| "auto"` | — | Set the lobby init mode. `"normal"` for custom lobbies, `"auto"` for matchmaker / ladder. |
-| `iceMsg` | `remotePlayerId: int`, `msg: **string**` | — | Hand a remote ICE candidate / SDP message to the local PeerRelay. `msg` is the candidates payload **as a JSON string**, not an object — see the payload-shape correction below. |
+| `iceMsg` | `remotePlayerId: int`, `msg: string` (**not** an object) | — | Hand a remote ICE candidate / SDP message to the local PeerRelay. `msg` is the candidates payload **as a JSON string**, not an object — see the payload-shape correction below. |
 | `sendToGpgNet` | `header: string`, `chunks: array` | — | Send an arbitrary GPGNet frame to the game (escape hatch for messages without a dedicated method). |
 | `setIceServers` | `iceServers: array<RTCIceServer>` | — | Configure STUN/TURN servers. **MUST be called before `joinGame` / `connectToPeer`.** |
 | `status` | — | `Status` (see §6) | Poll the adapter's runtime state. Used as health-check signal by WBS 2.2.8. |
@@ -155,7 +155,7 @@ Same as the WebRTC IDL — `{ "urls": [string], "username"?: string, "credential
 |---|---|---|
 | `onConnectionStateChanged` | `state: "Connected" \| "Disconnected"` | The game has connected (or disconnected) to the adapter's internal GPGNet TCP server. |
 | `onGpgNetMessageReceived` | `header: string`, `chunks: array` | The game emitted a GPGNet frame; the adapter forwards it verbatim. |
-| `onIceMsg` | `localPlayerId: int`, `remotePlayerId: int`, `msg: **string**` | A local PeerRelay produced an ICE candidate / SDP for `remotePlayerId`. The Mock Client must forward this to the lobby (see §7). |
+| `onIceMsg` | `localPlayerId: int`, `remotePlayerId: int`, `msg: string` (**not** an object) | A local PeerRelay produced an ICE candidate / SDP for `remotePlayerId`. The Mock Client must forward this to the lobby (see §7). |
 | `onIceConnectionStateChanged` | `localPlayerId: long`, `remotePlayerId: long`, `state: string` | The adapter's own `IceState` (`new` / `gathering` / `awaitingCandidates` / `checking` / `connected` / `completed` / `disconnected`), *not* the WebRTC IDL set. See the note below. |
 | `onConnected` | `localPlayerId: long`, `remotePlayerId: long`, `connected: bool` | High-level summary: the peer is reachable / unreachable. |
 
@@ -294,8 +294,10 @@ Steps:
    It parses `args[1]` only to check it is a JSON object, and forwards the
    **string itself** — the adapter parses it (see §5).
 5. **Peer Mock Client → Peer adapter.** The peer calls
-   `iceMsg(remotePlayerId=<senderId>, msg=<parsed object>)` on its local
-   adapter, which feeds the candidate to its PeerRelay.
+   `iceMsg(remotePlayerId=<senderId>, msg=<the string, verbatim>)` on its
+   local adapter, which parses it into a `CandidatesMessage` itself and feeds
+   the candidate to its PeerRelay. Handing it the parsed object instead throws
+   inside the adapter — see the payload-shape correction in §5.
 
 In summary: `onIceMsg` from JSON-RPC is wrapped onto the lobby; `IceMsg`
 from the lobby is unwrapped and pushed to JSON-RPC. The two ends of the
@@ -457,8 +459,8 @@ sequenceDiagram
     Note over HMC,JMC: Phase F — ICE candidate exchange (relayed through the lobby)
     loop until both sides reach "connected" / "completed"
         HIA-->>HMC: notify onIceMsg(1, 2, msg)
-        HMC->>LS: IceMsg target:game args:[2, JSON(msg)]
-        LS-->>JMC: IceMsg target:game args:[1, JSON(msg)]
+        HMC->>LS: IceMsg target:game args:[2, "msg-string"]
+        LS-->>JMC: IceMsg target:game args:[1, "msg-string"]
         JMC->>JIA: iceMsg(1, msg)
         JIA-->>JMC: result null
 

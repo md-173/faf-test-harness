@@ -3,6 +3,7 @@ package com.faforever.testharness.client.state;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.faforever.testharness.client.config.MockClientConfig;
@@ -67,6 +68,14 @@ final class PeerSessionWiringTest {
 
     /** The peer's lobby-assigned id. */
     private static final int PEER_ID = 4242;
+
+    /**
+     * A candidates payload shaped like the adapter's own {@code CandidatesMessage}, and carried as
+     * a JSON string because that is what the adapter sends and expects (see {@code
+     * IceSignalRelay}).
+     */
+    private static final String CANDIDATES_PAYLOAD =
+            "{\"srcId\":1,\"destId\":4242,\"candidates\":[{\"type\":\"host\",\"port\":6112}]}";
 
     private static final MockClientConfig MINIMAL_CONFIG =
             new MockClientConfig(
@@ -234,19 +243,25 @@ final class PeerSessionWiringTest {
     void launchedSessionRelaysIceCandidatesBothWays() throws Exception {
         launchedLifecycle();
 
-        // Adapter → lobby (R39): a local candidate reaches the lobby as an IceMsg frame.
+        // Adapter → lobby (R39): a local candidate reaches the lobby as an IceMsg frame. Fired as
+        // a JSON string, which is what the shipped adapter sends; an object here would exercise a
+        // shape the real adapter never produces, and the encoding assertion below — the one that
+        // fails if an already-stringified payload is stringified again — would prove nothing.
         adapter.fireNotification(
                 "onIceMsg",
                 notification(
                         "onIceMsg",
-                        MAPPER.createArrayNode()
-                                .add(1)
-                                .add(PEER_ID)
-                                .add(MAPPER.createObjectNode().put("candidate", "host"))));
+                        MAPPER.createArrayNode().add(1).add(PEER_ID).add(CANDIDATES_PAYLOAD)));
 
         JsonNode relayed = MAPPER.readTree(awaitLobbyFrame("IceMsg"));
         assertEquals(PEER_ID, relayed.path("args").path(0).asInt());
         assertEquals("game", relayed.path("target").asText());
+        JsonNode outbound = relayed.path("args").path(1);
+        assertTrue(outbound.isTextual(), "the payload crosses the lobby as a JSON string");
+        assertEquals(
+                "host",
+                MAPPER.readTree(outbound.asText()).path("candidates").path(0).path("type").asText(),
+                "one parse must recover the candidates; two would mean it was encoded twice");
 
         // Lobby → adapter (R39): a remote candidate reaches the adapter as an iceMsg call.
         server.broadcastText(

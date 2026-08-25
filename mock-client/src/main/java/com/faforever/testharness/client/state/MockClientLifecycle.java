@@ -962,17 +962,36 @@ public final class MockClientLifecycle {
         // unreachable, and a session that carried on would look healthy while silently unable to
         // connect. An adapter that has died outright is not this path's concern: its process exit
         // posts AdapterExited (#214), which is the reliable channel for that.
+        //
+        // whenCompleteAsync, not whenComplete: a send that fails outright (dead socket) completes
+        // the future before call() even returns, and a synchronous continuation would then re-enter
+        // the FSM monitor from inside this very transition, running TERMINATED's teardown while the
+        // transition that triggered it is still on the stack. Same hazard the launch path documents
+        // for its own process-exit continuations.
         iceConnection
                 .call("connectToPeer", remoteLogin.asText(), peerId, offer.asBoolean())
-                .whenComplete(
+                .whenCompleteAsync(
                         (result, error) -> {
-                            if (error != null) {
-                                LOG.warn(
-                                        "peer relay setup failed for id={} ({}); ending session",
+                            if (error == null) {
+                                return;
+                            }
+                            // Every clean shutdown fails this call: SessionTeardown terminates the
+                            // adapter process before it closes the RPC socket, so an in-flight
+                            // connectToPeer is failed on the way out. Reporting that as a peer
+                            // failure would be a false alarm on a healthy session — the same
+                            // reason onGameProcessExit and onAdapterExited consult this flag.
+                            if (teardown.hasRun()) {
+                                LOG.debug(
+                                        "connectToPeer for id={} failed during teardown ({})",
                                         peerId,
                                         error.getMessage());
-                                machine.receiveEvent(new ShutdownRequested());
+                                return;
                             }
+                            LOG.warn(
+                                    "peer relay setup failed for id={} ({}); ending session",
+                                    peerId,
+                                    error.getMessage());
+                            machine.receiveEvent(new ShutdownRequested());
                         });
     }
 

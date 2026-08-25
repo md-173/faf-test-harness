@@ -293,8 +293,13 @@ final class TwoPeerSessionLiveTest {
             // in any of them would leave a returned-value binding null while B's adapter, game and
             // lobby session were all up — the exact leak this block exists to prevent, and one
             // that also leaves B logged into the game server for the next run to trip over.
-            shutdown(joiner);
-            shutdown(host);
+            try {
+                shutdown(joiner);
+            } finally {
+                // Nested, so an unexpected throw while shutting B down cannot leave A's adapter
+                // and game running — the same class of hole as the joiner field above.
+                shutdown(host);
+            }
         }
 
         assertNoSurvivingSubprocesses(host.config);
@@ -308,10 +313,11 @@ final class TwoPeerSessionLiveTest {
      * @throws InterruptedException if any bounded wait is interrupted
      */
     private void runSession(final Peer host) throws InterruptedException {
-        // Taken before the events that can reach them. A dead session overshoots straight into
-        // TERMINATED, and a stateReached future asked for afterwards can never complete — so the
-        // run would burn the whole role budget and then blame HOSTING, when "the session had
-        // already died" was available immediately. Same trap ClientGameLifecycleLiveTest documents.
+        // Taken before the events that can reach them. StateMachine.stateReached only
+        // short-circuits while the state is still current, so a future asked for after the FSM has
+        // been through and left that state can never complete — and HOSTING is left the moment a
+        // session dies. Taking it up front is what makes this checkpoint honest; it does not make a
+        // dead session report faster, since nothing here races the wait against TERMINATED.
         CompletableFuture<Void> hosting = host.lifecycle.stateReached(ClientState.HOSTING);
 
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what

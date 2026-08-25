@@ -8,7 +8,7 @@ a real environment, captured by hand and committed here.
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
 | `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
-| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ✅ live, 2026-08-25 (three consecutive passes, `test` ↔ `Foo` against `ws.faforever.xyz`) — see below |
+| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ▶️ live test, run on demand — verified 2026-08-25, three consecutive passes (`test` ↔ `Foo` against `ws.faforever.xyz`); see below |
 
 ---
 
