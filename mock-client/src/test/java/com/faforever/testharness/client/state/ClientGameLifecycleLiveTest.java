@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -82,14 +83,20 @@ import org.junit.jupiter.api.condition.EnabledIf;
  *
  * <p><b>Every wait is bounded and named.</b> There is no unbounded {@code get()} anywhere below: a
  * missed checkpoint fails with the constant that ran out and what had been observed by then, so a
- * regression names itself instead of hanging until the class-level {@link Timeout} fires.
+ * regression names itself. That is the whole hang-proofing — the class-level {@link Timeout} is a
+ * total-runtime backstop and, under JUnit's default same-thread mode, could not interrupt a blocked
+ * wait even if one existed.
  *
  * <p><b>Running it locally</b> is documented in {@code documentation/demos/README.md}; this test
  * doubles as the sprint demo script.
  */
 @Tag("integration")
-// Last resort only. The sum of the named budgets below is well under this, so a real failure
-// surfaces as the specific checkpoint that timed out, not as a blanket JUnit timeout.
+// A backstop, and deliberately BELOW the ~505 s pathological sum of the named budgets below, so a
+// cascade of slow-but-not-failed checkpoints still ends the run instead of grinding on. It is not
+// what makes this test hang-proof: with no junit-platform.properties in the repo the default
+// timeout thread mode is SAME_THREAD, which reports a breach after the method returns rather than
+// interrupting it, so a genuinely blocked wait would never be cut short by this. The named budgets
+// on every individual wait are the real mechanism; this only bounds the total.
 @Timeout(value = 300, unit = TimeUnit.SECONDS)
 final class ClientGameLifecycleLiveTest {
 
@@ -156,6 +163,23 @@ final class ClientGameLifecycleLiveTest {
      */
     private static final Duration SUBPROCESS_VISIBLE_TIMEOUT = Duration.ofSeconds(15);
 
+    /**
+     * Budget for the client's own clean-end flag to catch up with the {@code GameEnded} frame.
+     *
+     * <p>Polled rather than sampled, because the two are set by <em>different handlers on the same
+     * fan-out dispatch</em>. This test's recorder is registered before the lifecycle's own, and
+     * {@code IceAdapterConnection} runs handlers sequentially in registration order on its reader
+     * thread — so enqueuing the frame here can wake the main thread before the lifecycle's handler
+     * has run. Sampling the flag instead would go red on a perfectly healthy session.
+     */
+    private static final Duration CLEAN_END_FLAG_TIMEOUT = Duration.ofSeconds(10);
+
+    /** Budget for the stand-in lobby transport to come up. */
+    private static final Duration LOBBY_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+
+    /** Budget for the stand-in lobby server to shut down in the teardown block. */
+    private static final Duration LOBBY_SERVER_STOP_TIMEOUT = Duration.ofSeconds(2);
+
     /** Poll slice for every bounded wait built on a queue or a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
 
@@ -206,7 +230,7 @@ final class ClientGameLifecycleLiveTest {
         ScriptedWebSocketServer lobbyServer = new ScriptedWebSocketServer();
         lobbyServer.startAndAwait();
         LobbyConnection lobby = new LobbyConnection(lobbyServer.uri());
-        lobby.connect().get(10, TimeUnit.SECONDS);
+        lobby.connect().get(LOBBY_CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         lobbyServer.awaitFirstClient();
 
         // Real transport, real launchers: nothing between the client and the two binaries is
@@ -233,7 +257,7 @@ final class ClientGameLifecycleLiveTest {
             // once-guarded, so on a successful run this is a no-op, and on a failed one it is the
             // exact sequence the assertions were checking.
             teardown.run();
-            lobbyServer.stop(2000);
+            lobbyServer.stop((int) LOBBY_SERVER_STOP_TIMEOUT.toMillis());
         }
 
         assertNoSurvivingSubprocesses(config);
@@ -255,13 +279,21 @@ final class ClientGameLifecycleLiveTest {
             throws Exception {
         // Futures for the later states are taken before the events that can reach them, so a
         // transition cannot slip past between the post and the wait.
+        // Every one of them, not just the later ones. StateMachine.stateReached short-circuits only
+        // while the state is still current; ask for a state the FSM has already overshot and you
+        // get a fresh future that can never complete. The realistic case is a failing hostGame RPC
+        // — that lands the FSM in TERMINATED inside the post, so a stateReached(HOSTING) taken
+        // afterwards would burn the whole HOSTING budget and then blame HOSTING, when the real
+        // answer ("the session had already died") was available immediately.
+        CompletableFuture<Void> idle = lifecycle.stateReached(ClientState.IDLE);
+        CompletableFuture<Void> hosting = lifecycle.stateReached(ClientState.HOSTING);
         CompletableFuture<Void> playing = lifecycle.stateReached(ClientState.PLAYING);
         CompletableFuture<Void> terminated = lifecycle.stateReached(ClientState.TERMINATED);
 
         // Trigger 1 — the welcome the lobby would have sent. Establishes the session identity that
         // both subprocesses are then launched under.
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        await(lifecycle.stateReached(ClientState.IDLE), WELCOME_TIMEOUT, "FSM reaches IDLE");
+        await(idle, WELCOME_TIMEOUT, "FSM reaches IDLE");
 
         // Trigger 2 — game_launch. This is the heavy one: it spawns the adapter, connects and
         // configures the JSON-RPC transport, and spawns the game, all synchronously inside the
@@ -287,10 +319,7 @@ final class ClientGameLifecycleLiveTest {
         // Lobby, so posting it earlier would prove nothing about the ordering the spec documents
         // (json-rpc-spec §9a). The map argument travels to the adapter's hostGame RPC.
         lifecycle.post(new HostGame(hostGameCommand()));
-        await(
-                lifecycle.stateReached(ClientState.HOSTING),
-                HOSTING_TIMEOUT,
-                "FSM reaches HOSTING and the hostGame RPC was issued");
+        await(hosting, HOSTING_TIMEOUT, "FSM reaches HOSTING and the hostGame RPC was issued");
 
         // Checkpoint 2 — the match goes live. Launching is the game's own signal, and 3.1.3.5 wires
         // it to StartMatch through the same fan-out, so PLAYING here is reached on a real frame and
@@ -298,14 +327,35 @@ final class ClientGameLifecycleLiveTest {
         awaitFrame("GameState", "Launching", LAUNCHING_TIMEOUT);
         await(playing, LAUNCHING_TIMEOUT, "FSM reaches PLAYING on the real Launching frame");
 
-        // Checkpoint 3 — the match plays out and reports. faf-server expects the results before
-        // GameEnded, and awaitFrame consumes in arrival order, so reaching GameEnded here having
-        // already matched GameResult is itself the ordering assertion.
-        awaitFrame("GameResult", null, MATCH_TIMEOUT);
+        // Checkpoint 3 — the match plays out and reports. GameResult must arrive before GameEnded,
+        // and awaitFrame consumes in arrival order, so reaching GameEnded here having already
+        // matched GameResult is itself the ordering assertion.
+        //
+        // Source-verified against faf-server, because the requirement is real but nowhere
+        // documented upstream — it falls out of the finish path. GameConnection.handle_game_ended
+        // sets finished_sim and calls check_game_finish; once the last connection has done so,
+        // process_game_results consumes self._results, and an empty _results marks the game
+        // UNKNOWN_RESULT (unrated). There is no recovery: a late result still lands in _results,
+        // but check_game_finish's state guard means on_game_finish never runs again, so the result
+        // is silently lost. In a single-connection harness "the last connection" is the only one,
+        // which makes the ordering strictly load-bearing here.
+        //
+        // JsonStats is deliberately NOT ordered against GameEnded. _process_pending_army_stats is
+        // re-triggered from both add_result and report_army_stats and is not gated on game state,
+        // so late stats still process; its only real constraint is that the player's result exists
+        // first. Do not "fix" this by adding a JsonStats ordering assertion — it would pin
+        // behaviour faf-server does not require.
+        Frame result = awaitFrame("GameResult", null, MATCH_TIMEOUT);
+        // The payload, not just the command name: an empty arg list here would mean the frame's
+        // body was lost somewhere on the game → adapter → client hop, which a name-only match would
+        // wave through. The values themselves are deliberately not pinned — mock-game still carries
+        // a "TODO: Configurable values" on them, so asserting "victory 10" would break on a change
+        // this test has no opinion about.
+        assertFalse(
+                result.args().isEmpty(),
+                "GameResult must carry its result payload across the fan-out; got: " + result);
         awaitFrame("GameEnded", null, MATCH_TIMEOUT);
-        assertTrue(
-                lifecycle.isCleanEndSeen(),
-                "the client must have recorded the clean-end flag from the GameEnded frame");
+        awaitCleanEndFlag(lifecycle);
 
         // Checkpoint 4 — a clean self-exit. Strictly 0, not "0 or 143": 3.1.1.10 landed with
         // teardown gated on the game-exit signal (TERMINATED's entry hook runs it, and the game
@@ -352,9 +402,10 @@ final class ClientGameLifecycleLiveTest {
      * @param command the GPGNet command to wait for
      * @param firstArg the required first argument, or {@code null} to match on the command alone
      * @param timeout the named budget for this checkpoint
+     * @return the matched frame, so a caller can assert on its payload
      * @throws InterruptedException if the wait is interrupted
      */
-    private void awaitFrame(final String command, final String firstArg, final Duration timeout)
+    private Frame awaitFrame(final String command, final String firstArg, final Duration timeout)
             throws InterruptedException {
         long deadline = System.nanoTime() + timeout.toNanos();
         do {
@@ -367,10 +418,10 @@ final class ClientGameLifecycleLiveTest {
                     firstArg == null
                             || (!frame.args().isEmpty() && firstArg.equals(frame.args().get(0)));
             if (command.equals(frame.command()) && argMatches) {
-                return;
+                return frame;
             }
         } while (System.nanoTime() < deadline);
-        fail(
+        return fail(
                 "no "
                         + command
                         + (firstArg == null ? "" : " " + firstArg)
@@ -378,6 +429,31 @@ final class ClientGameLifecycleLiveTest {
                         + timeout
                         + "; frames observed so far: "
                         + observed);
+    }
+
+    /**
+     * Wait for the client to record its own clean-end flag, which it sets from the same {@code
+     * GameEnded} frame this test just matched.
+     *
+     * <p>This is a wait and not a sample on purpose; see {@link #CLEAN_END_FLAG_TIMEOUT}. The two
+     * observers sit on one fan-out dispatch and this test's runs first, so the frame can reach the
+     * queue — and wake this thread — a moment before the lifecycle's handler has run.
+     *
+     * @param lifecycle the lifecycle under test
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private void awaitCleanEndFlag(final MockClientLifecycle lifecycle)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + CLEAN_END_FLAG_TIMEOUT.toNanos();
+        do {
+            if (lifecycle.isCleanEndSeen()) {
+                return;
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        } while (System.nanoTime() < deadline);
+        fail(
+                "the client never recorded the clean-end flag from the GameEnded frame within "
+                        + CLEAN_END_FLAG_TIMEOUT);
     }
 
     /**
