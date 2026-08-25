@@ -50,11 +50,27 @@ public class IceAdapterConnection {
     /** The adapter binds its JSON-RPC server on loopback only. */
     private static final String LOOPBACK = "127.0.0.1";
 
-    /** Default max connect attempts while the adapter is still binding. */
-    private static final int DEFAULT_CONNECT_ATTEMPTS = 20;
+    /**
+     * Default max connect attempts while the adapter is still binding. With {@link
+     * #DEFAULT_RETRY_DELAY} this is ≈20 s of cold-start headroom.
+     *
+     * <p>The previous default was 20 × 100 ms = 2 s, which is not enough for the real thing: a
+     * freshly-spawned {@code faf-ice-adapter} JVM takes several seconds to bind its RPC port, and
+     * {@link com.faforever.testharness.client.state.MockClientLifecycle} — the only production
+     * caller — does {@code connect().get()} with no retry above it, so a timeout there fails the
+     * whole session straight to TERMINATED. The 100 × 200 ms figure is not a guess: it is what
+     * {@code IceAdapterConnectionLiveSmokeTest} (R71) measured against the real binary and has been
+     * passing explicitly ever since. Only the default was left behind, which WBS-3.1.2.7 found on
+     * its first end-to-end run.
+     *
+     * <p>Nothing gets slower as a result. The window is a <em>ceiling</em>, not a wait: a healthy
+     * adapter is connected on an early attempt, and every unit test that wants a fast connect
+     * failure already passes its own explicit values rather than relying on these.
+     */
+    private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 
-    /** Default delay between connect attempts. */
-    private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(100);
+    /** Default delay between connect attempts; see {@link #DEFAULT_CONNECT_ATTEMPTS}. */
+    private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(200);
 
     /** Default time a {@link #call} waits for its response before failing. */
     private static final Duration DEFAULT_CALL_TIMEOUT = Duration.ofSeconds(5);
