@@ -161,6 +161,13 @@ final class TwoPeerSessionLiveTest {
     private static final String HOST_MOD = "faf";
 
     /**
+     * The joining peer, once {@link #runSession} has built it. A field rather than a local, so the
+     * test's teardown can reach it even when a checkpoint between its construction and the end of
+     * the session fails.
+     */
+    private Peer joiner;
+
+    /**
      * One peer verdict as the adapter reported it.
      *
      * @param localId the reporting adapter's own player id
@@ -195,6 +202,13 @@ final class TwoPeerSessionLiveTest {
          * message: the alternative is a bare 90 s timeout waiting for {@code game_launch} that
          * never says the server refused the join, and {@code game_not_ready} versus {@code
          * bad_password} are very different bugs.
+         *
+         * <p>Source-verified, because this command is missing from lobby-protocol-spec.md's §10.6
+         * lookup table: faf-server's {@code lobbyconnection.command_game_join} sends {@code
+         * {"command": "game_join_failed", "reason": …, "uid": …}} on every refusal, each followed
+         * by a {@code notice} frame its own comment marks {@code DEPRECATED: use game_join_failed
+         * instead}. The reason codes it can carry are {@code host_left_game}, {@code
+         * game_not_ready}, and {@code bad_password}.
          */
         private final AtomicReference<String> joinRefusal = new AtomicReference<>();
 
@@ -268,12 +282,17 @@ final class TwoPeerSessionLiveTest {
         // Unique per run, so a stale game from an earlier run is never what this one observes —
         // though it is the uid, not the title, that B actually targets.
         Peer host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
-        Peer joiner = null;
         try {
-            joiner = runSession(host);
+            runSession(host);
         } finally {
             // Always runs, so a failed checkpoint still leaves no adapter and no game behind.
             // Joiner first: it is the side that may not exist yet.
+            //
+            // The joiner is read out of the field rather than from runSession's return value: it
+            // is constructed partway through that method, and four bounded waits follow. A failure
+            // in any of them would leave a returned-value binding null while B's adapter, game and
+            // lobby session were all up — the exact leak this block exists to prevent, and one
+            // that also leaves B logged into the game server for the next run to trip over.
             shutdown(joiner);
             shutdown(host);
         }
@@ -286,33 +305,36 @@ final class TwoPeerSessionLiveTest {
      * the test method so the shutdown above wraps every one of them.
      *
      * @param host the hosting peer, not yet started
-     * @return the joining peer, once it exists, so the caller can shut it down too
      * @throws InterruptedException if any bounded wait is interrupted
      */
-    private Peer runSession(final Peer host) throws InterruptedException {
+    private void runSession(final Peer host) throws InterruptedException {
+        // Taken before the events that can reach them. A dead session overshoots straight into
+        // TERMINATED, and a stateReached future asked for afterwards can never complete — so the
+        // run would burn the whole role budget and then blame HOSTING, when "the session had
+        // already died" was available immediately. Same trap ClientGameLifecycleLiveTest documents.
+        CompletableFuture<Void> hosting = host.lifecycle.stateReached(ClientState.HOSTING);
+
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what
         // spawns A's adapter and game and completes gameLaunched with the uid.
         host.identity = await(host.lifecycle.start(tokensFor(host)), SESSION_TIMEOUT, "A: welcome");
         GameConfig hosted =
                 await(host.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "A: game_launch");
-        await(host.lifecycle.stateReached(ClientState.HOSTING), ROLE_TIMEOUT, "A: HOSTING");
+        await(hosting, ROLE_TIMEOUT, "A: HOSTING");
 
         // Only now is the game joinable: the server marks it hosted when A's game reports Lobby,
         // which reaches the server only because R72 forwards it. B is started with A's uid as its
-        // join target — the one value that crosses between the two clients in-process.
-        Peer joiner = new Peer("B(joiner)", joinConfig(hosted.uid()));
+        // join target — the one value that crosses between the two clients in-process. Assigned to
+        // the field before anything can fail, so the teardown in the caller can always reach it.
+        joiner = new Peer("B(joiner)", joinConfig(hosted.uid()));
+        CompletableFuture<Void> joining = joiner.lifecycle.stateReached(ClientState.JOINING);
         joiner.identity =
                 await(joiner.lifecycle.start(tokensFor(joiner)), SESSION_TIMEOUT, "B: welcome");
-        await(
-                joiner.lifecycle.gameLaunched(),
-                GAME_LAUNCH_TIMEOUT,
-                "B: game_launch" + joiner.refusalHint());
-        await(joiner.lifecycle.stateReached(ClientState.JOINING), ROLE_TIMEOUT, "B: JOINING");
+        await(joiner.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "B: game_launch", joiner);
+        await(joining, ROLE_TIMEOUT, "B: JOINING");
 
         // The card's definitive signal, on both sides, for the ids the lobby assigned.
         awaitPeerConnected(host, joiner);
         awaitPeerConnected(joiner, host);
-        return joiner;
     }
 
     /**
@@ -435,10 +457,36 @@ final class TwoPeerSessionLiveTest {
     private static <T> T await(
             final CompletableFuture<T> future, final Duration timeout, final String what)
             throws InterruptedException {
+        return await(future, timeout, what, null);
+    }
+
+    /**
+     * As {@link #await(CompletableFuture, Duration, String)}, but reads {@code peer}'s join-refusal
+     * recorder when the wait times out.
+     *
+     * <p>The hint is read here rather than folded into {@code what} by the caller because the
+     * refusal, by construction, can only arrive <em>during</em> this wait: a message built before
+     * the call would always report the empty string.
+     *
+     * @param future the checkpoint
+     * @param timeout its named budget
+     * @param what what reaching it proves
+     * @param peer the peer whose refusal recorder to consult on timeout, or {@code null}
+     * @param <T> the checkpoint's value type
+     * @return the future's value
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private static <T> T await(
+            final CompletableFuture<T> future,
+            final Duration timeout,
+            final String what,
+            final Peer peer)
+            throws InterruptedException {
         try {
             return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            return fail("timed out after " + timeout + " waiting for: " + what);
+            String hint = peer == null ? "" : peer.refusalHint();
+            return fail("timed out after " + timeout + " waiting for: " + what + hint);
         } catch (ExecutionException e) {
             return fail("failed waiting for: " + what, e.getCause());
         }

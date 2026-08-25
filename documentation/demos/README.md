@@ -8,7 +8,7 @@ a real environment, captured by hand and committed here.
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
 | `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
-| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ▶️ live test, run on demand — see below |
+| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ✅ live, 2026-08-25 (three consecutive passes, `test` ↔ `Foo` against `ws.faforever.xyz`) — see below |
 
 ---
 
@@ -68,7 +68,8 @@ done
 ```
 
 Neither game auto-launches its match (`--mock-game-launch-delay-seconds=-1`),
-so the run costs roughly the two sessions' setup rather than a simulated match.
+so the run costs roughly the two sessions' setup rather than a simulated match:
+**14–30 seconds**, against the 3.1.2.7 test's ~45.
 That flag is load-bearing: faf-server accepts a `game_join` only while the game
 is in `GameState.LOBBY` and drops it out of that state as soon as the host
 reports `GameState Launching`, so a host on the default 5 s timer makes itself
@@ -89,7 +90,7 @@ one to read for; `A` is the host, `B` the joiner.
 | B authenticated | `session ready: id=<idB> login=<loginB>` | `WelcomeStateSync` |
 | B joins | `Sending game_join for uid=<uid>`, then `game launch: uid=<uid> …` | `MockClientLifecycle` |
 | B is joining | `state entry: JOINING` | `MockClientLifecycle` |
-| A told about B | `Connecting to peer login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
+| A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
 | Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
 | Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `checking` → `connected` | `IceEventLogger` |
 | **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
@@ -103,6 +104,16 @@ asserts on `onConnected` and not on a "final" ICE state.
 
 The expected-noise entries under 3.1.2.7 (telemetry `WebsocketNotConnected`,
 the adapter's EOF-at-shutdown ERROR) apply here too, once per client.
+
+> **`dropping IceMsg … not a JSON object` is not expected noise — it is the
+> failure this test was built to catch.** It means candidates are being
+> double-encoded on the way out, so no peer ever receives one and ICE cycles
+> `gathering → awaitingCandidates → disconnected` until the budget runs out.
+> The first 4.3.1 run failed exactly this way: json-rpc-spec.md documented the
+> ICE payload as an object, the shipped adapter sends and expects a JSON
+> *string*, and `IceSignalRelay` had implemented the spec. Both halves of that
+> relay agreeing on the wrong shape is invisible to any single-client test. See
+> the payload-shape correction in json-rpc-spec.md §5.
 
 ### Acceptance criteria → evidence
 
