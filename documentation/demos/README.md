@@ -8,6 +8,113 @@ a real environment, captured by hand and committed here.
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
 | `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
+| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ▶️ live test, run on demand — see below |
+
+---
+
+## `two-peer-session` — host, join, peers connected (WBS-4.3.1)
+
+Two Mock Clients on one machine, each with its own lobby account, port set, ICE
+adapter and mock game, complete a host/join **through the live lobby** and both
+adapters report the peer link up. The whole exchange between them — `game_host`
+/ `game_join`, `JoinGame`, `ConnectToPeer`, and every ICE candidate — crosses
+the real server; the only value passed in-process is A's game uid, which is
+what an operator would read off A's `game launch:` line.
+
+No game traffic is sent or asserted. That is 4.3.2.
+
+### Prerequisites
+
+Everything the 3.1.2.7 demo needs (adapter jar, mock-game distribution), plus:
+
+3. **The `faf-uid` binary** at `./faf-uid` — the lobby's policy server rejects a
+   placeholder `unique_id`. Same download as the `lobby-connect-idle` demo
+   below. Override with `FAF_UID_BINARY=/path/to/faf-uid`.
+4. **Two seeded accounts, with a refresh token each**, at
+   `.secrets/refresh_token.txt` (hosts) and `.secrets/refresh_token_b.txt`
+   (joins). Override with `FAF_REFRESH_TOKEN_A` / `FAF_REFRESH_TOKEN_B`. One
+   account cannot host and join its own game, so the second is not optional;
+   bootstrap it exactly as the first (see `lobby-protocol-spec.md` §2 and the
+   `lobby-connect-idle` prerequisites below), logging in as the *second* test
+   user. **Both files are rewritten on every run** — Hydra rotates the refresh
+   token on use.
+
+The endpoint defaults to `wss://ws.faforever.xyz`; set `FAF_LOBBY_URL` to point
+elsewhere. Confirm it is reachable first — the test self-skips when it is not:
+
+```bash
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
+  && echo REACHABLE || echo UNREACHABLE
+```
+
+Any missing prerequisite **skips** the test rather than failing it, printing
+each one it wanted. A skip is not a pass — check for a `[4.3.1] skipping` line
+before believing a green run.
+
+### Run
+
+```bash
+./gradlew :mock-client:integrationTest --tests '*TwoPeerSessionLiveTest*' --rerun
+```
+
+`--rerun` is not optional, for the reason given under 3.1.2.7. The acceptance
+bar is three consecutive passes:
+
+```bash
+for i in 1 2 3; do
+  ./gradlew :mock-client:integrationTest --tests '*TwoPeerSessionLiveTest*' --rerun \
+    || { echo "run $i FAILED"; break; }
+done
+```
+
+Neither game auto-launches its match (`--mock-game-launch-delay-seconds=-1`),
+so the run costs roughly the two sessions' setup rather than a simulated match.
+That flag is load-bearing: faf-server accepts a `game_join` only while the game
+is in `GameState.LOBBY` and drops it out of that state as soon as the host
+reports `GameState Launching`, so a host on the default 5 s timer makes itself
+unjoinable while the joiner is still booting two JVMs.
+
+### What to look for in the logs
+
+Both clients run in one JVM, so their lines interleave. The order below is the
+one to read for; `A` is the host, `B` the joiner.
+
+| Stage | Log line | Source |
+|-------|----------|--------|
+| A authenticated | `session ready: id=<idA> login=<loginA>` | `WelcomeStateSync` |
+| A hosts | `Sending game_host for title=faf-test-harness 4.3.1 <uuid>` | `MockClientLifecycle` |
+| A's session up | `game launch: uid=<uid> mod=faf name=…`, then `state entry: STARTING_GAME` | `MockClientLifecycle` |
+| A's game in the lobby | `Received GPGNet message: GameState Idle` → `GameState Lobby` | `[ICEAdapter]` |
+| A is hosting | `Sent GPGNet message: HostGame scmp_007`, then `state entry: HOSTING` | `[ICEAdapter]` / `MockClientLifecycle` |
+| B authenticated | `session ready: id=<idB> login=<loginB>` | `WelcomeStateSync` |
+| B joins | `Sending game_join for uid=<uid>`, then `game launch: uid=<uid> …` | `MockClientLifecycle` |
+| B is joining | `state entry: JOINING` | `MockClientLifecycle` |
+| A told about B | `Connecting to peer login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
+| Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
+| Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `checking` → `connected` | `IceEventLogger` |
+| **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
+| Teardown | `state entry: TERMINATED` → `session teardown complete`, twice | `MockClientLifecycle` |
+
+`offer=true` on A is the server's doing, not ours: `connect_to_host` in
+faf-server's `gameconnection.py` makes the side already in the lobby the ICE
+initiator. The `peer ice` states are informational — `completed` never arrives
+(adapter 3.3.14 has no `setState(COMPLETED)` call site), which is why the test
+asserts on `onConnected` and not on a "final" ICE state.
+
+The expected-noise entries under 3.1.2.7 (telemetry `WebsocketNotConnected`,
+the adapter's EOF-at-shutdown ERROR) apply here too, once per client.
+
+### Acceptance criteria → evidence
+
+- Both adapters report `onConnected` true for the two lobby-assigned ids, through
+  the live lobby, with the empty ICE server list, on one machine → the test's two
+  `awaitPeerConnected` checkpoints, which assert the id pair on each side and not
+  merely that something connected.
+- Both sessions tear down on request and nothing survives → the shutdown of each
+  lifecycle, then the descendant-process sweep for a surviving adapter or game.
+- No game traffic sent or asserted → neither game ever leaves the lobby phase;
+  there is no `GameState Launching` in a passing run.
+- Repeatable → three consecutive passes with the loop above.
 
 ---
 
