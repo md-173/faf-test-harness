@@ -3,8 +3,10 @@ package com.faforever.testharness.client.state;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.ice.GpgNetForwarder;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.ice.IceEventLogger;
+import com.faforever.testharness.client.ice.IceSignalRelay;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameJoinSender;
@@ -107,6 +109,14 @@ public final class MockClientLifecycle {
      * the shared rationale.
      */
     private final CompletableFuture<Integer> adapterExit = new CompletableFuture<>();
+
+    /**
+     * The session's single game-launch signal (#218): completes with the {@code game_launch} config
+     * once {@link #launchGame} has brought the adapter and the game up. Never completes if no game
+     * launches. Mirrors {@link #gameExit}, and is the only in-process route to this session's game
+     * uid — the value a second client needs as its join target.
+     */
+    private final CompletableFuture<GameConfig> gameLaunched = new CompletableFuture<>();
 
     /** Maps the JSON result of LobbyConnection and LobbyHandshake into records. */
     private final ObjectMapper mapper = new ObjectMapper();
@@ -275,6 +285,7 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
+        registerConnectToPeerTransitions();
         registerAdapterExitedTransitions();
 
         // Disconnection on any of these states results in termination.
@@ -362,6 +373,8 @@ public final class MockClientLifecycle {
         lobby.registerHandler("game_launch", launchHandler::onMessage);
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+        lobby.registerHandler(
+                "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
 
         // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
         // #214): a game that exits near-instantly can complete gameExit on the same thread that
@@ -373,6 +386,34 @@ public final class MockClientLifecycle {
         // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
         // own exit wiring below needs free to observe that death.
         gameExit.thenAcceptAsync(this::onGameProcessExit);
+    }
+
+    /**
+     * Registers the peer-setup edges (#218): a {@code ConnectToPeer} from the lobby is accepted
+     * while hosting and while joining alike.
+     *
+     * <p>Stay-in-state on both, because the frame changes what the adapter is doing, not what phase
+     * this client is in — the host is still HOSTING and a joiner still JOINING once the peer relay
+     * exists. Both states rather than just HOSTING because faf-server sends the frame to every
+     * player already in the lobby when another arrives: the host on the first join ({@code
+     * connect_to_host}), and each peer already present from the third onwards ({@code
+     * connect_to_peer}). Self-loops skip entry hooks, so no duplicate state line is emitted per
+     * peer. Split out of {@link #setupStateMachine()} to keep that method under the checkstyle
+     * length limit.
+     */
+    private void registerConnectToPeerTransitions() {
+        states.get(ClientState.HOSTING)
+                .registerTransition(
+                        ConnectToPeer.class,
+                        states.get(ClientState.HOSTING),
+                        this::connectToPeer,
+                        null);
+        states.get(ClientState.JOINING)
+                .registerTransition(
+                        ConnectToPeer.class,
+                        states.get(ClientState.JOINING),
+                        this::connectToPeer,
+                        null);
     }
 
     /**
@@ -480,6 +521,27 @@ public final class MockClientLifecycle {
      */
     public CompletableFuture<Integer> adapterExit() {
         return adapterExit.copy();
+    }
+
+    /**
+     * The session's single game-launch signal (#218): completes exactly once with the {@code
+     * game_launch} config this session launched under, after the ICE adapter and the game are both
+     * running. Safe to call at any time — before, during, or after the launch. If no game ever
+     * launches, or the launch fails, the future never completes; the FSM reaching TERMINATED is the
+     * signal for that case, and a caller waiting here should bound its wait accordingly.
+     *
+     * <p>Its reason to exist is the game uid, which a second client needs as the target of its
+     * {@code game_join} and which reaches no other in-process surface (the harness log line
+     * WBS-3.1.6.2 carries it, but parsing logs is not an in-JVM interface).
+     *
+     * <p>Each call returns an independent copy; cancelling or completing it does not affect other
+     * subscribers. Continuations run on whichever thread drove the launch transition — hand
+     * non-trivial work to your own executor.
+     *
+     * @return a future resolving to the config this session's game was launched under
+     */
+    public CompletableFuture<GameConfig> gameLaunched() {
+        return gameLaunched.copy();
     }
 
     /** Performs the full shutdown of the lifecycle. Valid to call on any state. */
@@ -685,6 +747,18 @@ public final class MockClientLifecycle {
             // so no notification can arrive before its handlers exist; registration needs the
             // connection to exist, not to be connected.
             new IceEventLogger(iceConnection).start();
+            // The two halves of the client's signalling role (#218), started here because this is
+            // the first moment both connections exist. Registration is independent of connection
+            // state, and doing it before connect() is load-bearing on the same grounds as the
+            // logger above: the adapter starts talking the instant the socket opens.
+            //
+            // R39 relays ICE candidates in both directions, without which no peer link can form at
+            // all. R72 forwards the game's GPGNet frames to the lobby, without which the server
+            // never learns this game reached Lobby — and until it does, the game is not joinable
+            // (faf-server gates game_join on GameState.LOBBY) and no peer is ever announced. Both
+            // were built and tested under 3.1.4.5/3.1.4.6 and wired into no session until now.
+            new IceSignalRelay(lobby, iceConnection).start();
+            new GpgNetForwarder(lobby, iceConnection).start();
             iceConnection.connect().get();
             iceConnection
                     .call(
@@ -731,6 +805,12 @@ public final class MockClientLifecycle {
                     gameConfig.uid(),
                     gameConfig.mod(),
                     gameConfig.name());
+            // In-process counterpart of the line above (#218), completed at the same point and for
+            // the same reason: a second client needs this session's uid as its join target, and an
+            // in-JVM harness has nowhere else to read it from. Completed last, so a consumer never
+            // receives a join target for a session that died on the way in — a failed launch
+            // leaves it pending and the FSM reaches TERMINATED instead.
+            gameLaunched.complete(gameConfig);
         } catch (IceAdapterLaunchException e) {
             LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
@@ -817,6 +897,64 @@ public final class MockClientLifecycle {
 
         try {
             iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
+        } catch (ExecutionException e) {
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+        }
+    }
+
+    /**
+     * HOSTING/JOINING stay-in-state action for {@link ConnectToPeer} (#218): issues the adapter's
+     * {@code connectToPeer(remotePlayerLogin, remotePlayerId, offer)} RPC (json-rpc-spec.md §4) for
+     * the peer the lobby named, which is what creates the local PeerRelay and starts ICE
+     * negotiation with that peer.
+     *
+     * <p>The {@code offer} flag is read from the frame, never assumed: faf-server sends {@code
+     * true} to the side that should be the ICE initiator and {@code false} to the other, and
+     * getting it backwards would have both peers offering or both answering. The wire shape is
+     * {@code args: [player_name, player_uid, offer]} — verified against faf-server's {@code
+     * GpgNetServerProtocol.send_ConnectToPeer}, and matching lobby-protocol-spec.md §10.4.
+     *
+     * <p>A malformed frame fails the transition into TERMINATED, deliberately the same treatment
+     * {@link #hostGame} and {@link #joinGame} give theirs: the peer link cannot be set up from a
+     * frame we could not read, and a session that silently carries on without one would report a
+     * connection failure that the harness would have to attribute by hand.
+     *
+     * @param message the {@link ConnectToPeer} event; guaranteed by registration.
+     * @throws FailedTransitionException if the frame is malformed or the adapter rejects the call.
+     */
+    private void connectToPeer(Event message) throws FailedTransitionException {
+        if (!(message instanceof ConnectToPeer)) {
+            throw new AssertionError(
+                    "connectToPeer method called without a ConnectToPeer event, should be"
+                            + " impossible");
+        }
+        JsonNode command = ((ConnectToPeer) message).command();
+        JsonNode remoteLogin = command.path("args").path(0);
+        JsonNode remoteId = command.path("args").path(1);
+        JsonNode offer = command.path("args").path(2);
+        if (!remoteLogin.isTextual() || !remoteId.isInt() || !offer.isBoolean()) {
+            throw new FailedTransitionException(
+                    "textual remote login, int remote id, and boolean offer arguments not found in"
+                            + " ConnectToPeer message",
+                    states.get(ClientState.TERMINATED));
+        }
+
+        LOG.info(
+                "Connecting to peer login={} id={} offer={}",
+                remoteLogin.asText(),
+                remoteId.asInt(),
+                offer.asBoolean());
+        try {
+            iceConnection
+                    .call(
+                            "connectToPeer",
+                            remoteLogin.asText(),
+                            remoteId.asInt(),
+                            offer.asBoolean())
+                    .get();
         } catch (ExecutionException e) {
             throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
         } catch (InterruptedException e) {

@@ -4,18 +4,25 @@ import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 class DummyIceAdapterConnection extends IceAdapterConnection {
-    private final Map<String, Object[]> received = new HashMap<>();
+    /**
+     * Concurrent because calls are not always made on the test thread: once the relays are wired
+     * into a launch (#218), a lobby frame reaches the adapter from the connection's reader thread,
+     * and a test polling a plain HashMap for that call would be reading it unsynchronised.
+     */
+    private final Map<String, Object[]> received = new ConcurrentHashMap<>();
 
-    private final Map<String, List<Consumer<JsonNode>>> notificationHandlers = new HashMap<>();
+    /** Concurrent for the same reason as {@link #received}: registration and firing can differ. */
+    private final Map<String, List<Consumer<JsonNode>>> notificationHandlers =
+            new ConcurrentHashMap<>();
 
     private final Set<String> failCalls = new HashSet<>();
 
