@@ -73,7 +73,37 @@ final class IceSignalRelayTest {
         lobbyServer.stop(1000);
     }
 
-    /** Adapter → lobby: onIceMsg is wrapped with args[0]=remoteId and args[1]=stringified msg. */
+    /**
+     * Adapter → lobby, with the payload shape the <em>shipped</em> adapter sends: {@code params[2]}
+     * is already a JSON string ({@code RPCService.onIceMsg} serialises the {@code
+     * CandidatesMessage} before sending). It must cross the lobby stringified exactly once.
+     *
+     * <p>This is the 4.3.1 regression: stringifying it again produced a double-encoded payload that
+     * the receiving client dropped as "not a JSON object", so no candidate ever reached a peer and
+     * ICE sat in gathering → awaitingCandidates → disconnected. Nothing single-client could catch
+     * it — both halves of this relay shared the same wrong assumption.
+     */
+    @Test
+    void alreadyStringifiedPayloadIsForwardedVerbatimNotDoubleEncoded() throws Exception {
+        String stringifiedPayload = MAPPER.writeValueAsString(ICE_MSG_JSON);
+        adapterServer.send(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,2,"
+                        + stringifiedPayload
+                        + "]}\n");
+
+        JsonNode sent = MAPPER.readTree(lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode argsMsg = sent.get("args").get(1);
+        assertTrue(argsMsg.isTextual(), "msg must cross the lobby as a JSON string");
+        assertEquals(
+                MAPPER.readTree(ICE_MSG_JSON),
+                MAPPER.readTree(argsMsg.asText()),
+                "one parse must recover the object; two would mean it was encoded twice");
+    }
+
+    /**
+     * Adapter → lobby with an object payload — what json-rpc-spec.md §5 documents, and what a
+     * future adapter release could send. Kept so the tolerant branch stays covered.
+     */
     @Test
     void onIceMsgIsWrappedOntoLobbyWithStringifiedPayload() throws Exception {
         adapterServer.send(
@@ -93,18 +123,25 @@ final class IceSignalRelayTest {
                 "the string must parse back to the original msg object (stringified exactly once)");
     }
 
-    /** Lobby → adapter: IceMsg args[1] is parsed back to an object and pushed via iceMsg. */
+    /**
+     * Lobby → adapter: {@code args[1]} reaches the adapter as the JSON <em>string</em> it arrived
+     * as. The shipped {@code RPCHandler.iceMsg(long, Object)} casts its second argument to {@code
+     * String} and parses it itself (verified against the jar's bytecode), so handing it the parsed
+     * object — which json-rpc-spec.md §5 asks for — makes the adapter throw and drop the candidate.
+     */
     @Test
-    void lobbyIceMsgIsParsedAndPushedToAdapter() throws Exception {
+    void lobbyIceMsgIsPushedToAdapterAsAString() throws Exception {
         lobbyServer.broadcastText(iceMsgFrame(1, ICE_MSG_JSON));
 
         JsonNode call = MAPPER.readTree(adapterServer.pollReceived(3, TimeUnit.SECONDS));
         assertEquals("iceMsg", call.get("method").asText());
         assertEquals(1, call.get("params").get(0).asInt(), "params[0] must be senderId (args[0])");
+        JsonNode msg = call.get("params").get(1);
+        assertTrue(msg.isTextual(), "the adapter casts msg to String, so it must be sent as one");
         assertEquals(
                 MAPPER.readTree(ICE_MSG_JSON),
-                call.get("params").get(1),
-                "msg must reach the adapter as the parsed JSON object, never double-encoded");
+                MAPPER.readTree(msg.asText()),
+                "the string must be the payload verbatim, neither re-encoded nor altered");
     }
 
     /** Malformed inbound frames are logged and dropped; the relay keeps working afterwards. */

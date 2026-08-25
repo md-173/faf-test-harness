@@ -218,6 +218,19 @@ final class PeerSessionWiringTest {
     }
 
     @Test
+    void adapterRejectingConnectToPeerEndsTheSession() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        adapter.setupCallFail("connectToPeer");
+
+        server.broadcastText(connectToPeer(PEER_LOGIN, PEER_ID, true) + "\n");
+
+        // The adapter refusing to set up the relay is not recoverable here: this session can never
+        // reach that peer, so it ends rather than sitting in HOSTING looking healthy while the
+        // other side waits for candidates that will never come.
+        awaitState(lifecycle, ClientState.TERMINATED);
+    }
+
+    @Test
     void launchedSessionRelaysIceCandidatesBothWays() throws Exception {
         launchedLifecycle();
 
@@ -243,10 +256,12 @@ final class PeerSessionWiringTest {
 
         Object[] call = awaitCall("iceMsg");
         assertEquals(PEER_ID, call[0], "the sender id the lobby swapped in must be preserved");
+        // A string, not a parsed object: the shipped adapter's iceMsg casts its second argument to
+        // String and parses it itself. See IceSignalRelay's javadoc.
         assertEquals(
                 "srflx",
-                ((JsonNode) call[1]).path("candidate").asText(),
-                "the payload must reach the adapter parsed back into an object");
+                MAPPER.readTree((String) call[1]).path("candidate").asText(),
+                "the payload must reach the adapter verbatim as its JSON string");
     }
 
     @Test

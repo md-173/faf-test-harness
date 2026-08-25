@@ -18,12 +18,26 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li><b>Adapter → lobby.</b> An {@code onIceMsg(localId, remoteId, msg)} notification is wrapped
  *       as {@code {command:"IceMsg", target:"game", args:[remoteId, "<msg as JSON string>"]}} and
- *       sent to the lobby. {@code msg} crosses the lobby as a string, so it is stringified exactly
- *       once here.
+ *       sent to the lobby. {@code msg} crosses the lobby as a string, and is stringified exactly
+ *       once — see the payload-shape note below.
  *   <li><b>Lobby → adapter.</b> An inbound {@code IceMsg} with {@code args:[senderId,
- *       "<msg-string>"]} has {@code args[1]} parsed back to a JSON object and is pushed to the
- *       adapter as {@code iceMsg(senderId, msg)}.
+ *       "<msg-string>"]} is pushed to the adapter as {@code iceMsg(senderId, msg-string)}, with
+ *       {@code args[1]} parsed only to check it is a JSON object before forwarding.
  * </ul>
+ *
+ * <p><b>The payload is a string on both sides, not an object.</b> json-rpc-spec.md §5 documents
+ * {@code msg: object} for both {@code onIceMsg} and {@code iceMsg}; the shipped adapter (3.3.14)
+ * disagrees on both, and it is authoritative. Verified against the jar: {@code
+ * RPCHandler.iceMsg(long, Object)} casts its second argument to {@code String} and hands it to
+ * {@code ObjectMapper.readValue(String, CandidatesMessage.class)}, and {@code
+ * RPCService.onIceMsg(CandidatesMessage)} serialises the message before sending, so the wire
+ * carries {@code "params":[localId, remoteId, "{\"srcId\":…}"]}.
+ *
+ * <p>Treating either end as an object breaks the relay in a way no single-client test can see, and
+ * both halves were wrong until the 4.3.1 two-peer run: stringifying the already-stringified payload
+ * double-encoded it, and the receiving client then dropped its peer's candidates as "not a JSON
+ * object". The outbound direction still stringifies a genuine object payload, so a future adapter
+ * that matches the spec keeps working.
  *
  * <p>The relay never swaps ids itself: it sends {@code remoteId} outbound and trusts {@code
  * args[0]} inbound — the lobby server performs the sender/receiver swap in transit (spec §7 step
@@ -102,12 +116,21 @@ public final class IceSignalRelay {
             return;
         }
         int remoteId = params.get(ON_ICE_MSG_REMOTE_ID).asInt();
+        JsonNode payload = params.get(ON_ICE_MSG_PAYLOAD);
         final String msgString;
-        try {
-            msgString = mapper.writeValueAsString(params.get(ON_ICE_MSG_PAYLOAD));
-        } catch (JsonProcessingException e) {
-            LOG.warn("dropping onIceMsg for remoteId={}: could not stringify msg", remoteId, e);
-            return;
+        if (payload.isTextual()) {
+            // What the shipped adapter actually sends (see class javadoc): the payload is already
+            // a JSON string, so it is forwarded verbatim. Stringifying it again would double-encode
+            // it, and the receiving client would drop it as "not a JSON object" — which is exactly
+            // how this was found, in the 4.3.1 two-peer run.
+            msgString = payload.asText();
+        } else {
+            try {
+                msgString = mapper.writeValueAsString(payload);
+            } catch (JsonProcessingException e) {
+                LOG.warn("dropping onIceMsg for remoteId={}: could not stringify msg", remoteId, e);
+                return;
+            }
         }
         lobby.send(mapper.valueToTree(new IceMsgMessage(remoteId, msgString)))
                 .whenComplete(
@@ -137,9 +160,10 @@ public final class IceSignalRelay {
             return;
         }
         int senderId = args.get(0).asInt();
+        String msgString = args.get(1).asText();
         final JsonNode msg;
         try {
-            msg = mapper.readTree(args.get(1).asText());
+            msg = mapper.readTree(msgString);
         } catch (JsonProcessingException e) {
             LOG.warn(
                     "dropping IceMsg from senderId={}: args[1] is not valid JSON: {}",
@@ -147,8 +171,9 @@ public final class IceSignalRelay {
                     e.getOriginalMessage());
             return;
         }
-        // readTree accepts inputs the adapter's msg:object contract (spec §5) excludes: "" parses
-        // to a MissingNode (which would reach the adapter as null) and scalars parse to themselves.
+        // The parse is a validity check only — what goes to the adapter is the original string.
+        // readTree accepts inputs a candidates payload never is: "" parses to a MissingNode and
+        // scalars parse to themselves, and either would reach the adapter as an unparseable msg.
         if (!msg.isObject()) {
             LOG.warn(
                     "dropping IceMsg from senderId={}: args[1] is not a JSON object: {}",
@@ -156,7 +181,7 @@ public final class IceSignalRelay {
                     args.get(1));
             return;
         }
-        adapter.call("iceMsg", senderId, msg)
+        adapter.call("iceMsg", senderId, msgString)
                 .whenComplete(
                         (ok, error) -> {
                             if (error != null) {

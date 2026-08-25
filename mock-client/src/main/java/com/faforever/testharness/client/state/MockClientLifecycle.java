@@ -920,10 +920,11 @@ public final class MockClientLifecycle {
      * <p>A malformed frame fails the transition into TERMINATED, deliberately the same treatment
      * {@link #hostGame} and {@link #joinGame} give theirs: the peer link cannot be set up from a
      * frame we could not read, and a session that silently carries on without one would report a
-     * connection failure that the harness would have to attribute by hand.
+     * connection failure that the harness would have to attribute by hand. A frame that parses but
+     * whose RPC then fails ends the session too, asynchronously — see the comment on the call.
      *
      * @param message the {@link ConnectToPeer} event; guaranteed by registration.
-     * @throws FailedTransitionException if the frame is malformed or the adapter rejects the call.
+     * @throws FailedTransitionException if the frame is malformed.
      */
     private void connectToPeer(Event message) throws FailedTransitionException {
         if (!(message instanceof ConnectToPeer)) {
@@ -943,24 +944,36 @@ public final class MockClientLifecycle {
         }
 
         LOG.info(
-                "Connecting to peer login={} id={} offer={}",
+                "peer connect: login={} id={} offer={}",
                 remoteLogin.asText(),
                 remoteId.asInt(),
                 offer.asBoolean());
-        try {
-            iceConnection
-                    .call(
-                            "connectToPeer",
-                            remoteLogin.asText(),
-                            remoteId.asInt(),
-                            offer.asBoolean())
-                    .get();
-        } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
-        }
+        int peerId = remoteId.asInt();
+        // Deliberately not awaited, unlike hostGame/joinGame. Those run at role assignment, before
+        // any candidate flows; this one runs while ICE signalling is live, and the wait is not
+        // free. LobbyConnection requests its next frame only after the handler returns, so a
+        // blocked handler stops IceMsg and pong delivery outright, and receiveEvent is
+        // synchronized, so it also holds the FSM monitor throughout. Those two combine into a
+        // self-inflicted timeout: a GameState Launching arriving on the adapter's reader thread
+        // blocks on that monitor, which stops the same reader from delivering this call's
+        // response, which fails the call once its timeout expires.
+        //
+        // A failure still ends the session, just asynchronously — without the relay this peer is
+        // unreachable, and a session that carried on would look healthy while silently unable to
+        // connect. An adapter that has died outright is not this path's concern: its process exit
+        // posts AdapterExited (#214), which is the reliable channel for that.
+        iceConnection
+                .call("connectToPeer", remoteLogin.asText(), peerId, offer.asBoolean())
+                .whenComplete(
+                        (result, error) -> {
+                            if (error != null) {
+                                LOG.warn(
+                                        "peer relay setup failed for id={} ({}); ending session",
+                                        peerId,
+                                        error.getMessage());
+                                machine.receiveEvent(new ShutdownRequested());
+                            }
+                        });
     }
 
     /**
