@@ -151,11 +151,11 @@ public class StateMachine implements EventListener {
             timeout.cancel();
         }
         timeouts.clear();
-        // {@code awaitedStates} never holds an entry for the current state, which is why nothing
-        // can be left waiting on a state the machine is already in. Three things guarantee it and
-        // all three must be kept: {@code state} is written only here and in the constructor, this
-        // removal is unconditional on every commit, and {@link #stateReached(State)} short-circuits
-        // under this same monitor when asked for the current state.
+        // `awaitedStates` never holds an entry for the current state, which is why nothing can be
+        // left waiting on a state the machine is already in. Three things guarantee it and all
+        // three must be kept: `state` is written only here and in the constructor, this removal is
+        // unconditional on every commit, and `stateReached` short-circuits under this same monitor
+        // when asked for the current state.
         CompletableFuture<Void> alert = awaitedStates.remove(state);
         if (alert != null) {
             alert.complete(null);
@@ -220,10 +220,13 @@ public class StateMachine implements EventListener {
             synchronized (StateMachine.this) {
                 // TimerTask.cancel() cannot stop a task the timer thread has already dequeued: it
                 // runs anyway and blocks here until the thread that cancelled it releases the
-                // monitor. Membership of `timeouts` is the authoritative "still pending" check,
-                // because every commit clears the list. Without this, a cancelled timeout would
-                // commit a transition out of a `from` state the machine has already left.
+                // monitor. Membership of `timeouts` settles whether that happened, because every
+                // commit clears the list. Without this, a cancelled timeout would commit a
+                // transition out of a `from` state the machine has already left.
                 // Removing it here also keeps `timeouts` meaning "pending": this task has now run.
+                // Note this only covers cancellation. It is checked before the action runs, so an
+                // action that moves the machine itself (by calling receiveEvent) still leaves the
+                // captured `from` stale.
                 if (!timeouts.remove(this)) {
                     LOG.debug("Timeout fired after being cancelled, ignoring");
                     return;
@@ -234,9 +237,13 @@ public class StateMachine implements EventListener {
                     newState = transition.transition(null);
                 } catch (RuntimeException e) {
                     // Letting this escape would kill the timer thread, and every later setTimeout
-                    // would then throw IllegalStateException. Stay put instead.
+                    // would then throw IllegalStateException. The thrower may be the action or
+                    // either state's hooks, so do not name one; and if it was `entry()`, `exit()`
+                    // has already run, leaving the machine inconsistent rather than untouched.
+                    // The stack trace is the only reliable guide to which.
                     LOG.error(
-                            "Timeout action out of {} threw, staying in {}",
+                            "Timeout transition out of {} threw; state left as {}, which may be"
+                                    + " inconsistent if exit or entry hooks had already run",
                             state.getName(),
                             state.getName(),
                             e);

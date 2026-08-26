@@ -1,6 +1,7 @@
 package com.faforever.testharness.shared.statemachine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +10,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +39,12 @@ final class StateMachineStayPutTest {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         appender = new ListAppender<>();
+        // Defensive: this appender is on the root logger, so any thread in the JVM can append to
+        // it while assertions iterate it, and the default ArrayList would throw
+        // ConcurrentModificationException. No test here reaches that today — every line a timer
+        // thread emits is DEBUG and the root is INFO — but leaked threads from other classes in
+        // the same forked JVM can, and this costs nothing.
+        appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
@@ -49,19 +58,20 @@ final class StateMachineStayPutTest {
         }
     }
 
-    private boolean loggedWarnContaining(String... fragments) {
+    private Optional<ILoggingEvent> warnContaining(String... fragments) {
         return appender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
-                .map(ILoggingEvent::getFormattedMessage)
-                .anyMatch(
-                        message -> {
+                .filter(
+                        e -> {
+                            String message = e.getFormattedMessage();
                             for (var fragment : fragments) {
                                 if (!message.contains(fragment)) {
                                     return false;
                                 }
                             }
                             return true;
-                        });
+                        })
+                .findFirst();
     }
 
     @Test
@@ -86,33 +96,16 @@ final class StateMachineStayPutTest {
 
         assertSame(a, machine.getState());
         assertEquals(0, hookRuns.get(), "no exit or entry hook may fire on a stay-put failure");
+
+        var warning = warnContaining("action blew up", "A");
         assertTrue(
-                loggedWarnContaining("action blew up", "A"),
-                "a stay-put failure must not be silent: expected a WARN naming the failure and the"
-                        + " state stayed in, got "
-                        + appender.list);
-    }
-
-    @Test
-    void stayPutFailureWarnCarriesTheException() {
-        State a = new State("A");
-        State b = new State("B");
-
-        a.registerTransition(
-                Trigger.class,
-                b,
-                ignored -> {
-                    throw new FailedTransitionException("action blew up");
-                },
-                null);
-        StateMachine machine = new StateMachine(a);
-
-        machine.receiveEvent(new Trigger());
-
-        assertTrue(
-                appender.list.stream()
-                        .filter(e -> e.getLevel() == Level.WARN)
-                        .anyMatch(e -> e.getThrowableProxy() != null),
+                warning.isPresent(),
+                () ->
+                        "a stay-put failure must not be silent: expected a WARN naming the failure"
+                                + " and the state stayed in, got "
+                                + appender.list);
+        assertNotNull(
+                warning.get().getThrowableProxy(),
                 "the WARN must carry the exception so the failure has a stack trace");
     }
 

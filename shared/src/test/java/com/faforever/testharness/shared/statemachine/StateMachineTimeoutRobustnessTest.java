@@ -2,9 +2,19 @@ package com.faforever.testharness.shared.statemachine;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tests the two ways a scheduled timeout can misbehave once it has already been handed to the timer
@@ -17,6 +27,41 @@ final class StateMachineTimeoutRobustnessTest {
     private static final int AWAIT_SECONDS = 2;
 
     private final class Go implements Event {}
+
+    private ListAppender<ILoggingEvent> appender;
+    private Logger machineLogger;
+    private Level originalLevel;
+
+    /**
+     * Captures {@link StateMachine}'s own DEBUG output. The cancellation test needs it to prove it
+     * actually entered the race window rather than passing because the task was never dequeued.
+     */
+    @BeforeEach
+    void attachAppender() {
+        LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+        machineLogger = ctx.getLogger(StateMachine.class);
+        originalLevel = machineLogger.getLevel();
+        machineLogger.setLevel(Level.DEBUG);
+        appender = new ListAppender<>();
+        // The timer thread appends while the test thread asserts, so this one is load-bearing.
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.setContext(ctx);
+        appender.start();
+        machineLogger.addAppender(appender);
+    }
+
+    @AfterEach
+    void detachAppender() {
+        if (appender != null) {
+            appender.stop();
+            machineLogger.detachAppender(appender);
+            machineLogger.setLevel(originalLevel);
+        }
+    }
+
+    private boolean logged(String fragment) {
+        return appender.list.stream().anyMatch(e -> e.getFormattedMessage().contains(fragment));
+    }
 
     /**
      * {@link java.util.TimerTask#cancel()} cannot stop a task the timer thread has already
@@ -44,6 +89,14 @@ final class StateMachineTimeoutRobustnessTest {
         // The released task must notice it is no longer pending and do nothing.
         Thread.sleep(SETTLE_MS);
         assertSame(b, machine.getState(), "a cancelled timeout must not commit a transition");
+        // Without this the test passes vacuously whenever the timer thread was starved past the
+        // window: the task is then never dequeued, cancel() drops it cleanly, and nothing under
+        // test ever runs.
+        assertTrue(
+                logged("Timeout fired after being cancelled"),
+                () ->
+                        "the race window was never entered, so this proved nothing; log was "
+                                + appender.list);
     }
 
     /**

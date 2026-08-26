@@ -10,16 +10,16 @@ public class Transition {
     private static final Logger LOG = LoggerFactory.getLogger(Transition.class);
 
     /** The state to transition from. */
-    private State from;
+    private final State from;
 
     /** The state to transition to. */
-    private State to;
+    private final State to;
 
     /** The action taken if a transition actually takes place. */
-    private TransitionAction action;
+    private final TransitionAction action;
 
     /** Condition that must be met for a transition to happen. */
-    private Predicate<Event> guard;
+    private final Predicate<Event> guard;
 
     /**
      * Initializes a transition.
