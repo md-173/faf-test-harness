@@ -236,6 +236,17 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > — and that detection now costs up to 20 s, inside a `synchronized`
 > `StateMachine.receiveEvent`, during which no other event is processed. Same
 > shape as before, ten times the window.
+>
+> Two things bound that cost, so it is late detection rather than a hang.
+> `connectWithRetry` aborts as soon as `close()` is requested, and the CLI's
+> signal hook reaches `SessionTeardown` **without** going through the state
+> machine (`RunCommand` installs it as a JVM shutdown hook), so a Ctrl-C during
+> the connect window takes effect immediately rather than waiting the budget
+> out. Separately, `SubprocessManager` registers its own JVM shutdown hook, so
+> both children die with the parent whatever the FSM is doing — nothing is
+> orphaned. What remains is that a broken adapter is noticed late and
+> `AdapterExited` sits queued for that window. Moving the bring-up off the
+> transition action is tracked as a 3.1.3.3 fix.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is

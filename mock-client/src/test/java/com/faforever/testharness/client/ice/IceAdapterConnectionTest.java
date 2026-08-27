@@ -88,6 +88,35 @@ final class IceAdapterConnectionTest {
         assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
     }
 
+    /**
+     * {@code close()} must cut a connect-retry window short rather than let it run to exhaustion.
+     *
+     * <p>This is the shutdown-responsiveness path, not a tidiness check: the CLI's signal hook runs
+     * {@code SessionTeardown} directly rather than through the state machine, and teardown closes
+     * this connection — so a Ctrl-C while the adapter is still binding relies on the retry loop
+     * noticing. The budget here (200 × 100 ms = 20 s) is far longer than the assertion window, so a
+     * regression that only checks the flag after the loop finishes fails this test by timing out.
+     */
+    @Test
+    void closeDuringRetryAbandonsTheConnectWindow() throws Exception {
+        int deadPort = server.port();
+        server.stop(); // free the port so connects are refused
+
+        IceAdapterConnection c =
+                new IceAdapterConnection(
+                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+        CompletableFuture<Void> connectFuture = c.connect();
+
+        // Let a couple of attempts fail so the loop is genuinely mid-flight, then close.
+        Thread.sleep(250);
+        c.close();
+
+        assertThrows(
+                ExecutionException.class,
+                () -> connectFuture.get(3, TimeUnit.SECONDS),
+                "close() should abandon the retry window well inside its 20s budget");
+    }
+
     @Test
     void connectTwiceThrows() throws Exception {
         conn = connect();

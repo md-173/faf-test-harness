@@ -79,11 +79,23 @@ public class IceAdapterConnection {
      * and obscurely. {@link #connect()} completes exceptionally instead, and the FSM fails the
      * transition at the point of failure.
      *
-     * <p>Nothing gets slower as a result. The window is a <em>ceiling</em>, not a wait: a healthy
-     * adapter connects on an early attempt. No existing test is affected either — the tests that
-     * want a fast connect failure pass their own explicit values ({@code IceAdapterConnectionTest}
-     * uses 3 × 20 ms against a dead port), and every lifecycle-level test overrides {@link
-     * #connect()} outright rather than opening a socket at all.
+     * <p>The happy path does not get slower: the window is a <em>ceiling</em>, not a wait, and a
+     * healthy adapter connects on an early attempt. No existing test is affected either — the ones
+     * wanting a fast connect failure pass their own explicit values ({@code
+     * IceAdapterConnectionTest} uses 3 × 20 ms against a dead port), and every lifecycle-level test
+     * overrides {@link #connect()} outright rather than opening a socket at all.
+     *
+     * <p><b>The failure path does get slower, and the cost lands on the state machine.</b> {@code
+     * MockClientLifecycle.launchGame} calls {@code connect().get()} from inside a transition
+     * action, and {@code StateMachine.receiveEvent} is {@code synchronized} — so an adapter that
+     * never binds now holds the FSM lock for this whole window, with {@code AdapterExited} and
+     * {@code ShutdownRequested} queued behind it. Two things bound that: {@link
+     * #connectWithRetry()} aborts the moment {@link #close()} is requested (the CLI's signal hook
+     * reaches teardown without going through the FSM), and {@code SubprocessManager}'s own JVM
+     * shutdown hook kills both children regardless of FSM state, so nothing is orphaned. What
+     * remains is that a broken adapter is noticed late. Moving the bring-up off the transition
+     * action is tracked separately as a 3.1.3.3 fix; this constant is deliberately not the place to
+     * work around it.
      */
     private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 
@@ -250,9 +262,26 @@ public class IceAdapterConnection {
         readLoop(opened);
     }
 
+    /**
+     * Open the socket, retrying while the adapter subprocess is still binding.
+     *
+     * <p>Aborts as soon as {@link #close()} has been requested. That check is load-bearing for
+     * shutdown responsiveness rather than tidiness: the CLI's signal hook runs {@link
+     * com.faforever.testharness.client.process.SessionTeardown} directly instead of through the
+     * state machine, and teardown closes this connection — so honouring the flag here is what lets
+     * a Ctrl-C during adapter start-up take effect at once instead of waiting out the whole retry
+     * budget. Previously the flag was read only after this loop had already finished, which left
+     * {@code close()} unable to cut the window short at all.
+     *
+     * @return the connected socket
+     * @throws IOException if every attempt failed, or close was requested while retrying
+     */
     private Socket connectWithRetry() throws IOException {
         IOException last = null;
         for (int attempt = 1; attempt <= connectAttempts; attempt++) {
+            if (closeRequested.get()) {
+                throw new IOException("connect abandoned: close requested while retrying");
+            }
             try {
                 return new Socket(LOOPBACK, port);
             } catch (IOException e) {
