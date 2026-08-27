@@ -227,36 +227,45 @@ final class ClientGameLifecycleLiveTest {
         AdapterPorts ports = freeAdapterPorts();
         MockClientConfig config = configFor(resolveAdapterBinary(), resolveGameBinary(), ports);
 
+        // Constructed before the try so the finally can always stop it, but not *started* until
+        // inside it: a throw anywhere in the setup below — the lobby connect, the first-client
+        // wait, or the lifecycle constructor — would otherwise leak the server thread and its
+        // bound port for the remaining lifetime of the test JVM.
         ScriptedWebSocketServer lobbyServer = new ScriptedWebSocketServer();
-        lobbyServer.startAndAwait();
-        LobbyConnection lobby = new LobbyConnection(lobbyServer.uri());
-        lobby.connect().get(LOBBY_CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-        lobbyServer.awaitFirstClient();
-
-        // Real transport, real launchers: nothing between the client and the two binaries is
-        // stubbed. The connection is injected only so this test can observe the same R36 fan-out
-        // the lifecycle consumes; it is the same object the production constructor would build.
-        IceAdapterConnection adapter = new IceAdapterConnection(ports.rpc());
-        adapter.registerNotification("onGpgNetMessageReceived", this::recordFrame);
-
-        SessionTeardown teardown = new SessionTeardown(lobby);
-        MockClientLifecycle lifecycle =
-                new MockClientLifecycle(
-                        config,
-                        new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-3.1.2.7"),
-                        adapter,
-                        new MockGameLauncher(config),
-                        new IceAdapterLauncher(config),
-                        teardown);
-
+        SessionTeardown teardown = null;
         try {
+            lobbyServer.startAndAwait();
+            LobbyConnection lobby = new LobbyConnection(lobbyServer.uri());
+            lobby.connect().get(LOBBY_CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            lobbyServer.awaitFirstClient();
+
+            // Real transport, real launchers: nothing between the client and the two binaries is
+            // stubbed. The connection is injected only so this test can observe the same R36
+            // fan-out the lifecycle consumes; it is the same object the production constructor
+            // would build.
+            IceAdapterConnection adapter = new IceAdapterConnection(ports.rpc());
+            adapter.registerNotification("onGpgNetMessageReceived", this::recordFrame);
+
+            teardown = new SessionTeardown(lobby);
+            MockClientLifecycle lifecycle =
+                    new MockClientLifecycle(
+                            config,
+                            new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-3.1.2.7"),
+                            adapter,
+                            new MockGameLauncher(config),
+                            new IceAdapterLauncher(config),
+                            teardown);
+
             runSession(lifecycle, teardown, config);
         } finally {
             // Always runs, so a failed checkpoint above still leaves no adapter and no game behind.
             // Deliberately the session's own teardown rather than a second mechanism: it is
             // once-guarded, so on a successful run this is a no-op, and on a failed one it is the
-            // exact sequence the assertions were checking.
-            teardown.run();
+            // exact sequence the assertions were checking. Null only if the failure landed before
+            // the session existed, in which case there is nothing launched to tear down.
+            if (teardown != null) {
+                teardown.run();
+            }
             lobbyServer.stop((int) LOBBY_SERVER_STOP_TIMEOUT.toMillis());
         }
 
@@ -280,11 +289,15 @@ final class ClientGameLifecycleLiveTest {
         // Futures for the later states are taken before the events that can reach them, so a
         // transition cannot slip past between the post and the wait.
         // Every one of them, not just the later ones. StateMachine.stateReached short-circuits only
-        // while the state is still current; ask for a state the FSM has already overshot and you
-        // get a fresh future that can never complete. The realistic case is a failing hostGame RPC
-        // — that lands the FSM in TERMINATED inside the post, so a stateReached(HOSTING) taken
-        // afterwards would burn the whole HOSTING budget and then blame HOSTING, when the real
-        // answer ("the session had already died") was available immediately.
+        // while a state is *currently* occupied; ask for one the FSM has already entered and left
+        // and you get a fresh future that can never complete, so the checkpoint burns its whole
+        // budget before failing. Taking the futures up front closes that window — the FSM cannot
+        // pass through a state between the request and the wait, because the request already
+        // happened.
+        //
+        // This does not, and cannot, rescue a state that is never entered at all: a transition
+        // that fails on its way to HOSTING leaves the hoisted future uncompleted exactly as a late
+        // one would. That case is meant to fail by timeout, and does.
         CompletableFuture<Void> idle = lifecycle.stateReached(ClientState.IDLE);
         CompletableFuture<Void> hosting = lifecycle.stateReached(ClientState.HOSTING);
         CompletableFuture<Void> playing = lifecycle.stateReached(ClientState.PLAYING);
