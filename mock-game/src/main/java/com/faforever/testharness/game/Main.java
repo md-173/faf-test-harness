@@ -57,8 +57,10 @@ import org.slf4j.LoggerFactory;
  * process-global and one-way, so it belongs to whoever knows the process is ending — not to the
  * shutdown sequence, which also runs from the FSM thread mid-life.
  *
- * <p>The exit codes themselves are documented in {@link ExitCodes}; the client's crash detection
- * (WBS-3.1.2.4 / WBS-3.1.2.6) reads them.
+ * <p>The exit codes themselves are documented in {@link ExitCodes}, which is the contract the
+ * client's crash detection (WBS-3.1.2.4 / WBS-3.1.2.6) reads. Today that client only separates zero
+ * from non-zero, so the finer distinctions this class emits are ahead of their consumer; see {@link
+ * ExitCodes} for what is and is not load-bearing yet.
  */
 public final class Main {
 
@@ -99,9 +101,10 @@ public final class Main {
         try {
             exitCode = run(args, LAUNCH_DELAY, MATCH_DURATION);
         } finally {
-            // In a finally so an unchecked throw out of run still stops logging. Without it the
-            // JVM's uncaught-exception path exits 1, outside the documented scheme, and the
-            // teardown lines explaining why never leave the logging context.
+            // In a finally so an unchecked throw out of run still flushes and stops logging. It
+            // does not catch: the JVM's uncaught-exception path still exits 1 either way, and
+            // remapping would lose the stack trace. What the finally buys is that the teardown
+            // lines explaining the failure reach the log before the context goes away.
             LoggingSetup.shutdown();
         }
         System.exit(exitCode);

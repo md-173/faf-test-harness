@@ -5,8 +5,14 @@ package com.faforever.testharness.game.config;
  *
  * <p>The values are stable and documented in this one place so the Mock Client can rely on them:
  * the game exit code is the only failure signal that reaches the client (source-verified: the ICE
- * adapter waits indefinitely for a game that never connects, with no socket timeout), so the
- * client's crash detection (R41) and the lifecycle test (WBS-3.1.2.7) assert against these.
+ * adapter waits indefinitely for a game that never connects, with no socket timeout), so this is
+ * the contract the client's crash detection (R41) and the lifecycle test (WBS-3.1.2.7) read.
+ *
+ * <p>Note that today's client does not yet discriminate between them: {@code
+ * MockClientLifecycle.onGameProcessExit} branches only on zero versus non-zero plus its own
+ * teardown flag, and R41 classifies a clean end from an observed {@code GameEnded} frame rather
+ * than from the code. The distinctions below therefore exist <em>for</em> WBS-3.1.2.4 and
+ * WBS-3.1.2.6 to consume, and are not load-bearing until they do.
  *
  * <p>Mirrors the mock client's {@code ExitCodes} convention: {@code 0} is reserved for a clean
  * exit, and a usage error is distinct from a runtime error. {@link #USAGE} matches picocli's
@@ -26,9 +32,15 @@ package com.faforever.testharness.game.config;
  *       <td>{@code ExitStatus.SERVER_CONNECTION_LOST}</td></tr>
  *   <tr><td>{@link #RUNTIME}</td><td>never reached the adapter, or any other failed run</td>
  *       <td>{@code ExitStatus.SERVER_NOT_CONNECTED}, {@code ExitStatus.FAILED}</td></tr>
+ *   <tr><td>{@code 1}</td><td>an unchecked throw escaped the bootstrap; the JVM's
+ *       uncaught-exception default, not set here</td>
+ *       <td>{@code Error} or an unforeseen bug — no modelled failure produces it</td></tr>
  *   <tr><td>{@code 143}</td><td>{@code SIGTERM} — the JVM's own signal default, not set here</td>
  *       <td>client-initiated teardown</td></tr>
  * </table>
+ *
+ * <p>The last two rows are the JVM's, not this class's: they are listed because a consumer reading
+ * a mock-game exit code will see them, not because anything here sets them.
  */
 public final class ExitCodes {
 

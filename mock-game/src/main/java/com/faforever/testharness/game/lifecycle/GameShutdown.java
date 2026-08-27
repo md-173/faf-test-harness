@@ -12,10 +12,21 @@ import org.slf4j.LoggerFactory;
  *
  * <ol>
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
- *       queued timeout fires a transition mid-teardown;
+ *       timeout queued <em>on the FSM itself</em> fires a transition mid-teardown;
  *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
  *       no farewell frame is sent.
  * </ol>
+ *
+ * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels only the
+ * StateMachine's own timer. {@link MockGameLifecycle}'s launch-delay and match-duration tasks run
+ * on a separate scheduler this sequence does not stop, so one can still post an event after
+ * teardown. Usually inert — the invalid-transition policy is IGNORE, so a stray event in LIVE or
+ * ENDED is logged and dropped — but not always: a {@code SIGTERM} in HOSTING or JOINING with a
+ * launch still pending leaves the FSM in that state (the local close is filtered, see {@code
+ * MockGameLifecycle.setupStateMachine}), and the orphaned {@code LaunchMatch} then drives the
+ * registered transition to LIVE against a socket this sequence has already closed. It fails into
+ * ENDED, whose entry hook is this once-guarded sequence, so nothing tears down twice; the JVM is
+ * halting regardless. Tracked against WBS-3.2.4.1, which owns those tasks.
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
