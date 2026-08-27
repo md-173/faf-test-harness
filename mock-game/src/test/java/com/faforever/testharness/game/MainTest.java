@@ -19,6 +19,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +45,11 @@ final class MainTest {
 
     /** Short enough to keep the suite quick; the production values live in {@link Main}. */
     private static final Duration TEST_MATCH_DURATION = Duration.ofMillis(100);
+
+    /**
+     * Cap on frames skipped while waiting for one, so a wrong sequence fails instead of hanging.
+     */
+    private static final int MAX_FRAMES_SKIPPED = 32;
 
     private ScriptedGpgNetServer adapter;
 
@@ -76,9 +82,9 @@ final class MainTest {
         adapter.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
         assertEquals("Launching", nextGameState(), "the match starts after the launch delay");
 
-        assertEquals("GameResult", nextCommand());
-        assertEquals("JsonStats", nextCommand());
-        assertEquals("GameEnded", nextCommand());
+        awaitCommand("GameResult");
+        awaitCommand("JsonStats");
+        awaitCommand("GameEnded");
         assertEquals("Ended", nextGameState(), "the match ends after the match duration");
 
         assertEquals(
@@ -172,8 +178,12 @@ final class MainTest {
             if ("in-fsm".equals(phase)) {
                 adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
                 lifecycle.stateReached(GameState.LOBBY).get(10, TimeUnit.SECONDS);
+                // HOSTING is transient: entering it schedules LaunchMatch TEST_LAUNCH_DELAY later.
+                // stateReached is edge triggered and cannot observe a state the FSM has already
+                // left (#250), so the future has to be registered before the frame that causes it.
+                CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
                 adapter.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-                lifecycle.stateReached(GameState.HOSTING).get(10, TimeUnit.SECONDS);
+                hosting.get(10, TimeUnit.SECONDS);
             }
         }
 
@@ -196,7 +206,7 @@ final class MainTest {
     /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
     private static MockGameLifecycle lifecycleOn(final int gpgNetPort) {
         return new MockGameLifecycle(
-                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001),
+                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of()),
                 new GpgNetConnection(gpgNetPort),
                 TEST_LAUNCH_DELAY,
                 TEST_MATCH_DURATION);
@@ -245,15 +255,28 @@ final class MainTest {
         }
     }
 
-    /** The command of the next frame the game sends. */
-    private String nextCommand() throws InterruptedException {
-        return adapter.pollReceived(10, TimeUnit.SECONDS).command();
+    /**
+     * The next frame carrying {@code command}, skipping anything sent before it.
+     *
+     * <p>The lifecycle interleaves frames this test has no opinion about: {@code PlayerOption} and
+     * {@code GameOption} on entering HOSTING, and one {@code GameResult} per army at the end
+     * (WBS-3.2.4.3, which owns asserting their content). This test is about the boot path and the
+     * exit code, so it waits for the frames that mark a state change and ignores the rest, rather
+     * than pinning a frame sequence that belongs to another card and breaks whenever it grows.
+     */
+    private GpgNetFrame awaitCommand(final String command) throws InterruptedException {
+        for (int i = 0; i < MAX_FRAMES_SKIPPED; i++) {
+            GpgNetFrame frame = adapter.pollReceived(10, TimeUnit.SECONDS);
+            if (command.equals(frame.command())) {
+                return frame;
+            }
+        }
+        throw new AssertionError(
+                "no " + command + " frame within " + MAX_FRAMES_SKIPPED + " frames");
     }
 
-    /** The state named by the next frame, which must be a {@code GameState}. */
+    /** The state named by the next {@code GameState} frame. */
     private String nextGameState() throws InterruptedException {
-        GpgNetFrame frame = adapter.pollReceived(10, TimeUnit.SECONDS);
-        assertEquals("GameState", frame.command(), "expected a GameState frame, got " + frame);
-        return (String) frame.args().get(0);
+        return (String) awaitCommand("GameState").args().get(0);
     }
 }

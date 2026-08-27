@@ -22,7 +22,7 @@ package com.faforever.testharness.game.config;
  *       <td>{@code ExitStatus.OK}</td></tr>
  *   <tr><td>{@link #USAGE}</td><td>bad launch argument; exits before any connect attempt</td>
  *       <td>{@code MockGameCli.parseOrReport}</td></tr>
- *   <tr><td>{@link #ADAPTER_LOST}</td><td>adapter dropped the GPGNet socket mid-session</td>
+ *   <tr><td>{@link #ADAPTER_LOST}</td><td>GPGNet connection went down mid-session</td>
  *       <td>{@code ExitStatus.SERVER_CONNECTION_LOST}</td></tr>
  *   <tr><td>{@link #RUNTIME}</td><td>never reached the adapter, or any other failed run</td>
  *       <td>{@code ExitStatus.SERVER_NOT_CONNECTED}, {@code ExitStatus.FAILED}</td></tr>
@@ -39,11 +39,16 @@ public final class ExitCodes {
     public static final int USAGE = 2;
 
     /**
-     * The adapter dropped the GPGNet connection mid-session, so the game ended without playing out
-     * its match. Distinct from {@link #OK} because the session did not complete, and distinct from
-     * {@link #RUNTIME} because the game booted fine — it is the adapter that went away, which is
-     * the failure the client most needs to tell apart. {@code 69} is sysexits' {@code
+     * The GPGNet connection went down mid-session, so the game ended without playing out its match.
+     * Distinct from {@link #OK} because the session did not complete, and distinct from {@link
+     * #RUNTIME} because the game booted and connected fine. {@code 69} is sysexits' {@code
      * EX_UNAVAILABLE} ("a service is unavailable"), the closest standard fit.
+     *
+     * <p>Deliberately worded as the connection going down rather than the adapter dropping it. The
+     * transport cannot tell those apart: {@code GpgNetConnection}'s read loop labels every {@code
+     * IOException} out of the codec {@code REMOTE_CLOSE}, so a truncated or malformed frame, or a
+     * bug in our own decoder, arrives here identically to a peer that went away. The log line
+     * carries the underlying error; this code only says the session lost its adapter link.
      */
     public static final int ADAPTER_LOST = 69;
 

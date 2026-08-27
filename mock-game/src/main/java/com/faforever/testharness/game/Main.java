@@ -95,8 +95,15 @@ public final class Main {
      * @param args command-line arguments
      */
     public static void main(final String[] args) {
-        int exitCode = run(args, LAUNCH_DELAY, MATCH_DURATION);
-        LoggingSetup.shutdown();
+        int exitCode;
+        try {
+            exitCode = run(args, LAUNCH_DELAY, MATCH_DURATION);
+        } finally {
+            // In a finally so an unchecked throw out of run still stops logging. Without it the
+            // JVM's uncaught-exception path exits 1, outside the documented scheme, and the
+            // teardown lines explaining why never leave the logging context.
+            LoggingSetup.shutdown();
+        }
         System.exit(exitCode);
     }
 
@@ -140,10 +147,12 @@ public final class Main {
         try {
             Runtime.getRuntime().addShutdownHook(hook);
         } catch (IllegalStateException e) {
-            // A signal landed while the lifecycle was being constructed. The JVM is already
-            // shutting down, so there is nothing left to register and nothing to wait for; fall
-            // through and let the teardown below run on the way out.
-            LOG.info("shutdown already in progress at boot; not installing the hook");
+            // A signal landed while the lifecycle was being constructed. Tear down here and
+            // return: with no hook registered, the JVM halts once the shutdown sequence finishes,
+            // and the wait below would never return for the finally to run.
+            LOG.info("shutdown already in progress at boot; tearing down without a hook");
+            lifecycle.shutdown().run();
+            return ExitCodes.RUNTIME;
         }
         try {
             lifecycle.stateReached(GameState.ENDED).join();

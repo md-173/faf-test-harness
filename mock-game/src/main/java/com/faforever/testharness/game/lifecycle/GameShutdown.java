@@ -61,8 +61,11 @@ import org.slf4j.LoggerFactory;
  * must not classify a teardown-time {@code 143} as a crash.
  *
  * <p>Runs synchronously on the calling thread ({@code implements Runnable} so the bootstrap can use
- * it directly as a shutdown-hook body), and completes well within the client's SIGTERM→SIGKILL
- * grace: the connection close is a synchronous socket close and the FSM stop is local.
+ * it directly as a shutdown-hook body). It is not lock-free end to end: the caller that wins the
+ * guard still calls {@link StateMachine#cancel()}, which is synchronized, so if the FSM thread is
+ * mid-transition this blocks until that transition's action returns. The longest such action is the
+ * 500 ms pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, against the client's 5
+ * s SIGTERM to SIGKILL grace, so the bound is known rather than merely assumed.
  */
 public final class GameShutdown implements Runnable {
 
