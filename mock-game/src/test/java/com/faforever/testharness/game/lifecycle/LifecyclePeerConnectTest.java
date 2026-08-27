@@ -113,10 +113,7 @@ public final class LifecyclePeerConnectTest {
 
         // We should not receive any PlayerOption messages here (ScriptedGpgNetServer throws an
         // AssertionError when it times out).
-        assertThrows(AssertionError.class, () -> assertMessage("PlayerOption"));
-
-        // // Waiting for the message to go through
-        // Thread.sleep(1000);
+        assertThrows(AssertionError.class, () -> gpgnet.pollReceived(1, TimeUnit.SECONDS));
 
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
