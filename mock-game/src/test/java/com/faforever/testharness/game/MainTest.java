@@ -22,9 +22,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -45,6 +47,12 @@ final class MainTest {
 
     /** Short enough to keep the suite quick; the production values live in {@link Main}. */
     private static final Duration TEST_MATCH_DURATION = Duration.ofMillis(100);
+
+    /**
+     * A timer long enough that it never fires during a test — for cases that drive the FSM by hand
+     * and need the lifecycle's own scheduler to stay out of the way.
+     */
+    private static final Duration NO_AUTO_ADVANCE = Duration.ofMinutes(5);
 
     /**
      * Cap on frames skipped while waiting for one, so a wrong sequence fails instead of hanging.
@@ -203,13 +211,105 @@ final class MainTest {
         ran.get(10, TimeUnit.SECONDS);
     }
 
+    /**
+     * The fourth SIGTERM phase, which the parameterized test above cannot reach: the signal lands
+     * <em>while</em> the FSM is transitioning into ENDED. This is the interleaving the card calls
+     * out, and the one the old {@code synchronized run()} deadlocked on — the FSM thread held the
+     * StateMachine monitor and wanted GameShutdown's, the hook thread held GameShutdown's and
+     * wanted the StateMachine's.
+     *
+     * <p>{@code endMatch()} posts its event on the calling thread, which is the seam this needs:
+     * its racer thread becomes the FSM thread, entering the synchronized {@code receiveEvent} and
+     * running ENDED's entry hook (the shutdown sequence) while holding the monitor. The barrier
+     * releases the hook thread into that same window. Whichever wins the once-guard, the other must
+     * not block behind it.
+     *
+     * <p>Repeated because the window is a genuine race rather than a pinned interleaving, and the
+     * measurement is not academic: with the old guard restored, repetitions 1 and 3 still passed
+     * while most of the rest timed out, so a single-shot version of this test would be flaky in
+     * exactly the direction that matters. Both timers are set long enough that the lifecycle's own
+     * scheduler is not a third racer — the only {@code GameEnded} here is the one posted below.
+     */
+    @RepeatedTest(20)
+    void shutdownHookCompletesDuringTheEndedTransition() throws Exception {
+        adapter.start();
+        MockGameLifecycle lifecycle = lifecycleOn(adapter.port(), NO_AUTO_ADVANCE, NO_AUTO_ADVANCE);
+        lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
+
+        CompletableFuture<Void> lobby = lifecycle.stateReached(GameState.LOBBY);
+        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
+        lobby.get(10, TimeUnit.SECONDS);
+
+        CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
+        adapter.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        hosting.get(10, TimeUnit.SECONDS);
+
+        CompletableFuture<Void> live = lifecycle.stateReached(GameState.LIVE);
+        lifecycle.launchMatch();
+        live.get(10, TimeUnit.SECONDS);
+
+        // Both racers run on their own daemon threads and the test thread only waits. That matters:
+        // a reintroduced lock inversion deadlocks whichever threads are racing, so if the test
+        // thread were one of them it would hang the build instead of failing. Verified by putting
+        // the synchronized guard back — this fails in seconds rather than hanging.
+        CyclicBarrier bothReady = new CyclicBarrier(2);
+        CompletableFuture<Void> hookReturned = new CompletableFuture<>();
+        CompletableFuture<Void> endMatchReturned = new CompletableFuture<>();
+        startRacer(
+                bothReady,
+                () -> Main.shutdownHook(lifecycle, () -> {}).run(),
+                hookReturned,
+                "hook-during-ended");
+        startRacer(bothReady, lifecycle::endMatch, endMatchReturned, "end-match");
+
+        hookReturned.get(10, TimeUnit.SECONDS);
+        endMatchReturned.get(10, TimeUnit.SECONDS);
+        // ENDED is reached either way: if the hook closed the socket first, gameEnds' sends fail
+        // and the FailedTransitionException names ENDED as its failure state, which still fires
+        // ENDED's entry and commits. So the exit status is deliberately not asserted — this test
+        // is about not hanging, and which caller won the guard decides OK versus FAILED.
+        assertEquals(GameState.ENDED, lifecycle.getState(), "the FSM must land in ENDED");
+    }
+
+    /**
+     * Starts {@code body} on a named daemon thread that waits on {@code barrier} first, so every
+     * racer is released into the contended window together. Completes {@code done} on return, or
+     * exceptionally if the body threw.
+     */
+    private static void startRacer(
+            final CyclicBarrier barrier,
+            final Runnable body,
+            final CompletableFuture<Void> done,
+            final String name) {
+        Thread thread =
+                new Thread(
+                        () -> {
+                            try {
+                                barrier.await(10, TimeUnit.SECONDS);
+                                body.run();
+                                done.complete(null);
+                            } catch (Exception e) {
+                                done.completeExceptionally(e);
+                            }
+                        },
+                        name);
+        thread.setDaemon(true);
+        thread.start();
+    }
+
     /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
     private static MockGameLifecycle lifecycleOn(final int gpgNetPort) {
+        return lifecycleOn(gpgNetPort, TEST_LAUNCH_DELAY, TEST_MATCH_DURATION);
+    }
+
+    /** A lifecycle wired to {@code gpgNetPort}, with its two timers chosen by the caller. */
+    private static MockGameLifecycle lifecycleOn(
+            final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
         return new MockGameLifecycle(
                 new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of()),
                 new GpgNetConnection(gpgNetPort),
-                TEST_LAUNCH_DELAY,
-                TEST_MATCH_DURATION);
+                launchDelay,
+                matchDuration);
     }
 
     /** A never-connected connection that records when the shutdown sequence closes it. */
