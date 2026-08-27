@@ -22,10 +22,16 @@ box) are out of scope here; see the stub at [§9](#9-multi-peer-sessions-r79b).
 
 ### Always needed (both audiences)
 
-- **JDK 21.** The repo toolchain target ([`ice-adapter-setup.md`](ice-adapter-setup.md)).
-  A newer JDK that Gradle can toolchain-provision also works — this runbook's
-  live commands (§2) were verified on Temurin 25.0.2 with no toolchain
-  override, since no local JDK 21 was available in that environment.
+- **JDK 21.** The repo toolchain target ([`ice-adapter-setup.md`](ice-adapter-setup.md)):
+  `build.gradle` pins every subproject's toolchain to language version 21,
+  which governs compile/test/run regardless of which JDK starts the Gradle
+  daemon. There is no foojay resolver configured, so Gradle cannot fetch a
+  missing toolchain on its own — a machine with only a newer JDK installed
+  fails with `Cannot find a Java installation ... matching:
+  {languageVersion=21, ...}` / `Toolchain download repositories have not been
+  configured`. Have a real JDK 21 on the machine (this runbook's live
+  commands in §2 ran against an auto-detected local Temurin 21; the Temurin
+  25 elsewhere on that machine was only ever the Gradle daemon's own JVM).
 - **The Gradle wrapper.** No separate Gradle install; use `./gradlew` (or
   `gradlew.bat` on Windows) from the repo root throughout.
 - **The pinned `faf-ice-adapter` jar**, fetched with its own step:
@@ -59,8 +65,9 @@ items below are pointless to obtain otherwise.
 
 This is the entry point for anyone consuming the release inside another
 project's CI: no account, no OAuth, no network beyond localhost, and the
-sequence below was executed to produce this section (Windows 11, Temurin JDK
-25.0.2, 2026-08-21, `faf-ice-adapter` 3.3.14).
+sequence below was executed to produce this section (Windows 11, Gradle
+daemon on Temurin 25 with the actual compile/run on an auto-detected local
+Temurin 21, 2026-08-21, `faf-ice-adapter` 3.3.14).
 
 Build the launcher and fetch the adapter (§1), then spawn the adapter alone
 with `launch-ice`:
@@ -81,10 +88,11 @@ with `launch-ice`:
 ```
 
 The OAuth flags are required by config validation but are never used by
-`launch-ice` (it only spawns the adapter subprocess); any syntactically valid
-placeholders work, as they do above. A completed handshake looks like this in
-the log (`[MockClient]` = the harness, `[ICEAdapter]` = the real jar's own
-output):
+`launch-ice` (it only spawns the adapter subprocess and never connects to its
+JSON-RPC socket — there is no handshake in this path, adapter or otherwise);
+any syntactically valid placeholders work, as they do above. A successful
+adapter-only run looks like this in the log (`[MockClient]` = the harness,
+`[ICEAdapter]` = the real jar's own output):
 
 ```text
 [MockClient] Launching ICE adapter: <java> -Dlogback.configurationFile=... -jar .../faf-ice-adapter.jar --id 1 --login mock-client --game-id 0 --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
@@ -127,11 +135,14 @@ The GPGNet handshake itself **is** proven, against the real adapter, by that
 same automated test — `GpgNetConnectionLiveSmokeTest`
 (`./gradlew :mock-game:integrationTest --tests '*GpgNetConnectionLiveSmokeTest'`),
 which drives the protocol in-process and holds a plain TCP socket on the RPC
-port to satisfy precondition 2 above. Treat that test, not a manually
-composed `launch-ice` + `launch-game` pair, as the current evidence for "mock
-game talks to a real adapter." A `launch-ice`-only run, as captured above, is
-the right and sufficient adapter-alone check for a CI embedding this release
-today.
+port to satisfy precondition 2 above. It self-skips (does not fail) when the
+adapter jar or network is absent, so a skip there is the expected off-network
+result, not a failure — see [`component-isolation.md`](component-isolation.md)
+for the wider `test` / `integrationTest` split this and the other live rows
+follow. Treat that test, not a manually composed `launch-ice` + `launch-game`
+pair, as the current evidence for "mock game talks to a real adapter." A
+`launch-ice`-only run, as captured above, is the right and sufficient
+adapter-alone check for a CI embedding this release today.
 
 ## 3. Credentials
 
@@ -215,8 +226,18 @@ as an env var).
 ## 5. Running one client session
 
 ```bash
-./gradlew :mock-client:run --args="run --config mock-client.json"
+./gradlew :mock-client:installDist
+./mock-client/build/install/mock-client/bin/mock-client run --config mock-client.json
 ```
+
+(Skip the build step if you already ran it for §2.) Use the installed
+launcher, not `./gradlew :mock-client:run`: Gradle's `run` task executes from
+`mock-client/`, not the repo root, so `--config mock-client.json` (written to
+the repo root in §4) fails with `config file is not readable: mock-client.json`
+before the process ever tries to connect. Gradle also collapses every exit
+code below to its own `1`, so the picocli/`RUNTIME` distinction the next
+section depends on is lost. The installed binary, run from the repo root, has
+neither problem.
 
 A successful run prints, in order, the lines documented in
 [`mock-client/README.md`](../../mock-client/README.md#harness-log-contract)
@@ -238,7 +259,7 @@ The session then sits idle, auto-answering the lobby's `ping` heartbeat with
 
 | How | Exit code | Notes |
 |---|---|---|
-| `Ctrl-C` / `SIGTERM` | 130 (SIGINT) / 143 (SIGTERM) on Linux/macOS | Clean: closes the WebSocket via a JVM shutdown hook, logs `shutdown signal received; tearing down session`, no error lines. On native Windows, POSIX signal numbers don't apply — expect a platform-specific code rather than literally 130/143 (see the same caveat in §2). |
+| `Ctrl-C` / `SIGTERM` | 130 (SIGINT) / 143 (SIGTERM) on Linux/macOS | Clean: closes the WebSocket via a JVM shutdown hook, logs `shutdown signal received; tearing down session`, no error lines. On native Windows, POSIX signal numbers don't apply — expect a platform-specific code rather than literally 130/143 (see the same caveat in §2). These are the launcher's own codes, observable directly only when it is invoked as in §5 — running it through `./gradlew :mock-client:run` instead reports Gradle's own `1` for every non-zero case regardless of the underlying code. |
 | Config error (missing required option, unreadable file, bad URI/port) | `2` (`USAGE`) | Picocli prints the usage block plus the missing-option list before any connection is attempted — see the Failure mode section of `mock-client/README.md`. |
 | Runtime failure after start (bad refresh-token file, lobby session failure) | `70` (`RUNTIME`) | |
 
@@ -263,7 +284,7 @@ and is not repeated here.**
 |---|---|---|
 | Login ends without a `session ready` line; last relevant frame is a rejected auth | `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id` — `uidBinaryPath` is unset or wrong. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. |
 | `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. Full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery — get a fresh `code=` and refresh token. |
-| `run` hangs on connect, then times out with no `lobby WebSocket connected` line | (none — silence is the symptom) | The lobby host is unreachable from this network: a destination-side allowlist/VPN gate, observed from multiple networks and confirmed empirically (§8). Confirm with a raw TCP probe to `ws.faforever.xyz:443` before assuming a code problem. |
+| `run` hangs on connect, then times out with no `lobby WebSocket connected` line | (none — silence is the symptom) | `wss://ws.faforever.xyz` is Cloudflare-fronted and publicly reachable (§3, §8 verified this directly) — no FAF allowlist or VPN is needed for it. Look locally first: DNS resolution, an intercepting proxy, or an outbound firewall rule on this machine/network. Confirm with a raw TCP probe to `ws.faforever.xyz:443` before assuming a code problem. |
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
 
 ## 8. Contradictions in prior documentation, resolved here
