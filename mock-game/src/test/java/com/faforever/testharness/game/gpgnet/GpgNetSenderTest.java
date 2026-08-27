@@ -61,7 +61,7 @@ final class GpgNetSenderTest {
 
     @Test
     void gameResultEmitsFrame() throws IOException {
-        sender.gameResult(1, "victory 10");
+        sender.gameResult(1, "victory", 10);
         assertEquals(List.of(GpgNetFrame.of("GameResult", 1, "victory 10")), sent);
     }
 
@@ -113,7 +113,7 @@ final class GpgNetSenderTest {
             GpgNetSender wireSender = new GpgNetSender(conn);
 
             wireSender.gameState("Launching");
-            wireSender.gameResult(1, "victory 10");
+            wireSender.gameResult(1, "victory", 10);
 
             assertEquals(
                     GpgNetFrame.of("GameState", "Launching"),

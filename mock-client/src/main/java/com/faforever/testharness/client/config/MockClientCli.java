@@ -8,6 +8,8 @@ import com.faforever.testharness.client.cli.RunCommand;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.Callable;
@@ -362,6 +364,14 @@ public final class MockClientCli implements Callable<Integer> {
                             + "(default: ${DEFAULT-VALUE}).")
     private boolean hostEnforceRatingRange;
 
+    /** A set of key-value pair game options to be sent by the host game. */
+    @Option(
+            names = "--host-game-option",
+            arity = "0..*",
+            scope = ScopeType.INHERIT,
+            description = "A set of key-value pair game options to be sent by the host game.")
+    private Map<String, String> hostGameOption = new HashMap<>();
+
     /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
      * output stream and exit with {@link ExitCodes#USAGE}.
@@ -440,7 +450,8 @@ public final class MockClientCli implements Callable<Integer> {
                         hostVisibility,
                         Optional.ofNullable(hostRatingMin),
                         Optional.ofNullable(hostRatingMax),
-                        hostEnforceRatingRange));
+                        hostEnforceRatingRange,
+                        hostGameOption));
     }
 
     /**

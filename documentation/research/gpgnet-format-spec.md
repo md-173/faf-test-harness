@@ -242,8 +242,8 @@ This catalog lists every GPGNet command observed crossing the local TCP socket. 
 | Command | Args (ordered) | Class | Source |
 |---|---|---|---|
 | `GameState` | `state:string` ∈ `{"Idle","Lobby","Launching","Ended"}` | **Lifecycle** | [`cmd_game_state.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_game_state.go) |
-| `GameOption` | `key:string, value:string` | Lobby | [`cmd_game_option.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_game_option.go) |
-| `PlayerOption` | `player_id:int, key:string, value:string` | Lobby | [game-state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md) (no typed Go struct) |
+| `GameOption` | `key:string, value:any (specific keys have specific type constraints)` | Lobby | [`cmd_game_option.go`](https://github.com/FAForever/faf-pioneer/blob/master/gpgnet/cmd_game_option.go) |
+| `PlayerOption` | `player_id:int, key:string, value:any (specific keys have specific type constraints)` | Lobby | [game-state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/game-state-machine.md) (no typed Go struct) |
 | `AIOption` | `ai_name:string, key:string, value:string` | Lobby | game-state-machine.md |
 | `ClearSlot` | `slot:int` | Lobby | game-state-machine.md |
 | `GameMods` | `mode:string, args:...` (variadic; `"activated"` + count, or `"uids"` + space-separated string) | Lobby | game-state-machine.md |
@@ -266,6 +266,52 @@ This catalog lists every GPGNet command observed crossing the local TCP socket. 
 | `EstablishedPeer` | `peer_id:int` | LIVE | [`AutolobbyServerCommunicationsComponent.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua) — emitted by FA, no server handler; consumed by ICE adapter only |
 | `DisconnectedPeer` | `peer_id:int` | LIVE | same file — adapter-only |
 | `BEAT` | `game_tick:int, game_speed:int` | LIVE | [`gamemain.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/game/gamemain.lua) — heartbeat; not handled by lobby server |
+
+#### 7.1.1 GameOption keys
+
+The following is a list of `GameOption` keys that have obtained from official FAF sources.
+This list is not exhaustive, and each source lists a different amount and set of keys and associated values.
+Additionally, what each key does is not apparent from the code in all cases.
+
+For boolean options, the server considers any value of `True`, `"true"`, `"on"`, `"yes"`, and `1` to be equivalent.
+Similarly, any value of `False`, `"false"`, `"off"`, `"no"`, and `0` are equivalent.
+These are case insensitive.
+
+| Key                  | Possible values | (Inferred) usage/notes | Source |
+|----------------------|-----------------|------------------------|--------|
+| AIReplacement        | True, False | Whether a game can replace a disconnected player with an AI | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| AllowObservers       | True, False | Whether observers are allowed in the game | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| AutoTeams            | none, manual, tvsb, lvsr, pvsi, unknown | Automatic configuration of teams. 'tvsb' means 'top vs bottom', 'lvsr' means 'left vs right', 'pvsi' means 'even vs uneven' | [faf-pioneer](https://github.com/FAForever/faf-pioneer/blob/main/gpgnet/cmd_game_option.go), [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| CheatsEnabled        | True, False | Whether cheats can be used in the game | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java), [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| FogOfWar             | explored, ??? | Whether the map is fully releaved or must be explored, whether explored but unobserver regions update | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| GameSpeed            | normal, ??? | The tick speed of the game | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| NoRushOption         | True, False | ??? | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| PrebuiltUnits        | True, False | Whether armies can start with prebuilt units | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java), [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| RestrictedCategories | integer | ??? | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| RevealCivilians      | True, False | Whether civilians on the map are revealed or must be found | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| ScenarioFile         | string (filepath) | A lua file associated with a map | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| Score                | True, False | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| Share                | FullShare, ShareUntilDeath, PartialShare, TransferToKiller, Defectors, CivilianDeserter, unknown | ??? | [faf-pioneer](https://github.com/FAForever/faf-pioneer/blob/main/gpgnet/cmd_game_option.go), [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| Slots                | integer | A maximum number of players that can be in the game | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| TeamLock             | locked, unlocked, unknown | ??? | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java), [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| TeamSpawn            | fixed, random, balanced, balanced_flex, random_reveal, balanced_reveal, balanced_reveal_mirrored, balanced_flex_reveal, unknown | Where teams spawn on the map | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| Title                | string | Title of the game | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py) |
+| UnitCap              | integer | A maximum number of units that can be in an army | [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| Unranked             | Yes, No | Whether the game counts for ranking | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py), [faf-pioneer](https://github.com/FAForever/faf-pioneer/blob/main/gpgnet/cmd_game_option.go), [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+| Victory              | demoralization, domination, eradication, sandbox, unknown | Victory condition | [server](https://github.com/FAForever/server/blob/develop/server/games/game.py), [faf-java-commons](https://github.com/FAForever/faf-java-commons/blob/develop/data/src/main/java/com/faforever/commons/replay/header/GameOptions.java) |
+
+#### 7.1.2 PlayerOption keys
+
+The following is a list of `PlayerOption` keys obtained from [server](https://github.com/FAForever/server/blob/develop/tests/integration_tests/test_game.py)
+This list may not be exhaustive.
+
+| Key       | Possible values | Usage                                                       |
+|-----------|-----------------|-------------------------------------------------------------|
+| Army      | integer         | The individual army ID of the player                        |
+| Team      | integer         | The team to which the player belongs                        |
+| StartSpot | integer         | The ID of the spot on the map that the player will start in |
+| Faction   | integer         | A number presenting which faction the player is using (e.g. United Earth Federation = 1, Aeon Illuminate = 2, Cybran Nation = 3, Seraphim = 4) |
+| Color     | integer         | A color assigned to the player                              |
 
 ### 7.2 Adapter → Game (Mock Game receives) <a id="section-7-2-adapter-to-game"></a>
 

@@ -115,6 +115,22 @@ final class MockGameLauncherTest {
     }
 
     @Test
+    void argvCarriesEveryGameOption() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        Map<String, String> gameOptions = Map.of("Victory", "demoralization", "Slots", "6");
+        List<String> argv =
+                new MockGameLauncher(configWithBinaryAndGameOptions(binary, gameOptions))
+                        .buildArgv(binary);
+
+        for (var option : gameOptions.entrySet()) {
+            int i = argv.indexOf(String.format("%s=%s", option.getKey(), option.getValue()));
+            assertTrue(
+                    i != -1 && i > 0 && argv.get(i - 1).equals("--game-option"),
+                    "Game option was not carried to the mock game binary");
+        }
+    }
+
+    @Test
     void orchestratedArgvCarriesSessionIdentityNotConfig() throws Exception {
         Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
         LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
@@ -217,6 +233,31 @@ final class MockGameLauncherTest {
         int i = argv.indexOf(flag);
         assertTrue(i >= 0 && i + 1 < argv.size(), flag + " missing or has no value in " + argv);
         return argv.get(i + 1);
+    }
+
+    private static MockClientConfig configWithBinaryAndGameOptions(
+            final Path binary, final Map<String, String> gameOptions) {
+        List<String> args =
+                new ArrayList<>(
+                        List.of(
+                                "--lobby-websocket-url=wss://lobby.faforever.xyz",
+                                "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
+                                "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
+                                "--oauth-redirect-uri=http://127.0.0.1",
+                                "--oauth-scopes=openid offline lobby",
+                                "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+                                "--oauth-refresh-token-file=/nonexistent/test-refresh-token",
+                                "--unique-id=00000000-0000-0000-0000-000000000000",
+                                "--mock-game-binary-path=" + binary,
+                                "--host-title=Test",
+                                "--host-map=scmp_007",
+                                "--host-mod=faf",
+                                "--host-visibility=public"));
+
+        for (var option : gameOptions.entrySet()) {
+            args.add(String.format("--host-game-option=%s=%s", option.getKey(), option.getValue()));
+        }
+        return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
     private static MockClientConfig configWithBinary(final Path binary) {

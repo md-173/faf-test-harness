@@ -184,7 +184,8 @@ public class MockGameLauncher {
     }
 
     /**
-     * Builds the mock-game argument list for {@code binary} under {@code identity}.
+     * Builds the mock-game argument list for {@code binary} under {@code identity} with a potential
+     * set of game options.
      *
      * <p>{@code --game-uid} is a mock adaptation rather than a copy of an upstream flag. The real
      * client hands Forged Alliance its game uid inside the {@code /savereplay
@@ -212,6 +213,12 @@ public class MockGameLauncher {
         argv.add(identity.login());
         argv.add("--game-uid");
         argv.add(Integer.toString(identity.gameUid()));
+        if (config.hostConfig().isPresent()) {
+            for (var option : config.hostConfig().get().gameOptions().entrySet()) {
+                argv.add("--game-option");
+                argv.add(String.format("%s=%s", option.getKey(), option.getValue()));
+            }
+        }
         return argv;
     }
 }

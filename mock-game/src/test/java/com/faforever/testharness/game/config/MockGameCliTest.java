@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -23,6 +24,7 @@ final class MockGameCliTest {
         "--player-id", "42",
         "--player-login", "Rhiza",
         "--game-uid", "9001",
+        "--game-option", "Victory=demoralization",
     };
 
     @Test
@@ -34,6 +36,7 @@ final class MockGameCliTest {
         assertEquals(42, config.playerId());
         assertEquals("Rhiza", config.playerLogin());
         assertEquals(9001, config.gameUid());
+        assertEquals("demoralization", config.gameOptions().get("Victory"));
     }
 
     @Test
@@ -43,6 +46,14 @@ final class MockGameCliTest {
 
         // What the standalone launch-game diagnostic passes, having no lobby session.
         assertEquals(0, MockGameCli.parse(args).gameUid());
+    }
+
+    @Test
+    void noGameOptionsAllowed() {
+        // Truncate the last two args (the --game-option)
+        String[] args = Arrays.copyOf(VALID_ARGS, VALID_ARGS.length - 2);
+
+        assertEquals(0, MockGameCli.parse(args).gameOptions().size());
     }
 
     @Test

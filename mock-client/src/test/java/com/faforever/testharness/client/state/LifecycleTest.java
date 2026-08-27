@@ -15,6 +15,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
@@ -142,7 +143,8 @@ final class LifecycleTest {
                         "public",
                         Optional.empty(),
                         Optional.empty(),
-                        false);
+                        false,
+                        Map.of());
         MockClientLifecycle lifecycle =
                 lifecycleWithConfig(configWithHostConfig(Optional.of(hostConfig)));
 

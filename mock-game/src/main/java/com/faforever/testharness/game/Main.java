@@ -32,10 +32,11 @@ public class Main {
         }
         MockGameConfig config = outcome.config();
         LOG.info(
-                "mock game started: playerId={} login={} gpgNetPort={} lobbyPort={}",
+                "mock game started: playerId={} login={} gpgNetPort={} lobbyPort={} gameOptions={}",
                 config.playerId(),
                 config.playerLogin(),
                 config.gpgNetPort(),
-                config.lobbyPort());
+                config.lobbyPort(),
+                config.gameOptions());
     }
 }

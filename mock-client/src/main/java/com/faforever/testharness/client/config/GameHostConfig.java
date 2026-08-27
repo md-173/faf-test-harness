@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -17,6 +18,7 @@ import java.util.Optional;
  * @param ratingMax maximum displayed rating for joining the hosted game; empty means unset
  * @param enforceRatingRange whether the server should enforce {@code ratingMin}/{@code ratingMax};
  *     defaults to {@code false}, matching the server's own default
+ * @param gameOptions a set of game options to be passed to the mock game host. Can be empty.
  */
 public record GameHostConfig(
         String title,
@@ -25,7 +27,8 @@ public record GameHostConfig(
         String visibility,
         Optional<Double> ratingMin,
         Optional<Double> ratingMax,
-        boolean enforceRatingRange) {
+        boolean enforceRatingRange,
+        Map<String, String> gameOptions) {
 
     /**
      * Validates that {@code title}, {@code map}, {@code mod}, and {@code visibility} are present —

@@ -1,6 +1,8 @@
 package com.faforever.testharness.game.config;
 
 import java.io.PrintStream;
+import java.util.HashMap;
+import java.util.Map;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
@@ -53,6 +55,16 @@ public final class MockGameCli {
             description = "lobby game uid, 0 when launched without a session")
     private int gameUid;
 
+    /**
+     * A list of game options that can be set and, if this game is a host, will be sent to the
+     * GpgNet server.
+     */
+    @Option(
+            names = "--game-option",
+            arity = "0..*",
+            description = "Additional game options for the host to send")
+    private Map<String, String> gameOptions = new HashMap<>();
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -69,7 +81,12 @@ public final class MockGameCli {
         commandLine.parseArgs(args);
         cli.validate(commandLine);
         return new MockGameConfig(
-                cli.gpgNetPort, cli.lobbyPort, cli.playerId, cli.playerLogin, cli.gameUid);
+                cli.gpgNetPort,
+                cli.lobbyPort,
+                cli.playerId,
+                cli.playerLogin,
+                cli.gameUid,
+                cli.gameOptions);
     }
 
     /**

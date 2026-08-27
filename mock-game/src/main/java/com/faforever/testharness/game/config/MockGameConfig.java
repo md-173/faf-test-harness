@@ -1,5 +1,7 @@
 package com.faforever.testharness.game.config;
 
+import java.util.Map;
+
 /**
  * Immutable launch configuration for one mock-game instance (WBS-3.2.1.1), parsed from the argv the
  * Mock Client's {@code MockGameLauncher} (WBS-3.1.2.3) passes at spawn
@@ -20,6 +22,13 @@ package com.faforever.testharness.game.config;
  *     no orchestrated session, which is what the standalone {@code launch-game} diagnostic passes.
  *     A mock adaptation, since the real client hands Forged Alliance its game uid inside the {@code
  *     /savereplay} URL and the {@code /log} filename rather than as its own flag
+ * @param gameOptions a set of game options to be sent by the host. Ignored if this is a joiner. Can
+ *     be empty.
  */
 public record MockGameConfig(
-        int gpgNetPort, int lobbyPort, int playerId, String playerLogin, int gameUid) {}
+        int gpgNetPort,
+        int lobbyPort,
+        int playerId,
+        String playerLogin,
+        int gameUid,
+        Map<String, String> gameOptions) {}
