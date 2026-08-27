@@ -923,6 +923,15 @@ public final class MockClientLifecycle {
      * connection failure that the harness would have to attribute by hand. A frame that parses but
      * whose RPC then fails ends the session too, asynchronously — see the comment on the call.
      *
+     * <p><b>Blast radius, deliberately session-wide (#218 review).</b> Unlike {@link #hostGame} and
+     * {@link #joinGame}, which fire once at role assignment, this edge fires once per peer as the
+     * mesh grows — so a bad frame for the fourth peer of five tears down the working links to the
+     * first three as well. That is correct only while the FSM has no notion of a degraded session:
+     * a peer either gets its relay or the session ends, and there is no state meaning "playing on,
+     * one peer short". Introducing that state is 4.3.3/4.3.4's work (4.3.4 is mid-session peer
+     * departure, the same question from the other direction); until then, ending loudly beats
+     * carrying on in a state nothing can describe.
+     *
      * @param message the {@link ConnectToPeer} event; guaranteed by registration.
      * @throws FailedTransitionException if the frame is malformed.
      */
