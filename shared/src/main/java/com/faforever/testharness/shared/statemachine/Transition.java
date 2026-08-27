@@ -1,20 +1,25 @@
 package com.faforever.testharness.shared.statemachine;
 
 import java.util.function.Predicate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Represents a transition to another state. */
 public class Transition {
+    /** Logger instance for this class. */
+    private static final Logger LOG = LoggerFactory.getLogger(Transition.class);
+
     /** The state to transition from. */
-    private State from;
+    private final State from;
 
     /** The state to transition to. */
-    private State to;
+    private final State to;
 
     /** The action taken if a transition actually takes place. */
-    private TransitionAction action;
+    private final TransitionAction action;
 
     /** Condition that must be met for a transition to happen. */
-    private Predicate<Event> guard;
+    private final Predicate<Event> guard;
 
     /**
      * Initializes a transition.
@@ -36,8 +41,20 @@ public class Transition {
     /**
      * Performs a transition, and all actions that occur due to it.
      *
+     * <p>Returns {@code null} when no hooks fired and the machine stays in {@link Transition#from}:
+     * either the action failed without naming a failure state, or this is a self-loop (an internal
+     * transition, where the event is handled but the state does not change). Callers must treat
+     * {@code null} as "this event was handled, but nothing about the state changed" and skip
+     * everything they would otherwise do on a state change.
+     *
+     * <p>Note the one case where the state does not change and the return is still non-null: a
+     * {@link FailedTransitionException} whose failure state is {@code from} itself. That is a
+     * deliberate re-entry — {@code exit()} and {@code entry()} both fire — so it is reported as a
+     * real transition and callers will treat it as one, cancelling pending timeouts included. Use a
+     * null failure state, not {@code from}, to mean "stay put and change nothing".
+     *
      * @param event the event that triggers this transition.
-     * @return the new state.
+     * @return the new state, or {@code null} if no hooks fired and the state did not change.
      */
     public State transition(Event event) {
         if (action != null) {
@@ -50,17 +67,24 @@ public class Transition {
                     s.entry();
                     return s;
                 } else {
-                    return from;
+                    LOG.warn(
+                            "Transition action out of {} failed ({}), staying in {}",
+                            from.getName(),
+                            e.getMessage(),
+                            from.getName(),
+                            e);
+                    return null;
                 }
             }
         }
         // A self-loop (from == to) is a stay-in-state action: the event is handled but no actual
         // state change occurs, so exit/entry hooks must not re-fire (they would otherwise re-run
         // side effects such as teardown that are only meant to happen once, on genuine entry).
-        if (from != to) {
-            from.exit();
-            to.entry();
+        if (from == to) {
+            return null;
         }
+        from.exit();
+        to.entry();
         return to;
     }
 

@@ -109,19 +109,21 @@ public class StateMachine implements EventListener {
             for (var t : transitions) {
                 if (t.guard(event)) {
                     State newState = t.transition(event);
-                    LOG.debug(
-                            "Transition from {} to {} caused by {} successful",
-                            state.getName(),
-                            newState.getName(),
-                            event);
-                    state = newState;
-                    for (var timeout : timeouts) {
-                        timeout.cancel();
-                    }
-                    timeouts.clear();
-                    CompletableFuture<Void> alert = awaitedStates.remove(state);
-                    if (alert != null) {
-                        alert.complete(null);
+                    if (newState == null) {
+                        // The event was handled but no transition occurred, so none of the
+                        // bookkeeping that follows a state change applies: pending timeouts stay
+                        // armed and no awaited state is completed.
+                        LOG.debug(
+                                "Event {} handled with no state change, staying in {}",
+                                event,
+                                state.getName());
+                    } else {
+                        LOG.debug(
+                                "Transition from {} to {} caused by {} successful",
+                                state.getName(),
+                                newState.getName(),
+                                event);
+                        commitTransition(newState);
                     }
                     // Stop trying more transitions.
                     return;
@@ -130,6 +132,33 @@ public class StateMachine implements EventListener {
             LOG.debug(
                     "All transitions for {} failed due to guards",
                     event.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * Adopts the result of a transition that actually changed state: makes it current, disarms
+     * every pending timeout (a state change is exactly what timeouts wait for) and releases
+     * anything blocked on {@link #stateReached(State)} for the new state. Only ever called with a
+     * genuine new state; see {@link Transition#transition(Event)} for when there isn't one.
+     *
+     * <p>The caller must already hold this machine's monitor.
+     *
+     * @param newState the state the machine has just moved into.
+     */
+    private void commitTransition(State newState) {
+        state = newState;
+        for (var timeout : timeouts) {
+            timeout.cancel();
+        }
+        timeouts.clear();
+        // `awaitedStates` never holds an entry for the current state, which is why nothing can be
+        // left waiting on a state the machine is already in. Three things guarantee it and all
+        // three must be kept: `state` is written only here and in the constructor, this removal is
+        // unconditional on every commit, and `stateReached` short-circuits under this same monitor
+        // when asked for the current state.
+        CompletableFuture<Void> alert = awaitedStates.remove(state);
+        if (alert != null) {
+            alert.complete(null);
         }
     }
 
@@ -180,8 +209,8 @@ public class StateMachine implements EventListener {
 
         UpdateStateTask(State to, TransitionAction action) {
             // Wrap state in a transition so that entry and exit hooks are performed correctly.
-            // Safe to give current `state` as `from` parameter as the task will be cancelled if
-            // state changes.
+            // The captured `state` is only a valid `from` while this task is still pending, which
+            // run() re-checks under the monitor before doing anything with it.
             this.transition = new Transition(state, to, action, null);
         }
 
@@ -189,18 +218,46 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
+                // TimerTask.cancel() cannot stop a task the timer thread has already dequeued: it
+                // runs anyway and blocks here until the thread that cancelled it releases the
+                // monitor. Membership of `timeouts` settles whether that happened, because every
+                // commit clears the list. Without this, a cancelled timeout would commit a
+                // transition out of a `from` state the machine has already left.
+                // Removing it here also keeps `timeouts` meaning "pending": this task has now run.
+                // Note this only covers cancellation. It is checked before the action runs, so an
+                // action that moves the machine itself (by calling receiveEvent) still leaves the
+                // captured `from` stale.
+                if (!timeouts.remove(this)) {
+                    LOG.debug("Timeout fired after being cancelled, ignoring");
+                    return;
+                }
                 // No need to check guard and no actual event that triggered this.
-                state = transition.transition(null);
-                LOG.debug("Timeout fired, new state is {}", state.getName());
-                // State transition occured, any other timeouts are cancelled.
-                for (var timeout : timeouts) {
-                    timeout.cancel();
+                State newState;
+                try {
+                    newState = transition.transition(null);
+                } catch (RuntimeException e) {
+                    // Letting this escape would kill the timer thread, and every later setTimeout
+                    // would then throw IllegalStateException. The thrower may be the action or
+                    // either state's hooks, so do not name one; and if it was `entry()`, `exit()`
+                    // has already run, leaving the machine inconsistent rather than untouched.
+                    // The stack trace is the only reliable guide to which.
+                    LOG.error(
+                            "Timeout transition out of {} threw; state left as {}, which may be"
+                                    + " inconsistent if exit or entry hooks had already run",
+                            state.getName(),
+                            state.getName(),
+                            e);
+                    return;
                 }
-                timeouts.clear();
-                CompletableFuture<Void> alert = awaitedStates.remove(state);
-                if (alert != null) {
-                    alert.complete(null);
+                if (newState == null) {
+                    // The timeout's own action failed without naming a failure state, or it targets
+                    // the state we are already in. Either way nothing changed, so other timeouts
+                    // stay armed and no awaited state is completed.
+                    LOG.debug("Timeout fired with no state change, staying in {}", state.getName());
+                    return;
                 }
+                LOG.debug("Timeout fired, new state is {}", newState.getName());
+                commitTransition(newState);
             }
         }
     }

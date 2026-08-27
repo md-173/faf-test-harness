@@ -74,8 +74,8 @@ public class State {
 
     /**
      * Create a simple transition from this state to {@code other}, any time {@code event} happens.
-     * Transitions are tried in the order they were registered and the first one to succeed will be
-     * the only one to occur.
+     * Transitions are tried in the order they were registered and the first one whose guard passes
+     * will be the only one to occur.
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.
@@ -87,7 +87,8 @@ public class State {
     /**
      * Create a transition from this state to {@code other} any time {@code event} and also {@code
      * guard} evaluates to {@code true}. This transition calls {@code action}. Transitions are tried
-     * in the order they were registered and the first one to succeed will be the only one to occur.
+     * in the order they were registered and the first one whose guard passes will be the only one
+     * to occur.
      *
      * @param event trigger for transition to start.
      * @param other new state to go to.

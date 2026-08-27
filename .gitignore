@@ -61,3 +61,6 @@ bin/
 /faf-uid*
 # Windows/WSL NTFS alternate-data-stream artifacts
 *Zone.Identifier
+
+# Sprint demo screenshots (local evidence for standups, not repo content)
+/sprint-pack/
