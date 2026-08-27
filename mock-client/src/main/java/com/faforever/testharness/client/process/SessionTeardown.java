@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.net.http.WebSocket;
@@ -183,6 +184,15 @@ public final class SessionTeardown {
      * send and the exit-await are bounded, and every failure mode (no response, RPC error, process
      * still alive after quit) is swallowed at DEBUG: {@link #terminateAdapter()}'s SIGTERM fallback
      * covers all of them.
+     *
+     * <p>An {@link IceRpcException} response is treated as final rather than awaited: it means the
+     * adapter received and rejected quit, so it isn't going to exit on its own, and there is
+     * nothing left to wait for. Skipping {@link #ADAPTER_QUIT_EXIT_TIMEOUT} in that case is a
+     * meaningful speed-up, not just tidiness — see the upstream {@code faf-ice-adapter} tray-icon
+     * bug this guards against: {@code IceAdapter.close(int)} calls {@code TrayIcon.close()} with no
+     * {@code SystemTray.isSupported()} guard (unlike {@code TrayIcon.create()}, which does check),
+     * so on any headless box — this one included, and CI — quit always errors and the adapter never
+     * exits from it, leaving SIGTERM as the only path to actually end the process.
      */
     private void quitAdapterIfOpen() {
         IceAdapterConnection connection = adapterRpc;
@@ -195,7 +205,13 @@ public final class SessionTeardown {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return;
-        } catch (ExecutionException | TimeoutException e) {
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IceRpcException) {
+                LOG.debug("ICE adapter refused quit: {}", e.getCause().getMessage());
+                return;
+            }
+            LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
+        } catch (TimeoutException e) {
             LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
         }
         try {

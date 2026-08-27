@@ -138,6 +138,30 @@ final class SessionTeardownAdapterQuitTest {
         assertTrue(frame.contains("\"quit\""), "quit must still have been sent");
     }
 
+    /**
+     * The other half of {@link IceAdapterConnection#isOpen()}: a connection that connected and then
+     * disconnected (the adapter-crash path — {@code isOpen()} goes false via {@code
+     * disconnectFired}, not the never-connected {@code connectionOpened} case {@code
+     * SessionTeardownTest} already covers) must skip quit exactly the same way.
+     */
+    @Test
+    void rpcDisconnectedAfterConnectingSkipsQuitAndTerminatesAsBefore() throws Exception {
+        connectAdapterRpc();
+        SubprocessManager adapter = startSleeper();
+        server.dropClient();
+        Thread.sleep(100); // let the reader thread observe the drop and fire the disconnect
+
+        assertFalse(connection.isOpen(), "a dropped connection must report closed");
+
+        SessionTeardown teardown = new SessionTeardown(unconnectedLobby());
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(connection);
+
+        teardown.run();
+
+        assertFalse(adapter.isAlive(), "adapter must still be terminated via SIGTERM/SIGKILL");
+    }
+
     private static long extractId(final String frame) {
         int idIndex = frame.indexOf("\"id\":");
         String tail = frame.substring(idIndex + 5);
