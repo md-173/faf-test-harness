@@ -129,7 +129,7 @@ final class MockClientCliRecordSyncTest {
         // .size() (8 host-* options collapse into 1 hostConfig record component, and 2 join
         // options collapse into 1 joinConfig component).
         long expectedRecordComponents = 24;
-        long expectedCliOptionsExcludingHelpers = 31;
+        long expectedCliOptionsExcludingHelpers = 32;
 
         long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
         long actualCliOptions =
