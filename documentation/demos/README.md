@@ -12,6 +12,15 @@ a real environment, captured by hand and committed here.
 
 ## `lobby-connect-idle` — connect, authenticate, idle (WBS-3.1.1.4)
 
+> **Superseded as the setup path.** For prerequisites, configuration, and the
+> run command, follow
+> [`documentation/operations/harness-runbook.md`](../operations/harness-runbook.md)
+> instead — it sequences this material with the ICE adapter and
+> component-isolation docs into one ordered path and resolves contradictions
+> that existed across them. This section remains the sprint-review evidence
+> record for this specific demo: the captured transcript, the
+> acceptance-criteria mapping below, and how to capture a fresh recording.
+
 One command brings the Mock Client up against the live test lobby, runs the full
 handshake (`connect → ask_session → session → auth → welcome`), logs the
 authenticated player id, and holds the connection idle on the ping/pong

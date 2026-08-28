@@ -32,15 +32,13 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * Live smoke tests against the FAF public test environment, tagged {@code integration} so they
  * don't run under the default {@code ./gradlew test} task.
  *
- * <p>Two scenarios, both targeting the canonical {@code wss://lobby.faforever.xyz} (served at the
- * host root {@code /}) and both reachability-gated so they self-skip when the FAF test env is
+ * <p>Two scenarios, both targeting the canonical {@code wss://ws.faforever.xyz} (served at the host
+ * root {@code /}) and both reachability-gated so they self-skip when the FAF test env is
  * unreachable from the current network:
  *
  * <ul>
  *   <li>{@link #connectSucceeds()} — connect and verify the WS upgrade. Self-skips when {@code
- *       lobby.faforever.xyz:443} is unreachable (TCP timeout — observed from WSL, native Windows,
- *       curl, wscat, and an independent cloud egress: a destination-side allowlist/VPN gate, not a
- *       code issue).
+ *       ws.faforever.xyz:443} is unreachable (TCP timeout).
  *   <li>{@link #authHandshakeYieldsTerminalReply()} — the full production path: refresh-token →
  *       Hydra → JWT → {@code ask_session} → {@code session} → {@code auth} → {@code welcome} or
  *       {@code authentication_failed}. Additionally gated on a local {@code
@@ -69,13 +67,17 @@ final class LobbyConnectionLiveSmokeTest {
 
     /**
      * Canonical FAF test-env lobby endpoint, served natively at the host root ({@code /}) by the
-     * lobby server. Authoritative sources: downlords-faf-client {@code application-test.yml}
-     * ({@code server.url: wss://lobby.faforever.xyz}) and {@code server/servercontext.py} ({@code
-     * add_get("/")}). It is <em>not</em> {@code ws.faforever.xyz} and there is no {@code /ws} path
-     * (a {@code GET /ws} 404s — that was the retired {@code ws_bridge_rs} path). Reachable only
-     * from FAF-allowlisted hosts/VPN; both live tests self-skip elsewhere.
+     * lobby server (the {@code .com}→{@code .xyz} swap of production {@code
+     * wss://ws.faforever.com}; there is no {@code /ws} path — a {@code GET /ws} 404s, that was the
+     * retired {@code ws_bridge_rs} path). Cloudflare-fronted and publicly reachable — no FAF
+     * allowlist or VPN needed. {@code wss://lobby.faforever.xyz}, read from downlords-faf-client's
+     * {@code application-test.yml}, times out from every network tried (WSL, native Windows, curl,
+     * an independent cloud egress, and a FAF maintainer) and is wrong in practice — it resolves to
+     * a direct, non-Cloudflare origin, consistent with a destination-side gate on that host
+     * specifically, not this one. See {@code documentation/research/lobby-protocol-spec.md} §1's
+     * 2026-06-18 correction. Confirmed empirically by a full live login through this test.
      */
-    private static final URI FAF_TEST_LOBBY = URI.create("wss://lobby.faforever.xyz");
+    private static final URI FAF_TEST_LOBBY = URI.create("wss://ws.faforever.xyz");
 
     /** FAF Hydra test-env token endpoint. */
     private static final URI HYDRA_TOKEN = URI.create("https://hydra.faforever.xyz/oauth2/token");
@@ -98,7 +100,8 @@ final class LobbyConnectionLiveSmokeTest {
                 "FAF test lobby "
                         + FAF_TEST_LOBBY
                         + " unreachable from this network (TCP timeout on :443). Self-skips "
-                        + "off-net; runs on a FAF-allowlisted host/VPN.");
+                        + "off-net — check local DNS/proxy/firewall first, this host is publicly "
+                        + "reachable (Cloudflare-fronted, no FAF allowlist or VPN needed).");
         LobbyConnection lobby = new LobbyConnection(FAF_TEST_LOBBY);
         List<LobbyConnection.DisconnectEvent> disconnects = new CopyOnWriteArrayList<>();
         CountDownLatch disconnected = new CountDownLatch(1);
@@ -126,8 +129,9 @@ final class LobbyConnectionLiveSmokeTest {
                 lobbyReachable(),
                 "FAF test lobby "
                         + FAF_TEST_LOBBY
-                        + " unreachable (TCP timeout on :443 — destination-side allowlist/VPN "
-                        + "gate). Run from an allowlisted FAF host.");
+                        + " unreachable (TCP timeout on :443). This host is publicly reachable "
+                        + "(Cloudflare-fronted, no FAF allowlist or VPN needed) — check local "
+                        + "DNS/proxy/firewall before assuming an access problem.");
 
         Path refreshFile = findRefreshTokenFile();
         String accessToken = exchangeRefreshTokenForJwt(refreshFile);
