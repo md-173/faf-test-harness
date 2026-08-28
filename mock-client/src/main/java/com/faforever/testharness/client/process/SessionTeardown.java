@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.net.http.WebSocket;
@@ -23,6 +24,12 @@ import org.slf4j.LoggerFactory;
  * (game exit → {@code iceAdapter.stop()} → notify server; {@code GameRunner} in
  * downlords-faf-client). Each step is exception-isolated — a failing step is logged and the
  * sequence continues.
+ *
+ * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
+ * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
+ * iceAdapterProxy.quit()}) this teardown previously lacked. That always falls through to the
+ * existing SIGTERM→SIGKILL escalation below, which is a no-op once quit has already ended the
+ * process, so a quit that never lands still leaves the step (and teardown) bounded.
  *
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
@@ -49,6 +56,12 @@ public final class SessionTeardown {
 
     /** Bound on the clean lobby WebSocket close. */
     private static final Duration LOBBY_CLOSE_TIMEOUT = Duration.ofSeconds(5);
+
+    /** Bound on the quit RPC's response, before falling through to SIGTERM. */
+    private static final Duration ADAPTER_QUIT_RPC_TIMEOUT = Duration.ofSeconds(2);
+
+    /** Bound on awaiting the adapter's own exit once quit has been sent. */
+    private static final Duration ADAPTER_QUIT_EXIT_TIMEOUT = Duration.ofSeconds(2);
 
     /** Lobby connection; present from session startup. */
     private final LobbyConnection lobby;
@@ -146,10 +159,71 @@ public final class SessionTeardown {
         done = true;
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
-        terminate(adapterProcess, "ICE adapter");
+        terminateAdapter();
         closeAdapterRpc();
         closeLobby();
         LOG.info("session teardown complete");
+    }
+
+    /**
+     * Terminates the ICE adapter, quit-first (WBS-3.1.2.5): {@link #quitAdapterIfOpen()} gives the
+     * adapter a bounded chance to shut itself down gracefully via RPC, mirroring the real client's
+     * {@code iceAdapterProxy.quit()}. Unconditionally falls through to {@link
+     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, already a no-op once quit has
+     * ended the process — a quit that never lands still leaves this step bounded.
+     */
+    private void terminateAdapter() {
+        quitAdapterIfOpen();
+        terminate(adapterProcess, "ICE adapter");
+    }
+
+    /**
+     * Sends {@code quit} over the adapter RPC connection and briefly awaits the process actually
+     * exiting, but only while {@link IceAdapterConnection#isOpen()} — no RPC connection means
+     * nothing to send on, and this step is skipped exactly as it was before this card. Both the
+     * send and the exit-await are bounded, and every failure mode (no response, RPC error, process
+     * still alive after quit) is swallowed at DEBUG: {@link #terminateAdapter()}'s SIGTERM fallback
+     * covers all of them.
+     *
+     * <p>An {@link IceRpcException} response is treated as final rather than awaited: it means the
+     * adapter received and rejected quit, so it isn't going to exit on its own, and there is
+     * nothing left to wait for. Skipping {@link #ADAPTER_QUIT_EXIT_TIMEOUT} in that case is a
+     * meaningful speed-up, not just tidiness — see the upstream {@code faf-ice-adapter} tray-icon
+     * bug this guards against: {@code IceAdapter.close(int)} calls {@code TrayIcon.close()} with no
+     * {@code SystemTray.isSupported()} guard (unlike {@code TrayIcon.create()}, which does check),
+     * so on any headless box — this one included, and CI — quit always errors and the adapter never
+     * exits from it, leaving SIGTERM as the only path to actually end the process.
+     */
+    private void quitAdapterIfOpen() {
+        IceAdapterConnection connection = adapterRpc;
+        SubprocessManager process = adapterProcess;
+        if (connection == null || process == null || !connection.isOpen()) {
+            return;
+        }
+        try {
+            connection.call("quit").get(ADAPTER_QUIT_RPC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IceRpcException) {
+                LOG.debug("ICE adapter refused quit: {}", e.getCause().getMessage());
+                return;
+            }
+            LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
+        } catch (TimeoutException e) {
+            LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
+        }
+        try {
+            process.onExit().get(ADAPTER_QUIT_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException e) {
+            LOG.debug(
+                    "ICE adapter did not exit within {} of quit: {}",
+                    ADAPTER_QUIT_EXIT_TIMEOUT,
+                    e.getMessage());
+        }
     }
 
     /**

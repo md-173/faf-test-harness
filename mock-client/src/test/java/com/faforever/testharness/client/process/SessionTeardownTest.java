@@ -6,10 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.shared.process.SubprocessManager;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
@@ -152,13 +154,44 @@ final class SessionTeardownTest {
         assertEquals(List.of("lobby-closed"), events);
     }
 
+    /**
+     * A never-connected adapter RPC connection (as every existing test above uses) reports {@link
+     * IceAdapterConnection#isOpen()} {@code false} — {@link SessionTeardown} must skip the quit RPC
+     * and terminate the adapter the same way it always has.
+     */
+    @Test
+    void rpcNeverOpenedSkipsQuitAndTerminatesAsBefore() throws Exception {
+        SubprocessManager adapter = startSleeper();
+        RecordingAdapterConnection rpc =
+                new RecordingAdapterConnection(() -> events.add("rpc-closed"));
+
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(rpc);
+
+        assertFalse(rpc.isOpen(), "a never-connected connection must report closed");
+        teardown.run();
+
+        assertFalse(rpc.quitCalled, "quit must not be sent over an RPC connection that isn't open");
+        assertFalse(adapter.isAlive(), "adapter must still be terminated via SIGTERM/SIGKILL");
+    }
+
     /** Adapter-connection stub: never connects, runs the given action when closed. */
     private static final class RecordingAdapterConnection extends IceAdapterConnection {
         private final Runnable onClose;
+        private volatile boolean quitCalled;
 
         RecordingAdapterConnection(final Runnable onClose) {
             super(1);
             this.onClose = onClose;
+        }
+
+        @Override
+        public CompletableFuture<JsonNode> call(final String method, final Object... params) {
+            if ("quit".equals(method)) {
+                quitCalled = true;
+            }
+            return super.call(method, params);
         }
 
         @Override

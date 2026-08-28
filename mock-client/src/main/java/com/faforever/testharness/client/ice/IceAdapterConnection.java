@@ -122,6 +122,9 @@ public class IceAdapterConnection {
     /** Latch ensuring the disconnect listener fires at most once. */
     private final AtomicBoolean disconnectFired = new AtomicBoolean(false);
 
+    /** True once {@link #connect()} has succeeded; never unset by a disconnect. */
+    private final AtomicBoolean connectionOpened = new AtomicBoolean(false);
+
     /** Currently-installed disconnect listener; volatile so the reader thread sees updates. */
     private volatile Consumer<DisconnectEvent> disconnectListener = ignored -> {};
 
@@ -208,6 +211,7 @@ public class IceAdapterConnection {
             return;
         }
         LOG.info("connected to ICE adapter JSON-RPC at {}:{}", LOOPBACK, port);
+        connectionOpened.set(true);
         connected.complete(null);
         readLoop(opened);
     }
@@ -392,6 +396,18 @@ public class IceAdapterConnection {
      */
     public void onDisconnect(final Consumer<DisconnectEvent> listener) {
         this.disconnectListener = listener == null ? ignored -> {} : listener;
+    }
+
+    /**
+     * Whether the RPC connection is currently usable: {@link #connect()} succeeded and neither side
+     * has disconnected since. Read by {@link
+     * com.faforever.testharness.client.process.SessionTeardown} (WBS-3.1.2.5) to decide whether a
+     * quit-first RPC is worth attempting before falling back to killing the adapter process.
+     *
+     * @return {@code true} while a live connection can still carry a request
+     */
+    public boolean isOpen() {
+        return connectionOpened.get() && !disconnectFired.get();
     }
 
     /**
