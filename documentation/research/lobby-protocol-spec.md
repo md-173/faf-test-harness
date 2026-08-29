@@ -192,17 +192,18 @@ The mock client must never hardcode or commit OAuth credentials. Tokens, client 
 
 | Variable | Purpose |
 |---|---|
-| `FAF_MOCK_TOKEN_ENDPOINT` | Hydra token endpoint (public — tracked in `.env`) |
-| `FAF_MOCK_AUTH_ENDPOINT` | Hydra authorization endpoint, used by the bootstrap script (public — tracked in `.env`) |
-| `FAF_MOCK_CLIENT_ID` | OAuth client ID (public — tracked in `.env`) |
-| `FAF_MOCK_REDIRECT_URI` | Redirect URI registered on the OAuth client (public — tracked in `.env`) |
-| `FAF_MOCK_SCOPES` | Space-separated scopes, e.g. `openid offline lobby` (public — tracked in `.env`) |
+| `FAF_MOCK_TOKEN_ENDPOINT` | Hydra token endpoint (public) |
+| `FAF_MOCK_AUTH_ENDPOINT` | Hydra authorization endpoint, used by the bootstrap script (public) |
+| `FAF_MOCK_CLIENT_ID` | OAuth client ID (public) |
+| `FAF_MOCK_REDIRECT_URI` | Redirect URI registered on the OAuth client (public) |
+| `FAF_MOCK_SCOPES` | Space-separated scopes, e.g. `openid offline lobby` (public) |
 | `FAF_MOCK_REFRESH_TOKEN` | Long-lived refresh token from the bootstrap, rotated on each use (secret — must be gitignored, atomic write) |
 
 The chosen client (`95ecec08-...`) is a *public* client — no `FAF_MOCK_CLIENT_SECRET` is required or used. The mock client never holds a long-lived access token; access tokens are obtained at runtime by exchanging the refresh token.
 
+**Names above are this research note's shorthand, not the implemented ones.** The mock client resolves configuration through built-in defaults → a JSON config file (`--config`) → `FAF_MOCK_CLIENT_*` environment variables → CLI flags; [`mock-client/README.md`](../../mock-client/README.md#configuration) is the authoritative table of every key in all three forms.
 
-Non-secret values (hosts, ports, public client IDs, redirect URIs) may live in the tracked `.env` file. Secret values (client secrets, refresh tokens) must live in an untracked file such as `.env.local`, or be injected via CI secrets / the developer's shell. A `.env.example` file lists every variable so new contributors know what to set without exposing any real credentials.
+Non-secret values (hosts, ports, public client IDs, redirect URIs) belong in a JSON config file, in the environment, or on the command line. The repository holds no `.env` file and reads none. The one secret — the refresh token — lives in its own untracked file named by `--oauth-refresh-token-file` (the repo gitignores `.secrets/` for this), rewritten atomically on each rotation, or is injected via CI secrets. [`mock-client/mock-client.example.json`](../../mock-client/mock-client.example.json) shows every value a new contributor must set without exposing any real credential.
 
 ### Sources
 - [downlords-faf-client `application-test.yml`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/resources/application-test.yml) — `.xyz` client_id, scopes, endpoints

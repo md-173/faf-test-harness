@@ -44,8 +44,8 @@ import java.util.OptionalInt;
  * @param iceAdapterLobbyPort local UDP port the game lobby uses for game traffic; passed to
  *     faf-ice-adapter as {@code --lobby-port}
  * @param iceAdapterGameId game ID passed to faf-ice-adapter as {@code --game-id} (required by the
- *     adapter); a default for the {@code launch-ice}/{@code ice-smoke} diagnostics, overridden by
- *     the lobby {@code game_launch.uid} during a full {@code run} session
+ *     adapter); a default for the {@code launch-ice} diagnostic, overridden by the lobby {@code
+ *     game_launch.uid} during a full {@code run} session
  * @param mockGameLaunchDelaySeconds how long mock-game sits in the lobby before starting the match
  *     on its own, passed straight through as its {@code --launch-delay-seconds} (WBS-4.3.1).
  *     Negative disables auto-launch, which is what a multi-peer session needs: the FAF server
@@ -54,14 +54,14 @@ import java.util.OptionalInt;
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
  * @param playerIdOverride optional player ID override for deterministic local testing. Applies to
- *     the standalone {@code launch-ice} / {@code launch-game} / {@code ice-smoke} diagnostics only.
- *     A full {@code run} session launches under the lobby {@code welcome.me.id} instead, since the
- *     adapter's {@code --id} is what tells the game its own identity (WBS-3.1.2.9)
+ *     the standalone {@code launch-ice} / {@code launch-game} diagnostics only. A full {@code run}
+ *     session launches under the lobby {@code welcome.me.id} instead, since the adapter's {@code
+ *     --id} is what tells the game its own identity (WBS-3.1.2.9)
  * @param playerLogin local player login passed to faf-ice-adapter as {@code --login} and to
  *     mock-game as {@code --player-login}. Used directly by the standalone {@code launch-ice} /
- *     {@code launch-game} / {@code ice-smoke} diagnostics; during a full {@code run} session the
- *     lobby {@code welcome.me.login} is the authoritative identity (json-rpc-spec §8.1), so this
- *     value is a default that orchestration may override.
+ *     {@code launch-game} diagnostics; during a full {@code run} session the lobby {@code
+ *     welcome.me.login} is the authoritative identity (json-rpc-spec §8.1), so this value is a
+ *     default that orchestration may override.
  * @param hostConfig host-a-custom-game settings (lobby-protocol-spec §4.1 / §10.2); present only
  *     when the operator configured the mock client to host — empty means this run does not host
  *     (e.g. it joins an existing game instead)

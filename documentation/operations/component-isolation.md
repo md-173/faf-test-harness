@@ -14,8 +14,7 @@ the GPGNet research specs, so a pass against a double is evidence about the **re
 the double.
 
 > **How the doubles stay honest.** The doubles are `src/test`-scoped only — no new binary, no new
-> subcommand, nothing ships to a consumer. `ice-smoke` remains a stub returning
-> `NOT_IMPLEMENTED` (exit `64`); this card adds no CLI behaviour.
+> subcommand, nothing ships to a consumer; this card adds no CLI behaviour.
 
 ## How to use this document
 

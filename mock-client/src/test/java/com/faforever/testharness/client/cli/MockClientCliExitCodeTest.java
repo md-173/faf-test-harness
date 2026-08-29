@@ -92,10 +92,4 @@ final class MockClientCliExitCodeTest {
                 ExitCodes.RUNTIME,
                 execute(CliTestFixtures.withSubcommandAndGameBinary("launch-game", absentBinary)));
     }
-
-    @Test
-    void validIceSmokeInvocationExitsNotImplemented() {
-        assertEquals(
-                ExitCodes.NOT_IMPLEMENTED, execute(CliTestFixtures.withSubcommand("ice-smoke")));
-    }
 }

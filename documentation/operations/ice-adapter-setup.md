@@ -112,7 +112,7 @@ production artifact; 3.5× larger) or requiring a JavaFX JDK (heavier contributo
 `faf-ice-adapter` 3.3.14 requires `--game-id`; without it the adapter prints usage and exits
 **before** binding the RPC port. The launcher now always passes it
 (`--ice-adapter-game-id`, config field `iceAdapterGameId`, default `0`). During a full `run`
-session this is sourced from the lobby `game_launch.uid`; for the `launch-ice`/`ice-smoke`
+session this is sourced from the lobby `game_launch.uid`; for the `launch-ice` / `launch-game`
 diagnostics it is just a placeholder. This flag is absent from `json-rpc-spec.md` §8 and
 `subprocess-orchestration-spec.md` §2.6 — those tables predate 3.3.x and should be amended.
 
@@ -146,9 +146,9 @@ below):
 ```
 
 > **AC #2 is verified manually and recorded here.** The durable, re-runnable connect+`status` check
-> is owned by **WBS 3.1.4.3 (ice-smoke, #151)**, which drives it through the 3.1.4.1
-> `IceAdapterConnection` (#155); it is gated on this task (the real binary) plus #155 (the
-> transport). Re-run the probe (Quick start) after any version bump.
+> is owned by the 3.1.4.1 `IceAdapterConnection` (#155); it is gated on this task (the real
+> binary) plus #155 (the transport). The `ice-smoke` subcommand that WBS 3.1.4.3 (#151) was to
+> have carried it in never shipped and was removed at 7.1. Re-run the probe (Quick start) after any version bump.
 >
 > That check ships as `IceAdapterConnectionLiveSmokeTest`, run under `./gradlew integrationTest`
 > (not `test`). It resolves the adapter jar from the **`FAF_ICE_ADAPTER_JAR`** environment variable

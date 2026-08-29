@@ -58,10 +58,12 @@ application {
     mainClass = 'com.faforever.testharness.client.Main'
 }
 
+// The example lives in src/test so it documents the SubprocessManager API without shipping in
+// the release shadow jar; a consumer of mock-client-*.jar has no use for demo classes.
 tasks.register('runSubprocessExample', JavaExec) {
     group = 'application'
     description = 'Runs the SubprocessManager API example.'
-    classpath = sourceSets.main.runtimeClasspath
+    classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.faforever.testharness.client.examples.SubprocessManagerExample'
 }
 

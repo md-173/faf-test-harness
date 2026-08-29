@@ -37,12 +37,11 @@ Detailed protocol payloads and field-level references live alongside these
 diagrams:
 
 - [`../research/project-briefing.md`](../research/project-briefing.md) —
-  one-page overview, communication-channel summary, and glossary.
+  one-page overview, problem statement, communication-channel summary, and
+  glossary.
 - [`../research/lobby-protocol-spec.md`](../research/lobby-protocol-spec.md) —
   full lobby-protocol reference: OAuth, WebSocket framing, auth handshake,
   game setup, GPGNet-over-WebSocket wrapping, result reporting, heartbeat.
-- [`../project-spec.md`](../project-spec.md) — original problem statement and
-  upstream FAForever resource links.
 
 ## Maintenance
 

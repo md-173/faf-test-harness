@@ -15,7 +15,6 @@ subcommands that dispatch to the matching component.
 | `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 |
 | `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    |
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
-| `ice-smoke`   | ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet handshake.|
 
 `run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
 (`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
@@ -24,8 +23,7 @@ to the lobby's `ping` heartbeats. `Ctrl-C` / `SIGTERM` closes the WebSocket
 cleanly (the process exit code then follows the signal: 130 for SIGINT, 143 for
 SIGTERM). `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) each spawn
 their respective binary, run it for `--duration-seconds`, terminate it, and log
-the exit code. `ice-smoke` is still CLI scaffolding — it validates config,
-applies logging, logs a TODO line, and exits with code `64` (`NOT_IMPLEMENTED`).
+the exit code.
 
 Invocation shape:
 
@@ -44,7 +42,6 @@ additionally take a subcommand-local `--duration-seconds` flag.
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
@@ -121,8 +118,8 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
 | `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | no | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
-| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
+| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this
@@ -302,14 +299,6 @@ uses.
 
 A missing or invalid `--mock-game-binary-path` produces a single-line error and
 exits `70` (`RUNTIME`) — no stack trace.
-
-### `ice-smoke` — connectivity sanity check
-
-```bash
-./mock-client/build/install/mock-client/bin/mock-client \
-  ice-smoke \
-  --config mock-client.json
-```
 
 ### Environment variables only
 

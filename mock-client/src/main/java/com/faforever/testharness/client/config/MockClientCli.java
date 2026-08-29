@@ -1,7 +1,6 @@
 package com.faforever.testharness.client.config;
 
 import com.faforever.testharness.client.cli.ExitCodes;
-import com.faforever.testharness.client.cli.IceSmokeCommand;
 import com.faforever.testharness.client.cli.LaunchGameCommand;
 import com.faforever.testharness.client.cli.LaunchIceCommand;
 import com.faforever.testharness.client.cli.RunCommand;
@@ -22,10 +21,10 @@ import picocli.CommandLine.Spec;
 
 /**
  * Picocli root command for the Mock Client. Holds every {@link MockClientConfig} field as a
- * {@code @Option} and registers the four subcommands ({@code run}, {@code launch-ice}, {@code
- * launch-game}, {@code ice-smoke}). Picocli populates the fields by merging (in priority order):
- * CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also
- * via the provider), and built-in {@code defaultValue} attributes.
+ * {@code @Option} and registers the three subcommands ({@code run}, {@code launch-ice}, {@code
+ * launch-game}). Picocli populates the fields by merging (in priority order): CLI flags,
+ * environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also via the
+ * provider), and built-in {@code defaultValue} attributes.
  *
  * <p>Every {@code @Option} declared here uses {@link ScopeType#INHERIT}, so the same flags are
  * accepted by every subcommand and may appear before <em>or</em> after the subcommand name on the
@@ -58,7 +57,6 @@ import picocli.CommandLine.Spec;
             RunCommand.class,
             LaunchIceCommand.class,
             LaunchGameCommand.class,
-            IceSmokeCommand.class,
         })
 public final class MockClientCli implements Callable<Integer> {
 
@@ -234,7 +232,7 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "0",
             description =
                     "Game ID passed to faf-ice-adapter as --game-id (required by the adapter). "
-                            + "Used by the launch-ice / ice-smoke diagnostics; a full 'run' "
+                            + "Used by the launch-ice diagnostic; a full 'run' "
                             + "session sets it from the lobby game_launch.uid.")
     private int iceAdapterGameId;
 
@@ -275,7 +273,7 @@ public final class MockClientCli implements Callable<Integer> {
             scope = ScopeType.INHERIT,
             description =
                     "Optional player ID override for deterministic local testing. Used by the "
-                            + "launch-ice / launch-game / ice-smoke diagnostics; a full 'run' "
+                            + "launch-ice / launch-game diagnostics; a full 'run' "
                             + "session uses the lobby welcome identity instead.")
     private Integer playerIdOverride;
 
@@ -286,7 +284,7 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "mock-client",
             description =
                     "Local player login passed to faf-ice-adapter as --login and to mock-game as "
-                            + "--player-login. Used by the launch-ice / launch-game / ice-smoke "
+                            + "--player-login. Used by the launch-ice / launch-game "
                             + "diagnostics; a full 'run' session uses the lobby welcome identity "
                             + "instead.")
     private String playerLogin;
