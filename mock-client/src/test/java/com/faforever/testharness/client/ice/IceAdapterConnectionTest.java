@@ -117,6 +117,46 @@ final class IceAdapterConnectionTest {
                 "close() should abandon the retry window well inside its 20s budget");
     }
 
+    /**
+     * A {@code close()} during the retry window is reported as {@link
+     * DisconnectReason#LOCAL_CLOSE}, never as {@link DisconnectReason#CONNECT_FAILED} — the adapter
+     * was reachable or not, but either way we are the ones who stopped trying.
+     *
+     * <p>This pins intent; it does not reproduce the race it guards. With a 100 ms retry delay and
+     * a 250 ms sleep, {@code close()} beats the sleeping connect thread every time, so the listener
+     * fires from {@code close()}'s own {@code socket == null} path. The interleaving where the
+     * connect thread reports first is a few instructions wide and not reachable from a test — but a
+     * regression that hardcodes {@code CONNECT_FAILED} in that path would still be caught the
+     * moment it ever won.
+     */
+    @Test
+    void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {
+        int deadPort = server.port();
+        server.stop(); // free the port so connects are refused
+
+        IceAdapterConnection c =
+                new IceAdapterConnection(
+                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+        CountDownLatch fired = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        c.onDisconnect(
+                e -> {
+                    event.set(e);
+                    fired.countDown();
+                });
+
+        CompletableFuture<Void> connectFuture = c.connect();
+        Thread.sleep(250);
+        c.close();
+
+        assertThrows(ExecutionException.class, () -> connectFuture.get(3, TimeUnit.SECONDS));
+        assertTrue(fired.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+        assertEquals(
+                DisconnectReason.LOCAL_CLOSE,
+                event.get().reason(),
+                "a deliberate close must not be reported as an unreachable adapter");
+    }
+
     @Test
     void connectTwiceThrows() throws Exception {
         conn = connect();

@@ -123,6 +123,25 @@ public class IceAdapterConnection {
      */
     public record DisconnectEvent(DisconnectReason reason, Throwable error) {}
 
+    /**
+     * Thrown by {@link #connectWithRetry()} when {@link #close()} cut the retry window short, as
+     * distinct from the window genuinely running out.
+     *
+     * <p>Exists so {@link #runConnection} can tell the two apart. Both exits from the retry loop
+     * are {@code IOException}s, and re-reading {@code closeRequested} in the catch would not
+     * discriminate them: a {@code close()} arriving while a genuinely exhausted budget was
+     * unwinding would then be reported as a local close, mislabelling a real never-bound adapter.
+     * The exception's identity is the only thing that distinguishes the two at that point.
+     */
+    private static final class ConnectAbandonedException extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        ConnectAbandonedException() {
+            super("connect abandoned: close requested while retrying");
+        }
+    }
+
     /** Adapter JSON-RPC port on {@link #LOOPBACK}. */
     private final int port;
 
@@ -235,6 +254,21 @@ public class IceAdapterConnection {
         try {
             opened = connectWithRetry();
             this.out = opened.getOutputStream();
+        } catch (ConnectAbandonedException e) {
+            // Our own close(), not an unreachable adapter — report it as such. Discriminating on
+            // the
+            // exception type rather than re-reading closeRequested is deliberate: this catch cannot
+            // otherwise tell an abandoned connect from a genuinely exhausted retry budget, and a
+            // close() arriving during the unwind of the latter would mislabel a real never-bound
+            // adapter as a local close.
+            //
+            // Usually redundant: close() with no socket yet fires LOCAL_CLOSE itself, and
+            // fireDisconnect is one-shot, so this loses the race and is suppressed. It earns its
+            // place in the interleaving where the connect thread gets here first.
+            LOG.debug("ICE adapter connect abandoned: close requested while retrying");
+            connected.completeExceptionally(e);
+            fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
+            return;
         } catch (IOException e) {
             LOG.warn(
                     "could not connect to ICE adapter at {}:{}: {}",
@@ -274,13 +308,14 @@ public class IceAdapterConnection {
      * {@code close()} unable to cut the window short at all.
      *
      * @return the connected socket
-     * @throws IOException if every attempt failed, or close was requested while retrying
+     * @throws ConnectAbandonedException if close was requested while retrying
+     * @throws IOException if every attempt failed
      */
     private Socket connectWithRetry() throws IOException {
         IOException last = null;
         for (int attempt = 1; attempt <= connectAttempts; attempt++) {
             if (closeRequested.get()) {
-                throw new IOException("connect abandoned: close requested while retrying");
+                throw new ConnectAbandonedException();
             }
             try {
                 return new Socket(LOOPBACK, port);
