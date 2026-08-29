@@ -126,9 +126,14 @@ integration guide (7.5).
 
 `.github/RELEASE_BODY.md` used `[README.md](README.md)`, which resolves to
 `/releases/tag/README.md` and 404s from a release page. Replaced with an absolute URL.
+A deep link to runbook §2 was added alongside it — the no-account path is what a
+maintainer embedding the mocks actually needs, and linking the top of a document does
+not serve that. The anchor was verified against the heading rather than assumed.
+
 `release.yml` feeds this file through `bodyFile`, so future releases are fixed by the
-file; the published 0.1.0 body was updated separately. Moved here from 7.6-fix so it
-lands with the repository going public; the checksums half stays in #254.
+file; the published 0.1.0 body was updated separately and now contains no relative
+links. This completes item 2 of #254 (7.6-fix) in full, so that item can be struck
+there rather than owned twice; the checksums half of #254 stays.
 
 ## 7. Code cleanup
 
