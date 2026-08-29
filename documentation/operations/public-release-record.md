@@ -112,7 +112,7 @@ not erasure: GitHub shows issue edit history to anyone with read access, so #96'
 earlier revisions still carry them. This is moot for exposure purposes — the commit
 history publishes the same addresses either way — but it is worth knowing that editing
 an issue does not retract what it contained. Raised with the affected people rather
-than decided unilaterally; see §8.
+than decided unilaterally; see §9.
 
 ## 6. Landing page and release body
 
@@ -145,7 +145,7 @@ two references, and every mention across `mock-client/README.md`,
 `MockClientConfig`'s javadoc, `component-isolation.md` and `ice-adapter-setup.md`. No
 shipped command now returns `NOT_IMPLEMENTED`.
 
-The value it was meant to provide is real but unbuilt, and is tracked separately (§8).
+The value it was meant to provide is real but unbuilt, and is tracked separately (§9).
 
 **`examples` package moved, not deleted.** The card called for removing it as dead
 code. `SubprocessManagerExample` is a self-contained worked example of the
@@ -164,24 +164,48 @@ peer-connection path:
 |---|---|
 | `Initiate actual connection with peer` (JoinGame handler) | Pending **4.3.2** (#219). Verified still present on both #246 and #257, so it is *not* resolved by 4.3.1 as originally assumed |
 | `Initiate actual connection with peer` (ConnectToPeer handler) | Same |
-| `Configurable values` (game always reports player 1 victory, all others defeat) | Survived 3.2.4.3 (#231). Had no tracking issue; one was filed (§8) |
+| `Configurable values` (game always reports player 1 victory, all others defeat) | Survived 3.2.4.3 (#231). Had no tracking issue; one was filed (§9) |
 
 The rule these answer to lives in `.github/PULL_REQUEST_TEMPLATE.md`, not
 `CONTRIBUTING.md`. All three sit in a file that #246 and #257 both modify, so the issue
 references are applied after rebasing onto the merged state rather than being written
 against line numbers that are about to move.
 
-## 8. Raised, not decided
+## 8. The LICENSE
 
-Three things are not one person's call and were referred rather than settled.
+Was MIT, `Copyright (c) 2026 Jai Dutta`. A single individual's name on a four-person
+project being handed to a community is unusual, and it was not one person's call to
+keep. Changed to:
 
-1. **The LICENSE.** MIT, `Copyright (c) 2026 Jai Dutta`. A single individual's name on
-   a four-person project being handed to a community is unusual. Whether it stays, adds
-   the other three, or names the project is for the team to agree.
-2. **Contributor email addresses.** As in §5 — permanent on publication, and
+```
+Copyright (c) 2026 The faf-test-harness contributors
+```
+
+The licence remains MIT and its terms are byte-identical; only the holder line moved.
+
+Naming all four in full was considered and rejected on a specific ground. Three of the
+four have full legal names in git author metadata already, so those publish whether or
+not the LICENSE repeats them. The fourth appears nowhere in the repository under
+anything but a first name — not in author metadata, not in any tracked file in any
+commit, including the meeting notes removed in §1. Writing a surname into the LICENSE
+would therefore have created *new* exposure rather than restating existing exposure,
+and into the most widely propagated file in the repository: MIT requires the copyright
+notice to travel with every copy, so it is duplicated into every downstream
+distribution, indexed by GitHub's licence detector, and read by SBOM and compliance
+scanners. That is a decision for the person named, not for the team.
+
+The collective form gives all four equal standing, needs no amendment as FAF
+contributors arrive after handover, and leaves per-person attribution where people
+actually look for it: the git history and the GitHub contributors page.
+
+## 9. Raised, not decided
+
+Two things remain for the team rather than this card.
+
+1. **Contributor email addresses.** As in §5 — permanent on publication, and
    disproportionate to remove. The two affected people should decide rather than
    discover.
-3. **Publication itself.** The deleted `needs-answering/john.md` recorded "Can we make
+2. **Publication itself.** The deleted `needs-answering/john.md` recorded "Can we make
    the github repo public? / No", and `meeting-19-03-26.md` recorded that repositories
    stay private "until such a point as the supervisor goes over them and allows the
    release". Both predate the request that prompted this card. Re-confirm before
@@ -192,7 +216,7 @@ Follow-up issues filed for work found but deliberately not done here: making
 compose; restoring `ice-smoke` as a working no-lobby reachability command; and making
 the mock game's end-of-match results configurable.
 
-## 9. Verified
+## 10. Verified
 
 `./gradlew spotlessApply check` passes. No behaviour changed in any shipped code path:
 the only production removals are a stub command that returned `NOT_IMPLEMENTED` and its
