@@ -243,6 +243,12 @@ public final class MockGameLifecycle {
      * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase,
      * including before the GPGNet connection ever opened.
      *
+     * <p>Running it out of band does not end the lifecycle. It closes the connection and cancels
+     * the FSM's scheduling without posting any event, so the machine stays in whatever state it was
+     * in and {@link #stateReached(GameState)} for ENDED never completes. Callers that want the FSM
+     * driven to ENDED should let it get there on its own, or on a disconnect; this is teardown for
+     * a process that is already on its way out.
+     *
      * @return the shutdown sequence; never {@code null}.
      */
     public GameShutdown shutdown() {

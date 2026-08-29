@@ -9,8 +9,11 @@ import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
+import com.faforever.testharness.game.lifecycle.GameShutdown;
 import com.faforever.testharness.game.lifecycle.GameState;
 import com.faforever.testharness.game.lifecycle.MockGameLifecycle;
+import com.faforever.testharness.shared.statemachine.State;
+import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -153,13 +156,13 @@ final class MainTest {
 
     @Test
     void shutdownHookTearsDownBeforeStoppingLogging() throws Exception {
-        adapter.start();
-        MockGameLifecycle lifecycle = lifecycleOn(adapter.port());
-        lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
-
+        // Built directly rather than taken from a lifecycle: the ordering is the subject here, and
+        // this way the connection whose close is recorded is the one the sequence actually owns.
         List<String> order = new CopyOnWriteArrayList<>();
-        lifecycle.shutdown().registerConnection(recordingConnection(order));
-        Main.shutdownHook(lifecycle, () -> order.add("stop-logging")).run();
+        GameShutdown shutdown =
+                new GameShutdown(new StateMachine(new State("A")), recordingConnection(order));
+
+        Main.shutdownHook(shutdown, () -> order.add("stop-logging")).run();
 
         assertEquals(
                 List.of("close-connection", "stop-logging"),
@@ -181,7 +184,13 @@ final class MainTest {
             lifecycle = lifecycleOn(closedPort());
         } else {
             adapter.start();
-            lifecycle = lifecycleOn(adapter.port());
+            // NO_AUTO_ADVANCE for the in-fsm case: with the 100ms timers the FSM would run itself
+            // HOSTING -> LIVE -> ENDED and fire the sequence from ENDED's entry hook before the
+            // hook thread got there, leaving the hook body a no-op and the case asserting nothing.
+            lifecycle =
+                    "in-fsm".equals(phase)
+                            ? lifecycleOn(adapter.port(), NO_AUTO_ADVANCE, NO_AUTO_ADVANCE)
+                            : lifecycleOn(adapter.port());
             lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
             if ("in-fsm".equals(phase)) {
                 adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
@@ -199,7 +208,7 @@ final class MainTest {
         Thread hook =
                 new Thread(
                         () -> {
-                            Main.shutdownHook(lifecycle, () -> {}).run();
+                            Main.shutdownHook(lifecycle.shutdown(), () -> {}).run();
                             ran.complete(null);
                         },
                         "hook-" + phase);
@@ -257,7 +266,7 @@ final class MainTest {
         CompletableFuture<Void> endMatchReturned = new CompletableFuture<>();
         startRacer(
                 bothReady,
-                () -> Main.shutdownHook(lifecycle, () -> {}).run(),
+                () -> Main.shutdownHook(lifecycle.shutdown(), () -> {}).run(),
                 hookReturned,
                 "hook-during-ended");
         startRacer(bothReady, lifecycle::endMatch, endMatchReturned, "end-match");

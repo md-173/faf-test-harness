@@ -4,6 +4,7 @@ import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameCli;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
+import com.faforever.testharness.game.lifecycle.GameShutdown;
 import com.faforever.testharness.game.lifecycle.GameState;
 import com.faforever.testharness.game.lifecycle.MockGameLifecycle;
 import com.faforever.testharness.game.lifecycle.MockGameLifecycle.ExitStatus;
@@ -146,7 +147,9 @@ public final class Main {
                         launchDelay,
                         matchDuration);
         Thread hook =
-                new Thread(shutdownHook(lifecycle, LoggingSetup::shutdown), "mock-game-shutdown");
+                new Thread(
+                        shutdownHook(lifecycle.shutdown(), LoggingSetup::shutdown),
+                        "mock-game-shutdown");
         try {
             Runtime.getRuntime().addShutdownHook(hook);
         } catch (IllegalStateException e) {
@@ -183,13 +186,17 @@ public final class Main {
      *
      * <p>Order matters: teardown logs, so stopping logging first would swallow its output.
      *
-     * @param lifecycle the running lifecycle, whose once-guarded shutdown sequence this shares
+     * <p>Takes the sequence rather than the lifecycle that owns it, since that is all it needs. A
+     * test can then hand it one built over a connection it controls, instead of registering a
+     * stand-in onto a live lifecycle's sequence.
+     *
+     * @param shutdown the game's once-guarded shutdown sequence, shared with the FSM's ENDED phase
      * @param logFlush the flush-and-stop-logging step; {@code LoggingSetup::shutdown} in production
      * @return the hook body
      */
-    static Runnable shutdownHook(final MockGameLifecycle lifecycle, final Runnable logFlush) {
+    static Runnable shutdownHook(final GameShutdown shutdown, final Runnable logFlush) {
         return () -> {
-            lifecycle.shutdown().run();
+            shutdown.run();
             logFlush.run();
         };
     }
