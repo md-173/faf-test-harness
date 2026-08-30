@@ -49,11 +49,13 @@ public final class Main {
      * @param env environment map consulted by the layered default-value provider
      * @param err stream the construction-time diagnostic above is written and flushed to. It
      *     receives nothing else: once {@code execute} is entered, picocli writes parse errors,
-     *     usage text and unhandled stack traces to its own writer, which defaults to {@link
+     *     usage text and subcommand failures to its own writer, which defaults to {@link
      *     System#err} and is not redirected here.
-     * @return the process exit code — one of {@link ExitCodes} on the guarded path, otherwise
-     *     whatever {@code execute} returns, which includes picocli's {@code ExitCode.SOFTWARE}
-     *     ({@code 1}) if an exception escapes a subcommand's {@code call()}
+     * @return the process exit code, always one of {@link ExitCodes}. An exception escaping a
+     *     subcommand's {@code call()} would otherwise be picocli's {@code ExitCode.SOFTWARE}
+     *     ({@code 1}); {@link com.faforever.testharness.client.cli.ExecutionExceptionHandler},
+     *     installed by {@link ConfigLoader#newCommandLine(String[], Map)}, maps it to {@link
+     *     ExitCodes#RUNTIME} instead
      */
     public static int run(
             final String[] args, final Map<String, String> env, final PrintStream err) {

@@ -48,12 +48,21 @@ import picocli.CommandLine.Spec;
  *
  * <p>When the root is invoked with no subcommand, {@link #call()} prints usage and exits with
  * {@link ExitCodes#USAGE}.
+ *
+ * <p>Every {@code @Command} in this tree — this root and every subcommand — sets {@code
+ * exitCodeOnExecutionException} to {@link ExitCodes#RUNTIME}. An exception escaping a subcommand's
+ * {@code call()} is normally handled by {@link
+ * com.faforever.testharness.client.cli.ExecutionExceptionHandler}, which never returns picocli's
+ * default of {@code 1}; the annotation is the backstop for the routes that bypass that handler and
+ * land in picocli's {@code handleUnhandled}. It must be set on the leaf commands, not just here —
+ * see that class for why.
  */
 @Command(
         name = "mock-client",
         mixinStandardHelpOptions = true,
         version = "mock-client 1.0-SNAPSHOT",
         description = "Headless FAF lobby client used by the integration test harness.",
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         subcommands = {
             RunCommand.class,
             LaunchIceCommand.class,

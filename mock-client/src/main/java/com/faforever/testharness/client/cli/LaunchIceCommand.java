@@ -35,6 +35,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "launch-ice",
         mixinStandardHelpOptions = true,
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "Spawn faf-ice-adapter only and forward its output through the harness logger.")
 public final class LaunchIceCommand implements Callable<Integer> {

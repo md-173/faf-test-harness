@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import com.faforever.testharness.client.cli.ExecutionExceptionHandler;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Map;
@@ -17,8 +18,9 @@ import picocli.CommandLine.ParseResult;
  *
  * <ul>
  *   <li>{@link #newCommandLine(String[], Map)} — builds the {@link CommandLine} with the {@link
- *       LayeredDefaultProvider} attached. Used by {@code Main} to drive {@link
- *       CommandLine#execute(String...)}, and by tests that want to exercise the subcommand tree.
+ *       LayeredDefaultProvider} and the {@link ExecutionExceptionHandler} attached. Used by {@code
+ *       Main} to drive {@link CommandLine#execute(String...)}, and by tests that want to exercise
+ *       the subcommand tree.
  *   <li>{@link #load(String[], Map)} — parses {@code args} and returns a validated config (or
  *       {@link Optional#empty()} on {@code --help}/{@code --version}). The headless test seam used
  *       by all existing {@code ConfigLoader*Test} classes — its contract is stable and must not
@@ -93,6 +95,11 @@ public final class ConfigLoader {
     public static CommandLine newCommandLine(final String[] args, final Map<String, String> env) {
         MockClientCli cli = new MockClientCli();
         CommandLine commandLine = new CommandLine(cli);
+
+        // Installed here rather than in Main so every caller of this factory — Main, and the
+        // exit-code tests that drive execute() directly — observes the same failure shape. It is
+        // inert on the parseArgs path used by load().
+        commandLine.setExecutionExceptionHandler(new ExecutionExceptionHandler());
 
         try {
             Path configFile = preParseConfigFlag(args);

@@ -45,11 +45,21 @@ additionally take a subcommand-local `--duration-seconds` flag.
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
 | `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. Also any exception that escapes a subcommand uncaught. |
+
+The table is closed: **no input produces any other code**, and in particular
+never `1`. Picocli's own default for an exception escaping a subcommand is
+`ExitCode.SOFTWARE` (`1`) plus a stack trace on stderr;
+`ExecutionExceptionHandler` replaces that with a single line naming the command
+and the cause, and returns `70`. The stack trace is not discarded — it is logged
+at `DEBUG`, so `--log-level DEBUG` puts the whole trace in the JSONL file as one
+record's `exception` field. The failure itself is recorded at `ERROR` regardless
+of level, so a harness reading log records alone still sees it.
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
-`com.faforever.testharness.client.cli.ExitCodes`.
+`com.faforever.testharness.client.cli.ExitCodes`, and every row is pinned by a
+test in `MockClientCliExitCodeTest`.
 
 ## Configuration
 

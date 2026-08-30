@@ -25,7 +25,12 @@ public final class ExitCodes {
      */
     public static final int NOT_IMPLEMENTED = 64;
 
-    /** Reserved for runtime failures once subcommands ship. */
+    /**
+     * A runtime failure after a subcommand started: one the subcommand reported itself, or any
+     * exception that escaped its {@code call()} — see {@link ExecutionExceptionHandler}, which maps
+     * the latter here so picocli's {@code ExitCode.SOFTWARE} ({@code 1}) is unreachable and this
+     * scheme stays closed.
+     */
     public static final int RUNTIME = 70;
 
     private ExitCodes() {}
