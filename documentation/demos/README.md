@@ -7,6 +7,123 @@ a real environment, captured by hand and committed here.
 | Demo | WBS | Proves | Artifact |
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
+| `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
+
+---
+
+## `client-game-lifecycle` — launch, handshake, play out, tear down (WBS-3.1.2.7)
+
+The sprint's integration milestone, and the sprint demo script. One command drives a whole
+session: the Mock Client spawns the **real** `faf-ice-adapter` and the **real** mock game as
+subprocesses, the game completes its GPGNet handshake with the adapter, the FSM walks
+`IDLE → STARTING_GAME → HOSTING → PLAYING → TERMINATED` on frames the game actually sent, the
+game plays out its match and self-exits 0, and teardown leaves no process behind.
+
+It is a live-tagged test rather than a CLI run, because the checkpoints have to be asserted, not
+eyeballed: [`ClientGameLifecycleLiveTest`](../../mock-client/src/test/java/com/faforever/testharness/client/state/ClientGameLifecycleLiveTest.java).
+Excluded from `./gradlew :mock-client:test` and from CI — it needs the local adapter binary.
+
+**Deliberately lobby-independent.** Client↔lobby integration is already proven (see the demo
+above), so this one isolates the previously-unproven client↔adapter↔game seam: it posts the three
+lobby-side triggers itself (`WelcomeReceived` with a fabricated identity, `LaunchGame`, `HostGame`)
+instead of waiting on the live lobby's `game_launch`. Nothing else in the run is faked. The
+lobby-driven full path is the two-peer milestone's job (4.3.1). No network access is required, and
+no credentials — unlike every other live test here, this one runs offline.
+
+### Prerequisites
+
+1. **The adapter jar.** `./gradlew downloadIceAdapter` puts the pinned `-nojfx` jar at
+   `./faf-ice-adapter.jar`; see [`ice-adapter-setup.md`](../operations/ice-adapter-setup.md) (R74).
+   Override with `FAF_ICE_ADAPTER_JAR=/path/to/jar` if you keep it elsewhere.
+2. **The mock-game distribution.** Built automatically — `:mock-client:integrationTest` depends on
+   `:mock-game:installDist`. Override with `FAF_MOCK_GAME_BINARY=/path/to/bin/mock-game`.
+
+If either binary is missing the test **skips** rather than fails, printing which one and how to get
+it. A skip is not a pass — check for the `[3.1.2.7] skipping` line before believing a green run.
+
+### Run
+
+```bash
+./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun
+```
+
+> **`--rerun` is not optional.** Without it, a second invocation with no source changes prints
+> `Task :mock-client:integrationTest UP-TO-DATE` and `BUILD SUCCESSFUL in 765ms` — a green build
+> that executed nothing. `--rerun` is task-scoped (Gradle 7.6+); prefer it over `--rerun-tasks`,
+> which also re-runs compile, checkstyle, spotless and `installDist` and so inflates the timing
+> below.
+
+Roughly **45 seconds**, most of it the mock game's own simulated match
+(`Main.MATCH_DURATION`, 30 s) plus its lobby wait (`Main.LAUNCH_DELAY`, 5 s). Neither has a flag.
+The acceptance bar is three consecutive passes:
+
+```bash
+for i in 1 2 3; do
+  ./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun \
+    || { echo "run $i FAILED"; break; }
+done
+```
+
+### What to look for in the logs
+
+`showStandardStreams` is on for this task, so the captured `[ICEAdapter]` and `[MockGame]`
+subprocess output is interleaved with the client's own lines. The client's own lines are tagged
+`[Unknown]` rather than `[MockClient]` in this JVM — `LoggingSetup.configure` is only called from
+`Main`, and a test does not go through it — so the "Source" column below names the emitting logger,
+not the bracketed tag. Only `[ICEAdapter]` and `[MockGame]` appear as tags.
+
+The FSM starts at `CONNECTING` (logged before the posted welcome) and the checkpoints then run in
+this order:
+
+| Stage | Log line | Source |
+|-------|----------|--------|
+| Adapter up, under the **session** identity | `Launching ICE adapter: … --id 9001 --login welcome-login` | `IceAdapterLauncher` |
+| RPC transport up | `connected to ICE adapter JSON-RPC at 127.0.0.1:<port>` | `IceAdapterConnection` |
+| Game up, same identity | `Launching mock-game: … --player-id 9001 --player-login welcome-login` | `MockGameLauncher` |
+| | `state entry: STARTING_GAME` | `MockClientLifecycle` |
+| Handshake | `Sent GPGNet message: CreateLobby 0 <port> welcome-login 9001 1` → `Received GPGNet message: GameState Idle` → `Received GPGNet message: GameState Lobby` | `[ICEAdapter]` |
+| Host role taken | `Sent GPGNet message: HostGame scmp_007`, then `state entry: HOSTING` | `[ICEAdapter]` / `MockClientLifecycle` |
+| Match live | `Received GPGNet message: GameState Launching`, then `state entry: PLAYING` | `[ICEAdapter]` / `MockClientLifecycle` |
+| Result reported | `GameResult 1 victory 10` → `JsonStats` → `GameEnded`, **in that order** | `[ICEAdapter]` |
+| Clean self-exit | `mock game finished: status=OK, exit code 0`, then `mock-game exited cleanly with exit code 0` | `[MockGame]` / `MockClientLifecycle` |
+| Teardown | `state entry: TERMINATED` → `tearing down session` → `session teardown complete` | `MockClientLifecycle` |
+
+> **The handshake lines look out of order, and are not.** `CreateLobby` is logged *before* the
+> `Received … GameState Idle` that caused it. Upstream `GPGNetServer.processGpgnetMessage` (3.3.14)
+> sends `CreateLobby` from inside the `Idle` handler and only logs `Received GPGNet message` at the
+> *end* of the method, while `sendGpgnetMessage` logs at send time. Read it as "CreateLobby was the
+> reply to Idle", not as the adapter speaking first.
+
+> **`[MockGame]` output arrives in a lump.** The child's stdout is block-buffered, so game log lines
+> can surface tens of seconds after they were emitted — a line stamped at `t+2s` may not appear
+> until the game exits. On a run that fails *before* the game exits, the most recent `[MockGame]`
+> lines may be missing from the log entirely; read the `[ICEAdapter]` frame log for what the game
+> actually sent.
+
+The identity values (`9001` / `welcome-login`) are the fabricated session identity, and are
+deliberately unlike the config defaults the launchers would otherwise fall back on — seeing them in
+both argvs is what proves WBS-3.1.2.9 propagation, and the test asserts it against the live
+processes.
+
+**Expected noise, not failures.** Two lines look alarming and are neither:
+
+- `[ICEAdapter] … TelemetryDebugger - Error on sending message object: …
+  WebsocketNotConnectedException` — the adapter phones home to
+  `ice-telemetry.faforever.com` and 3.3.14 has no working off switch
+  ([`ice-adapter-setup.md`](../operations/ice-adapter-setup.md)). Harmless.
+- `[ICEAdapter] … Error while communicating with FA (input), assuming shutdown … EOFException` —
+  this is the adapter noticing the game closed its GPGNet socket on the way out, i.e. the clean
+  end, logged at ERROR by upstream.
+
+### Acceptance criteria → evidence
+
+- Launch, handshake, phases, clean end, teardown, repeatably (three runs) → the loop above.
+- Every checkpoint asserted through a public seam → FSM `stateReached` futures, the R36
+  `onGpgNetMessageReceived` fan-out, and the game-exit signal. No test hooks in production code.
+- Fails loudly rather than hanging → every wait is bounded by a named constant and reports what it
+  had observed; the class-level `@Timeout` is a last resort, not the mechanism.
+- No orphans → the test walks this JVM's process descendants after teardown and fails on any
+  surviving adapter or game.
 
 ---
 

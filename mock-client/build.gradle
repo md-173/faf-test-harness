@@ -26,7 +26,8 @@ test {
 }
 
 tasks.register('integrationTest', Test) {
-    description = 'Runs JUnit tests tagged "integration" (hits live FAF .xyz endpoints).'
+    description = 'Runs JUnit tests tagged "integration" (hits live FAF .xyz endpoints, and ' +
+            'launches the real faf-ice-adapter and mock-game binaries).'
     group = 'verification'
     useJUnitPlatform {
         includeTags 'integration'
@@ -34,6 +35,19 @@ tasks.register('integrationTest', Test) {
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     shouldRunAfter test
+    // ClientGameLifecycleLiveTest (WBS-3.1.2.7) launches the *installed* mock-game distribution,
+    // which is what MockGameLauncher's default --mock-game-binary-path points at. Building it here
+    // makes a repeat run one command, and stops a stale dist from silently testing old game code.
+    // The adapter jar is deliberately NOT wired in: downloadIceAdapter hits the network, so it
+    // stays explicit (see documentation/operations/ice-adapter-setup.md) and the live tests
+    // self-skip without it.
+    dependsOn ':mock-game:installDist'
+    // Live tests exist to show what the real binaries do, so the captured [ICEAdapter] and
+    // [MockGame] subprocess output is part of the deliverable, not noise to bury in the HTML
+    // report. Mirrors :mock-game:integrationTest.
+    testLogging {
+        showStandardStreams = true
+    }
 }
 
 tasks.withType(Checkstyle).configureEach {
