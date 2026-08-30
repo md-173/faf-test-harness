@@ -74,3 +74,16 @@ bin/
 # stray .env.local holding a token can never be committed.
 .env
 .env.*
+
+# Internal project-management and academic documents, removed at 7.1 (see
+# documentation/operations/public-release-record.md §1). They remain in git history by
+# deliberate decision -- the removal is for a clean tree, not secrecy -- so any of them
+# can be restored locally with `git show <old-commit>:<path> > <path>`. Ignored so a
+# restored copy can never be re-committed.
+/documentation/project-spec.md
+/documentation/task-desc.md
+/documentation/meetings/
+/documentation/needs-answering/
+/documentation/operations/cost.md
+/documentation/operations/schedule.md
+/documentation/operations/team-roles.md

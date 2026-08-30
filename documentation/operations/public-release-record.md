@@ -9,9 +9,10 @@ several items below are written against their merged state.
 
 ## 1. Internal documents removed
 
-Eleven documents were deleted. The test applied was the card's own: *would a stranger
-running the harness want this?* Everything below is project-management or academic
-process, names individuals, or records a third party's words without their sign-off.
+Ten documents were deleted and one was untracked but kept on disk. The test applied was
+the card's own: *would a stranger running the harness want this?* Everything below is
+project-management or academic process, names individuals, or records a third party's
+words without their sign-off.
 
 | Document | Why removed |
 |---|---|
@@ -24,8 +25,36 @@ process, names individuals, or records a third party's words without their sign-
 | `documentation/operations/cost.md` | Engineer-hour budget; coursework artifact |
 | `documentation/operations/schedule.md` | 25-week academic phase plan. Deleted rather than corrected: it still claimed a 3 September delivery and had not been touched since 19 April, and a corrected version would carry no value to a consumer while needing public upkeep |
 | `documentation/operations/team-roles.md` | Four first names with academic roles |
-| `documentation/project-spec.md` | The client's business brief, including commercial resourcing language; not ours to publish |
 | `documentation/task-desc.md` | Phase-by-phase task breakdown; project management, not consumer documentation |
+
+`documentation/project-spec.md` — the client's business brief, including commercial
+resourcing language — is **untracked rather than deleted**. It stays on disk for the
+team's reference and is gitignored, the same treatment `faf-uid` gets in §3: valuable
+locally, not published.
+
+**All of the paths above are gitignored**, so a copy restored locally can never be
+re-committed by accident. `git add` refuses them without `-f`.
+
+### These files remain in git history, deliberately
+
+`git rm` cleans the tip of the branch, not the past. Every document above is still
+readable from earlier commits — `project-spec.md` in 3, `john.md` in 14,
+`meeting-19-03-26.md` in 5 — and `faf-uid`'s 3.7 MB blob is still in the pack, so
+untracking it did not shrink the clone. On a public repository that means anyone can
+recover them with `git show <commit>:<path>`.
+
+This was raised before publication and **accepted knowingly**. The removal is for a
+clean working tree, not for secrecy: nothing in these documents is a credential, and
+the credential scan in §4 is separately clean. Purging the paths with `git filter-repo`
+was considered and rejected as disproportionate — it rewrites all 423 commit SHAs,
+forces every contributor to re-clone, breaks the open PR, and re-points the 0.1.0 tag,
+all to hide material that is merely untidy.
+
+Worth knowing for any *future* decision of this kind: a rewrite is fully effective only
+while the repository is still private, because nothing has been exposed or crawled yet.
+After publication, purging additionally needs GitHub Support, and anything already
+fetched is beyond recall. If something genuinely sensitive is ever committed, it must be
+dealt with before the repository is public, not after.
 
 Three inbound links were repaired rather than left dangling:
 `diagrams/sequence-full-session.md` and `diagrams/README.md` now point at
