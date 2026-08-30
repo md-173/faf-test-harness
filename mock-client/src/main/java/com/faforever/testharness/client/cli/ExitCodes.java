@@ -20,8 +20,10 @@ public final class ExitCodes {
     public static final int USAGE = 2;
 
     /**
-     * A runtime failure after a subcommand started: a binary that could not be launched, an
-     * endpoint that never answered, a session that could not be established.
+     * A runtime failure after a subcommand started: one the subcommand reported itself, or any
+     * exception that escaped its {@code call()} — see {@link ExecutionExceptionHandler}, which maps
+     * the latter here so picocli's {@code ExitCode.SOFTWARE} ({@code 1}) is unreachable and this
+     * scheme stays closed.
      */
     public static final int RUNTIME = 70;
 
