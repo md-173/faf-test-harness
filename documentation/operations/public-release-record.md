@@ -9,10 +9,11 @@ several items below are written against their merged state.
 
 ## 1. Internal documents removed
 
-Ten documents were deleted and one was untracked but kept on disk. The test applied was
-the card's own: *would a stranger running the harness want this?* Everything below is
-project-management or academic process, names individuals, or records a third party's
-words without their sign-off.
+Ten documents were deleted. The test applied was the card's own: *would a stranger
+running the harness want this?* Everything below is project-management or academic
+process, names individuals, or records a third party's words without their sign-off.
+An eleventh, `project-spec.md`, was removed and then reinstated after review — see
+below.
 
 | Document | Why removed |
 |---|---|
@@ -27,18 +28,36 @@ words without their sign-off.
 | `documentation/operations/team-roles.md` | Four first names with academic roles |
 | `documentation/task-desc.md` | Phase-by-phase task breakdown; project management, not consumer documentation |
 
-`documentation/project-spec.md` — the client's business brief, including commercial
-resourcing language — is **untracked rather than deleted**. It stays on disk for the
-team's reference and is gitignored, the same treatment `faf-uid` gets in §3: valuable
-locally, not published.
-
 **All of the paths above are gitignored**, so a copy restored locally can never be
 re-committed by accident. `git add` refuses them without `-f`.
+
+One inbound link was repaired rather than left dangling: `diagrams/sequence-full-session.md`
+cited `../task-desc.md` §1.1 for subprocess orchestration and now points at
+`research/subprocess-orchestration-spec.md`, which covers the same ground in more depth.
+
+### `project-spec.md` was reconsidered and kept
+
+It was initially removed as "the client's business brief, not ours to publish". Reading
+it in full does not support that. One sentence was internal — a line about a "critical
+business need" and "DCC resourcing" — and it has been deleted. The remaining 136 lines
+are the problem statement, FAF's component architecture and topology diagram, the
+strict component-boundary table, the 2–4 player and fault-injection requirements, and
+the best set of upstream links in the repository: faf-pioneer's network-architecture
+and GPGNet docs, faf-api-specs, the lobby server, the client, FAF's Zulip, and
+Brutus5000's earlier `galactic-war` mocking attempt.
+
+Two further points argued for keeping it. The document links to an FAF maintainer's own
+repository and directs readers to FAF's Zulip, so it reads as written *for* this
+project from the FAF side rather than as a third party's private material. And
+`project-briefing.md`, which the diagram README had been redirected to in its place,
+carries no external links at all — the redirect pointed readers at a weaker document.
+That redirect has been reverted, as has the prose reference in
+`subprocess-orchestration-spec.md` §5.3.
 
 ### These files remain in git history, deliberately
 
 `git rm` cleans the tip of the branch, not the past. Every document above is still
-readable from earlier commits — `project-spec.md` in 3, `john.md` in 14,
+readable from earlier commits — `john.md` in 14,
 `meeting-19-03-26.md` in 5 — and `faf-uid`'s 3.7 MB blob is still in the pack, so
 untracking it did not shrink the clone. On a public repository that means anyone can
 recover them with `git show <commit>:<path>`.
@@ -55,12 +74,6 @@ while the repository is still private, because nothing has been exposed or crawl
 After publication, purging additionally needs GitHub Support, and anything already
 fetched is beyond recall. If something genuinely sensitive is ever committed, it must be
 dealt with before the repository is public, not after.
-
-Three inbound links were repaired rather than left dangling:
-`diagrams/sequence-full-session.md` and `diagrams/README.md` now point at
-`research/subprocess-orchestration-spec.md` and `research/project-briefing.md`; the
-prose reference in `research/subprocess-orchestration-spec.md` §5.3 now says "the
-client's original brief" instead of naming the deleted file.
 
 **Kept deliberately:** every research spec, `component-isolation.md`,
 `ice-adapter-setup.md`, `harness-runbook.md`, `demos/`, `diagrams/`, `libraries.md`.

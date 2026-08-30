@@ -80,7 +80,6 @@ bin/
 # deliberate decision -- the removal is for a clean tree, not secrecy -- so any of them
 # can be restored locally with `git show <old-commit>:<path> > <path>`. Ignored so a
 # restored copy can never be re-committed.
-/documentation/project-spec.md
 /documentation/task-desc.md
 /documentation/meetings/
 /documentation/needs-answering/

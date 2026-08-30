@@ -588,7 +588,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
    this; otherwise an explicit `--shutdown` admin port or
   a SIGTERM-on-stdin convention is needed.
 - ~~**Per-host sessions vs per-container.**~~ **Resolved — Java orchestrator is
-  the target, not Docker-compose.** The client's original brief lists
+  the target, not Docker-compose.** The client spec (`project-spec.md`) lists
   "Create test harness that spawns N clients automatically" as an explicit goal,
   and requires "simulate 2–4 players locally" with no mention of containers.
   Docker-compose multi-peer was our extrapolation, not a client requirement. The
