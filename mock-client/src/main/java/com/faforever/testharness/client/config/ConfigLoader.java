@@ -147,7 +147,14 @@ public final class ConfigLoader {
             return Path.of(value);
         } catch (InvalidPathException e) {
             throw new IllegalArgumentException(
-                    "invalid " + CONFIG_FLAG + " path: " + value + " (" + e.getReason() + ")", e);
+                    "invalid "
+                            + CONFIG_FLAG
+                            + " path: "
+                            + LayeredDefaultProvider.oneLine(value)
+                            + " ("
+                            + e.getReason()
+                            + ")",
+                    e);
         }
     }
 }

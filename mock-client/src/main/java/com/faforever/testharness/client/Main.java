@@ -47,8 +47,13 @@ public final class Main {
      *
      * @param args raw command-line arguments
      * @param env environment map consulted by the layered default-value provider
-     * @param err stream bad-invocation diagnostics are written and flushed to
-     * @return the process exit code, one of {@link ExitCodes}
+     * @param err stream the construction-time diagnostic above is written and flushed to. It
+     *     receives nothing else: once {@code execute} is entered, picocli writes parse errors,
+     *     usage text and unhandled stack traces to its own writer, which defaults to {@link
+     *     System#err} and is not redirected here.
+     * @return the process exit code — one of {@link ExitCodes} on the guarded path, otherwise
+     *     whatever {@code execute} returns, which includes picocli's {@code ExitCode.SOFTWARE}
+     *     ({@code 1}) if an exception escapes a subcommand's {@code call()}
      */
     public static int run(
             final String[] args, final Map<String, String> env, final PrintStream err) {

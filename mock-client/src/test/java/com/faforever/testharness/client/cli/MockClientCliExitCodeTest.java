@@ -94,6 +94,14 @@ final class MockClientCliExitCodeTest {
         return lines;
     }
 
+    /**
+     * Asserts the captured stderr carries no stack trace. Meaningful only for failures raised while
+     * the {@link CommandLine} is being built, which is all {@link Main#run} writes to the injected
+     * stream; anything picocli emits from inside {@code execute} goes to its own writer and would
+     * not appear here, so this would pass on an empty capture.
+     *
+     * @param err captured stderr
+     */
     private static void assertNoStackTrace(final String err) {
         assertFalse(err.contains("Exception in thread"), "stderr leaked an uncaught exception");
         assertFalse(err.contains("\tat "), "stderr leaked a stack trace frame");
@@ -177,6 +185,30 @@ final class MockClientCliExitCodeTest {
         assertTrue(
                 errorLines(outcome.err()).get(0).startsWith("invalid --config path: "),
                 "unexpected error line: " + errorLines(outcome.err()).get(0));
+        assertNoStackTrace(outcome.err());
+    }
+
+    @Test
+    void configPathContainingNewlineStaysOnOneLine() {
+        // A newline is legal in a POSIX filename. Interpolated raw it would split the diagnostic,
+        // and a path containing "\nUsage:" would forge the boundary between the error and picocli's
+        // usage block for anything reading stderr — so the path is escaped, not passed through.
+        Path forged = tempDir.resolve("x\nUsage: mock-client FORGED\ny.json");
+        MainOutcome outcome = runMain(new String[] {"run", "--config", forged.toString()});
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        List<String> lines = errorLines(outcome.err());
+        assertEquals(1, lines.size(), "path newline split the diagnostic: " + lines);
+        assertTrue(
+                lines.get(0).startsWith("config file is not readable: "),
+                "unexpected error line: " + lines.get(0));
+        // The line-count check alone is not enough: unescaped, the forged "Usage:" line would be
+        // read as the usage block and errorLines would still report one line. Requiring the whole
+        // path on that line is what proves it was escaped rather than truncated at the newline.
+        assertTrue(
+                lines.get(0).endsWith("y.json"),
+                "path was truncated at its newline: " + lines.get(0));
+        assertTrue(outcome.err().contains("Usage: mock-client [-hV]"), "no real usage block");
         assertNoStackTrace(outcome.err());
     }
 

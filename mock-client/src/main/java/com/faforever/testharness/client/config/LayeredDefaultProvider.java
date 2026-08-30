@@ -109,13 +109,13 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
 
     private static Map<String, String> readJsonFile(final Path path) {
         if (!Files.isReadable(path)) {
-            throw new IllegalArgumentException("config file is not readable: " + path);
+            throw new IllegalArgumentException("config file is not readable: " + oneLine(path));
         }
         try {
             JsonNode root = JSON.readTree(Files.readString(path));
             if (!root.isObject()) {
                 throw new IllegalArgumentException(
-                        "config file root must be a JSON object: " + path);
+                        "config file root must be a JSON object: " + oneLine(path));
             }
             Map<String, String> out = new LinkedHashMap<>();
             Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
@@ -134,15 +134,30 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             // the file name, which Jackson redacts (INCLUDE_SOURCE_IN_LOCATION is off by default).
             throw new IllegalArgumentException(
                     "failed to parse config file "
-                            + path
+                            + oneLine(path)
                             + describeLocation(e.getLocation())
                             + ": "
                             + e.getOriginalMessage(),
                     e);
         } catch (IOException e) {
             throw new IllegalArgumentException(
-                    "failed to parse config file " + path + ": " + e.getMessage(), e);
+                    "failed to parse config file " + oneLine(path) + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Renders a value for a single-line diagnostic, escaping any line break it contains.
+     *
+     * <p>A path may legally contain a newline on Linux and macOS. Interpolated raw, it splits the
+     * diagnostic the entry point promises to keep on one line, and a path containing {@code
+     * "\nUsage:"} would forge the boundary between the error and picocli's usage block for anything
+     * reading stderr.
+     *
+     * @param value the value to interpolate, typically a {@link Path}
+     * @return the value's text with every line terminator replaced by a literal {@code \n}
+     */
+    static String oneLine(final Object value) {
+        return String.valueOf(value).replaceAll("\\R", "\\\\n");
     }
 
     /**
