@@ -97,8 +97,13 @@ public final class ConfigLoader {
         CommandLine commandLine = new CommandLine(cli);
 
         // Installed here rather than in Main so every caller of this factory — Main, and the
-        // exit-code tests that drive execute() directly — observes the same failure shape. It is
-        // inert on the parseArgs path used by load().
+        // exit-code tests that drive execute() directly — observes the same failure shape. Picocli
+        // only consults it from execute(), so the parseArgs path used by load() never calls it.
+        //
+        // Constructing it must stay free of side effects. Nothing on this path may create an SLF4J
+        // logger: Logback resolves ${LOG_LEVEL:-INFO} when the first logger is created, and every
+        // subcommand sets that property later, inside call(). A logger here would pin the whole
+        // process at INFO and silently disable --log-level. See ExecutionExceptionHandler.
         commandLine.setExecutionExceptionHandler(new ExecutionExceptionHandler());
 
         try {
