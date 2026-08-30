@@ -109,6 +109,66 @@ public final class LifecycleFailureTest {
                 () -> lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS));
     }
 
+    /**
+     * A send that fails because the socket is gone reports connection loss, not the initial FAILED.
+     *
+     * <p>Closing locally is what makes this deterministic. The real trigger is a dead adapter, but
+     * that leaves the outcome to a race between the reader thread spotting EOF and the send itself
+     * failing; a local close removes the reader from the picture entirely, because it does not
+     * drive the FSM at all (see {@code connectionClosedOnLive}). So the status asserted here can
+     * only have come from the failed send inside the transition action.
+     */
+    @Test
+    void sendFailureOnLaunchReportsConnectionLost() throws Exception {
+        GpgNetConnection conn = new GpgNetConnection(gpgnet.port());
+        MockGameLifecycle lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, conn, null, null);
+        lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
+        lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        conn.close();
+        // matchBegins sends "Launching", which now fails.
+        lifecycle.launchMatch();
+
+        lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
+        assertEquals(
+                MockGameLifecycle.ExitStatus.SERVER_CONNECTION_LOST, lifecycle.getExitStatus());
+    }
+
+    /**
+     * The match-end case from the issue: the GPGNet link is gone when the closing frames are sent.
+     * Previously this reported the initial FAILED, because throwing into ENDED skips the OK
+     * assignment at the end of {@code gameEnds} and nothing else set a status — so the same
+     * physical event reported SERVER_CONNECTION_LOST or FAILED depending on which path won.
+     */
+    @Test
+    void sendFailureOnMatchEndReportsConnectionLost() throws Exception {
+        GpgNetConnection conn = new GpgNetConnection(gpgnet.port());
+        MockGameLifecycle lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, conn, null, null);
+        lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
+        lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+        lifecycle.launchMatch();
+        lifecycle.stateReached(GameState.LIVE).get(1, TimeUnit.SECONDS);
+
+        conn.close();
+        // gameEnds sends the game results, stats and closing frames, which now fail.
+        lifecycle.endMatch();
+
+        lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
+        assertEquals(
+                MockGameLifecycle.ExitStatus.SERVER_CONNECTION_LOST, lifecycle.getExitStatus());
+    }
+
     @Test
     void serverDisconnectionOnInitializing() throws Exception {
         // Stop the server now.
