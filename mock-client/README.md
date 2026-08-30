@@ -47,14 +47,23 @@ additionally take a subcommand-local `--duration-seconds` flag.
 | `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. Also any exception that escapes a subcommand uncaught. |
 
-The table is closed: **no input produces any other code**, and in particular
-never `1`. Picocli's own default for an exception escaping a subcommand is
-`ExitCode.SOFTWARE` (`1`) plus a stack trace on stderr;
+**No parse failure and no subcommand failure produces a code outside this
+table** — in particular, never `1`. Picocli's own default for an exception
+escaping a subcommand is `ExitCode.SOFTWARE` (`1`) plus a stack trace on stderr;
 `ExecutionExceptionHandler` replaces that with a single line naming the command
 and the cause, and returns `70`. The stack trace is not discarded — it is logged
 at `DEBUG`, so `--log-level DEBUG` puts the whole trace in the JSONL file as one
-record's `exception` field. The failure itself is recorded at `ERROR` regardless
-of level, so a harness reading log records alone still sees it.
+record's `exception` field (and, being a normal log record, on the console too).
+The failure itself is recorded at `ERROR` regardless of level, so a harness
+reading log records alone still sees it.
+
+Two things sit outside the table by design, not by oversight. A **signal** exits
+with the JVM's signal code — `130` for SIGINT, `143` for SIGTERM — which is the
+documented, intended exit path for `run` (see above). And an **`Error`** rather
+than an `Exception` — `OutOfMemoryError`, `StackOverflowError` — propagates out
+of picocli, which catches only `Exception`; the JVM then prints it and exits `1`.
+A consumer should treat any code outside the table as an abnormal termination
+rather than a reportable failure mode.
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in

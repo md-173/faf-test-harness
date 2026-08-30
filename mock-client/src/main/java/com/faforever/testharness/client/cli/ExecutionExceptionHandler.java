@@ -34,10 +34,16 @@ import picocli.CommandLine.ParseResult;
  *
  * <p>So annotating only the root with {@code exitCodeOnExecutionException} would not move the exit
  * code at all. Every {@code @Command} in the tree carries it as a backstop for the two routes that
- * reach {@code handleUnhandled} without consulting this handler (this handler itself throwing, and
- * a non-{@code ParameterException} escaping {@code parseArgs}), but the annotation alone cannot
- * suppress the stack trace — only a handler can, because {@code handleUnhandled} prints before it
- * maps the code.
+ * reach {@code handleUnhandled} and read that attribute without consulting this handler (this
+ * handler itself throwing, and a non-{@code ParameterException} escaping {@code parseArgs}). The
+ * annotation alone cannot suppress the stack trace, though — only a handler can, because {@code
+ * handleUnhandled} prints before it maps the code.
+ *
+ * <p>Neither closes the {@code Error} case: picocli catches only {@code Exception}, so an {@code
+ * OutOfMemoryError} or {@code StackOverflowError} leaves {@code execute} entirely and the JVM
+ * reports it. That is documented in {@code mock-client/README.md} as an abnormal termination rather
+ * than mapped, because a code that means "this process is not healthy" should not be laundered into
+ * one that means "this run failed for a reason I understood".
  *
  * <p>Three sinks, deliberately different:
  *
@@ -60,9 +66,6 @@ public final class ExecutionExceptionHandler implements IExecutionExceptionHandl
     /** Appended to the stderr line so the suppressed trace is discoverable without the README. */
     static final String DEBUG_HINT = "re-run with --log-level DEBUG for the stack trace";
 
-    /** Logger for the two records this handler emits. */
-    private static final Logger LOG = LoggerFactory.getLogger(ExecutionExceptionHandler.class);
-
     /**
      * Reports {@code ex} on stderr and in the log, then maps it to {@link ExitCodes#RUNTIME}.
      *
@@ -79,8 +82,15 @@ public final class ExecutionExceptionHandler implements IExecutionExceptionHandl
         // the type name alone is more use to a reader than the word "null".
         String summary = command + " failed: " + oneLine(ex.toString());
 
-        LOG.error(summary);
-        LOG.debug("unhandled exception in {}", command, ex);
+        // Resolved here, NOT in a static field. This class is instantiated while the CommandLine is
+        // being built, which is before any subcommand has run applyLoggingProperties — and Logback
+        // resolves ${LOG_LEVEL:-INFO} once, at whatever moment the first logger is created. A
+        // static Logger would therefore configure Logback at INFO during construction and make
+        // --log-level DEBUG a silent no-op for the whole process, including the DEBUG record below
+        // that this handler's own stderr hint tells the user to go and look for.
+        Logger log = LoggerFactory.getLogger(ExecutionExceptionHandler.class);
+        log.error(summary);
+        log.debug("unhandled exception in {}", command, ex);
 
         commandLine.getErr().println(summary + " (" + DEBUG_HINT + ")");
         commandLine.getErr().flush();

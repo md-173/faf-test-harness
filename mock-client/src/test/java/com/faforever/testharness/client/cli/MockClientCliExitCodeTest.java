@@ -370,6 +370,9 @@ final class MockClientCliExitCodeTest {
 
         assertEquals(
                 ExitCodes.RUNTIME, outcome.exitCode(), "exit 1 is not in the documented table");
+        // Explicit, because errorLines("") is [""] — the size-one check below would pass on an
+        // empty capture, which is what a mis-ordered addSubcommand/setErr would produce.
+        assertFalse(outcome.err().isEmpty(), "nothing was written to picocli's error writer");
         List<String> lines = errorLines(outcome.err());
         assertEquals(1, lines.size(), "expected a single-line error, got: " + lines);
         assertTrue(
@@ -405,7 +408,11 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
-    void unhandledSubcommandExceptionTraceIsRecoverableAtDebug() {
+    void unhandledSubcommandExceptionAttachesItsTraceToTheDebugRecord() {
+        // Half of "the trace is recoverable at DEBUG": that the handler emits it when DEBUG is
+        // enabled. This forces the level programmatically, so it says nothing about whether
+        // --log-level can enable DEBUG in the first place — LogLevelFlagEndToEndTest covers that,
+        // in a child JVM, because Logback resolves the level once per process.
         ILoggingEvent debug = onlyEventAt(captureLogsAt(Level.DEBUG), Level.DEBUG);
 
         IThrowableProxy thrown = debug.getThrowableProxy();
@@ -422,17 +429,24 @@ final class MockClientCliExitCodeTest {
         // The backstop for the two routes that reach picocli's handleUnhandled without consulting
         // the handler. Picocli reads this off the *leaf* command's spec, so asserting it on the
         // root alone would not prove exit 1 unreachable — hence the walk over the subcommands.
-        CommandLine root = ConfigLoader.newCommandLine(new String[0], Map.of());
+        assertDeclaresRuntime(ConfigLoader.newCommandLine(new String[0], Map.of()));
+    }
 
+    /**
+     * Asserts {@code command} and every command beneath it declares {@link ExitCodes#RUNTIME} as
+     * its execution-exception exit code. Recursive rather than one level deep: picocli reads the
+     * annotation off whichever command actually threw, so a sub-subcommand added later would be the
+     * one leaf still able to exit 1 — precisely the case this test exists to prevent.
+     *
+     * @param command the command to check, along with its whole subcommand subtree
+     */
+    private static void assertDeclaresRuntime(final CommandLine command) {
         assertEquals(
                 ExitCodes.RUNTIME,
-                root.getCommandSpec().exitCodeOnExecutionException(),
-                "mock-client can still exit 1");
-        for (CommandLine sub : root.getSubcommands().values()) {
-            assertEquals(
-                    ExitCodes.RUNTIME,
-                    sub.getCommandSpec().exitCodeOnExecutionException(),
-                    sub.getCommandName() + " can still exit 1");
+                command.getCommandSpec().exitCodeOnExecutionException(),
+                command.getCommandSpec().qualifiedName() + " can still exit 1");
+        for (CommandLine sub : command.getSubcommands().values()) {
+            assertDeclaresRuntime(sub);
         }
     }
 
