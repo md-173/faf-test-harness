@@ -1,5 +1,7 @@
 package com.faforever.testharness.client.config;
 
+import com.fasterxml.jackson.core.JsonLocation;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -125,9 +127,35 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                 }
             }
             return out;
+        } catch (JsonProcessingException e) {
+            // getMessage() appends a multi-line " at [Source: ...]" block, and the entry point
+            // renders this as a single-line usage error. Take the reason on its own, then put back
+            // the line/column that block carried — that is what tells the user where to look — and
+            // the file name, which Jackson redacts (INCLUDE_SOURCE_IN_LOCATION is off by default).
+            throw new IllegalArgumentException(
+                    "failed to parse config file "
+                            + path
+                            + describeLocation(e.getLocation())
+                            + ": "
+                            + e.getOriginalMessage(),
+                    e);
         } catch (IOException e) {
-            throw new IllegalArgumentException("failed to parse config file: " + e.getMessage(), e);
+            throw new IllegalArgumentException(
+                    "failed to parse config file " + path + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Renders a Jackson parse location as a single parenthesised clause.
+     *
+     * @param location the location reported by the parse failure, possibly {@code null} or unset
+     * @return {@code " (line N, column M)"}, or an empty string if no location is available
+     */
+    private static String describeLocation(final JsonLocation location) {
+        if (location == null || location.getLineNr() < 1) {
+            return "";
+        }
+        return " (line " + location.getLineNr() + ", column " + location.getColumnNr() + ")";
     }
 
     /**

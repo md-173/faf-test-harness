@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
@@ -90,11 +91,11 @@ public final class ConfigLoader {
      *     read or parsed
      */
     public static CommandLine newCommandLine(final String[] args, final Map<String, String> env) {
-        Path configFile = preParseConfigFlag(args);
         MockClientCli cli = new MockClientCli();
         CommandLine commandLine = new CommandLine(cli);
 
         try {
+            Path configFile = preParseConfigFlag(args);
             commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
@@ -120,13 +121,33 @@ public final class ConfigLoader {
             String token = args[i];
             if (token != null) {
                 if (token.equals(CONFIG_FLAG) && i + 1 < args.length) {
-                    return Path.of(args[i + 1]);
+                    return toPath(args[i + 1]);
                 }
                 if (token.startsWith(CONFIG_FLAG + "=")) {
-                    return Path.of(token.substring(CONFIG_FLAG.length() + 1));
+                    return toPath(token.substring(CONFIG_FLAG.length() + 1));
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Converts a {@code --config} value to a {@link Path}, turning a syntactically invalid one into
+     * the {@link IllegalArgumentException} the caller already maps to a usage error. {@link
+     * java.nio.file.InvalidPathException} is itself an {@code IllegalArgumentException}, but its
+     * message names neither the flag nor the whole value, and on Windows the reserved characters
+     * {@code < > : " | ? *} make this reachable from an ordinary shell.
+     *
+     * @param value the raw {@code --config} argument
+     * @return the parsed path
+     * @throws IllegalArgumentException if {@code value} is not a valid path on this platform
+     */
+    private static Path toPath(final String value) {
+        try {
+            return Path.of(value);
+        } catch (InvalidPathException e) {
+            throw new IllegalArgumentException(
+                    "invalid " + CONFIG_FLAG + " path: " + value + " (" + e.getReason() + ")", e);
+        }
     }
 }
