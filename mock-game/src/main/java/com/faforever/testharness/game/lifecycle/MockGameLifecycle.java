@@ -470,8 +470,7 @@ public final class MockGameLifecycle {
                     playerId,
                     address);
             peers.add(new Peer(address, login, playerId));
-            // TODO(#219): initiate the actual peer connection (WBS-4.3.2, peer game
-            // traffic exchange). Until then the peer is recorded but never dialled.
+            // TODO(#219): Initiate actual connection with peer
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("JoinGame frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
@@ -523,8 +522,7 @@ public final class MockGameLifecycle {
                     address);
             peer = new Peer(address, login, playerId);
             peers.add(peer);
-            // TODO(#219): initiate the actual peer connection (WBS-4.3.2, peer game
-            // traffic exchange). Until then the peer is recorded but never dialled.
+            // TODO(#219): Initiate actual connection with peer
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
@@ -548,9 +546,7 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            // TODO(#281): make the end-of-match result configurable. Player 1 always
-            // wins and every other peer loses, which makes multi-peer result reporting
-            // decorative (WBS-3.2.4.3-fix).
+            // TODO(#281): Configurable values.
             gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
             for (int i = 2; i <= peers.size() + 1; i++) {
                 gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));
