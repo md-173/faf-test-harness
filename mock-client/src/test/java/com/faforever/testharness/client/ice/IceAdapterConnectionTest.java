@@ -88,6 +88,75 @@ final class IceAdapterConnectionTest {
         assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
     }
 
+    /**
+     * {@code close()} must cut a connect-retry window short rather than let it run to exhaustion.
+     *
+     * <p>This is the shutdown-responsiveness path, not a tidiness check: the CLI's signal hook runs
+     * {@code SessionTeardown} directly rather than through the state machine, and teardown closes
+     * this connection — so a Ctrl-C while the adapter is still binding relies on the retry loop
+     * noticing. The budget here (200 × 100 ms = 20 s) is far longer than the assertion window, so a
+     * regression that only checks the flag after the loop finishes fails this test by timing out.
+     */
+    @Test
+    void closeDuringRetryAbandonsTheConnectWindow() throws Exception {
+        int deadPort = server.port();
+        server.stop(); // free the port so connects are refused
+
+        IceAdapterConnection c =
+                new IceAdapterConnection(
+                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+        CompletableFuture<Void> connectFuture = c.connect();
+
+        // Let a couple of attempts fail so the loop is genuinely mid-flight, then close.
+        Thread.sleep(250);
+        c.close();
+
+        assertThrows(
+                ExecutionException.class,
+                () -> connectFuture.get(3, TimeUnit.SECONDS),
+                "close() should abandon the retry window well inside its 20s budget");
+    }
+
+    /**
+     * A {@code close()} during the retry window is reported as {@link
+     * DisconnectReason#LOCAL_CLOSE}, never as {@link DisconnectReason#CONNECT_FAILED} — the adapter
+     * was reachable or not, but either way we are the ones who stopped trying.
+     *
+     * <p>This pins intent; it does not reproduce the race it guards. With a 100 ms retry delay and
+     * a 250 ms sleep, {@code close()} beats the sleeping connect thread every time, so the listener
+     * fires from {@code close()}'s own {@code socket == null} path. The interleaving where the
+     * connect thread reports first is a few instructions wide and not reachable from a test — but a
+     * regression that hardcodes {@code CONNECT_FAILED} in that path would still be caught the
+     * moment it ever won.
+     */
+    @Test
+    void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {
+        int deadPort = server.port();
+        server.stop(); // free the port so connects are refused
+
+        IceAdapterConnection c =
+                new IceAdapterConnection(
+                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+        CountDownLatch fired = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        c.onDisconnect(
+                e -> {
+                    event.set(e);
+                    fired.countDown();
+                });
+
+        CompletableFuture<Void> connectFuture = c.connect();
+        Thread.sleep(250);
+        c.close();
+
+        assertThrows(ExecutionException.class, () -> connectFuture.get(3, TimeUnit.SECONDS));
+        assertTrue(fired.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+        assertEquals(
+                DisconnectReason.LOCAL_CLOSE,
+                event.get().reason(),
+                "a deliberate close must not be reported as an unreachable adapter");
+    }
+
     @Test
     void connectTwiceThrows() throws Exception {
         conn = connect();

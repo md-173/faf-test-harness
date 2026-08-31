@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
  * <pre>{@code
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
  *          --player-id <id> --player-login <login> --game-uid <uid>
+ *          --launch-delay-seconds <seconds>
  * }</pre>
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
@@ -219,6 +220,11 @@ public class MockGameLauncher {
                 argv.add(String.format("%s=%s", option.getKey(), option.getValue()));
             }
         }
+        // Always emitted, never left to mock-game's own default (WBS-4.3.1): the value decides
+        // whether this session's game stays joinable, so an orchestrated launch states it rather
+        // than inheriting it. mock-game's default exists only for a hand-run binary.
+        argv.add("--launch-delay-seconds");
+        argv.add(Integer.toString(config.mockGameLaunchDelaySeconds()));
         return argv;
     }
 }
