@@ -103,7 +103,7 @@ After the command completes, run `git status` / `git diff` so any formatter-
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
-- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat.
+- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
 Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
