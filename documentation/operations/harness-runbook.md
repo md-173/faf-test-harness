@@ -199,7 +199,7 @@ The GPGNet handshake itself **is** proven, against the real adapter, by that
 same automated test — `GpgNetConnectionLiveSmokeTest`
 (`./gradlew :mock-game:integrationTest --tests '*GpgNetConnectionLiveSmokeTest'`),
 which drives the protocol in-process and holds a plain TCP socket on the RPC
-port to satisfy precondition 2 above. It self-skips (does not fail) when the
+port to supply the JSON-RPC peer the adapter's GPGNet accept path waits for. It self-skips (does not fail) when the
 adapter jar or network is absent, so a skip there is the expected off-network
 result, not a failure — see [`component-isolation.md`](component-isolation.md)
 for the wider `test` / `integrationTest` split this and the other live rows

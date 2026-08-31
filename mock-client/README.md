@@ -43,8 +43,8 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 23
-config flags — are declared on the root and apply to every subcommand. Each
+Global flags — `--config`, `--help`, `--version`, plus the 32 config options —
+are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag, and `ice-smoke`
 a `--timeout-seconds` flag.
@@ -137,8 +137,8 @@ none of the lobby or OAuth rows apply to it.
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
 | `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | no | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
-| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this
@@ -352,7 +352,7 @@ jar's own output, trimmed here):
 
 ```text
 [MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
-[MockClient] ice-smoke: connecting to ICE adapter JSON-RPC at 127.0.0.1:7236 (within PT20S)
+[MockClient] ice-smoke: connecting to ICE adapter JSON-RPC at 127.0.0.1:7236 (within PT10.97S)
 [ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started
 [ICEAdapter] c.n.jjsonrpc.TcpServer - TCP Server started.
 [MockClient] connected to ICE adapter JSON-RPC at 127.0.0.1:7236
@@ -367,7 +367,12 @@ jar's own output, trimmed here):
 The whole run takes about two seconds; every wait is bounded and named.
 `--timeout-seconds` (default `20`, max `3600`) caps the checking itself — the
 phases from launch to verdict. That default is failure headroom, not the
-expected runtime: the check returns the moment it has its verdict. Tearing the
+expected runtime: the check returns the moment it has its verdict. The connect
+phase does not get the whole budget — it reserves the nine seconds the three
+later phases can need, which is why the transcript above shows it waiting
+`PT10.97S` rather than the full `PT20S`. Without that reserve, a slow-starting
+adapter would spend the budget on the connect and the phases after it would
+fail instantly, reporting a startup problem under the wrong name. Tearing the
 adapter down is deliberately *not* inside that cap, because skipping it to
 honour a budget would leave a stray adapter to break the next run's port
 pre-flight; it is bounded separately by a 2 s SIGTERM→SIGKILL grace. So the

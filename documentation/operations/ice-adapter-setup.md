@@ -112,8 +112,9 @@ production artifact; 3.5× larger) or requiring a JavaFX JDK (heavier contributo
 `faf-ice-adapter` 3.3.14 requires `--game-id`; without it the adapter prints usage and exits
 **before** binding the RPC port. The launcher now always passes it
 (`--ice-adapter-game-id`, config field `iceAdapterGameId`, default `0`). During a full `run`
-session this is sourced from the lobby `game_launch.uid`; for the `launch-ice` / `launch-game`
-diagnostics it is just a placeholder. This flag is absent from `json-rpc-spec.md` §8 and
+session this is sourced from the lobby `game_launch.uid`; for the `launch-ice` / `ice-smoke`
+diagnostics it is just a placeholder. (Those two are the commands that spawn the adapter;
+`launch-game` passes the same config field to mock-game as `--game-uid`, not to the adapter.) This flag is absent from `json-rpc-spec.md` §8 and
 `subprocess-orchestration-spec.md` §2.6 — those tables predate 3.3.x and should be amended.
 
 ## Verification record (2026-06-17, JDK 21.0.11)
@@ -147,8 +148,7 @@ below):
 
 > **AC #2 is verified manually and recorded here.** The durable, re-runnable connect+`status` check
 > is owned by the 3.1.4.1 `IceAdapterConnection` (#155); it is gated on this task (the real
-> binary) plus #155 (the transport). The `ice-smoke` subcommand that WBS 3.1.4.3 (#151) was to
-> have carried it in never shipped and was removed at 7.1. Re-run the probe (Quick start) after any version bump.
+> binary) plus #155 (the transport). Re-run the probe (Quick start) after any version bump.
 >
 > **Since WBS-3.1.4.3 there is also a CLI check**, `mock-client ice-smoke`, which proves the same
 > bring-up plus the GPGNet endpoint and needs no lobby or OAuth placeholders. It deliberately does
