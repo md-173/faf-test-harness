@@ -55,6 +55,7 @@ final class GameProcessTest {
                     0,
                     0,
                     0,
+                    5,
                     "WARN",
                     Optional.empty(),
                     OptionalInt.empty(),

@@ -72,7 +72,7 @@ Every row was exercised on a dev machine as part of this card. Environment: **ma
 Legend: ✅ ran and passed · ⏭️ not run here (needs R74 setup and/or network — see the row) · ⛔ not
 on `main` yet (intended filter recorded).
 
-### Row 5 — `launch-game` recorded output (2026-08-04)
+### Row 5 — `launch-game` recorded output (re-recorded 2026-08-24, after 3.2.5.1)
 
 Build the two binaries, then point the subcommand at the built `mock-game`:
 
@@ -95,21 +95,25 @@ The OAuth flags are required by config validation but unused by `launch-game` (i
 game); any syntactically valid placeholders work — same convention as `launch-ice`. Observed:
 
 ```
-[MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client
-[MockClient] mock-game started, pid=95564
-[MockGame]   Mock game started
-[MockClient] mock-game exited on its own before the 5s run window; exit code 0
+[MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0 --launch-delay-seconds 5
+[MockClient] mock-game started, pid=30207
+[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238 launch=auto after 5s
+[MockGame]   Created StateMachine with initial state INITIALIZING and policy IGNORE
+[MockGame]   [WARN] could not connect to GPGNet server at 127.0.0.1:7237: GPGNet server not reachable at 127.0.0.1:7237 after 20 attempts
+[MockGame]   shutting down mock game
+[MockGame]   mock game shutdown complete
+[MockGame]   mock game finished: status=SERVER_NOT_CONNECTED, exit code 70
+[MockClient] [ERROR] mock-game exited on its own before the 5s run window; exit code 70
 # process exit: 70 (RUNTIME)
 ```
 
 **Pass condition for this row is a `RUNTIME` (`70`) coded exit together with the two launch lines
 above, not the exit code alone.** `launch-game` returns `RUNTIME` whenever the game exits before the
-run window elapses, and also when the binary cannot be launched at all. Today `mock-game`'s `main`
-is still a stub that logs one line and exits `0` immediately, so the window is never reached — the
-subcommand correctly surfaces that as `RUNTIME`. **Once 3.2.5.1 lands** (the game's bounded
-adapter-connect window), a `launch-game` run **without** an adapter will run that window, fail to
-connect, and exit with the same runtime code — the coded exit is unchanged, so this row's documented
-pass condition holds across that change.
+run window elapses, and also when the binary cannot be launched at all. Since 3.2.5.1 landed,
+`mock-game` runs its bounded adapter-connect window (about two seconds) and then exits `70` of its
+own accord, so the child's exit code and the subcommand's now agree — where previously the game was
+a stub that exited `0` and only `launch-game` supplied the `RUNTIME`. The documented pass condition
+is unchanged.
 
 ## Reproducing the offline runs
 

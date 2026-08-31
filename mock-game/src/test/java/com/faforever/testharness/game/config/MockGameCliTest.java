@@ -3,9 +3,11 @@ package com.faforever.testharness.game.config;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -37,6 +39,46 @@ final class MockGameCliTest {
         assertEquals("Rhiza", config.playerLogin());
         assertEquals(9001, config.gameUid());
         assertEquals("demoralization", config.gameOptions().get("Victory"));
+    }
+
+    @Test
+    void launchDelayDefaultsToTheBehaviourMainUsedToHardcode() {
+        // The one defaulted argument (WBS-4.3.1). VALID_ARGS deliberately omits it, so this is the
+        // hand-run path: no flag means the 5 s auto-launch mock-game had before the flag existed.
+        assertEquals(
+                Optional.of(Duration.ofSeconds(5)), MockGameCli.parse(VALID_ARGS).launchDelay());
+    }
+
+    @Test
+    void explicitLaunchDelayIsHonoured() {
+        String[] args = withExtra(VALID_ARGS, "--launch-delay-seconds", "90");
+
+        assertEquals(Optional.of(Duration.ofSeconds(90)), MockGameCli.parse(args).launchDelay());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-1", "-30"})
+    void negativeLaunchDelayDisablesAutoLaunch(final String seconds) {
+        // What a multi-peer session passes (WBS-4.3.1): a host that auto-launches moves its own
+        // game out of the server's LOBBY state and the joiner's game_join is refused.
+        String[] args = withExtra(VALID_ARGS, "--launch-delay-seconds", seconds);
+
+        assertEquals(Optional.empty(), MockGameCli.parse(args).launchDelay());
+    }
+
+    @Test
+    void zeroLaunchDelayLaunchesImmediatelyRatherThanNever() {
+        // Zero is a real delay, not the disable sentinel — the boundary the sign check turns on.
+        String[] args = withExtra(VALID_ARGS, "--launch-delay-seconds", "0");
+
+        assertEquals(Optional.of(Duration.ZERO), MockGameCli.parse(args).launchDelay());
+    }
+
+    @Test
+    void malformedLaunchDelayFailsTheParse() {
+        String[] args = withExtra(VALID_ARGS, "--launch-delay-seconds", "soon");
+
+        assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }
 
     @Test

@@ -50,11 +50,57 @@ public class IceAdapterConnection {
     /** The adapter binds its JSON-RPC server on loopback only. */
     private static final String LOOPBACK = "127.0.0.1";
 
-    /** Default max connect attempts while the adapter is still binding. */
-    private static final int DEFAULT_CONNECT_ATTEMPTS = 20;
+    /**
+     * Default max connect attempts while the adapter is still binding. With {@link
+     * #DEFAULT_RETRY_DELAY} this is ≈20 s of cold-start headroom.
+     *
+     * <p>The previous default was 20 × 100 ms = 2 s. That was not a reproduced failure — a real
+     * adapter on a developer machine binds in about a second, so 2 s usually worked — it was
+     * <em>margin</em>, and there was almost none. It mattered because {@link
+     * com.faforever.testharness.client.state.MockClientLifecycle}, the only production caller, does
+     * {@code connect().get()} with no retry above it: one slow cold start and the whole session
+     * fails straight to TERMINATED.
+     *
+     * <p>The number comes from the real client, verified against downlords-faf-client v2026.7.1.
+     * Its {@code IceAdapterImpl} does exactly what this class does — a blind TCP connect-retry
+     * loop, no readiness probe or liveness check to copy — with {@code CONNECTION_ATTEMPTS = 50} ×
+     * {@code CONNECTION_ATTEMPT_DELAY_MILLIS = 250} ≈ <b>12.5 s</b>, above a comment reading "the
+     * socket fails too fast on unix/linux not giving the adapter enough time to start". So a fixed
+     * window is the right shape and 2 s was five times under what the real client budgets; ours is
+     * deliberately a little above upstream's. It also matches what {@code
+     * IceAdapterConnectionLiveSmokeTest} (R71) has been passing explicitly since it was written.
+     *
+     * <p>{@code subprocess-orchestration-spec.md} §2.7 is why the old value looked right: it
+     * claimed "max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop", which the source
+     * above refutes. The spec has been corrected; this constant is the code half of that fix.
+     *
+     * <p>One upstream behaviour is deliberately <em>not</em> copied: on exhausting its attempts
+     * that loop swallows the failure and returns with a null peer, so the real client fails later
+     * and obscurely. {@link #connect()} completes exceptionally instead, and the FSM fails the
+     * transition at the point of failure.
+     *
+     * <p>The happy path does not get slower: the window is a <em>ceiling</em>, not a wait, and a
+     * healthy adapter connects on an early attempt. No existing test is affected either — the ones
+     * wanting a fast connect failure pass their own explicit values ({@code
+     * IceAdapterConnectionTest} uses 3 × 20 ms against a dead port), and every lifecycle-level test
+     * overrides {@link #connect()} outright rather than opening a socket at all.
+     *
+     * <p><b>The failure path does get slower, and the cost lands on the state machine.</b> {@code
+     * MockClientLifecycle.launchGame} calls {@code connect().get()} from inside a transition
+     * action, and {@code StateMachine.receiveEvent} is {@code synchronized} — so an adapter that
+     * never binds now holds the FSM lock for this whole window, with {@code AdapterExited} and
+     * {@code ShutdownRequested} queued behind it. Two things bound that: {@link
+     * #connectWithRetry()} aborts the moment {@link #close()} is requested (the CLI's signal hook
+     * reaches teardown without going through the FSM), and {@code SubprocessManager}'s own JVM
+     * shutdown hook kills both children regardless of FSM state, so nothing is orphaned. What
+     * remains is that a broken adapter is noticed late. Moving the bring-up off the transition
+     * action is tracked separately as a 3.1.3.3 fix; this constant is deliberately not the place to
+     * work around it.
+     */
+    private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 
-    /** Default delay between connect attempts. */
-    private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(100);
+    /** Default delay between connect attempts; see {@link #DEFAULT_CONNECT_ATTEMPTS}. */
+    private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(200);
 
     /** Default time a {@link #call} waits for its response before failing. */
     private static final Duration DEFAULT_CALL_TIMEOUT = Duration.ofSeconds(5);
@@ -76,6 +122,25 @@ public class IceAdapterConnection {
      * @param error the throwable that ended the connection, or {@code null} for a clean local close
      */
     public record DisconnectEvent(DisconnectReason reason, Throwable error) {}
+
+    /**
+     * Thrown by {@link #connectWithRetry()} when {@link #close()} cut the retry window short, as
+     * distinct from the window genuinely running out.
+     *
+     * <p>Exists so {@link #runConnection} can tell the two apart. Both exits from the retry loop
+     * are {@code IOException}s, and re-reading {@code closeRequested} in the catch would not
+     * discriminate them: a {@code close()} arriving while a genuinely exhausted budget was
+     * unwinding would then be reported as a local close, mislabelling a real never-bound adapter.
+     * The exception's identity is the only thing that distinguishes the two at that point.
+     */
+    private static final class ConnectAbandonedException extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        ConnectAbandonedException() {
+            super("connect abandoned: close requested while retrying");
+        }
+    }
 
     /** Adapter JSON-RPC port on {@link #LOOPBACK}. */
     private final int port;
@@ -189,6 +254,21 @@ public class IceAdapterConnection {
         try {
             opened = connectWithRetry();
             this.out = opened.getOutputStream();
+        } catch (ConnectAbandonedException e) {
+            // Our own close(), not an unreachable adapter — report it as such. Discriminating on
+            // the
+            // exception type rather than re-reading closeRequested is deliberate: this catch cannot
+            // otherwise tell an abandoned connect from a genuinely exhausted retry budget, and a
+            // close() arriving during the unwind of the latter would mislabel a real never-bound
+            // adapter as a local close.
+            //
+            // Usually redundant: close() with no socket yet fires LOCAL_CLOSE itself, and
+            // fireDisconnect is one-shot, so this loses the race and is suppressed. It earns its
+            // place in the interleaving where the connect thread gets here first.
+            LOG.debug("ICE adapter connect abandoned: close requested while retrying");
+            connected.completeExceptionally(e);
+            fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
+            return;
         } catch (IOException e) {
             LOG.warn(
                     "could not connect to ICE adapter at {}:{}: {}",
@@ -216,9 +296,27 @@ public class IceAdapterConnection {
         readLoop(opened);
     }
 
+    /**
+     * Open the socket, retrying while the adapter subprocess is still binding.
+     *
+     * <p>Aborts as soon as {@link #close()} has been requested. That check is load-bearing for
+     * shutdown responsiveness rather than tidiness: the CLI's signal hook runs {@link
+     * com.faforever.testharness.client.process.SessionTeardown} directly instead of through the
+     * state machine, and teardown closes this connection — so honouring the flag here is what lets
+     * a Ctrl-C during adapter start-up take effect at once instead of waiting out the whole retry
+     * budget. Previously the flag was read only after this loop had already finished, which left
+     * {@code close()} unable to cut the window short at all.
+     *
+     * @return the connected socket
+     * @throws ConnectAbandonedException if close was requested while retrying
+     * @throws IOException if every attempt failed
+     */
     private Socket connectWithRetry() throws IOException {
         IOException last = null;
         for (int attempt = 1; attempt <= connectAttempts; attempt++) {
+            if (closeRequested.get()) {
+                throw new ConnectAbandonedException();
+            }
             try {
                 return new Socket(LOOPBACK, port);
             } catch (IOException e) {

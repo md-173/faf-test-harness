@@ -201,11 +201,52 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
    ← starts the process, drains both streams via ProcessOutputLogger,
      registers in SubprocessRegistry (installs JVM shutdown hook once).
-4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 250 ms backoff,
-   max 10 attempts, total ≤ 2.5 s. Mirrors the real client's loop.
+4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 200 ms backoff,
+   max 100 attempts, total ≤ 20 s. See the correction note below.
 6. Once connected: setLobbyInitMode(...) → setIceServers(...).
 7. Spawn mock-game with the same gpgnetPort and lobbyUdpPort.
 ```
+
+> **Correction (WBS-3.1.2.7).** Step 4 previously read "250 ms backoff, max 10
+> attempts, total ≤ 2.5 s. Mirrors the real client's loop." The backoff was
+> right; the attempt count was not, and it did **not** mirror the real client.
+> Verified against `downlords-faf-client` v2026.7.1,
+> `src/main/java/com/faforever/client/fa/relay/ice/IceAdapterImpl.java`:
+>
+> ```java
+> private static final int CONNECTION_ATTEMPTS = 50;
+> private static final int CONNECTION_ATTEMPT_DELAY_MILLIS = 250;
+> ```
+>
+> — i.e. **50 attempts, ≈12.5 s**, five times the budget this spec claimed,
+> above a comment reading *"the socket fails too fast on unix/linux not giving
+> the adapter enough time to start."* `IceAdapterConnection` had faithfully
+> implemented the wrong figure (20 × 100 ms = 2 s); it is now 100 × 200 ms =
+> 20 s, deliberately a little above upstream's.
+>
+> Two upstream details worth knowing but **not** worth copying. On exhausting
+> its attempts, `initializeIceAdapterConnection` returns normally leaving
+> `peer` null, so the real client fails later and obscurely — our `connect()`
+> completes exceptionally instead. And upstream picks ports via
+> `new ServerSocket(0)` closed immediately before the adapter binds them, the
+> same benign TOCTOU race our live tests carry.
+>
+> Note the interaction with §2.6: the adapter exits **0** on a usage error, so
+> a mis-launch is detected by this connect timeout rather than by an exit code
+> — and that detection now costs up to 20 s, inside a `synchronized`
+> `StateMachine.receiveEvent`, during which no other event is processed. Same
+> shape as before, ten times the window.
+>
+> Two things bound that cost, so it is late detection rather than a hang.
+> `connectWithRetry` aborts as soon as `close()` is requested, and the CLI's
+> signal hook reaches `SessionTeardown` **without** going through the state
+> machine (`RunCommand` installs it as a JVM shutdown hook), so a Ctrl-C during
+> the connect window takes effect immediately rather than waiting the budget
+> out. Separately, `SubprocessManager` registers its own JVM shutdown hook, so
+> both children die with the parent whatever the FSM is doing — nothing is
+> orphaned. What remains is that a broken adapter is noticed late and
+> `AdapterExited` sits queued for that window. Moving the bring-up off the
+> transition action is tracked as a 3.1.3.3 fix.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is
@@ -219,11 +260,28 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
-  "--game-uid",    game_launch.uid ]
+  "--game-uid",    game_launch.uid,
+  "--launch-delay-seconds", mockGameLaunchDelaySeconds ]
 ```
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
-(WBS-3.2.1.1): strict, every argument required, unknown arguments rejected.
+(WBS-3.2.1.1): strict, unknown arguments rejected, and every argument that
+states a *session fact* required and never defaulted.
+
+`--launch-delay-seconds` (WBS-4.3.1) is the one defaulted argument, because it
+is a behavioural knob rather than a session fact: how long the game sits in the
+lobby before starting the match on its own, with a negative value meaning it
+never does. Its default (5 s, the value `Main` used to hardcode) applies only to
+a hand-run binary — `MockGameLauncher` always emits the flag explicitly, from
+the client's own `--mock-game-launch-delay-seconds`, and `Main` logs the
+effective policy in its startup line either way.
+
+A multi-peer session must pass a negative value **to the host at least**. The
+FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
+(`lobbyconnection.command_game_join`) and moves it out of that state as soon as
+the host reports `GameState Launching` (`gameconnection._handle_game_state` →
+`game.launch()`), so a host that auto-launches on a timer makes its own game
+unjoinable while the joiner is still booting its adapter and game.
 
 All three identity values have the same two sources as the adapter's
 (WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity

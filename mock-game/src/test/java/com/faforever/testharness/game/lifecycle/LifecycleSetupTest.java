@@ -8,6 +8,8 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -19,7 +21,7 @@ import org.junit.jupiter.api.Test;
 public final class LifecycleSetupTest {
 
     private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of());
+            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 
@@ -40,10 +42,28 @@ public final class LifecycleSetupTest {
     }
 
     @Test
+    // The FSM's starting state, asserted against a port with no listener. The shared fixture binds
+    // its ServerSocket in its constructor, and a bound socket completes TCP handshakes out of the
+    // listen backlog whether or not start() has been called — so a lifecycle pointed at it can
+    // connect and leave INITIALIZING before the assertion runs, which is what made this a CI flake.
+    // With nothing listening, the bounded connect retry holds INITIALIZING for its full window.
+    void startsInInitializing() throws IOException {
+        int deadPort;
+        try (ServerSocket socket = new ServerSocket()) {
+            socket.bind(new InetSocketAddress("127.0.0.1", 0));
+            deadPort = socket.getLocalPort();
+        }
+
+        MockGameLifecycle unconnected =
+                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(deadPort), null, null);
+
+        assertEquals(GameState.INITIALIZING, unconnected.getState());
+    }
+
+    @Test
     // Tests initial gpgnet connection causes a GameState("Idle") and following CreateLobby causes a
     // GameState("Lobby"), with similar internal state.
     void gpgnetSetup() throws Exception {
-        assertEquals(GameState.INITIALIZING, lifecycle.getState());
         gpgnet.start();
 
         gpgnet.awaitClient();

@@ -69,9 +69,18 @@ public final class ScriptedGpgNetServer {
 
     /** Block until the client connects, or fail after 5s. */
     public void awaitClient() throws InterruptedException {
-        if (!clientConnected.await(5, TimeUnit.SECONDS)) {
+        if (!awaitClient(5, TimeUnit.SECONDS)) {
             throw new AssertionError("no client connected within 5s");
         }
+    }
+
+    /**
+     * Block until the client connects or {@code timeout} elapses, reporting which happened rather
+     * than failing — for tests asserting that no connection is attempted at all.
+     */
+    public boolean awaitClient(final long timeout, final TimeUnit unit)
+            throws InterruptedException {
+        return clientConnected.await(timeout, unit);
     }
 
     /** Next frame the client sent, or fail after {@code timeout}. */

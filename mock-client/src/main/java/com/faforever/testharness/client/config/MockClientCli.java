@@ -238,6 +238,22 @@ public final class MockClientCli implements Callable<Integer> {
                             + "session sets it from the lobby game_launch.uid.")
     private int iceAdapterGameId;
 
+    /**
+     * Seconds mock-game waits in the lobby before starting the match on its own; negative disables
+     * auto-launch (WBS-4.3.1). This is the single default for the knob — mock-game's own default
+     * only ever applies to a hand-run binary, since {@code MockGameLauncher} always emits the flag.
+     */
+    @Option(
+            names = "--mock-game-launch-delay-seconds",
+            scope = ScopeType.INHERIT,
+            defaultValue = "5",
+            description =
+                    "Seconds mock-game sits in the lobby before launching the match on its own "
+                            + "(default: ${DEFAULT-VALUE}). Use a negative value for a multi-peer "
+                            + "session: the lobby server refuses a game_join once the host has "
+                            + "launched, so an auto-launching host is unjoinable.")
+    private int mockGameLaunchDelaySeconds;
+
     /** Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR). */
     @Option(
             names = "--log-level",
@@ -410,6 +426,7 @@ public final class MockClientCli implements Callable<Integer> {
                 iceAdapterGpgNetPort,
                 iceAdapterLobbyPort,
                 iceAdapterGameId,
+                mockGameLaunchDelaySeconds,
                 logLevel,
                 Optional.ofNullable(logFile),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
