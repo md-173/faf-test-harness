@@ -45,10 +45,13 @@ import org.junit.jupiter.params.provider.ValueSource;
  */
 final class MainTest {
 
-    /** Short enough to keep the suite quick; the production values live in {@link Main}. */
-    private static final Duration TEST_LAUNCH_DELAY = Duration.ofMillis(100);
+    /**
+     * Launch as soon as hosting starts, so the suite stays quick. Passed the way the launcher
+     * passes it — as {@code --launch-delay-seconds} — since WBS-4.3.1 made the delay an argument.
+     */
+    private static final String TEST_LAUNCH_DELAY_SECONDS = "0";
 
-    /** Short enough to keep the suite quick; the production values live in {@link Main}. */
+    /** Short enough to keep the suite quick; the production value lives in {@link Main}. */
     private static final Duration TEST_MATCH_DURATION = Duration.ofMillis(100);
 
     /**
@@ -61,6 +64,9 @@ final class MainTest {
      * Cap on frames skipped while waiting for one, so a wrong sequence fails instead of hanging.
      */
     private static final int MAX_FRAMES_SKIPPED = 32;
+
+    /** The lifecycle-level launch delay for the tests that build a lifecycle directly. */
+    private static final Duration TEST_LAUNCH_DELAY = Duration.ofMillis(100);
 
     private ScriptedGpgNetServer adapter;
 
@@ -116,7 +122,7 @@ final class MainTest {
         try {
             System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
             // Runs on the test thread: a usage failure must return without waiting on anything.
-            exitCode = Main.run(args, TEST_LAUNCH_DELAY, TEST_MATCH_DURATION);
+            exitCode = Main.run(args, TEST_MATCH_DURATION);
         } finally {
             System.setErr(originalErr);
         }
@@ -315,7 +321,7 @@ final class MainTest {
     private static MockGameLifecycle lifecycleOn(
             final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
         return new MockGameLifecycle(
-                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of()),
+                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0),
                 new GpgNetConnection(gpgNetPort),
                 launchDelay,
                 matchDuration);
@@ -336,11 +342,18 @@ final class MainTest {
     /** As {@link #argv(int)}, with the player id chosen — 0 is the invalid case. */
     private static String[] argv(final int gpgNetPort, final int playerId) {
         return new String[] {
-            "--gpgnet-port", Integer.toString(gpgNetPort),
-            "--lobby-port", "6112",
-            "--player-id", Integer.toString(playerId),
-            "--player-login", "Rhiza",
-            "--game-uid", "9001",
+            "--gpgnet-port",
+            Integer.toString(gpgNetPort),
+            "--lobby-port",
+            "6112",
+            "--player-id",
+            Integer.toString(playerId),
+            "--player-login",
+            "Rhiza",
+            "--game-uid",
+            "9001",
+            "--launch-delay-seconds",
+            TEST_LAUNCH_DELAY_SECONDS,
         };
     }
 
@@ -349,8 +362,7 @@ final class MainTest {
         CompletableFuture<Integer> exit = new CompletableFuture<>();
         Thread thread =
                 new Thread(
-                        () -> exit.complete(Main.run(args, TEST_LAUNCH_DELAY, TEST_MATCH_DURATION)),
-                        "mock-game-boot");
+                        () -> exit.complete(Main.run(args, TEST_MATCH_DURATION)), "mock-game-boot");
         thread.setDaemon(true);
         thread.start();
         return exit;

@@ -95,9 +95,9 @@ The OAuth flags are required by config validation but unused by `launch-game` (i
 game); any syntactically valid placeholders work — same convention as `launch-ice`. Observed:
 
 ```
-[MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0
+[MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0 --launch-delay-seconds 5
 [MockClient] mock-game started, pid=30207
-[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238
+[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238 launch=auto after 5s
 [MockGame]   Created StateMachine with initial state INITIALIZING and policy IGNORE
 [MockGame]   [WARN] could not connect to GPGNet server at 127.0.0.1:7237: GPGNet server not reachable at 127.0.0.1:7237 after 20 attempts
 [MockGame]   shutting down mock game

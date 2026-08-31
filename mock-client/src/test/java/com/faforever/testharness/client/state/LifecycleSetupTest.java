@@ -48,6 +48,7 @@ final class LifecycleSetupTest {
                     0,
                     0,
                     0,
+                    5,
                     "WARN",
                     Optional.empty(),
                     OptionalInt.empty(),

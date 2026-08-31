@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
 public final class LifecycleSetupTest {
 
     private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of());
+            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 

@@ -43,6 +43,7 @@ final class ShutdownTest {
                     0,
                     0,
                     0,
+                    5,
                     "WARN",
                     Optional.empty(),
                     OptionalInt.empty(),

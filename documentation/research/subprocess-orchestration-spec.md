@@ -260,11 +260,28 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
-  "--game-uid",    game_launch.uid ]
+  "--game-uid",    game_launch.uid,
+  "--launch-delay-seconds", mockGameLaunchDelaySeconds ]
 ```
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
-(WBS-3.2.1.1): strict, every argument required, unknown arguments rejected.
+(WBS-3.2.1.1): strict, unknown arguments rejected, and every argument that
+states a *session fact* required and never defaulted.
+
+`--launch-delay-seconds` (WBS-4.3.1) is the one defaulted argument, because it
+is a behavioural knob rather than a session fact: how long the game sits in the
+lobby before starting the match on its own, with a negative value meaning it
+never does. Its default (5 s, the value `Main` used to hardcode) applies only to
+a hand-run binary — `MockGameLauncher` always emits the flag explicitly, from
+the client's own `--mock-game-launch-delay-seconds`, and `Main` logs the
+effective policy in its startup line either way.
+
+A multi-peer session must pass a negative value **to the host at least**. The
+FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
+(`lobbyconnection.command_game_join`) and moves it out of that state as soon as
+the host reports `GameState Launching` (`gameconnection._handle_game_state` →
+`game.launch()`), so a host that auto-launches on a timer makes its own game
+unjoinable while the joiner is still booting its adapter and game.
 
 All three identity values have the same two sources as the adapter's
 (WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity

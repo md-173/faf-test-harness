@@ -11,15 +11,24 @@ import picocli.CommandLine.ParameterException;
 /**
  * Strict parser for the mock game's launch arguments (WBS-3.2.1.1), producing a {@link
  * MockGameConfig}. The caller is a machine — the Mock Client's {@code MockGameLauncher}
- * (WBS-3.1.2.3) — so the contract is strict: every argument required, nothing defaulted, no
- * environment-variable or config-file fallbacks, and unknown arguments fail the parse.
+ * (WBS-3.1.2.3) — so the contract is strict: no environment-variable or config-file fallbacks, and
+ * unknown arguments fail the parse. Every argument that states a <em>session fact</em> (the ports,
+ * the identity, the game uid) is required and never defaulted, because a guessed port or player id
+ * produces a session that looks alive and is wrong.
+ *
+ * <p><b>{@code --launch-delay-seconds} is the one defaulted argument</b> (WBS-4.3.1), and
+ * deliberately so: it is a behavioural knob, not a session fact, and its default is the behaviour
+ * mock-game had before the flag existed. Nothing silently depends on that default in an
+ * orchestrated run — {@code MockGameLauncher} always emits the flag explicitly, from the client's
+ * own config — so it only applies to a hand-run binary, and {@code Main} logs the effective policy
+ * at startup so even a hand-run says which one it took.
  *
  * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8). Extend both ends together if
  * orchestration ever adds the remaining {@code game_launch}-derived flags.
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
- * --game-uid <uid>
+ * --game-uid <uid> [--launch-delay-seconds <seconds>]
  * }</pre>
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
@@ -31,6 +40,13 @@ public final class MockGameCli {
 
     /** Highest valid TCP/UDP port number. */
     private static final int MAX_PORT = 65535;
+
+    /**
+     * Default for {@code --launch-delay-seconds}: the 5 s {@code Main} used to hardcode. Long
+     * enough that a peer's {@code ConnectToPeer} lands first in a single-peer run, short enough not
+     * to pad every harness run.
+     */
+    private static final String DEFAULT_LAUNCH_DELAY_SECONDS = "5";
 
     /** TCP port of the adapter's GPGNet server; validated to a real port range. */
     @Option(names = "--gpgnet-port", required = true, description = "adapter GPGNet TCP port")
@@ -65,6 +81,21 @@ public final class MockGameCli {
             description = "Additional game options for the host to send")
     private Map<String, String> gameOptions = new HashMap<>();
 
+    /**
+     * How long the game sits in the lobby before starting the match on its own; negative disables
+     * auto-launch entirely. The default is the behaviour that was hardcoded in {@code Main} before
+     * this flag existed.
+     */
+    @Option(
+            names = "--launch-delay-seconds",
+            defaultValue = DEFAULT_LAUNCH_DELAY_SECONDS,
+            description =
+                    "Seconds to sit in the lobby before launching the match on our own "
+                            + "(default: ${DEFAULT-VALUE}). Negative never auto-launches, which is "
+                            + "what a multi-peer session needs: a host that launches makes its own "
+                            + "game unjoinable.")
+    private int launchDelaySeconds;
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -86,7 +117,8 @@ public final class MockGameCli {
                 cli.playerId,
                 cli.playerLogin,
                 cli.gameUid,
-                cli.gameOptions);
+                cli.gameOptions,
+                cli.launchDelaySeconds);
     }
 
     /**

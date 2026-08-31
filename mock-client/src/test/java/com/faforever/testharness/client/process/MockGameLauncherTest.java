@@ -115,6 +115,24 @@ final class MockGameLauncherTest {
         assertEquals("mock-client", valueAfter(argv, "--player-login"));
         // iceAdapterGameId default, meaning no orchestrated session.
         assertEquals("0", valueAfter(argv, "--game-uid"));
+        // Emitted even when it matches mock-game's own default (WBS-4.3.1): the value decides
+        // whether the session's game stays joinable, so the launcher states it rather than letting
+        // the game guess. An argv without it would silently inherit auto-launch.
+        assertEquals("5", valueAfter(argv, "--launch-delay-seconds"));
+    }
+
+    @Test
+    void argvCarriesTheConfiguredLaunchDelayIncludingTheDisableSentinel() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config = configWithLaunchDelay(binary, -1);
+
+        List<String> argv = new MockGameLauncher(config).buildArgv(binary);
+
+        assertEquals(
+                "-1",
+                valueAfter(argv, "--launch-delay-seconds"),
+                "a multi-peer session disables auto-launch, and the negative value must survive "
+                        + "the config → argv hop intact");
     }
 
     @Test
@@ -267,8 +285,18 @@ final class MockGameLauncherTest {
         return configWithBinaryAndPlayerId(binary, null);
     }
 
+    /** As {@link #configWithBinary(Path)}, with an explicit mock-game launch delay. */
+    private static MockClientConfig configWithLaunchDelay(final Path binary, final int seconds) {
+        return configWithBinaryAndPlayerId(binary, null, seconds);
+    }
+
     private static MockClientConfig configWithBinaryAndPlayerId(
             final Path binary, final Integer playerId) {
+        return configWithBinaryAndPlayerId(binary, playerId, null);
+    }
+
+    private static MockClientConfig configWithBinaryAndPlayerId(
+            final Path binary, final Integer playerId, final Integer launchDelaySeconds) {
         List<String> args =
                 new ArrayList<>(
                         List.of(
@@ -283,6 +311,9 @@ final class MockGameLauncherTest {
                                 "--mock-game-binary-path=" + binary));
         if (playerId != null) {
             args.add("--player-id-override=" + playerId);
+        }
+        if (launchDelaySeconds != null) {
+            args.add("--mock-game-launch-delay-seconds=" + launchDelaySeconds);
         }
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
