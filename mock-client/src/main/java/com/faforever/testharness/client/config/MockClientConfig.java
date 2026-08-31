@@ -69,6 +69,9 @@ import java.util.OptionalInt;
  * @param joinConfig join-an-existing-game settings (lobby-protocol-spec §4.2 / §10.2); present only
  *     when the operator configured the mock client to join — empty means this run does not join
  *     (e.g. it hosts a game instead)
+ * @param queueConfig matchmaking-queue settings (lobby-protocol-spec §4.3 / §10.2); present only
+ *     when the operator configured the mock client to queue — empty means this run does not queue
+ *     (e.g. it hosts or joins a custom game instead)
  * @param iceRelayDelayMs how long the ICE signal relay holds each relayed candidate before
  *     forwarding it, in milliseconds; {@code 0} (the default) forwards inline. The delayed-ICE half
  *     of WBS-5.1's fault injection. Read through {@link #iceRelayDelay()} rather than directly
@@ -98,6 +101,7 @@ public record MockClientConfig(
         String playerLogin,
         Optional<GameHostConfig> hostConfig,
         Optional<GameJoinConfig> joinConfig,
+        Optional<GameQueueConfig> queueConfig,
         int iceRelayDelayMs) {
 
     /**
