@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -66,6 +67,82 @@ final class LogLevelFlagEndToEndTest {
         assertFalse(records.isEmpty(), "the child wrote no records at all, so it never ran");
     }
 
+    @Test
+    void failureBeforeTheSubcommandConfiguresLoggingStillHonoursBothFlags() throws Exception {
+        // The handler is the first logger in the process on this path, so whatever it finds in the
+        // system properties is what Logback pins for good. Left alone it pins INFO and the default
+        // path: no DEBUG record to recover the trace from, and the ERROR record in a file the
+        // operator never asked for, tagged Unknown.
+        Path requested = tempDir.resolve("child.jsonl");
+        List<JsonNode> records =
+                runChild(
+                        EarlyFailureChild.class,
+                        false,
+                        new String[] {EarlyFailureChild.SUBCOMMAND},
+                        "--log-level=DEBUG",
+                        "--log-file=" + requested);
+
+        JsonNode error = onlyRecordAt(records, "ERROR");
+        assertTrue(
+                error.path("message").asText().contains(EarlyFailureChild.MESSAGE),
+                "the ERROR record did not describe the failure: " + error);
+        assertEquals(
+                "MockClient",
+                error.path("component").asText(),
+                "records are tagged Unknown, so LoggingSetup.configure never ran: " + error);
+
+        JsonNode debug = onlyRecordAt(records, "DEBUG");
+        assertTrue(
+                debug.has("exception"),
+                "the DEBUG record carries no stack trace, so the stderr hint is unactionable: "
+                        + debug);
+        assertTrue(
+                debug.path("exception").asText().contains("IllegalStateException"),
+                "the recovered trace is not the throw under test: " + debug);
+    }
+
+    @Test
+    void environmentLayerReachesLoggingBeforeTheSubcommandStarts() throws Exception {
+        // The strategy reads the populated root command rather than the ParseResult, precisely
+        // because options resolved from the environment or the config file are never "matched"
+        // options. Without this case, switching to parseResult.matchedOptionValue would still pass
+        // every other test here while silently stranding anyone who configures the harness by
+        // environment — which is how the Docker workspace and the N-client spawner do it.
+        Path requested = tempDir.resolve("child.jsonl");
+        List<JsonNode> records =
+                runChild(
+                        EarlyFailureChild.class,
+                        false,
+                        Map.of(
+                                "FAF_MOCK_CLIENT_LOG_LEVEL",
+                                "DEBUG",
+                                "FAF_MOCK_CLIENT_LOG_FILE",
+                                requested.toString()),
+                        new String[] {EarlyFailureChild.SUBCOMMAND});
+
+        assertEquals(
+                "MockClient",
+                onlyRecordAt(records, "ERROR").path("component").asText(),
+                "records are tagged Unknown, so LoggingSetup.configure never ran");
+        assertTrue(
+                onlyRecordAt(records, "DEBUG").has("exception"),
+                "FAF_MOCK_CLIENT_LOG_LEVEL did not reach Logback, so the trace is unrecoverable");
+    }
+
+    /**
+     * Returns the single record at {@code level}, failing if there is not exactly one.
+     *
+     * @param records every record the child wrote
+     * @param level the level to select
+     * @return the one record at that level
+     */
+    private static JsonNode onlyRecordAt(final List<JsonNode> records, final String level) {
+        List<JsonNode> matching =
+                records.stream().filter(r -> level.equals(r.path("level").asText())).toList();
+        assertEquals(1, matching.size(), "expected one " + level + " record, got: " + matching);
+        return matching.get(0);
+    }
+
     /**
      * Whether {@code record} is the marker {@link LogLevelFlagChild} emits at {@code DEBUG}.
      *
@@ -92,8 +169,58 @@ final class LogLevelFlagEndToEndTest {
      */
     private List<JsonNode> runChild(final String... extraArgs)
             throws IOException, InterruptedException {
-        Path logFile = tempDir.resolve("child.jsonl");
         String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
+        return runChild(
+                LogLevelFlagChild.class,
+                true,
+                CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary),
+                extraArgs);
+    }
+
+    /**
+     * Runs {@code mainClass} in a child JVM and returns the records it wrote to this test's log
+     * file.
+     *
+     * @param mainClass the child program to run
+     * @param logFileViaEnv whether to point the child at the log file with the {@code LOG_FILE}
+     *     environment variable. Pass {@code false} when the test is about the {@code --log-file}
+     *     flag itself: the environment variable reaches Logback whether or not the flag was
+     *     honoured, so setting both would mask exactly the failure under test
+     * @param baseArgs the subcommand and its required flags
+     * @param extraArgs arguments appended after {@code baseArgs}
+     * @return the parsed records, in order
+     * @throws IOException if the child cannot be started or its output cannot be read
+     * @throws InterruptedException if the wait for the child is interrupted
+     */
+    private List<JsonNode> runChild(
+            final Class<?> mainClass,
+            final boolean logFileViaEnv,
+            final String[] baseArgs,
+            final String... extraArgs)
+            throws IOException, InterruptedException {
+        return runChild(mainClass, logFileViaEnv, Map.of(), baseArgs, extraArgs);
+    }
+
+    /**
+     * As above, with extra environment variables set on the child.
+     *
+     * @param mainClass the child program to run
+     * @param logFileViaEnv whether to point the child at the log file with {@code LOG_FILE}
+     * @param extraEnv variables to set on the child, applied after the ambient scrub below
+     * @param baseArgs the subcommand and its required flags
+     * @param extraArgs arguments appended after {@code baseArgs}
+     * @return the parsed records, in order
+     * @throws IOException if the child cannot be started or its output cannot be read
+     * @throws InterruptedException if the wait for the child is interrupted
+     */
+    private List<JsonNode> runChild(
+            final Class<?> mainClass,
+            final boolean logFileViaEnv,
+            final Map<String, String> extraEnv,
+            final String[] baseArgs,
+            final String... extraArgs)
+            throws IOException, InterruptedException {
+        Path logFile = tempDir.resolve("child.jsonl");
         String javaBin =
                 ProcessHandle.current()
                         .info()
@@ -106,9 +233,8 @@ final class LogLevelFlagEndToEndTest {
                                 javaBin,
                                 "-cp",
                                 System.getProperty("java.class.path"),
-                                LogLevelFlagChild.class.getName()));
-        command.addAll(
-                List.of(CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary)));
+                                mainClass.getName()));
+        command.addAll(List.of(baseArgs));
         command.addAll(List.of(extraArgs));
 
         ProcessBuilder pb = new ProcessBuilder(command);
@@ -117,7 +243,16 @@ final class LogLevelFlagEndToEndTest {
         // developer or CI runner exporting either of these would otherwise steer the child.
         pb.environment().remove(LoggingSetup.LOG_LEVEL_ENV);
         pb.environment().remove(LoggingSetup.INSTANCE_NAME_ENV);
-        pb.environment().put(LoggingSetup.LOG_FILE_ENV, logFile.toString());
+        if (logFileViaEnv) {
+            pb.environment().put(LoggingSetup.LOG_FILE_ENV, logFile.toString());
+        } else {
+            pb.environment().remove(LoggingSetup.LOG_FILE_ENV);
+        }
+        // The child reads the live environment, so a developer or CI runner with any
+        // FAF_MOCK_CLIENT_* variable exported would otherwise be configuring it from outside the
+        // test. Scrub the whole namespace, then apply only what this case asked for.
+        pb.environment().keySet().removeIf(name -> name.startsWith("FAF_MOCK_CLIENT_"));
+        pb.environment().putAll(extraEnv);
         pb.redirectErrorStream(true);
 
         Process child = pb.start();

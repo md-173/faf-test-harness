@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.config;
 
 import com.faforever.testharness.client.cli.ExecutionExceptionHandler;
+import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Map;
@@ -105,6 +106,7 @@ public final class ConfigLoader {
         // subcommand sets that property later, inside call(). A logger here would pin the whole
         // process at INFO and silently disable --log-level. See ExecutionExceptionHandler.
         commandLine.setExecutionExceptionHandler(new ExecutionExceptionHandler());
+        commandLine.setExecutionStrategy(ConfigLoader::applyLoggingThenRun);
 
         try {
             Path configFile = preParseConfigFlag(args);
@@ -114,6 +116,43 @@ public final class ConfigLoader {
         }
 
         return commandLine;
+    }
+
+    /**
+     * Execution strategy: bridge the resolved {@code --log-level} / {@code --log-file} into the
+     * system properties Logback reads, then run the selected subcommand.
+     *
+     * <p>Logback resolves {@code ${LOG_LEVEL:-INFO}} and {@code ${LOG_FILE:-…}} exactly once, when
+     * the first logger in the process is created. Whoever creates that logger therefore decides the
+     * level and the file for the whole run. Applying the values here — after parsing, so every
+     * layer has been merged, and before any {@code call()}, so nothing has logged yet — makes that
+     * moment deterministic instead of a property of which code path happened to log first.
+     *
+     * <p>This replaces a guard that tried to detect whether logging had already been configured by
+     * testing whether the {@code LOG_LEVEL} system property was set. That test could not work:
+     * {@code -DLOG_LEVEL=…} on the command line, or the variable in the environment, both set the
+     * signal without any subcommand having run, so the configuration was skipped and {@code
+     * --log-file} was silently ignored. One unconditional application point needs no such signal.
+     *
+     * <p>Subcommands still call {@link MockClientCli#applyLoggingProperties} themselves. That is
+     * now redundant rather than wrong — same values, already applied — and is left in place because
+     * those calls belong to their own WBS items.
+     *
+     * @param parseResult the parsed command line
+     * @return the exit code produced by the executed subcommand
+     */
+    private static int applyLoggingThenRun(final ParseResult parseResult) {
+        // Only when a subcommand will actually run. --help, --version and the bare root all return
+        // without doing any work, and configuring logging for them would create a log file for an
+        // invocation that produced nothing worth logging.
+        if (parseResult.hasSubcommand()
+                && parseResult.commandSpec().userObject() instanceof MockClientCli cli) {
+            cli.applyLoggingPropertiesFromOptions();
+            // Also stamps the component onto every record. Without it the label resolves to
+            // "Unknown", which is what a harness filtering by component would have to match on.
+            LoggingSetup.configure(MockClientCli.COMPONENT_NAME);
+        }
+        return new CommandLine.RunLast().execute(parseResult);
     }
 
     /**
