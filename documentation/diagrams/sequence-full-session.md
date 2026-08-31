@@ -208,4 +208,4 @@ sequenceDiagram
   and
   [`faf-pioneer/docs/network_architecture.md`](https://github.com/FAForever/faf-pioneer/blob/main/docs/network_architecture.md).
 - Subprocess orchestration (ProcessBuilder, JSON-RPC init, teardown):
-  [`../task-desc.md`](../task-desc.md) §1.1 Mock Client Core.
+  [`../research/subprocess-orchestration-spec.md`](../research/subprocess-orchestration-spec.md).

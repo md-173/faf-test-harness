@@ -118,18 +118,25 @@ table in [`mock-client/README.md`](../../mock-client/README.md#exit-codes)).
 in-repo `mock-game` against the adapter's GPGNet port with `launch-game`, to
 show a full GPGNet handshake with no lobby at all — does not currently work
 end to end, and this runbook will not present a workaround as if it were the
-process. Two independent things block it as of this writing:
+process. Since 3.2.5.1 landed, one thing blocks it: `faf-ice-adapter` 3.3.14
+blocks its GPGNet accept path (`RPCService.getPeerOrWait()`) until a JSON-RPC
+client connects first — `launch-ice` alone never provides one, so even a real
+game binary never gets past connect. This ordering constraint is documented in
+full in `GpgNetConnectionLiveSmokeTest`'s class javadoc (WBS 3.2.2.4).
 
-1. `mock-game`'s `main` is still a stub that logs one line and exits `0`
-   immediately, before ever opening the GPGNet socket (recorded in
-   [`component-isolation.md`](component-isolation.md), row 5) — verified
-   again here: `launch-game` against the built `mock-game` binary exits `70`
-   (`RUNTIME`) because the game exits before its run window.
-2. Independently of that, `faf-ice-adapter` 3.3.14 blocks its GPGNet accept
-   path (`RPCService.getPeerOrWait()`) until a JSON-RPC client connects first
-   — `launch-ice` alone never provides one, so even a real game binary would
-   hang on connect. This ordering constraint is documented in full in
-   `GpgNetConnectionLiveSmokeTest`'s class javadoc (WBS 3.2.2.4).
+`mock-game` itself is no longer an obstacle, and the reason a bare
+`launch-game` still exits `70` has changed. 3.2.5.1 replaced the old stub
+`main` with a real bootstrap, so the game now boots normally, runs its bounded
+adapter-connect window (about two seconds), finds nothing listening on the
+GPGNet port, and exits `70` under its own power —
+`status=SERVER_NOT_CONNECTED`, which `Main` maps via `SERVER_NOT_CONNECTED,
+FAILED -> ExitCodes.RUNTIME`. That is the same exit code this section reported
+before 3.2.5.1, for the opposite cause: the game used to exit `0` before its
+run window was ever reached, and `launch-game` supplied the `RUNTIME` itself.
+Reading the `70` as "the game died early" is now wrong — it boots fine and
+finds no adapter. Row 5 of
+[`component-isolation.md`](component-isolation.md) carries the re-recorded
+output.
 
 The GPGNet handshake itself **is** proven, against the real adapter, by that
 same automated test — `GpgNetConnectionLiveSmokeTest`

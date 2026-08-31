@@ -1,7 +1,5 @@
 # FAForever Mocking Project
 
-We have a critical business need to accelerate our DevEnv delivery and would like to discuss potential DCC resourcing to assist. FAForever mocking project.
-
 ## A Little Background
 FAForever is an open-source project emulating the multiplayer lobby of the video game "Supreme Commander: Forged Alliance". The project is working based on reverse engineering the original components and has replaced everything except of the "game" running on your computer itself.
 

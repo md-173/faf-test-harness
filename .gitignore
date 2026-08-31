@@ -68,3 +68,9 @@ bin/
 
 # Sprint demo screenshots (local evidence for standups, not repo content)
 /sprint-pack/
+
+# Local environment overrides. The harness reads none of these (config comes from
+# defaults -> --config JSON -> FAF_MOCK_CLIENT_* env -> CLI flags); ignored so a
+# stray .env.local holding a token can never be committed.
+.env
+.env.*

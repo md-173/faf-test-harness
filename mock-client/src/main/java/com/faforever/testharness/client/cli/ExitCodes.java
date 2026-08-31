@@ -19,12 +19,6 @@ public final class ExitCodes {
      */
     public static final int USAGE = 2;
 
-    /**
-     * Subcommand acknolwged but its real logic has not shipped yet. Different from {@link #OK} so
-     * CI cannot mistake a stub for a real success.
-     */
-    public static final int NOT_IMPLEMENTED = 64;
-
     /** Reserved for runtime failures once subcommands ship. */
     public static final int RUNTIME = 70;
 
