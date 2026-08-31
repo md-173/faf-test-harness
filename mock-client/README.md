@@ -55,7 +55,15 @@ and the cause, and returns `70`. The stack trace is not discarded — it is logg
 at `DEBUG`, so `--log-level DEBUG` puts the whole trace in the JSONL file as one
 record's `exception` field (and, being a normal log record, on the console too).
 The failure itself is recorded at `ERROR` regardless of level, so a harness
-reading log records alone still sees it.
+reading log records alone still sees it. Both hold even when the failure lands
+before the subcommand itself starts: `--log-level` and `--log-file` are applied
+once after parsing and before any subcommand runs, so the records go to the file
+you asked for rather than to the default one.
+
+Note that this is the `--log-level` flag and its `FAF_MOCK_CLIENT_LOG_LEVEL`
+counterpart. A bare `LOG_LEVEL` variable in the environment is Logback's own
+channel and is overridden by the resolved value, on this path and on every
+other.
 
 Two things sit outside the table by design, not by oversight. A **signal** exits
 with the JVM's signal code — `130` for SIGINT, `143` for SIGTERM — which is the
