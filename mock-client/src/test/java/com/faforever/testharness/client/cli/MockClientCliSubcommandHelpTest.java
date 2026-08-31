@@ -45,6 +45,10 @@ final class MockClientCliSubcommandHelpTest {
         assertTrue(text.contains("run"), "Help should mention 'run'. Got: " + text);
         assertTrue(text.contains("launch-ice"), "Help should mention 'launch-ice'. Got: " + text);
         assertTrue(text.contains("launch-game"), "Help should mention 'launch-game'. Got: " + text);
+        // Load-bearing beyond discoverability: a command can be implemented, tested, and
+        // documented while silently missing from MockClientCli's `subcommands` list — which is
+        // exactly what a merge dropped once. This assertion is what catches that.
+        assertTrue(text.contains("ice-smoke"), "Help should mention 'ice-smoke'. Got: " + text);
     }
 
     @Test
@@ -60,6 +64,11 @@ final class MockClientCliSubcommandHelpTest {
     @Test
     void launchGameSubcommandHelpShortCircuitsRequiredCheck() {
         assertSubcommandHelpWorks("launch-game");
+    }
+
+    @Test
+    void iceSmokeSubcommandHelpShortCircuitsRequiredCheck() {
+        assertSubcommandHelpWorks("ice-smoke");
     }
 
     private static void assertSubcommandHelpWorks(final String subcommand) {

@@ -92,4 +92,42 @@ final class MockClientCliExitCodeTest {
                 ExitCodes.RUNTIME,
                 execute(CliTestFixtures.withSubcommandAndGameBinary("launch-game", absentBinary)));
     }
+
+    @Test
+    void iceSmokeRunsWithoutAnyLobbyOrOauthFlags() {
+        // This is ice-smoke's RUNTIME row of the table, and its no-credentials guarantee in one:
+        // given only an adapter path and no credentials at all, a guaranteed-absent binary must
+        // reach the command's own logic and report RUNTIME — not USAGE, which is what a
+        // missing-required-options rejection would produce. A second test passing the full flag
+        // set would assert nothing this one does not (IceSmokeCommandTest covers the message and
+        // the absence of a stack trace).
+        String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
+        assertEquals(
+                ExitCodes.RUNTIME,
+                execute(
+                        new String[] {
+                            "ice-smoke",
+                            "--ice-adapter-binary-path=" + absentBinary,
+                            "--timeout-seconds=2"
+                        }));
+    }
+
+    @Test
+    void iceSmokeWithNonPositiveTimeoutExitsUsage() {
+        assertEquals(ExitCodes.USAGE, execute(new String[] {"ice-smoke", "--timeout-seconds=0"}));
+    }
+
+    @Test
+    void iceSmokeWithEqualRpcAndGpgNetPortsExitsUsage() {
+        // Both are TCP listeners in one adapter process, so equal values cannot both bind. Caught
+        // as a usage error rather than surfacing later as an unexplained "unreachable".
+        assertEquals(
+                ExitCodes.USAGE,
+                execute(
+                        new String[] {
+                            "ice-smoke",
+                            "--ice-adapter-rpc-port=7236",
+                            "--ice-adapter-gpg-net-port=7236"
+                        }));
+    }
 }

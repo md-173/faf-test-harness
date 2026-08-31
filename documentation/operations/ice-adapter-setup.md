@@ -150,6 +150,12 @@ below):
 > binary) plus #155 (the transport). The `ice-smoke` subcommand that WBS 3.1.4.3 (#151) was to
 > have carried it in never shipped and was removed at 7.1. Re-run the probe (Quick start) after any version bump.
 >
+> **Since WBS-3.1.4.3 there is also a CLI check**, `mock-client ice-smoke`, which proves the same
+> bring-up plus the GPGNet endpoint and needs no lobby or OAuth placeholders. It deliberately does
+> **not** use `status` — upstream marks that method `@Deprecated(forRemoval = true)` — so after a
+> version bump run both: `ice-smoke` for the verdict, and the manual `status` probe below only if
+> you need the response body quoted here.
+>
 > That check ships as `IceAdapterConnectionLiveSmokeTest`, run under `./gradlew integrationTest`
 > (not `test`). It resolves the adapter jar from the **`FAF_ICE_ADAPTER_JAR`** environment variable
 > if set, else the default `faf-ice-adapter.jar` on the launcher's path (repo root / CWD), and

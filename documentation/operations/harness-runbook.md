@@ -69,6 +69,58 @@ sequence below was executed to produce this section (Windows 11, Gradle
 daemon on Temurin 25 with the actual compile/run on an auto-detected local
 Temurin 21, 2026-08-21, `faf-ice-adapter` 3.3.14).
 
+### Start here: `ice-smoke`
+
+One command answers "is this harness working?" for a consumer with no FAF
+account. It spawns the adapter, connects to its JSON-RPC port, sends one
+request, connects to its GPGNet port and waits for the adapter to announce that
+connection back over RPC, then tears everything down. Exit `0` means reachable;
+anything else names the phase that failed.
+
+```bash
+./gradlew :mock-client:installDist
+./gradlew downloadIceAdapter
+
+./mock-client/build/install/mock-client/bin/mock-client ice-smoke \
+  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar"
+```
+
+That is the entire invocation: no lobby URL, no OAuth values, no placeholders.
+Run from the repo root, where `downloadIceAdapter` puts the jar on the default
+path, even the binary flag is optional — `mock-client ice-smoke` alone passes.
+It takes about two seconds, and every wait inside it is bounded and named
+(`--timeout-seconds`, default `20`, caps the checking; tearing the adapter down
+adds a separately bounded 2 s SIGTERM→SIGKILL grace outside that cap, and only
+matters for an adapter that ignores SIGTERM). Run it as the precondition before paying
+for anything longer — when a full session test fails, this is what separates
+"the adapter never came up" from "the session logic is wrong". The verdict
+vocabulary and a worked pass/fail transcript are in
+[`mock-client/README.md`](../../mock-client/README.md#ice-smoke--is-a-local-adapter-reachable).
+
+*Provenance: this subcommand and its transcript were exercised against the real
+`faf-ice-adapter` 3.3.14 on Linux (WSL2, Temurin 21) on 2026-08-30 — a different
+run from the Windows 11 session that produced the rest of this section. Elapsed:
+1.7 s. The same path is pinned automatically by `IceSmokeLiveTest`
+(`./gradlew :mock-client:integrationTest --tests '*IceSmokeLiveTest'`), which
+self-skips when the adapter jar is absent.*
+
+### The adapter subprocess alone: `launch-ice`
+
+`ice-smoke` answers "is the adapter reachable?" and is the one to reach for
+first. `launch-ice` answers a different question — "what does the adapter do
+when left alone?" — and the difference is not just scope: it attaches **no
+JSON-RPC peer**, which is a distinct state upstream behaves differently in
+(`RPCService.getPeerOrWait()` blocks the GPGNet accept path there; see below).
+It also holds the adapter up for a configurable window instead of exiting as
+soon as a verdict exists, which is what makes it the right tool for reading the
+adapter's own output after a version bump ([`ice-adapter-setup.md`](ice-adapter-setup.md)).
+
+That gives the two commands a fault-localisation split worth keeping: if
+`ice-smoke` reports `RPC_UNREACHABLE` but `launch-ice` shows a healthy adapter
+running out its window, the fault is in the RPC layer, not the spawn. Whether
+`launch-ice` should keep that boundary or start dialling JSON-RPC itself is an
+open question, tracked in #279.
+
 Build the launcher and fetch the adapter (§1), then spawn the adapter alone
 with `launch-ice`:
 
@@ -137,6 +189,11 @@ Reading the `70` as "the game died early" is now wrong — it boots fine and
 finds no adapter. Row 5 of
 [`component-isolation.md`](component-isolation.md) carries the re-recorded
 output.
+
+`ice-smoke` is not the missing peer either. It does connect a JSON-RPC client,
+but only for the couple of seconds its own check runs, and it terminates the
+adapter it started on the way out — so it cannot hold one open for a separately
+launched game. Supplying that peer is what #279 is for.
 
 The GPGNet handshake itself **is** proven, against the real adapter, by that
 same automated test — `GpgNetConnectionLiveSmokeTest`
