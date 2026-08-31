@@ -14,8 +14,8 @@ import java.util.concurrent.CompletableFuture;
  * consuming them at runtime is the FSM's job, not this class's.
  *
  * <p>This class is deliberately a leaf: it builds one outbound frame from a {@link GameQueueConfig}
- * and hands it to {@link LobbyConnection#send(com.fasterxml.jackson.databind.JsonNode)}. It does not
- * decide <em>when</em> to queue — that is {@link
+ * and hands it to {@link LobbyConnection#send(com.fasterxml.jackson.databind.JsonNode)}. It does
+ * not decide <em>when</em> to queue — that is {@link
  * com.faforever.testharness.client.state.MockClientLifecycle}'s {@code IDLE} entry hook, {@code
  * sendGameMatchmakingIfConfigured()}, which calls {@link #sendStart(GameQueueConfig)} only when the
  * mock client was configured to queue.
@@ -39,8 +39,8 @@ public final class GameMatchmakingSender {
     }
 
     /**
-     * Builds and sends a {@code game_matchmaking} state {@code "start"} request from {@code config},
-     * including the configured faction, if any.
+     * Builds and sends a {@code game_matchmaking} state {@code "start"} request from {@code
+     * config}, including the configured faction, if any.
      *
      * @param config queue settings to send; must not be {@code null}
      * @return future that completes when the frame has been handed to the OS socket
@@ -64,7 +64,8 @@ public final class GameMatchmakingSender {
      */
     public CompletableFuture<WebSocket> sendStop(final GameQueueConfig config) {
         Objects.requireNonNull(config, "config");
-        GameMatchmakingMessage message = new GameMatchmakingMessage(config.queueName(), "stop", null);
+        GameMatchmakingMessage message =
+                new GameMatchmakingMessage(config.queueName(), "stop", null);
         return lobby.send(mapper.valueToTree(message));
     }
 }

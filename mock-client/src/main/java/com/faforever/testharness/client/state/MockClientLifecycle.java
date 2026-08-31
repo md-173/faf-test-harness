@@ -274,28 +274,7 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendGameHostIfConfigured);
         states.get(ClientState.IDLE).onEntry(this::sendGameJoinIfConfigured);
-        states.get(ClientState.IDLE).onEntry(this::sendGameMatchmakingIfConfigured);
-
-        // Matchmaking queue edges (#224): IDLE to SEARCHING on the server's confirmation that a
-        // search actually started, back to IDLE on either a stop confirmation or a cancelled match.
-        // A found match does not move the FSM by itself (no accept/decline step exists) — it stays
-        // SEARCHING until game_launch arrives, so the STARTING_GAME edge below is registered from
-        // SEARCHING too, reusing the same LaunchGame event and action the custom-game host/join
-        // paths already use.
-        states.get(ClientState.IDLE)
-                .registerTransition(SearchStarted.class, states.get(ClientState.SEARCHING));
-        states.get(ClientState.SEARCHING)
-                .registerTransition(SearchStopped.class, states.get(ClientState.IDLE));
-        states.get(ClientState.SEARCHING)
-                .registerTransition(MatchCancelled.class, states.get(ClientState.IDLE));
-        states.get(ClientState.SEARCHING)
-                .registerTransition(
-                        LaunchGame.class,
-                        states.get(ClientState.STARTING_GAME),
-                        this::launchGame,
-                        null);
-        states.get(ClientState.SEARCHING)
-                .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
+        registerMatchmakingQueueTransitions();
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -416,6 +395,33 @@ public final class MockClientLifecycle {
         // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
         // own exit wiring below needs free to observe that death.
         gameExit.thenAcceptAsync(this::onGameProcessExit);
+    }
+
+    /**
+     * Registers the matchmaking queue edges (#224): IDLE to SEARCHING on the server's confirmation
+     * that a search actually started, back to IDLE on either a stop confirmation or a cancelled
+     * match. A found match does not move the FSM by itself (no accept/decline step exists) — it
+     * stays SEARCHING until {@code game_launch} arrives, so the STARTING_GAME edge below is
+     * registered from SEARCHING too, reusing the same {@link LaunchGame} event and action the
+     * custom-game host/join paths already use. Split out of {@link #setupStateMachine()} to keep
+     * that method under the checkstyle length limit.
+     */
+    private void registerMatchmakingQueueTransitions() {
+        states.get(ClientState.IDLE).onEntry(this::sendGameMatchmakingIfConfigured);
+        states.get(ClientState.IDLE)
+                .registerTransition(SearchStarted.class, states.get(ClientState.SEARCHING));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(SearchStopped.class, states.get(ClientState.IDLE));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(MatchCancelled.class, states.get(ClientState.IDLE));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(
+                        LaunchGame.class,
+                        states.get(ClientState.STARTING_GAME),
+                        this::launchGame,
+                        null);
+        states.get(ClientState.SEARCHING)
+                .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
     }
 
     /**
@@ -1115,10 +1121,10 @@ public final class MockClientLifecycle {
 
     /**
      * {@code search_info} handler (WBS-3.1.1.9, lobby-protocol-spec.md §4.3 / §10.2): the server's
-     * confirmation of a search's actual state, carrying {@code queue_name} and {@code state} ({@code
-     * "start"} or {@code "stop"}). Posts the matching event so the FSM edge (registered in {@link
-     * #setupStateMachine()}) can move IDLE to SEARCHING or SEARCHING to IDLE. An unrecognised state
-     * value is logged and otherwise ignored, since neither FSM edge applies.
+     * confirmation of a search's actual state, carrying {@code queue_name} and {@code state}
+     * ({@code "start"} or {@code "stop"}). Posts the matching event so the FSM edge (registered in
+     * {@link #setupStateMachine()}) can move IDLE to SEARCHING or SEARCHING to IDLE. An
+     * unrecognised state value is logged and otherwise ignored, since neither FSM edge applies.
      *
      * @param message the {@code search_info} frame received.
      */
@@ -1134,8 +1140,8 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * {@code match_found} handler (WBS-3.1.1.9): the server matched this client and is about to send
-     * {@code game_launch}. There is no accept or decline step in the protocol — a found match
+     * {@code match_found} handler (WBS-3.1.1.9): the server matched this client and is about to
+     * send {@code game_launch}. There is no accept or decline step in the protocol — a found match
      * proceeds directly to launch and players cannot refuse it — so this only logs; the FSM stays
      * SEARCHING until {@code game_launch} drives it into STARTING_GAME.
      *

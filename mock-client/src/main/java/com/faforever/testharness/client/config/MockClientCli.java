@@ -498,7 +498,8 @@ public final class MockClientCli implements Callable<Integer> {
      * Builds the queue config from {@code --queue-name} and {@code --queue-faction}, or empty if no
      * queue was set.
      *
-     * @return the queue config, or {@link Optional#empty()} if the operator did not request queueing
+     * @return the queue config, or {@link Optional#empty()} if the operator did not request
+     *     queueing
      */
     private Optional<GameQueueConfig> buildQueueConfig() {
         if (queueName == null) {
