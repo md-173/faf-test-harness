@@ -51,6 +51,7 @@ final class LifecycleTest {
                     OptionalInt.empty(),
                     "Rhiza",
                     Optional.empty(),
+                    Optional.empty(),
                     Optional.empty());
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
@@ -246,7 +247,8 @@ final class LifecycleTest {
                 MINIMAL_CONFIG.playerIdOverride(),
                 MINIMAL_CONFIG.playerLogin(),
                 hostConfig,
-                MINIMAL_CONFIG.joinConfig());
+                MINIMAL_CONFIG.joinConfig(),
+                MINIMAL_CONFIG.queueConfig());
     }
 
     private MockClientLifecycle lifecycleWithConfig(MockClientConfig config) {

@@ -431,7 +431,7 @@ transition that stays in the same state, such as losing the lobby while
 
 | Line | Meaning |
 |---|---|
-| `state entry: <STATE>` | The client entered `<STATE>`, one of `CONNECTING`, `IDLE`, `STARTING_GAME`, `HOSTING`, `JOINING`, `PLAYING`, `TERMINATED`. |
+| `state entry: <STATE>` | The client entered `<STATE>`, one of `CONNECTING`, `IDLE`, `SEARCHING`, `STARTING_GAME`, `HOSTING`, `JOINING`, `PLAYING`, `TERMINATED`. |
 
 The line precedes that state's side effects, so `state entry: TERMINATED`
 appears before teardown output.

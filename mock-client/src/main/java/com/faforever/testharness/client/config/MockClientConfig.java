@@ -68,6 +68,9 @@ import java.util.OptionalInt;
  * @param joinConfig join-an-existing-game settings (lobby-protocol-spec §4.2 / §10.2); present only
  *     when the operator configured the mock client to join — empty means this run does not join
  *     (e.g. it hosts a game instead)
+ * @param queueConfig matchmaking-queue settings (lobby-protocol-spec §4.3 / §10.2); present only
+ *     when the operator configured the mock client to queue — empty means this run does not queue
+ *     (e.g. it hosts or joins a custom game instead)
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -93,7 +96,8 @@ public record MockClientConfig(
         OptionalInt playerIdOverride,
         String playerLogin,
         Optional<GameHostConfig> hostConfig,
-        Optional<GameJoinConfig> joinConfig) {
+        Optional<GameJoinConfig> joinConfig,
+        Optional<GameQueueConfig> queueConfig) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:

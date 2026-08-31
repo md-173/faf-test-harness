@@ -389,6 +389,28 @@ public final class MockClientCli implements Callable<Integer> {
     private Map<String, String> hostGameOption = new HashMap<>();
 
     /**
+     * Matchmaker queue name sent in the {@code game_matchmaking} request. No default: set to queue
+     * on reaching IDLE; omit to not queue.
+     */
+    @Option(
+            names = "--queue-name",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Matchmaker queue to search, e.g. \"ladder1v1\". When set, the mock client "
+                            + "sends game_matchmaking start for this queue once it reaches the "
+                            + "IDLE lobby state.")
+    private String queueName;
+
+    /** Faction sent alongside {@code game_matchmaking} state {@code start}. No default. */
+    @Option(
+            names = "--queue-faction",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Faction to search with (1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim). Sent only on "
+                            + "game_matchmaking start. See --queue-name.")
+    private Integer queueFaction;
+
+    /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
      * output stream and exit with {@link ExitCodes#USAGE}.
      *
@@ -432,7 +454,8 @@ public final class MockClientCli implements Callable<Integer> {
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
                 buildHostConfig(),
-                buildJoinConfig());
+                buildJoinConfig(),
+                buildQueueConfig());
     }
 
     /**
@@ -469,6 +492,19 @@ public final class MockClientCli implements Callable<Integer> {
                         Optional.ofNullable(hostRatingMax),
                         hostEnforceRatingRange,
                         hostGameOption));
+    }
+
+    /**
+     * Builds the queue config from {@code --queue-name} and {@code --queue-faction}, or empty if no
+     * queue was set.
+     *
+     * @return the queue config, or {@link Optional#empty()} if the operator did not request queueing
+     */
+    private Optional<GameQueueConfig> buildQueueConfig() {
+        if (queueName == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new GameQueueConfig(queueName, Optional.ofNullable(queueFaction)));
     }
 
     /**
