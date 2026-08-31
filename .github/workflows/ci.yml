@@ -36,6 +36,24 @@ jobs:
     - name: Build with Gradle Wrapper
       run: ./gradlew build
 
+    # A failed build is torn down with the runner, so the Gradle reports die with it and all that
+    # survives is the one-line assertion in the log above. Keep them on failure — the XML and HTML
+    # carry the stack trace and the captured stdout/stderr that the log line does not. Green runs do
+    # not match `failure()`, so they upload nothing. Caveat: `build` stops at the first module whose
+    # tests fail, so the artifact holds that module plus any that finished before it, not always all
+    # three. `warn` is deliberate — a compile or checkstyle failure legitimately produces no test
+    # reports and must not become a second, misleading step failure.
+    - name: Upload test reports
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          **/build/reports/tests
+          **/build/test-results
+        retention-days: 14
+        if-no-files-found: warn
+
     # NOTE: The Gradle Wrapper is the default and recommended way to run Gradle (https://docs.gradle.org/current/userguide/gradle_wrapper.html).
     # If your project does not have the Gradle Wrapper configured, you can use the following configuration to run Gradle with a specified version.
     #
