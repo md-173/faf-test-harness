@@ -137,11 +137,12 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                             + oneLine(path)
                             + describeLocation(e.getLocation())
                             + ": "
-                            + e.getOriginalMessage(),
+                            + oneLine(e.getOriginalMessage()),
                     e);
         } catch (IOException e) {
             throw new IllegalArgumentException(
-                    "failed to parse config file " + oneLine(path) + ": " + e.getMessage(), e);
+                    "failed to parse config file " + oneLine(path) + ": " + oneLine(e.getMessage()),
+                    e);
         }
     }
 
@@ -153,7 +154,12 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
      * "\nUsage:"} would forge the boundary between the error and picocli's usage block for anything
      * reading stderr.
      *
-     * @param value the value to interpolate, typically a {@link Path}
+     * <p>Every caller-controlled value interpolated into one of these messages goes through here,
+     * not just the path: an underlying library's message is no more trustworthy than the filename
+     * that produced it, and one unescaped operand reopens the hole for all of them. Values drawn
+     * from fixed sets, such as the stale-key names, are exempt.
+     *
+     * @param value the value to interpolate — a {@link Path}, or a message from a caught exception
      * @return the value's text with every line terminator replaced by a literal {@code \n}
      */
     static String oneLine(final Object value) {

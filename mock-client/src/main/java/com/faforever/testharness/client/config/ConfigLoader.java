@@ -152,7 +152,7 @@ public final class ConfigLoader {
                             + " path: "
                             + LayeredDefaultProvider.oneLine(value)
                             + " ("
-                            + e.getReason()
+                            + LayeredDefaultProvider.oneLine(e.getReason())
                             + ")",
                     e);
         }
