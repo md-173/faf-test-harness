@@ -28,9 +28,9 @@ import picocli.CommandLine.Option;
  * hostRatingMin}, {@code hostRatingMax}, {@code hostEnforceRatingRange}) into a single {@link
  * GameHostConfig} record component, {@code joinConfig} groups two ({@code targetGameId}, {@code
  * gameJoinPassword}) into a single {@link GameJoinConfig} component, and {@code queueConfig} groups
- * two ({@code queueName}, {@code queueFaction}) into a single {@link GameQueueConfig} component (see
- * {@link MockClientCli#toConfig()}), so each can be absent as a whole when the mock client isn't
- * configured to host, join, or queue. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
+ * two ({@code queueName}, {@code queueFaction}) into a single {@link GameQueueConfig} component
+ * (see {@link MockClientCli#toConfig()}), so each can be absent as a whole when the mock client
+ * isn't configured to host, join, or queue. {@link #GROUPED_RECORD_COMPONENT_NAMES} and {@link
  * #GROUPED_CLI_FIELD_NAMES} carve those pairings out of the strict 1:1 checks below.
  */
 final class MockClientCliRecordSyncTest {
