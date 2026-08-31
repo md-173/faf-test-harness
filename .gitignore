@@ -39,6 +39,10 @@ bin/
 ### VS Code ###
 .vscode/
 
+### Claude Code ###
+# Local agent scratch: worktrees/ holds checkouts whose gitlinks are not repo content.
+.claude/
+
 ### Mac OS ###
 .DS_Store
 
