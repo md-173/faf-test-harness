@@ -36,8 +36,10 @@ import org.slf4j.LoggerFactory;
  * <p>Treating either end as an object breaks the relay in a way no single-client test can see, and
  * both halves were wrong until the 4.3.1 two-peer run: stringifying the already-stringified payload
  * double-encoded it, and the receiving client then dropped its peer's candidates as "not a JSON
- * object". The outbound direction still stringifies a genuine object payload, so a future adapter
- * that matches the spec keeps working.
+ * object". Both directions target the shipped adapter, not the spec: outbound tolerates an object
+ * payload by stringifying it, but inbound always hands the adapter a string, so an adapter that
+ * ever did take an object would need the inbound half changed too. Not worth pre-building a
+ * shape-aware path for — the {@code (String)} cast is what the adapter actually ships.
  *
  * <p>The relay never swaps ids itself: it sends {@code remoteId} outbound and trusts {@code
  * args[0]} inbound — the lobby server performs the sender/receiver swap in transit (spec §7 step

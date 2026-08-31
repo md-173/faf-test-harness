@@ -409,7 +409,7 @@ final class TwoPeerSessionLiveTest {
     }
 
     /**
-     * The pgrep-clean checkpoint: once both sessions have shut down, neither binary may still be
+     * The "pgrep-clean" checkpoint: once both sessions have shut down, neither binary may still be
      * running under this JVM. Both peers use the same two binaries, so one check covers all four
      * processes.
      *

@@ -616,12 +616,13 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * {@link #gameExit} completion handler (#211): classifies the exit locally, then sends the
-     * lobby the same generic {@code GameState Ended} frame the real client sends on every
-     * termination (clean or crashed; see faf-client's {@code GameRunner.notifyGameEnded}), before
-     * posting {@link GameExited} so the frame leaves before teardown closes the connection. Crash
-     * detail itself never reaches the server — only this local log line carries it, per the card's
-     * source verification (no crash-report command exists in the protocol).
+     * {@link #gameExit} completion handler (#211): classifies the exit locally, then — unless the
+     * game already sent one itself — gives the lobby the generic {@code GameState Ended} frame the
+     * real client sends on every termination (clean or crashed; see faf-client's {@code
+     * GameRunner.notifyGameEnded}), before posting {@link GameExited} so the frame leaves before
+     * teardown closes the connection. Crash detail itself never reaches the server — only this
+     * local log line carries it, per the card's source verification (no crash-report command exists
+     * in the protocol).
      *
      * <p>Classification: INFO on a zero exit; INFO (not WARN) on a non-zero exit once {@link
      * #teardown}'s {@link SessionTeardown#hasRun()} is {@code true}, since {@link
@@ -641,16 +642,31 @@ public final class MockClientLifecycle {
         } else {
             LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
         }
-        sendGameStateEnded();
+        if (!cleanEndSeen.get()) {
+            sendGameStateEnded();
+        }
         machine.receiveEvent(new GameExited(exitCode));
     }
 
     /**
      * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby — the
      * exact envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send
-     * for a {@code GameState Ended} GPGNet frame. Sent directly here rather than through the
-     * forwarder because a crashed/killed game process never emits this frame to the adapter itself.
-     * Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
+     * for a {@code GameState Ended} GPGNet frame. This is the fallback for the case the forwarder
+     * cannot cover: a crashed or killed game process never emits the frame to the adapter at all.
+     *
+     * <p>The caller gates it on {@link #cleanEndSeen} rather than sending unconditionally, because
+     * since R72 was wired into {@code launchGame} (#218) a clean end produces the frame twice —
+     * mock-game emits {@code GameEnded} then {@code GameState Ended}, the adapter relays both
+     * (every frame reaches {@code onGpgNetMessageReceived}; verified in the 3.3.14 jar), and the
+     * forwarder sends them on. faf-server routes {@code GameState "Ended"} to {@code
+     * on_connection_closed()} and drops the repeat silently ({@code lobbyconnection.py}: {@code if
+     * not self.game_connection: return}), so the duplicate is harmless — but the real client never
+     * sends it, and this harness exists to be wire-faithful. The gate is exact because {@code
+     * GameEnded} precedes {@code GameState Ended} on the wire, and it degrades safely: a process
+     * that dies before the adapter relays {@code GameEnded} leaves the flag false and still gets
+     * the frame from here.
+     *
+     * <p>Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
      * ignored, since a dead lobby connection surfaces through the connection's own disconnect
      * listener.
      */

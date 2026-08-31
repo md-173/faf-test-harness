@@ -13,6 +13,7 @@ import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.nio.file.Path;
@@ -182,6 +183,66 @@ final class GameEndReportingTest {
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
     }
 
+    /**
+     * A clean end must put exactly one {@code GameState Ended} on the lobby socket. Since R72's
+     * forwarder was wired into {@code launchGame} (#218) the game's own frame reaches the lobby on
+     * its own, so {@link MockClientLifecycle}'s crash fallback must stand down — the real client
+     * never sends the frame twice, and faf-server routes {@code GameState "Ended"} straight to
+     * {@code on_connection_closed()}.
+     *
+     * <p>The two emitted frames are what mock-game actually sends at the end of a match, in order
+     * ({@code MockGameLifecycle.gameEnds}). The hanging "game" never exits on its own, so #192's
+     * safety net drives teardown — and that is the same {@code onGameProcessExit} path a real exit
+     * takes, which is where the duplicate came from.
+     */
+    @Test
+    void cleanEndSendsGameStateEndedExactlyOnce() throws Exception {
+        FakeIceAdapterConnection iceConn = new FakeIceAdapterConnection(MINIMAL_CONFIG);
+        MockClientLifecycle lifecycle = playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
+
+        iceConn.emitGpgNet("GameEnded");
+        iceConn.emitGpgNet("GameState", "Ended");
+
+        lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
+
+        List<JsonNode> frames = drainLobbyFrames();
+        long ended = frames.stream().filter(GameEndReportingTest::isGameStateEnded).count();
+        assertEquals(
+                1, ended, "exactly one GameState Ended must reach the lobby. captured: " + frames);
+    }
+
+    /**
+     * Reads every frame the lobby server has received, stopping at the first gap. The gap is
+     * detected by {@link ScriptedWebSocketServer#pollReceived(long, TimeUnit)}'s own timeout
+     * assertion, which is a failure for its usual callers but the terminator here.
+     *
+     * @return the frames in arrival order.
+     * @throws Exception if a parse fails.
+     */
+    private List<JsonNode> drainLobbyFrames() throws Exception {
+        List<JsonNode> frames = new ArrayList<>();
+        while (true) {
+            String message;
+            try {
+                message = server.pollReceived(2, TimeUnit.SECONDS);
+            } catch (AssertionError noMoreFrames) {
+                return frames;
+            }
+            frames.add(MAPPER.readTree(message));
+        }
+    }
+
+    /**
+     * Whether {@code frame} is the {@code GameState Ended} envelope.
+     *
+     * @param frame a frame received by the lobby server.
+     * @return {@code true} for {@code {command: "GameState", target: "game", args: ["Ended"]}}.
+     */
+    private static boolean isGameStateEnded(JsonNode frame) {
+        return "GameState".equals(frame.path("command").asText())
+                && "Ended".equals(frame.path("args").path(0).asText());
+    }
+
     @Test
     void safetyNetDoesNotFireWithoutGameEnded() throws Exception {
         FakeIceAdapterConnection iceConn = new FakeIceAdapterConnection(MINIMAL_CONFIG);
@@ -261,10 +322,19 @@ final class GameEndReportingTest {
 
         /** Fabricates and dispatches an {@code onGpgNetMessageReceived(command, [])} frame. */
         void emitGpgNet(String command) {
+            emitGpgNet(command, new String[0]);
+        }
+
+        /** Fabricates and dispatches an {@code onGpgNetMessageReceived(command, args)} frame. */
+        void emitGpgNet(String command, String... args) {
             ObjectNode notification = MAPPER.createObjectNode();
             notification.put("jsonrpc", "2.0");
             notification.put("method", "onGpgNetMessageReceived");
-            notification.putArray("params").add(command).addArray();
+            ArrayNode chunks = MAPPER.createArrayNode();
+            for (String arg : args) {
+                chunks.add(arg);
+            }
+            notification.putArray("params").add(command).add(chunks);
             List<Consumer<JsonNode>> registered =
                     handlers.getOrDefault("onGpgNetMessageReceived", new CopyOnWriteArrayList<>());
             for (Consumer<JsonNode> handler : registered) {
