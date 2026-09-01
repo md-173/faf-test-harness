@@ -172,6 +172,11 @@ public final class Main {
             lifecycle.shutdown().run();
             return ExitCodes.RUNTIME;
         }
+        // Only now open the socket. WBS-3.2.4.1-fix (#262) moved this out of the constructor, which
+        // is what lets the hook above be registered first: the teardown that closes the connection
+        // is in place before there is a connection to close, closing the window 3.2.5.1 documented
+        // as unavoidable when construction did the connecting.
+        lifecycle.start();
         try {
             lifecycle.stateReached(GameState.ENDED).join();
             ExitStatus status = lifecycle.getExitStatus();

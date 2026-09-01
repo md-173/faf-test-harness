@@ -45,6 +45,7 @@ public final class LifecycleFailureTest {
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
+        lifecycle.start();
         // Wait for 2 seconds, timeout should occur.
         lifecycle.stateReached(GameState.ENDED).get(2, TimeUnit.SECONDS);
         assertEquals(MockGameLifecycle.ExitStatus.SERVER_NOT_CONNECTED, lifecycle.getExitStatus());
@@ -58,6 +59,7 @@ public final class LifecycleFailureTest {
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
+        lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
         gpgnet.stop();
         lifecycle.stateReached(GameState.ENDED).get(10, TimeUnit.SECONDS);
@@ -71,6 +73,7 @@ public final class LifecycleFailureTest {
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()), null, null);
+        lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
@@ -92,6 +95,7 @@ public final class LifecycleFailureTest {
         GpgNetConnection conn = new GpgNetConnection(gpgnet.port());
         // No delay and match duration so that those don't intefere.
         MockGameLifecycle lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, conn, null, null);
+        lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
@@ -120,6 +124,7 @@ public final class LifecycleFailureTest {
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
+        lifecycle.start();
         lifecycle.stateReached(GameState.ENDED).get(3, TimeUnit.SECONDS);
         assertEquals(MockGameLifecycle.ExitStatus.SERVER_NOT_CONNECTED, lifecycle.getExitStatus());
     }
@@ -132,6 +137,7 @@ public final class LifecycleFailureTest {
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
+        lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
         gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
         lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
