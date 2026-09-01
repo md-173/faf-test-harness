@@ -142,10 +142,7 @@ public final class ConfigLoader {
      * @return the exit code produced by the executed subcommand
      */
     private static int applyLoggingThenRun(final ParseResult parseResult) {
-        // Only when a subcommand will actually run. --help, --version and the bare root all return
-        // without doing any work, and configuring logging for them would create a log file for an
-        // invocation that produced nothing worth logging.
-        if (parseResult.hasSubcommand()
+        if (willRunASubcommand(parseResult)
                 && parseResult.commandSpec().userObject() instanceof MockClientCli cli) {
             cli.applyLoggingPropertiesFromOptions();
             // Also stamps the component onto every record. Without it the label resolves to
@@ -153,6 +150,41 @@ public final class ConfigLoader {
             LoggingSetup.configure(MockClientCli.COMPONENT_NAME);
         }
         return new CommandLine.RunLast().execute(parseResult);
+    }
+
+    /**
+     * Whether this invocation will actually run a subcommand's {@code call()}, as opposed to
+     * printing help or version text and returning.
+     *
+     * <p>Configuring logging opens the appender, which creates the log file. Doing that for an
+     * invocation that only prints text leaves an empty file behind — and with {@code --log-file} it
+     * leaves it wherever the operator pointed, so {@code mock-client run --help --log-file=X} would
+     * create {@code X} for someone checking a flag name.
+     *
+     * <p>{@code hasSubcommand()} alone is not that question: it is true for {@code run --help}. The
+     * help flags are declared on every command by {@code mixinStandardHelpOptions}, so the request
+     * can be recorded anywhere in the parse chain. This is the same test picocli itself applies —
+     * {@code CommandLine.executeHelpRequest} walks {@code asCommandLineList()} checking these two
+     * predicates, and {@code RunLast} calls it on its first line. The strategy runs one line
+     * earlier, which is exactly why the check has to be repeated here.
+     *
+     * <p>This does not cover a usage error raised inside {@code call()} — a non-positive {@code
+     * --duration-seconds}, or a config that fails validation. Those reach the subcommand, so
+     * logging is legitimately configured before they fail, and they exit {@code 2} leaving an empty
+     * file. Removing that would mean deferring file creation until the first record is written,
+     * which Logback's {@code FileAppender} has no option for. Accepted: the file is empty, the next
+     * real run appends to it, and nothing reads it for existence.
+     *
+     * @param parseResult the parsed command line
+     * @return {@code true} if a subcommand will run and logging should be configured for it
+     */
+    private static boolean willRunASubcommand(final ParseResult parseResult) {
+        return parseResult.hasSubcommand()
+                && parseResult.asCommandLineList().stream()
+                        .noneMatch(
+                                command ->
+                                        command.isUsageHelpRequested()
+                                                || command.isVersionHelpRequested());
     }
 
     /**

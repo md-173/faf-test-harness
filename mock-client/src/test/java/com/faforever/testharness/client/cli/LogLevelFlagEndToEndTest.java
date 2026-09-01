@@ -14,8 +14,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Pins that {@code --log-level} actually reaches Logback, which is what makes the stack trace
@@ -127,6 +130,84 @@ final class LogLevelFlagEndToEndTest {
         assertTrue(
                 onlyRecordAt(records, "DEBUG").has("exception"),
                 "FAF_MOCK_CLIENT_LOG_LEVEL did not reach Logback, so the trace is unrecoverable");
+    }
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "--help",
+                "--version",
+                "run --help",
+                "launch-ice --help",
+                "launch-game --help",
+                "ice-smoke --help",
+                "launch-ice --version",
+            })
+    void helpAndVersionInvocationsCreateNoLogFile(final String args) throws Exception {
+        // Configuring logging opens the appender, which creates the file. An invocation that only
+        // prints text should leave nothing behind — and with --log-file it would land wherever the
+        // operator pointed, so `run --help --log-file=X` creating X is the shape to prevent.
+        //
+        // hasSubcommand() alone does not express this: it is true for `run --help`. The rows below
+        // the first two are the ones it lets through.
+        Path logFile = tempDir.resolve("must-not-exist.jsonl");
+        int exitCode =
+                runChildRaw(
+                        SilentEntryPointChild.class,
+                        Stream.concat(
+                                        Stream.of(args.split(" ")),
+                                        Stream.of("--log-file=" + logFile))
+                                .toArray(String[]::new));
+
+        assertEquals(ExitCodes.OK, exitCode, "help and version invocations exit 0");
+        assertFalse(
+                Files.exists(logFile),
+                "'" + args + "' created the log file it was pointed at, having logged nothing");
+        assertFalse(
+                Files.exists(tempDir.resolve("logs")),
+                "'" + args + "' created the default logs/ directory, having logged nothing");
+    }
+
+    /**
+     * Runs a child JVM and returns its exit code, without requiring that any log file was written.
+     *
+     * @param mainClass the child program to run
+     * @param args the full argument list
+     * @return the child's exit code
+     * @throws IOException if the child cannot be started or its output cannot be read
+     * @throws InterruptedException if the wait for the child is interrupted
+     */
+    private int runChildRaw(final Class<?> mainClass, final String[] args)
+            throws IOException, InterruptedException {
+        String javaBin =
+                ProcessHandle.current()
+                        .info()
+                        .command()
+                        .orElse(System.getProperty("java.home") + "/bin/java");
+        List<String> command =
+                new ArrayList<>(
+                        List.of(
+                                javaBin,
+                                "-cp",
+                                System.getProperty("java.class.path"),
+                                mainClass.getName()));
+        command.addAll(List.of(args));
+
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(tempDir.toFile());
+        pb.environment().remove(LoggingSetup.LOG_LEVEL_ENV);
+        pb.environment().remove(LoggingSetup.LOG_FILE_ENV);
+        pb.environment().remove(LoggingSetup.INSTANCE_NAME_ENV);
+        pb.environment().keySet().removeIf(name -> name.startsWith("FAF_MOCK_CLIENT_"));
+        pb.redirectErrorStream(true);
+
+        Process child = pb.start();
+        String console = new String(child.getInputStream().readAllBytes());
+        assertTrue(
+                child.waitFor(CHILD_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "child JVM did not exit in time");
+        assertFalse(console.contains("\tat "), "child leaked a stack trace: " + console);
+        return child.exitValue();
     }
 
     /**
