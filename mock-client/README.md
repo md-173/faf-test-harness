@@ -10,11 +10,12 @@ do not require a real game install or a human at the keyboard.
 Mock Client is a Picocli command tree: a root `mock-client` command plus four
 subcommands that dispatch to the matching component.
 
-| Subcommand    | Purpose                                                                            |
-|---------------|------------------------------------------------------------------------------------|
-| `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 |
-| `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    |
-| `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          |
+| Subcommand    | Purpose                                                                            | Needs a FAF account |
+|---------------|------------------------------------------------------------------------------------|---|
+| `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 | yes |
+| `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    | no¹ |
+| `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          | no¹ |
+| `ice-smoke`   | Bring up the adapter, verify its JSON-RPC and GPGNet endpoints are serving, tear it down. | no |
 
 `run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
 (`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
@@ -23,7 +24,18 @@ to the lobby's `ping` heartbeats. `Ctrl-C` / `SIGTERM` closes the WebSocket
 cleanly (the process exit code then follows the signal: 130 for SIGINT, 143 for
 SIGTERM). `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) each spawn
 their respective binary, run it for `--duration-seconds`, terminate it, and log
-the exit code.
+the exit code. `ice-smoke` (WBS-3.1.4.3) is the reachability gate: it spawns the
+adapter, connects to its JSON-RPC port, sends one request, connects to its GPGNet
+port and waits for the adapter to announce that connection back over RPC, then
+tears everything down. Exit `0` means reachable; any other exit names the phase
+that failed. A healthy run takes about two seconds.
+
+¹ `launch-ice` and `launch-game` never contact the lobby, but they are still
+validated as full-session invocations, so they require syntactically valid
+placeholders for the lobby and OAuth options (see the worked example in
+[`harness-runbook.md`](../documentation/operations/harness-runbook.md) §2).
+`ice-smoke` deliberately does not: it validates only the adapter options, so it
+runs with no credentials of any kind.
 
 Invocation shape:
 
@@ -31,18 +43,22 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--log-level`, `--help`, `--version`, plus all 23
-config flags — are declared on the root and apply to every subcommand. Each
+Global flags — `--config`, `--help`, `--version`, plus the 32 config options —
+are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
-additionally take a subcommand-local `--duration-seconds` flag.
+additionally take a subcommand-local `--duration-seconds` flag, and `ice-smoke`
+a `--timeout-seconds` flag.
 
 ## Exit codes
 
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
-| `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
+| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window, or `ice-smoke` returned any verdict other than reachable. |
+
+No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
+Nothing shipped here is a placeholder.
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
@@ -96,7 +112,10 @@ the output of `--help`:
 ```
 
 The table below is a quick reference. If it ever drifts from `--help`,
-`--help` wins.
+`--help` wins. **Required** there means required by the full-session config
+validation, which `run`, `launch-ice`, and `launch-game` all share. `ice-smoke`
+does not: it validates only the `iceAdapter*` / `player*` / logging fields, so
+none of the lobby or OAuth rows apply to it.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
@@ -118,8 +137,8 @@ The table below is a quick reference. If it ever drifts from `--help`,
 | `iceAdapterLobbyPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_LOBBY_PORT` | `--ice-adapter-lobby-port` | `7238` | no | Local UDP lobby port passed to `faf-ice-adapter` as `--lobby-port`. |
 | `logLevel` | `FAF_MOCK_CLIENT_LOG_LEVEL` | `--log-level` | `INFO` | no | `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`. |
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
-| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
-| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` diagnostics (a full `run` uses the lobby identity). |
+| `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this
@@ -299,6 +318,94 @@ uses.
 
 A missing or invalid `--mock-game-binary-path` produces a single-line error and
 exits `70` (`RUNTIME`) — no stack trace.
+
+### `ice-smoke` — is a local adapter reachable?
+
+The one command that exercises the harness without a FAF account: no lobby, no
+OAuth, and nothing this harness sends leaves loopback. Run it as a precondition
+before paying for a full session test, and to tell "the adapter never came up"
+apart from "the session logic is wrong".
+
+The adapter itself is less abstemious: on every launch `faf-ice-adapter` 3.3.14
+opens a telemetry WebSocket to `ice-telemetry.faforever.com`, which it has no
+flag to disable (`json-rpc-spec.md` §8). The verdict does not depend on it — a
+refused connection makes the adapter unregister its telemetry debugger and carry
+on — but on a network that blackholes rather than refuses, expect the adapter's
+boot, and so this check, to be slower than the usual two seconds.
+
+```bash
+./gradlew :mock-client:installDist
+./gradlew downloadIceAdapter
+
+./mock-client/build/install/mock-client/bin/mock-client ice-smoke \
+  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar"
+```
+
+That is the whole invocation — no other flag is required. From the repo root,
+where `downloadIceAdapter` puts the jar on the default path, even the binary
+flag is optional: `mock-client ice-smoke` on its own passes. The ports default
+to `7236` / `7237` / `7238`; pass `--ice-adapter-rpc-port` and friends to run
+alongside something already using them.
+
+A pass looks like this (`[MockClient]` = the harness, `[ICEAdapter]` = the real
+jar's own output, trimmed here):
+
+```text
+[MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
+[MockClient] ice-smoke: connecting to ICE adapter JSON-RPC at 127.0.0.1:7236 (within PT10.97S)
+[ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started
+[ICEAdapter] c.n.jjsonrpc.TcpServer - TCP Server started.
+[MockClient] connected to ICE adapter JSON-RPC at 127.0.0.1:7236
+[MockClient] ice-smoke: RPC round-trip setLobbyInitMode (within PT2S)
+[MockClient] ice-smoke: probing GPGNet endpoint at 127.0.0.1:7237 (within PT2S)
+[MockClient] ice-smoke: awaiting adapter's GPGNet connection notice (within PT5S)
+[ICEAdapter] c.f.i.g.GPGNetServer - GPGNetClient has connected
+[MockClient] ice-smoke: ICE adapter terminated; exit code 143
+[MockClient] ice-smoke: PASS - ICE adapter reachable: JSON-RPC 127.0.0.1:7236 answered, GPGNet 127.0.0.1:7237 served the probe
+```
+
+The whole run takes about two seconds; every wait is bounded and named.
+`--timeout-seconds` (default `20`, max `3600`) caps the checking itself — the
+phases from launch to verdict. That default is failure headroom, not the
+expected runtime: the check returns the moment it has its verdict. The connect
+phase does not get the whole budget — it reserves the nine seconds the three
+later phases can need, which is why the transcript above shows it waiting
+`PT10.97S` rather than the full `PT20S`. Without that reserve, a slow-starting
+adapter would spend the budget on the connect and the phases after it would
+fail instantly, reporting a startup problem under the wrong name. Tearing the
+adapter down is deliberately *not* inside that cap, because skipping it to
+honour a budget would leave a stray adapter to break the next run's port
+pre-flight; it is bounded separately by a 2 s SIGTERM→SIGKILL grace. So the
+honest worst case for the whole command is the budget plus about four seconds,
+and only against an adapter that ignores SIGTERM (measured: `3.7 s` total for
+`--timeout-seconds=2` against one that does). The adapter may log a lost-connection line as the probe disconnects
+(`Error while communicating with FA (input), assuming shutdown` /
+`GPGNet connection lost`); that is the adapter noticing the probe going away, and
+it is expected on a passing run.
+
+A failure exits `70` and names the phase that decided it, so a CI log explains
+itself without a rerun:
+
+```text
+[MockClient] ice-smoke: FAIL [GPGNET_UNREACHABLE] GPGNet probe: could not connect to 127.0.0.1:7237 within PT2S (Connection refused)
+```
+
+| Verdict | Meaning |
+|---|---|
+| `PORTS_IN_USE` | A configured port was already taken, so anything answering would not be the adapter this run started. Stop the other adapter, or pass different ports. |
+| `LAUNCH_FAILED` | The adapter binary is missing or could not be started. |
+| `ADAPTER_EXITED` | The adapter exited mid-check; its exit code is named when known. |
+| `RPC_UNREACHABLE` | Nothing accepted a JSON-RPC connection within the budget. |
+| `RPC_SILENT` | The socket opened but the adapter never answered a request on it. |
+| `GPGNET_UNREACHABLE` | The GPGNet port refused the probe. |
+| `GPGNET_UNCONFIRMED` | The GPGNet port accepted, but the adapter never announced it over RPC — the two halves are not wired together. |
+| `INTERRUPTED` | The thread running the check was interrupted. Not what `Ctrl-C` does: SIGINT ends the JVM at exit `130` with no verdict line at all (the adapter is still reaped, by the subprocess shutdown hook). This verdict is for programmatic callers of `IceReachabilityCheck`. |
+
+What a pass proves: the binary launches, its JSON-RPC endpoint parses and answers
+a request, its GPGNet endpoint accepts a client, and the adapter's two halves are
+wired to each other. What it does not prove: ICE negotiation, lobby connectivity,
+or anything about `mock-game` — those need a full session (`run`) or the
+lifecycle tests.
 
 ### Environment variables only
 

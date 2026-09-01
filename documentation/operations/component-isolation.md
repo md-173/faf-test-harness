@@ -15,6 +15,10 @@ the double.
 
 > **How the doubles stay honest.** The doubles are `src/test`-scoped only — no new binary, no new
 > subcommand, nothing ships to a consumer; this card adds no CLI behaviour.
+>
+> *(WBS-3.1.4.3 added one live path this matrix predates: row 4's "adapter alone" walk can now be
+> run as `mock-client ice-smoke --ice-adapter-binary-path=…`, which unlike `launch-ice` needs no
+> lobby or OAuth placeholders and additionally proves both adapter endpoints serve.)*
 
 ## How to use this document
 

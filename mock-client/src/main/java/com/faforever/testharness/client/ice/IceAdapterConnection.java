@@ -210,15 +210,21 @@ public class IceAdapterConnection {
     }
 
     /**
-     * Full-control constructor — used by tests to tune retry and timeout for fast, deterministic
-     * runs.
+     * Full-control constructor, for callers whose connect window is not the default's.
+     *
+     * <p>Two use it. Tests tune retry and timeout <em>down</em>, for fast deterministic runs
+     * against an in-process fixture. The {@code ice-smoke} check (WBS-3.1.4.3) needs the window to
+     * follow its own {@code --timeout-seconds} in <em>both</em> directions: {@link
+     * #DEFAULT_CONNECT_ATTEMPTS}'s fixed ≈20 s would overshoot a two-second budget and cut a
+     * sixty-second one short, and a diagnostic whose answer arrives outside the budget it was given
+     * is not a diagnostic. It derives the attempt count from the budget it has left instead.
      *
      * @param port the adapter's JSON-RPC port
      * @param connectAttempts max connect attempts before failing
      * @param retryDelay delay between connect attempts
      * @param callTimeout how long a {@link #call} waits for its response before failing
      */
-    IceAdapterConnection(
+    public IceAdapterConnection(
             final int port,
             final int connectAttempts,
             final Duration retryDelay,

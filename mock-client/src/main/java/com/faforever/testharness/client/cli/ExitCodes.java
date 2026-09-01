@@ -19,7 +19,10 @@ public final class ExitCodes {
      */
     public static final int USAGE = 2;
 
-    /** Reserved for runtime failures once subcommands ship. */
+    /**
+     * A runtime failure after a subcommand started: a binary that could not be launched, an
+     * endpoint that never answered, a session that could not be established.
+     */
     public static final int RUNTIME = 70;
 
     private ExitCodes() {}

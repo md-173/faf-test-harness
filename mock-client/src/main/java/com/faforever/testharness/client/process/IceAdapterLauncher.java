@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.process;
 
+import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -17,10 +18,14 @@ import org.slf4j.LoggerFactory;
  * Launches the external {@code faf-ice-adapter} binary as a child process (WBS-3.1.2.2).
  *
  * <p>This class only <em>spawns and reaps</em>: it builds the adapter's argument list from {@link
- * MockClientConfig} and hands a fully-configured {@link ProcessBuilder} to {@link
+ * IceAdapterSettings} and hands a fully-configured {@link ProcessBuilder} to {@link
  * SubprocessManager}, which owns output capture, the JVM shutdown hook, and SIGTERM/SIGKILL
  * teardown. Lifecycle decisions ("launch the adapter when entering matchmaking") belong to the FSM
  * orchestration tasks and are deliberately out of scope here.
+ *
+ * <p>Those settings arrive by one of two routes: narrowed out of a full {@link MockClientConfig}
+ * (the lobby-driven session), or built straight from CLI options by the no-lobby {@code ice-smoke}
+ * diagnostic, which has no lobby leg to configure. Both produce the same argument list.
  *
  * <p>Argument list (subprocess-orchestration-spec §2.6, json-rpc-spec §8). {@code --id} and {@code
  * --login} are emitted first because the upstream synopsis lists them first.
@@ -100,16 +105,29 @@ public class IceAdapterLauncher {
             </configuration>
             """;
 
-    /** Validated configuration the argument list is built from. */
-    private final MockClientConfig config;
+    /** Adapter-relevant settings the argument list is built from. */
+    private final IceAdapterSettings settings;
 
     /**
-     * Creates a launcher bound to {@code config}.
+     * Creates a launcher bound to {@code config}. The session path: everything the launcher needs
+     * is narrowed out of the full configuration by {@link
+     * IceAdapterSettings#from(MockClientConfig)}.
      *
      * @param config the validated Mock Client configuration; must not be {@code null}
      */
     public IceAdapterLauncher(final MockClientConfig config) {
-        this.config = Objects.requireNonNull(config, "config");
+        this(IceAdapterSettings.from(Objects.requireNonNull(config, "config")));
+    }
+
+    /**
+     * Creates a launcher bound to {@code settings}. The no-lobby path (WBS-3.1.4.3): {@code
+     * ice-smoke} builds these settings straight from its CLI options, so an adapter-only check does
+     * not have to satisfy the lobby and OAuth fields a full session needs.
+     *
+     * @param settings the validated adapter settings; must not be {@code null}
+     */
+    public IceAdapterLauncher(final IceAdapterSettings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
     }
 
     /**
@@ -150,7 +168,7 @@ public class IceAdapterLauncher {
         // Spec §2.3: per-child LOG_DIR, and LOG_LEVEL sourced from the harness config so the
         // adapter logs at the same level as the Mock Client.
         pb.environment().put("LOG_DIR", LOG_DIR + "/");
-        pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, config.logLevel());
+        pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, settings.logLevel());
         // Note: redirectErrorStream is intentionally NOT set — SubprocessManager keeps stdout and
         // stderr separate so stderr can be routed to WARN (spec §4 / §5.3).
         createLogDir();
@@ -182,7 +200,7 @@ public class IceAdapterLauncher {
      * @throws IceAdapterLaunchException if the path is missing or not a regular file
      */
     Path resolveBinary() throws IceAdapterLaunchException {
-        Path binary = config.iceAdapterBinaryPath();
+        Path binary = settings.binaryPath();
         if (!Files.isRegularFile(binary)) {
             throw new IceAdapterLaunchException(
                     "faf-ice-adapter binary not found: " + binary.toAbsolutePath());
@@ -198,7 +216,7 @@ public class IceAdapterLauncher {
      * @return the config-derived launch identity
      */
     LaunchIdentity configIdentity() {
-        return LaunchIdentity.fromConfig(config, DEFAULT_PLAYER_ID);
+        return LaunchIdentity.fromSettings(settings, DEFAULT_PLAYER_ID);
     }
 
     /**
@@ -239,11 +257,11 @@ public class IceAdapterLauncher {
         argv.add("--game-id");
         argv.add(Integer.toString(identity.gameUid()));
         argv.add("--rpc-port");
-        argv.add(Integer.toString(config.iceAdapterRpcPort()));
+        argv.add(Integer.toString(settings.rpcPort()));
         argv.add("--gpgnet-port");
-        argv.add(Integer.toString(config.iceAdapterGpgNetPort()));
+        argv.add(Integer.toString(settings.gpgNetPort()));
         argv.add("--lobby-port");
-        argv.add(Integer.toString(config.iceAdapterLobbyPort()));
+        argv.add(Integer.toString(settings.lobbyPort()));
         return argv;
     }
 

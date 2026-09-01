@@ -1,13 +1,16 @@
 package com.faforever.testharness.client.config;
 
 import com.faforever.testharness.client.cli.ExitCodes;
+import com.faforever.testharness.client.cli.IceSmokeCommand;
 import com.faforever.testharness.client.cli.LaunchGameCommand;
 import com.faforever.testharness.client.cli.LaunchIceCommand;
 import com.faforever.testharness.client.cli.RunCommand;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -21,10 +24,10 @@ import picocli.CommandLine.Spec;
 
 /**
  * Picocli root command for the Mock Client. Holds every {@link MockClientConfig} field as a
- * {@code @Option} and registers the three subcommands ({@code run}, {@code launch-ice}, {@code
- * launch-game}). Picocli populates the fields by merging (in priority order): CLI flags,
- * environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also via the
- * provider), and built-in {@code defaultValue} attributes.
+ * {@code @Option} and registers the four subcommands ({@code run}, {@code launch-ice}, {@code
+ * launch-game}, {@code ice-smoke}). Picocli populates the fields by merging (in priority order):
+ * CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also
+ * via the provider), and built-in {@code defaultValue} attributes.
  *
  * <p>Every {@code @Option} declared here uses {@link ScopeType#INHERIT}, so the same flags are
  * accepted by every subcommand and may appear before <em>or</em> after the subcommand name on the
@@ -57,11 +60,18 @@ import picocli.CommandLine.Spec;
             RunCommand.class,
             LaunchIceCommand.class,
             LaunchGameCommand.class,
+            IceSmokeCommand.class,
         })
 public final class MockClientCli implements Callable<Integer> {
 
     /** Component label written to log records by every Mock Client subcommand. */
     public static final String COMPONENT_NAME = "MockClient";
+
+    /** Lowest port number the adapter's three listeners may be assigned. */
+    private static final int MIN_PORT = 1;
+
+    /** Highest port number the adapter's three listeners may be assigned. */
+    private static final int MAX_PORT = 65535;
 
     /**
      * Picocli auto-injects the active {@link CommandSpec}; used by {@link #call()} to print usage.
@@ -232,7 +242,7 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "0",
             description =
                     "Game ID passed to faf-ice-adapter as --game-id (required by the adapter). "
-                            + "Used by the launch-ice diagnostic; a full 'run' "
+                            + "Used by the launch-ice / ice-smoke diagnostics; a full 'run' "
                             + "session sets it from the lobby game_launch.uid.")
     private int iceAdapterGameId;
 
@@ -273,7 +283,7 @@ public final class MockClientCli implements Callable<Integer> {
             scope = ScopeType.INHERIT,
             description =
                     "Optional player ID override for deterministic local testing. Used by the "
-                            + "launch-ice / launch-game diagnostics; a full 'run' "
+                            + "launch-ice / launch-game / ice-smoke diagnostics; a full 'run' "
                             + "session uses the lobby welcome identity instead.")
     private Integer playerIdOverride;
 
@@ -284,7 +294,7 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "mock-client",
             description =
                     "Local player login passed to faf-ice-adapter as --login and to mock-game as "
-                            + "--player-login. Used by the launch-ice / launch-game "
+                            + "--player-login. Used by the launch-ice / launch-game / ice-smoke "
                             + "diagnostics; a full 'run' session uses the lobby welcome identity "
                             + "instead.")
     private String playerLogin;
@@ -488,6 +498,78 @@ public final class MockClientCli implements Callable<Integer> {
     }
 
     /**
+     * Builds the adapter-only view of the populated options, validating <em>only</em> what an
+     * ICE-adapter diagnostic actually uses. Deliberately does not go through {@link #toConfig()}: a
+     * localhost reachability check has no lobby leg, so requiring the lobby endpoint and the OAuth
+     * credential channel would force a consumer with no FAF account to invent placeholder values
+     * for fields nothing reads (WBS-3.1.4.3).
+     *
+     * <p>This is where operator input is range-checked, since it is the layer that receives it.
+     * {@link IceAdapterSettings} itself validates only what would reach the adapter as a nonsense
+     * argument, so it stays a faithful narrowing of an already-validated {@link MockClientConfig}.
+     *
+     * @param callerSpec the {@link CommandSpec} of the command requesting validation, so the error
+     *     renders under that subcommand's usage block
+     * @return the validated adapter settings
+     * @throws CommandLine.ParameterException if a port is out of range, the JSON-RPC and GPGNet
+     *     ports are equal, or an adapter-relevant value is blank
+     */
+    public IceAdapterSettings toValidatedAdapterSettings(final CommandSpec callerSpec) {
+        List<String> problems = new ArrayList<>();
+        checkPort(problems, "--ice-adapter-rpc-port", iceAdapterRpcPort);
+        checkPort(problems, "--ice-adapter-gpg-net-port", iceAdapterGpgNetPort);
+        checkPort(problems, "--ice-adapter-lobby-port", iceAdapterLobbyPort);
+        // Both are TCP listeners in one process: equal values make the adapter fail to bind the
+        // second one and exit, which would otherwise only show up as an unexplained "unreachable"
+        // once the connect budget expired.
+        if (iceAdapterRpcPort == iceAdapterGpgNetPort) {
+            problems.add(
+                    "--ice-adapter-rpc-port and --ice-adapter-gpg-net-port must differ; both are "
+                            + iceAdapterRpcPort);
+        }
+        // Checked here rather than on the record: the full-session path accepts a blank level
+        // (MockClientConfig does not validate it), and this card must not change what launch-ice
+        // and run accept. A diagnostic invocation gets the clean usage error instead.
+        if (logLevel == null || logLevel.isBlank()) {
+            problems.add("--log-level must not be blank");
+        }
+        if (!problems.isEmpty()) {
+            throw new CommandLine.ParameterException(
+                    callerSpec.commandLine(), String.join("; ", problems));
+        }
+        try {
+            return new IceAdapterSettings(
+                    iceAdapterBinaryPath,
+                    iceAdapterRpcPort,
+                    iceAdapterGpgNetPort,
+                    iceAdapterLobbyPort,
+                    iceAdapterGameId,
+                    playerIdOverride == null
+                            ? OptionalInt.empty()
+                            : OptionalInt.of(playerIdOverride),
+                    playerLogin,
+                    logLevel,
+                    Optional.ofNullable(logFile));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Records a range problem for {@code port} under {@code flag}, if there is one.
+     *
+     * @param problems accumulator every check appends to, so one error lists them all
+     * @param flag the CLI flag name to blame in the message
+     * @param port the configured port value
+     */
+    private static void checkPort(final List<String> problems, final String flag, final int port) {
+        if (port < MIN_PORT || port > MAX_PORT) {
+            problems.add(
+                    flag + " must be between " + MIN_PORT + " and " + MAX_PORT + "; got " + port);
+        }
+    }
+
+    /**
      * Bridges {@link MockClientConfig#logLevel()} and {@link MockClientConfig#logFile()} into the
      * system properties consumed by {@code logback.xml}. Subcommands call this from their {@code
      * Callable.call()} before {@link LoggingSetup#configure(String)} so Logback observes the
@@ -496,8 +578,27 @@ public final class MockClientCli implements Callable<Integer> {
      * @param config the validated configuration whose logging fields should be applied
      */
     public static void applyLoggingProperties(final MockClientConfig config) {
-        System.setProperty(LoggingSetup.LOG_LEVEL_ENV, config.logLevel());
-        config.logFile()
-                .ifPresent(path -> System.setProperty(LoggingSetup.LOG_FILE_ENV, path.toString()));
+        applyLoggingProperties(config.logLevel(), config.logFile());
+    }
+
+    /**
+     * Overload for the adapter-only diagnostics, which never build a full {@link MockClientConfig}.
+     *
+     * @param settings the validated adapter settings whose logging fields should be applied
+     */
+    public static void applyLoggingProperties(final IceAdapterSettings settings) {
+        applyLoggingProperties(settings.logLevel(), settings.logFile());
+    }
+
+    /**
+     * Sets the two system properties {@code logback.xml} reads.
+     *
+     * @param level the minimum log level to apply
+     * @param file optional JSONL log file path; left untouched when empty, so the logback default
+     *     applies
+     */
+    private static void applyLoggingProperties(final String level, final Optional<Path> file) {
+        System.setProperty(LoggingSetup.LOG_LEVEL_ENV, level);
+        file.ifPresent(path -> System.setProperty(LoggingSetup.LOG_FILE_ENV, path.toString()));
     }
 }
