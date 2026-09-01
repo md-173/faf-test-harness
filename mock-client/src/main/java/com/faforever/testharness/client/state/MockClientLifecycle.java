@@ -635,17 +635,64 @@ public final class MockClientLifecycle {
      * @param exitCode the game process's exit code.
      */
     private void onGameProcessExit(int exitCode) {
-        if (exitCode == 0) {
-            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
-        } else if (teardown.hasRun()) {
-            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
-        } else {
-            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
-        }
-        if (!cleanEndSeen.get()) {
+        boolean cleanEnd = cleanEndSeen.get();
+        classifyGameExit(exitCode, cleanEnd);
+        if (!cleanEnd) {
             sendGameStateEnded();
         }
         machine.receiveEvent(new GameExited(exitCode));
+    }
+
+    /**
+     * Reports how the game process ended, reading its exit code alongside whether a {@code
+     * GameEnded} frame was ever observed.
+     *
+     * <p>The exit code alone cannot answer this (WBS-3.1.2.6-fix, #295). {@code
+     * GpgNetConnection.send} returns once the kernel accepts the bytes, never when they are
+     * delivered, so when the adapter dies as a match ends the game can write every closing frame
+     * into a dead socket's buffer without error, reach {@code ExitStatus.OK} and exit {@code 0}
+     * having delivered nothing. #277 settled that the game's {@code 0} is not a lie — it reports
+     * that the process completed its own program — but that leaves a game which delivered nothing
+     * indistinguishable from one that delivered everything.
+     *
+     * <p>The observer has the missing half. {@link #isCleanEndSeen()} records the {@code GameEnded}
+     * frame <em>as forwarded by the adapter</em>, which confirms delivery at the far end, and this
+     * is its first production reader. The split mirrors the real client, whose {@code
+     * GameRunner.handleTermination} treats the exit code as the crash signal and reports
+     * end-of-game separately rather than from the game's own frames.
+     *
+     * <p>Harness-initiated teardown is checked before either: the harness killing the game on
+     * purpose is not a finding, whatever code that produces and whether or not the match had ended.
+     * Keeping it first preserves what R41 already relies on, notably a teardown-time {@code 143}.
+     *
+     * <p>Package-private so a test can drive all four combinations directly. Reaching them through
+     * real subprocess exits would mean staging a delivered-versus-undelivered {@code GameEnded} on
+     * a live GPGNet link, which is the very race this classification exists to describe.
+     *
+     * @param exitCode the code the game process exited with.
+     * @param cleanEnd whether a {@code GameEnded} frame was observed for this session.
+     */
+    void classifyGameExit(final int exitCode, final boolean cleanEnd) {
+        if (exitCode != 0 && teardown.hasRun()) {
+            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
+        } else if (exitCode == 0 && cleanEnd) {
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
+        } else if (exitCode == 0) {
+            // The case this card exists for. Not a crash, and not success either: the game ran its
+            // whole program and nothing it sent was ever seen coming back through the adapter.
+            LOG.warn(
+                    "mock-game exited cleanly with exit code {} but no GameEnded frame was ever"
+                            + " observed; its closing frames were written but may never have been"
+                            + " delivered",
+                    exitCode);
+        } else if (cleanEnd) {
+            LOG.info(
+                    "mock-game exited with code {} after a confirmed clean game end; the session's"
+                            + " closing frames landed before the process died",
+                    exitCode);
+        } else {
+            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
+        }
     }
 
     /**
