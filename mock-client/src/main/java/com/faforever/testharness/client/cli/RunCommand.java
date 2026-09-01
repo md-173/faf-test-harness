@@ -49,6 +49,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "run",
         mixinStandardHelpOptions = true,
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description = "Connect to the lobby, authenticate, and sit idle until interrupted.")
 public final class RunCommand implements Callable<Integer> {
 

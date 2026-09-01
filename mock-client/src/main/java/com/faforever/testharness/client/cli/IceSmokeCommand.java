@@ -21,6 +21,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "ice-smoke",
         mixinStandardHelpOptions = true,
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "ICE-adapter connectivity smoke test: bring up the adapter, verify GPGNet "
                         + "handshake, exit.")

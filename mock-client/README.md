@@ -45,11 +45,38 @@ additionally take a subcommand-local `--duration-seconds` flag.
 | `0`  | `OK`              | Successful run; `--help` and `--version`.                                        |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
 | `64` | `NOT_IMPLEMENTED` | Subcommand acknowledged but its real logic has not shipped yet (`ice-smoke` stub). |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, or `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window. Also any exception that escapes a subcommand uncaught. |
+
+**No parse failure and no subcommand failure produces a code outside this
+table** — in particular, never `1`. Picocli's own default for an exception
+escaping a subcommand is `ExitCode.SOFTWARE` (`1`) plus a stack trace on stderr;
+`ExecutionExceptionHandler` replaces that with a single line naming the command
+and the cause, and returns `70`. The stack trace is not discarded — it is logged
+at `DEBUG`, so `--log-level DEBUG` puts the whole trace in the JSONL file as one
+record's `exception` field (and, being a normal log record, on the console too).
+The failure itself is recorded at `ERROR` regardless of level, so a harness
+reading log records alone still sees it. Both hold even when the failure lands
+before the subcommand itself starts: `--log-level` and `--log-file` are applied
+once after parsing and before any subcommand runs, so the records go to the file
+you asked for rather than to the default one.
+
+Note that this is the `--log-level` flag and its `FAF_MOCK_CLIENT_LOG_LEVEL`
+counterpart. A bare `LOG_LEVEL` variable in the environment is Logback's own
+channel and is overridden by the resolved value, on this path and on every
+other.
+
+Two things sit outside the table by design, not by oversight. A **signal** exits
+with the JVM's signal code — `130` for SIGINT, `143` for SIGTERM — which is the
+documented, intended exit path for `run` (see above). And an **`Error`** rather
+than an `Exception` — `OutOfMemoryError`, `StackOverflowError` — propagates out
+of picocli, which catches only `Exception`; the JVM then prints it and exits `1`.
+A consumer should treat any code outside the table as an abnormal termination
+rather than a reportable failure mode.
 
 `USAGE` matches picocli's default `CommandLine.ExitCode.USAGE` so picocli's
 parameter-exception path needs no remap. Constants live in
-`com.faforever.testharness.client.cli.ExitCodes`.
+`com.faforever.testharness.client.cli.ExitCodes`, and every row is pinned by a
+test in `MockClientCliExitCodeTest`.
 
 ## Configuration
 
