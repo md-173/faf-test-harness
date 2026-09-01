@@ -102,7 +102,8 @@ final class PeerSessionWiringTest {
                     OptionalInt.empty(),
                     "Rhiza",
                     Optional.empty(),
-                    Optional.empty());
+                    Optional.empty(),
+                    0);
 
     private static final GameConfig GAME_CONFIG =
             new GameConfig(

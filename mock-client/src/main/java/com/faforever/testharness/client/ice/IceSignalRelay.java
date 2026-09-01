@@ -5,7 +5,11 @@ import com.faforever.testharness.client.lobby.message.IceMsgMessage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,6 +55,19 @@ import org.slf4j.LoggerFactory;
  * otherwise ignored. A dead connection is surfaced through the connections' own disconnect
  * listeners and handled by the lifecycle FSM (WBS 3.1.3), not here. Handlers run on the respective
  * reader threads and only do non-blocking work (JSON transcode + async send).
+ *
+ * <p><b>Fault injection (WBS-5.1).</b> An optional forward delay holds every relayed candidate for
+ * a fixed interval before it goes out, in both directions, simulating slow ICE negotiation without
+ * {@code tc} or elevated privileges. It delays the <em>signalling</em>, not the adapter-to-adapter
+ * connectivity checks, which happen inside {@code faf-ice-adapter} and are not ours to touch;
+ * delaying candidate relay delays when negotiation can begin, which is the faithful reading.
+ *
+ * <p>Delay, never drop and never reorder. Validation and transcoding still happen inline on the
+ * reader thread, so a malformed frame is still rejected immediately and the delay applies only to
+ * the forward itself. The scheduler is single-threaded and every forward takes the same delay, so
+ * tasks fire in submission order and candidates keep their relative sequence. At the default of
+ * zero the scheduler is never created and each forward runs inline on the reader thread, exactly as
+ * it did before the flag existed.
  */
 public final class IceSignalRelay {
 
@@ -75,16 +92,58 @@ public final class IceSignalRelay {
     /** Guards against {@link #start()} being called more than once. */
     private final AtomicBoolean started = new AtomicBoolean(false);
 
+    /** How long each forward is held before it goes out; {@link Duration#ZERO} forwards inline. */
+    private final Duration forwardDelay;
+
     /**
-     * Creates a relay between {@code lobby} and {@code adapter}. Nothing is registered until {@link
-     * #start()} — construction is side-effect free.
+     * Schedules delayed forwards, or {@code null} when {@link #forwardDelay} is zero. Single-
+     * threaded so equal delays fire in submission order, and daemon so it can never hold the JVM
+     * open — this relay outlives no explicit teardown in the session path that builds it.
+     */
+    private final ScheduledExecutorService scheduler;
+
+    /**
+     * Creates a relay that forwards without delay. Equivalent to {@link #IceSignalRelay(
+     * LobbyConnection, IceAdapterConnection, Duration)} with {@link Duration#ZERO}.
      *
      * @param lobby the lobby connection; must not be {@code null}
      * @param adapter the adapter connection; must not be {@code null}
      */
     public IceSignalRelay(final LobbyConnection lobby, final IceAdapterConnection adapter) {
+        this(lobby, adapter, Duration.ZERO);
+    }
+
+    /**
+     * Creates a relay between {@code lobby} and {@code adapter}, holding every forward for {@code
+     * forwardDelay}. Nothing is registered until {@link #start()} — construction allocates the
+     * scheduler when a delay is configured, and is otherwise side-effect free.
+     *
+     * @param lobby the lobby connection; must not be {@code null}
+     * @param adapter the adapter connection; must not be {@code null}
+     * @param forwardDelay how long to hold each relayed candidate, in both directions; {@link
+     *     Duration#ZERO} (the default) forwards inline, and is the pre-WBS-5.1 behaviour
+     * @throws IllegalArgumentException if {@code forwardDelay} is negative
+     */
+    public IceSignalRelay(
+            final LobbyConnection lobby,
+            final IceAdapterConnection adapter,
+            final Duration forwardDelay) {
         this.lobby = Objects.requireNonNull(lobby, "lobby");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
+        this.forwardDelay = Objects.requireNonNull(forwardDelay, "forwardDelay");
+        if (forwardDelay.isNegative()) {
+            throw new IllegalArgumentException(
+                    "forwardDelay must not be negative: " + forwardDelay);
+        }
+        this.scheduler =
+                forwardDelay.isZero()
+                        ? null
+                        : Executors.newSingleThreadScheduledExecutor(
+                                runnable -> {
+                                    Thread thread = new Thread(runnable, "ice-relay-delay");
+                                    thread.setDaemon(true);
+                                    return thread;
+                                });
     }
 
     /**
@@ -134,16 +193,19 @@ public final class IceSignalRelay {
                 return;
             }
         }
-        lobby.send(mapper.valueToTree(new IceMsgMessage(remoteId, msgString)))
-                .whenComplete(
-                        (ok, error) -> {
-                            if (error != null) {
-                                LOG.warn(
-                                        "failed to relay IceMsg to lobby for remoteId={}: {}",
-                                        remoteId,
-                                        error.getMessage());
-                            }
-                        });
+        forward(
+                () ->
+                        lobby.send(mapper.valueToTree(new IceMsgMessage(remoteId, msgString)))
+                                .whenComplete(
+                                        (ok, error) -> {
+                                            if (error != null) {
+                                                LOG.warn(
+                                                        "failed to relay IceMsg to lobby for"
+                                                                + " remoteId={}: {}",
+                                                        remoteId,
+                                                        error.getMessage());
+                                            }
+                                        }));
     }
 
     /**
@@ -183,15 +245,48 @@ public final class IceSignalRelay {
                     args.get(1));
             return;
         }
-        adapter.call("iceMsg", senderId, msgString)
-                .whenComplete(
-                        (ok, error) -> {
-                            if (error != null) {
-                                LOG.warn(
-                                        "iceMsg call to adapter failed for senderId={}: {}",
-                                        senderId,
-                                        error.getMessage());
-                            }
-                        });
+        forward(
+                () ->
+                        adapter.call("iceMsg", senderId, msgString)
+                                .whenComplete(
+                                        (ok, error) -> {
+                                            if (error != null) {
+                                                LOG.warn(
+                                                        "iceMsg call to adapter failed for"
+                                                                + " senderId={}: {}",
+                                                        senderId,
+                                                        error.getMessage());
+                                            }
+                                        }));
+    }
+
+    /**
+     * Runs one forward, immediately or after the configured delay.
+     *
+     * <p>Only the forward is deferred. The caller has already validated and transcoded the frame on
+     * the reader thread, so a malformed candidate is still rejected at once and never occupies a
+     * scheduler slot. Submission order is preserved because the scheduler is single-threaded and
+     * every task takes the same delay, so their deadlines fall in the order they were queued.
+     *
+     * @param action the send or call to perform
+     */
+    private void forward(final Runnable action) {
+        if (scheduler == null) {
+            action.run();
+            return;
+        }
+        scheduler.schedule(action, forwardDelay.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Releases the delay scheduler, if one was created. Optional: the scheduler's thread is a
+     * daemon and cannot hold the JVM open, so the session path that never tears the relay down is
+     * not leaking anything that matters. Tests call it so a suite does not accumulate one idle
+     * thread per relay. Idempotent; queued forwards are abandoned rather than run.
+     */
+    public void stop() {
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
     }
 }
