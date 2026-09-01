@@ -773,7 +773,7 @@ public final class MockClientLifecycle {
             // never learns this game reached Lobby — and until it does, the game is not joinable
             // (faf-server gates game_join on GameState.LOBBY) and no peer is ever announced. Both
             // were built and tested under 3.1.4.5/3.1.4.6 and wired into no session until now.
-            new IceSignalRelay(lobby, iceConnection).start();
+            new IceSignalRelay(lobby, iceConnection, config.iceRelayDelay()).start();
             new GpgNetForwarder(lobby, iceConnection).start();
             iceConnection.connect().get();
             iceConnection

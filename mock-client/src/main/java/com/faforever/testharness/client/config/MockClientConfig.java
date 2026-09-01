@@ -2,6 +2,7 @@ package com.faforever.testharness.client.config;
 
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -68,6 +69,9 @@ import java.util.OptionalInt;
  * @param joinConfig join-an-existing-game settings (lobby-protocol-spec §4.2 / §10.2); present only
  *     when the operator configured the mock client to join — empty means this run does not join
  *     (e.g. it hosts a game instead)
+ * @param iceRelayDelayMs how long the ICE signal relay holds each relayed candidate before
+ *     forwarding it, in milliseconds; {@code 0} (the default) forwards inline. The delayed-ICE half
+ *     of WBS-5.1's fault injection. Read through {@link #iceRelayDelay()} rather than directly
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -93,7 +97,8 @@ public record MockClientConfig(
         OptionalInt playerIdOverride,
         String playerLogin,
         Optional<GameHostConfig> hostConfig,
-        Optional<GameJoinConfig> joinConfig) {
+        Optional<GameJoinConfig> joinConfig,
+        int iceRelayDelayMs) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:
@@ -178,5 +183,21 @@ public record MockClientConfig(
                     "playerLogin must not be blank: it is passed to faf-ice-adapter as --login. "
                             + "Set --player-login or remove the empty value from the config file.");
         }
+        // A negative delay is always a typo. Rejecting it here rather than in IceSignalRelay turns
+        // it into a usage error at parse time instead of an exception from inside a live session.
+        if (iceRelayDelayMs < 0) {
+            throw new IllegalArgumentException(
+                    "iceRelayDelayMs must not be negative: " + iceRelayDelayMs);
+        }
+    }
+
+    /**
+     * The ICE relay's forward delay as {@link com.faforever.testharness.client.ice.IceSignalRelay}
+     * wants it (WBS-5.1).
+     *
+     * @return the delay to hold each relayed candidate for; {@link Duration#ZERO} forwards inline
+     */
+    public Duration iceRelayDelay() {
+        return Duration.ofMillis(iceRelayDelayMs);
     }
 }
