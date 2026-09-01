@@ -77,10 +77,10 @@ public final class Main {
      * constrains this value — the client's post-{@code GameEnded} safety net is armed only once
      * {@code GameEnded} has been observed, so it bounds the exit, not the match. It is a plain
      * judgement call: long enough that a session looks like a session in the logs, short enough
-     * that an end-to-end harness run does not cost a minute. Revisit it with a real workload rather
-     * than by argument.
+     * that an end-to-end harness run does not cost a minute. Five seconds chosen as this
+     * compromise.
      */
-    private static final Duration MATCH_DURATION = Duration.ofSeconds(30);
+    private static final Duration MATCH_DURATION = Duration.ofSeconds(5);
 
     private Main() {}
 
