@@ -128,6 +128,15 @@ public final class MockClientLifecycle {
      */
     private final AtomicBoolean cleanEndSeen = new AtomicBoolean(false);
 
+    /**
+     * Whether this session ever reached PLAYING, i.e. a match actually started.
+     *
+     * <p>Read only by {@link #classifyGameExit}, to tell "the match's closing frames never landed"
+     * apart from "there was never a match". A game that exits cleanly out of HOSTING has no {@code
+     * GameEnded} to have delivered, so the absence of one says nothing about it.
+     */
+    private final AtomicBoolean matchStarted = new AtomicBoolean(false);
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -299,6 +308,7 @@ public final class MockClientLifecycle {
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
+        states.get(ClientState.PLAYING).onEntry(() -> matchStarted.set(true));
         states.get(ClientState.PLAYING)
                 .registerTransition(
                         GameExited.class,
@@ -636,7 +646,7 @@ public final class MockClientLifecycle {
      */
     private void onGameProcessExit(int exitCode) {
         boolean cleanEnd = cleanEndSeen.get();
-        classifyGameExit(exitCode, cleanEnd);
+        classifyGameExit(exitCode, cleanEnd, matchStarted.get());
         if (!cleanEnd) {
             sendGameStateEnded();
         }
@@ -661,23 +671,31 @@ public final class MockClientLifecycle {
      * GameRunner.handleTermination} treats the exit code as the crash signal and reports
      * end-of-game separately rather than from the game's own frames.
      *
+     * <p>Gated on a match having actually started. A game that exits cleanly out of HOSTING never
+     * had a {@code GameEnded} to deliver, so the absence of one is not evidence of anything — an
+     * earlier draft of this warned there too, and {@code CrashRecoveryTest}'s clean-exit case
+     * caught it.
+     *
      * <p>Harness-initiated teardown is checked before either: the harness killing the game on
      * purpose is not a finding, whatever code that produces and whether or not the match had ended.
      * Keeping it first preserves what R41 already relies on, notably a teardown-time {@code 143}.
      *
-     * <p>Package-private so a test can drive all four combinations directly. Reaching them through
+     * <p>Takes both signals as parameters rather than reading the fields, so it is a pure function
+     * of the three inputs and a test can drive every combination directly. Reaching them through
      * real subprocess exits would mean staging a delivered-versus-undelivered {@code GameEnded} on
      * a live GPGNet link, which is the very race this classification exists to describe.
      *
      * @param exitCode the code the game process exited with.
      * @param cleanEnd whether a {@code GameEnded} frame was observed for this session.
+     * @param matchWasStarted whether this session ever reached PLAYING.
      */
-    void classifyGameExit(final int exitCode, final boolean cleanEnd) {
+    void classifyGameExit(
+            final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
         if (exitCode != 0 && teardown.hasRun()) {
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);
-        } else if (exitCode == 0) {
+        } else if (exitCode == 0 && matchWasStarted) {
             // The case this card exists for. Not a crash, and not success either: the game ran its
             // whole program and nothing it sent was ever seen coming back through the adapter.
             LOG.warn(
@@ -685,6 +703,10 @@ public final class MockClientLifecycle {
                             + " observed; its closing frames were written but may never have been"
                             + " delivered",
                     exitCode);
+        } else if (exitCode == 0) {
+            // Clean exit with no match ever started: there was no GameEnded to deliver, so its
+            // absence says nothing. Unremarkable, and reported as it always was.
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
         } else if (cleanEnd) {
             LOG.info(
                     "mock-game exited with code {} after a confirmed clean game end; the session's"

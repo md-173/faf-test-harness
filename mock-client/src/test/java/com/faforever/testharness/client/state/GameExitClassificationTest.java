@@ -119,9 +119,10 @@ final class GameExitClassificationTest {
     }
 
     /** The one record {@code classifyGameExit} emitted, with its level. */
-    private ILoggingEvent classify(final int exitCode, final boolean cleanEnd) {
+    private ILoggingEvent classify(
+            final int exitCode, final boolean cleanEnd, final boolean matchStarted) {
         appender.list.clear();
-        lifecycle.classifyGameExit(exitCode, cleanEnd);
+        lifecycle.classifyGameExit(exitCode, cleanEnd, matchStarted);
         List<ILoggingEvent> mine =
                 appender.list.stream()
                         .filter(e -> e.getFormattedMessage().startsWith("mock-game exited"))
@@ -133,7 +134,7 @@ final class GameExitClassificationTest {
     /** Exit 0 with the frame confirmed: the only genuinely clean outcome, and stays INFO. */
     @Test
     void zeroWithACleanEndIsInfo() {
-        ILoggingEvent event = classify(0, true);
+        ILoggingEvent event = classify(0, true, true);
         assertEquals(Level.INFO, event.getLevel());
         assertTrue(event.getFormattedMessage().contains("exited cleanly"));
     }
@@ -144,7 +145,7 @@ final class GameExitClassificationTest {
      */
     @Test
     void zeroWithNoCleanEndIsNotReportedAsSuccess() {
-        ILoggingEvent event = classify(0, false);
+        ILoggingEvent event = classify(0, false, true);
         assertEquals(
                 Level.WARN,
                 event.getLevel(),
@@ -159,7 +160,7 @@ final class GameExitClassificationTest {
      */
     @Test
     void nonZeroWithACleanEndIsNotReportedAsACrash() {
-        ILoggingEvent event = classify(70, true);
+        ILoggingEvent event = classify(70, true, true);
         assertEquals(Level.INFO, event.getLevel());
         assertTrue(event.getFormattedMessage().contains("clean game end"));
     }
@@ -167,7 +168,7 @@ final class GameExitClassificationTest {
     /** Non-zero with nothing observed: an ordinary crash, unchanged. */
     @Test
     void nonZeroWithNoCleanEndStaysAWarning() {
-        ILoggingEvent event = classify(70, false);
+        ILoggingEvent event = classify(70, false, true);
         assertEquals(Level.WARN, event.getLevel());
         assertTrue(event.getFormattedMessage().contains("abnormally"));
     }
@@ -181,7 +182,7 @@ final class GameExitClassificationTest {
         teardown.run();
 
         for (boolean cleanEnd : new boolean[] {true, false}) {
-            ILoggingEvent event = classify(143, cleanEnd);
+            ILoggingEvent event = classify(143, cleanEnd, true);
             assertEquals(
                     Level.INFO,
                     event.getLevel(),
