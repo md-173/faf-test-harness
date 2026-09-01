@@ -540,3 +540,75 @@ log attribution, the `INSTANCE_NAME` convention, and true N-peer sessions —
 is out of scope for this document. It lands with R79b, immediately after the
 two-peer and N-peer cards, as sections appended here rather than a
 restructure of what exists above.
+
+## 10. Network fault injection (WBS 5.1)
+
+Two flags degrade the harness from the inside, covering the delayed-ICE and
+dropped-UDP faults the project brief names. Both default to off, and with both
+unset nothing about a run changes. Validation is by log inspection, which is
+what the brief itself asks for.
+
+Injection is in-harness rather than network-level on purpose. `tc`/`netem`
+would run on a hosted Linux runner, but it cannot express either fault:
+ICE candidates relay through the lobby over WSS, so degrading that socket also
+degrades authentication and every other lobby message; and everything else
+shares loopback, so `netem` on `lo` hits the control plane and all peers at
+once. These flags target one relay and one sender, stay attributable per peer,
+and work wherever the mocks themselves run.
+
+| Flag | Component | Default | What it does |
+|---|---|---|---|
+| `--ice-relay-delay-ms` | mock-client | `0` | Holds every relayed ICE candidate for that many milliseconds before forwarding it, in both directions. |
+| `--udp-drop-percent` | mock-game | `0` | Suppresses that percentage of outbound peer datagrams, drawn independently per peer per round. |
+
+### `--ice-relay-delay-ms`
+
+Delays ICE **signalling**, not the connectivity checks — those run adapter to
+adapter inside `faf-ice-adapter` and are not ours to touch. Delaying candidate
+relay delays when negotiation can begin, which is the faithful reading of the
+requirement.
+
+Candidates are delayed, never dropped and never reordered: the scheduler is
+single-threaded and every forward takes the same delay, so they come out in the
+order they went in. Malformed frames are still rejected immediately, on the
+reader thread, so a bad candidate does not occupy a delay slot.
+
+What to look for when it is on:
+
+- The gap between the adapter's `onIceMsg` notification and the outbound
+  `IceMsg` frame to the lobby widens by roughly the configured delay, in both
+  directions. Compare timestamps on adjacent records in `logs/mockclient.jsonl`.
+- The per-peer ICE connection-state transitions logged by WBS 3.1.6.2
+  (`gathering` → `awaitingCandidates` → `connected`) take correspondingly
+  longer to reach `connected`.
+- A two-peer session should still complete. If it does not, the delay is long
+  enough to be pushing past a timeout rather than exercising one — that is a
+  finding about the timeout, not about the flag.
+
+### `--udp-drop-percent`
+
+Suppresses the datagram at the same point a send failure is swallowed, after
+the sequence number has been stamped and advanced. That ordering is
+load-bearing: `GameUdpReceiver` counts forward gaps against the sequence, so a
+drop that skipped the increment would leave the receiving peer with an unbroken
+stream and the injected fault would be invisible.
+
+What to look for when it is on:
+
+- The receiving peer's per-sender discontinuity count rises in proportion to
+  the percentage. `GameUdpReceiver` exposes datagrams received, highest
+  sequence seen, and discontinuities per sender, and logs its totals.
+- The gap is attributable to the sender that dropped it, because the count is
+  kept per sender id — which is the whole reason injection sits here rather
+  than on the interface, where loss is traceable to nobody.
+- At `DEBUG`, the sender emits one `dropping datagram seq=…` record per
+  suppressed datagram, naming the peer and the sequence. Use it to tie a
+  specific gap at the receiver to the send that never happened. It is `DEBUG`
+  rather than `WARN` because an injected fault is the operator's own doing, and
+  at a high percentage a per-datagram `WARN` would bury the rest of the run.
+
+**Note.** `mock-game`'s UDP sender is not yet started by the game's lifecycle —
+WBS 3.2.2.5 built it and no FSM phase constructs one. `--udp-drop-percent` is
+parsed, validated, and carried on `MockGameConfig` today; it takes effect for
+any caller that constructs a `GameUdpSender`, and will apply to the game's own
+peer traffic as soon as the FSM wires the sender in.
