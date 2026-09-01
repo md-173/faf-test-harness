@@ -1,6 +1,9 @@
 package com.faforever.testharness.shared.logging;
 
 import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.core.ContextBase;
+import ch.qos.logback.core.rolling.helper.FileNamePattern;
+import java.util.regex.Pattern;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
@@ -90,11 +93,15 @@ public final class LoggingSetup {
         // instances of a component would share one rolling file and contend on rollover, which
         // matters most for the subprocesses a client launches: LOG_FILE is not forwarded to them
         // (see MockGameLauncher), so every mock game would otherwise land in logs/mockgame.jsonl.
+        String defaultLogFile =
+                "logs/" + componentName.toLowerCase() + fileSuffix(instanceName) + ".jsonl";
         if (System.getenv(LOG_FILE_ENV) == null && System.getProperty(LOG_FILE_ENV) == null) {
-            String suffix = instanceName.isEmpty() ? "" : "-" + fileSafe(instanceName);
-            System.setProperty(
-                    LOG_FILE_ENV, "logs/" + componentName.toLowerCase() + suffix + ".jsonl");
+            System.setProperty(LOG_FILE_ENV, defaultLogFile);
         }
+
+        // Before anything touches SLF4J. The next statement initialises Logback, and an unusable
+        // path takes the whole logging subsystem down with it (WBS-2.3.6-fix, #305).
+        rejectUnusableLogFile(defaultLogFile);
 
         MDC.put(COMPONENT_MDC_KEY, componentName);
 
@@ -114,6 +121,85 @@ public final class LoggingSetup {
             MDC.put(INSTANCE_MDC_KEY, instanceName);
             context.putProperty(INSTANCE_MDC_KEY, instanceName);
         }
+    }
+
+    /**
+     * Replaces the configured log file with {@code fallback} when Logback could not use it,
+     * reporting the swap on stderr.
+     *
+     * <p>{@code ${LOG_FILE}} is interpolated into the rolling appender's {@code fileNamePattern},
+     * and Logback converts that pattern into a <em>regular expression</em> to find previous
+     * rollovers — splicing the operator's raw path in unescaped. A path holding a regex
+     * metacharacter therefore fails {@code LoggerContext} initialisation outright: {@code
+     * a[b.jsonl} becomes {@code a[b.jsonl.\d{4}-...} and throws {@code PatternSyntaxException}.
+     * {@code [}, {@code {} and {@code (} all do it, and all are legal in a filename on Linux and
+     * macOS. {@code ${LOG_FILE}} fails the same way, through self-referential substitution.
+     *
+     * <p>The consequence was worse than a missing file. Logback failed to configure at all, so the
+     * run had no logging of any kind — and since every subcommand reports its own failures through
+     * the logger, an operator who mistyped a path was told nothing about why the run then failed.
+     * The exit code was unaffected, so this never breached the exit-code table; it breached the
+     * single-line-diagnostic contract beside it, exactly when the run was already going wrong.
+     *
+     * <p>Degrading rather than rejecting is the deliberate choice. A bad log path is not a reason
+     * to abandon a run, and the operator needs the command's real diagnostic more than they need
+     * their preferred filename. Writing to stderr is not a fallback for the logger being absent —
+     * it is the only channel available, because this runs before Logback exists.
+     *
+     * <p>Validation defers to Logback's own conversion rather than a character blacklist, so it
+     * stays correct if that conversion changes and does not reject paths Logback would have
+     * accepted. Legitimate paths pass, including relative, parent-relative and absolute ones.
+     *
+     * @param fallback the default path to use when the configured one is unusable.
+     */
+    private static void rejectUnusableLogFile(final String fallback) {
+        String configured = System.getProperty(LOG_FILE_ENV);
+        if (configured == null) {
+            configured = System.getenv(LOG_FILE_ENV);
+        }
+        if (configured == null || isUsableLogFile(configured)) {
+            return;
+        }
+        System.err.println(
+                "log file path cannot be used by the log rotator and was ignored: "
+                        + configured
+                        + " (it contains a regular-expression metacharacter such as '[', '{' or"
+                        + " '('); logging to "
+                        + fallback
+                        + " instead");
+        System.err.flush();
+        System.setProperty(LOG_FILE_ENV, fallback);
+    }
+
+    /**
+     * Whether {@code path} survives the conversion Logback performs on the rolling appender's
+     * {@code fileNamePattern}.
+     *
+     * <p>The suffix mirrors {@code logback.xml}'s {@code fileNamePattern} exactly; the two must be
+     * changed together. Package-private so a test can assert the boundary directly.
+     *
+     * @param path the candidate log file path.
+     * @return {@code true} if Logback can build a usable rollover pattern from it.
+     */
+    static boolean isUsableLogFile(final String path) {
+        try {
+            Pattern.compile(
+                    new FileNamePattern(path + ".%d{yyyy-MM-dd}.%i.gz", new ContextBase())
+                            .toRegex());
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * The file-name suffix a named instance contributes, or an empty string when none is named.
+     *
+     * @param instanceName the resolved instance label.
+     * @return {@code "-<label>"}, or {@code ""}.
+     */
+    private static String fileSuffix(final String instanceName) {
+        return instanceName.isEmpty() ? "" : "-" + fileSafe(instanceName);
     }
 
     /**
