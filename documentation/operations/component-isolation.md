@@ -44,16 +44,29 @@ it is the confirmation step once the offline row is green.
 |---|---|---|---|---|---|
 | 1 | **Client ↔ lobby** (WebSocket) | `ScriptedWebSocketServer` — `LobbyConnectionTest`.<br>`./gradlew :mock-client:test --tests '*LobbyConnectionTest'` | `LobbyConnectionLiveSmokeTest` (`@Tag("integration")`).<br>`./gradlew :mock-client:integrationTest --tests '*LobbyConnectionLiveSmokeTest'` | WS upgrade + text-frame round-trip, clean/abrupt close handling, against the captured `faf-server` lobby protocol. Live: the real lobby accepts the transport and the auth handshake yields a terminal reply. | `logs/mockclient.jsonl` (+ console); JUnit report `mock-client/build/reports/tests/test/` |
 | 2 | **Client ↔ adapter** (JSON-RPC/TCP) | `ScriptedJsonRpcServer` — `IceAdapterConnectionTest`.<br>`./gradlew :mock-client:test --tests '*IceAdapterConnectionTest'` | `IceAdapterConnectionLiveSmokeTest` (3.1.4.3, `@Tag("integration")`).<br>`./gradlew :mock-client:integrationTest --tests '*IceAdapterConnectionLiveSmokeTest'` | Newline-framed JSON-RPC request/response, id correlation, disconnect mechanics against the captured `java-ice-adapter` protocol. Live: the real adapter binds RPC and answers `status`. | `logs/mockclient.jsonl`; adapter child tagged `[ICEAdapter]` also under `logs/ice-adapter/` |
-| 3 | **Game ↔ adapter** (GPGNet/TCP) | `ScriptedGpgNetServer` — `GpgNetConnectionTest`.<br>`./gradlew :mock-game:test --tests '*GpgNetConnectionTest'` | `GpgNetConnectionLiveSmokeTest` (3.2.2.4, `@Tag("integration")`) — **lands with 3.2.2.4**.<br>`./gradlew :mock-game:integrationTest --tests '*GpgNetConnectionLiveSmokeTest'` | GPGNet binary frame codec round-trip (well-formed and malformed/truncated) against the captured GPGNet wire format. Live: the real adapter's GPGNet endpoint accepts and answers frames. | `logs/mockgame.jsonl` |
+| 3 | **Game ↔ adapter** (GPGNet/TCP) | `ScriptedGpgNetServer` — `GpgNetConnectionTest`.<br>`./gradlew :mock-game:test --tests '*GpgNetConnectionTest'` | `GpgNetConnectionLiveSmokeTest` (3.2.2.4, `@Tag("integration")`).<br>`./gradlew :mock-game:integrationTest --tests '*GpgNetConnectionLiveSmokeTest'` | GPGNet binary frame codec round-trip (well-formed and malformed/truncated) against the captured GPGNet wire format. Live: the real adapter's GPGNet endpoint accepts and answers frames. | `logs/mockgame.jsonl` |
 | 4 | **Adapter alone** (subprocess) | `LaunchIceCommandTest`.<br>`./gradlew :mock-client:test --tests '*LaunchIceCommandTest'` | `launch-ice` subcommand vs. the real jar — the [R74 Quick start](ice-adapter-setup.md#quick-start-clean-checkout). Requires R74 setup + network. | The subprocess launch → output-capture → SIGTERM-reap plumbing for the adapter, with no lobby and no FSM. Live pass: adapter spawns, RPC socket opens, `status` answers, clean teardown (exit `0`). | `logs/mockclient.jsonl`; adapter `[ICEAdapter]` + `logs/ice-adapter/` |
 | 5 | **Game alone** (subprocess) | `LaunchGameCommandTest`.<br>`./gradlew :mock-client:test --tests '*LaunchGameCommandTest'` | `launch-game` subcommand vs. the built `mock-game` binary (command below). | The subprocess plumbing for `mock-game`, with no lobby, FSM, or adapter. Pass condition: a `RUNTIME` (`70`) coded exit — see the note under the row. | `logs/mockgame.jsonl` (child `[MockGame]`) + `logs/mockclient.jsonl` (launcher) |
-| 6 | **UDP game-traffic seam** | Sender `GameUdpSenderTest` (3.2.2.5) — **lands with 3.2.2.5**.<br>`./gradlew :mock-game:test --tests '*GameUdpSenderTest'`<br>Receiver `GameUdpReceiverTest` (3.2.2.6 / #213) — **lands with #213**.<br>`./gradlew :mock-game:test --tests '*GameUdpReceiverTest'` | No standalone live UDP test — the UDP seam to the adapter's `--lobby-port` is exercised inside a full orchestrated session (row 7). | Sender: per-peer datagram emission at the tick cadence with independent, incrementing sequences. Receiver: inbound datagram decode. Together: the game↔adapter UDP path. | `logs/mockgame.jsonl` |
-| 7 | **Full stack** (end-to-end) | Orchestrated full-session test (3.1.2.7) — **lands with 3.1.2.7**.<br>`./gradlew :mock-client:integrationTest --tests '*FullSession*'` *(intended filter; name finalised by 3.1.2.7)* | `run` end-to-end demo — the `lobby-connect-idle` demo ([demos/README.md](../demos/README.md), WBS 3.1.1.4).<br>`./gradlew :mock-client:run --args="run --config mock-client.json"` | The components wired together against the live environment. Today's `run` demo proves connect → auth → `welcome` → idle ≥ 5 min → clean Ctrl-C. The 3.1.2.7 test will prove the orchestrated client→adapter→game session automatically. | `logs/mockclient.jsonl` |
+| 6 | **UDP game-traffic seam** | Sender `GameUdpSenderTest` (3.2.2.5).<br>`./gradlew :mock-game:test --tests '*GameUdpSenderTest'`<br>Receiver `GameUdpReceiverTest` (3.2.2.6 / #213).<br>`./gradlew :mock-game:test --tests '*GameUdpReceiverTest'` | No standalone live UDP test — the UDP seam to the adapter's `--lobby-port` is exercised inside a full orchestrated session (row 7). | Sender: per-peer datagram emission at the tick cadence with independent, incrementing sequences. Receiver: inbound datagram decode. Together: the game↔adapter UDP path. | `logs/mockgame.jsonl` |
+| 7 | **Full stack** (end-to-end) | †`ClientGameLifecycleLiveTest` (3.1.2.7, `@Tag("integration")`).<br>`./gradlew :mock-client:integrationTest --tests '*ClientGameLifecycleLiveTest*' --rerun` *(`--rerun` is required, or a repeat run reports `UP-TO-DATE` having executed nothing)* | `run` end-to-end demo — the `lobby-connect-idle` demo ([demos/README.md](../demos/README.md), WBS 3.1.1.4).<br>`./gradlew :mock-client:run --args="run --config mock-client.json"` | The components wired together against the live environment. Today's `run` demo proves connect → auth → `welcome` → idle ≥ 5 min → clean Ctrl-C. `ClientGameLifecycleLiveTest` proves the orchestrated client→adapter→game session automatically, offline and with no credentials. | `logs/mockclient.jsonl` |
+
+† Row 7's entry sits in the offline column but does not meet its "no external binary" rule: it is
+`@Tag("integration")` and spawns the real adapter and the real `mock-game`. It belongs there on the
+other half of the definition — it is deterministic and needs no live FAF network or credentials.
+Treat it as a third category: **offline but not binary-free**. Rows 2 and 3's live smoke tests sit
+in the same position: adapter-jar-gated, but with no FAF network of their own.
 
 ## Execution record
 
 Every row was exercised on a dev machine as part of this card. Environment: **macOS**, **JDK 21**
 (`21.0.6`, `JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home`), **2026-08-04**.
+
+> **This table is a dated snapshot, not live state.** It records what was run on the dates its rows
+> carry — the table below on 2026-08-04, row 5's transcript re-recorded since — and is deliberately
+> left as-is: a ⛔ means "not on `main` *that day*", and flipping one without a fresh run would
+> invent a result. Four have since landed (`GpgNetConnectionLiveSmokeTest` 3.2.2.4,
+> `GameUdpSenderTest` 3.2.2.5, `GameUdpReceiverTest` 3.2.2.6, and 3.1.2.7 as
+> `ClientGameLifecycleLiveTest`); the matrix above is the current view.
 
 | # | Row | Ran here? | Result |
 |---|---|---|---|
@@ -75,12 +88,11 @@ Every row was exercised on a dev machine as part of this card. Environment: **ma
 Legend: ✅ ran and passed · ⏭️ not run here (needs R74 setup and/or network — see the row) · ⛔ not
 on `main` yet (intended filter recorded).
 
-### Row 5 — `launch-game` recorded output (re-recorded 2026-08-24, after 3.2.5.1)
+### Row 5 — `launch-game` recorded output (re-recorded 2026-09-01 on WSL2 Linux)
 
 Build the two binaries, then point the subcommand at the built `mock-game`:
 
 ```bash
-export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
 ./gradlew :mock-client:installDist :mock-game:installDist
 
 mock-client/build/install/mock-client/bin/mock-client launch-game --duration-seconds=5 \
@@ -99,8 +111,8 @@ game); any syntactically valid placeholders work — same convention as `launch-
 
 ```
 [MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0 --launch-delay-seconds 5
-[MockClient] mock-game started, pid=30207
-[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238 launch=auto after 5s
+[MockClient] mock-game started, pid=39439
+[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238 gameOptions={} launch=auto after 5s
 [MockGame]   Created StateMachine with initial state INITIALIZING and policy IGNORE
 [MockGame]   [WARN] could not connect to GPGNet server at 127.0.0.1:7237: GPGNet server not reachable at 127.0.0.1:7237 after 20 attempts
 [MockGame]   shutting down mock game
@@ -144,8 +156,10 @@ Per-class report: `mock-client/build/reports/tests/test/index.html` and the matc
 
 ## Live rows — setup and network
 
-The live rows (2's live smoke, 4's `launch-ice`, 3's `GpgNetConnectionLiveSmokeTest`, and 7's `run`
-demo) need the **real** `faf-ice-adapter` jar and/or the FAF `.xyz` network:
+The live rows (2's live smoke, 3's `GpgNetConnectionLiveSmokeTest`, 4's `launch-ice`, 7's
+`ClientGameLifecycleLiveTest`, and 7's `run` demo) need the **real** `faf-ice-adapter` jar, and some
+of them the FAF `.xyz` network. Only row 1's live smoke and row 7's `run` demo need that network and
+credentials; the rest are jar-gated and run on loopback:
 
 - **Adapter jar:** provision per [`ice-adapter-setup.md`](ice-adapter-setup.md) (R74) —
   `./gradlew downloadIceAdapter`, or set `FAF_ICE_ADAPTER_JAR`. The `integration`-tagged tests
@@ -162,8 +176,9 @@ conditions are recorded in the matrix and in the linked docs, and are not faked 
 
 - [`ice-adapter-setup.md`](ice-adapter-setup.md) — R74: provisioning and running the real adapter
   headless; the source of truth for rows 2 (live), 3 (live), and 4 (live).
-- [`demos/README.md`](../demos/README.md) — the `lobby-connect-idle` end-to-end demo, closest live
-  evidence for row 7 until 3.1.2.7 lands.
+- [`demos/README.md`](../demos/README.md) — the captured demo transcripts, including
+  `client-game-lifecycle` (3.1.2.7), which is row 7's evidence, and the `lobby-connect-idle` and
+  `two-peer-session` live demos.
 - [`research/json-rpc-spec.md`](../research/json-rpc-spec.md),
   [`research/gpgnet-format-spec.md`](../research/gpgnet-format-spec.md),
   [`research/lobby-protocol-spec.md`](../research/lobby-protocol-spec.md) — the wire protocols the
