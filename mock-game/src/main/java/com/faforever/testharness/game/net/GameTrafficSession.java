@@ -63,6 +63,13 @@ public final class GameTrafficSession implements AutoCloseable {
     /** How often {@link #logProgress(boolean)} samples the receiver's counters. */
     private static final Duration PROGRESS_INTERVAL = Duration.ofSeconds(1);
 
+    /**
+     * How long {@link #close()} waits for the receive loop to unwind. Long enough for a thread
+     * already blocked on a closed socket to wake and log, short enough to be invisible against the
+     * client's five-second SIGTERM grace.
+     */
+    private static final Duration RECEIVER_STOP_TIMEOUT = Duration.ofMillis(500);
+
     /** This game's FAF player id: stamped into every datagram, and named in the progress line. */
     private final int playerId;
 
@@ -92,6 +99,11 @@ public final class GameTrafficSession implements AutoCloseable {
 
     /** True once the cadence has been started by the first registered peer. */
     private boolean sending;
+
+    /**
+     * True once a bind was attempted and failed, so a later peer names the fault it actually hit.
+     */
+    private boolean bindFailed;
 
     /** True once {@link #close()} has run; every call afterwards is a no-op. */
     private boolean closed;
@@ -137,6 +149,7 @@ public final class GameTrafficSession implements AutoCloseable {
         try {
             socket = new DatagramSocket(lobbyPort);
         } catch (SocketException e) {
+            bindFailed = true;
             LOG.error(
                     "failed to bind lobby port {} ({}); this game will exchange no peer traffic",
                     lobbyPort,
@@ -171,11 +184,21 @@ public final class GameTrafficSession implements AutoCloseable {
             return;
         }
         if (sender == null) {
-            LOG.warn(
-                    "peer {} at {} announced before the lobby socket was bound; no traffic will "
-                            + "reach it",
-                    peerId,
-                    netAddress);
+            // Two different faults, and confusing them sends triage to the wrong place: a failed
+            // bind is a port problem here, an unbound socket is a frame-ordering problem upstream.
+            if (bindFailed) {
+                LOG.warn(
+                        "peer {} at {} announced but the lobby socket failed to bind; no traffic "
+                                + "will reach it",
+                        peerId,
+                        netAddress);
+            } else {
+                LOG.warn(
+                        "peer {} at {} announced before the lobby socket was bound; no traffic "
+                                + "will reach it",
+                        peerId,
+                        netAddress);
+            }
             return;
         }
         if (netAddress.equals(registered.get(peerId))) {
@@ -204,9 +227,17 @@ public final class GameTrafficSession implements AutoCloseable {
      * Stops the cadence and closes the lobby socket, which ends the receive loop.
      *
      * <p>Run by the game's shutdown sequence, on every exit path. Logs one final progress line per
-     * sender first: the receiver's own totals line is emitted asynchronously once the loop unwinds
-     * and races the process's log shutdown, so it is not something a test can rely on seeing.
-     * Idempotent.
+     * sender, closes the socket, then waits briefly for the receive loop to unwind so the
+     * receiver's own totals line lands before this returns rather than on a daemon thread at some
+     * arbitrary point afterwards. That matters beyond tidiness: the bootstrap stops the logging
+     * context immediately after teardown, and a Gradle test worker treats output written after its
+     * class finished as a fault of its own.
+     *
+     * <p>The wait is bounded and cannot deadlock: the receive thread touches nothing guarded by
+     * this session's monitor, and the socket it is blocked on has already been closed. A receiver
+     * that outlives the bound is left to the daemon-thread fate it had before.
+     *
+     * <p>Idempotent.
      */
     @Override
     public synchronized void close() {
@@ -223,6 +254,29 @@ public final class GameTrafficSession implements AutoCloseable {
         if (socket != null) {
             logProgress(true);
             socket.close();
+            awaitReceiverStopped();
+        }
+    }
+
+    /**
+     * Waits, briefly, for the receive loop to notice the closed socket and log its totals. Returns
+     * at once if the receiver never started, and gives up rather than hanging teardown.
+     */
+    private void awaitReceiverStopped() {
+        Thread thread = receiver == null ? null : receiver.receiveThread();
+        if (thread == null) {
+            return;
+        }
+        try {
+            thread.join(RECEIVER_STOP_TIMEOUT.toMillis());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        if (thread.isAlive()) {
+            LOG.warn(
+                    "receive loop still running {} ms after its socket closed",
+                    RECEIVER_STOP_TIMEOUT.toMillis());
         }
     }
 
@@ -270,7 +324,7 @@ public final class GameTrafficSession implements AutoCloseable {
      *
      * @return the socket, or {@code null} if it was never bound
      */
-    DatagramSocket socket() {
+    synchronized DatagramSocket socket() {
         return socket;
     }
 
@@ -279,7 +333,7 @@ public final class GameTrafficSession implements AutoCloseable {
      *
      * @return the receiver, or {@code null} if the socket was never bound
      */
-    GameUdpReceiver receiver() {
+    synchronized GameUdpReceiver receiver() {
         return receiver;
     }
 

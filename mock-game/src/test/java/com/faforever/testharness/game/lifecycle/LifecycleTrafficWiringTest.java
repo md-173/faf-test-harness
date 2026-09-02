@@ -242,7 +242,7 @@ final class LifecycleTrafficWiringTest {
     }
 
     /** Drains what is already in flight, then asserts the cadence has genuinely stopped. */
-    private void assertNoMoreTraffic() throws IOException {
+    private void assertNoMoreTraffic() throws IOException, InterruptedException {
         peer.setSoTimeout((int) QUIET_WINDOW.toMillis());
         byte[] buffer = new byte[RECEIVE_BUFFER_BYTES];
         try {
@@ -256,6 +256,38 @@ final class LifecycleTrafficWiringTest {
                 SocketTimeoutException.class,
                 this::receiveFromGame,
                 "no datagram may be sent once the game has been torn down");
+        assertCadenceStopped();
+    }
+
+    /**
+     * Asserts the cadence itself stopped, not merely that its socket closed.
+     *
+     * <p>Silence at the stub proves nothing on its own — teardown closes the socket, so nothing
+     * arrives either way. A cadence that survived teardown keeps firing into that closed socket and
+     * {@link com.faforever.testharness.game.net.GameUdpSender} logs a send failure every round, so
+     * a count that keeps growing is the tell. One straggler is allowed: stopping does not join a
+     * round already in flight.
+     */
+    private void assertCadenceStopped() throws InterruptedException {
+        long before = sendFailures();
+        Thread.sleep(QUIET_WINDOW.toMillis());
+        long after = sendFailures();
+        if (after > before) {
+            fail(
+                    "the send cadence outlived teardown: send failures went from "
+                            + before
+                            + " to "
+                            + after
+                            + " over "
+                            + QUIET_WINDOW);
+        }
+    }
+
+    /** Captured send-failure warnings, which only a live cadence on a closed socket produces. */
+    private long sendFailures() {
+        return appender.list.stream()
+                .filter(event -> event.getFormattedMessage().contains("failed to send datagram"))
+                .count();
     }
 
     /** Re-binding the lobby port proves the shared socket was closed. */
