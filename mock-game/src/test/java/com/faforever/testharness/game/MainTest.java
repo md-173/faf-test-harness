@@ -21,6 +21,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -70,13 +71,26 @@ final class MainTest {
 
     private ScriptedGpgNetServer adapter;
 
+    /**
+     * This test's lobby port, free at setup time. Since WBS-4.3.2 the game binds it for real on
+     * {@code CreateLobby}, so the fixed 6112 this class used — the real Forged Alliance port —
+     * would collide between repetitions and with anything the developer happens to be running.
+     */
+    private int lobbyPort;
+
+    /** Lifecycles built directly by a test, torn down after it so no lobby socket leaks. */
+    private final List<MockGameLifecycle> lifecycles = new ArrayList<>();
+
     @BeforeEach
     void setUp() throws IOException {
         adapter = new ScriptedGpgNetServer();
+        lobbyPort = TestPorts.freeUdpPort();
     }
 
     @AfterEach
     void tearDown() {
+        lifecycles.forEach(lifecycle -> lifecycle.shutdown().run());
+        lifecycles.clear();
         adapter.stop();
     }
 
@@ -93,7 +107,7 @@ final class MainTest {
         // the lifecycle's 500ms pre-first-frame wait leaves so much slack that a late registration
         // would still pass here. That handlers precede the first outbound frame is structural — the
         // constructor registers them, and only then calls connect().
-        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
+        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 42, 1)));
         assertEquals("Lobby", nextGameState(), "CreateLobby is handled and answered");
 
         adapter.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
@@ -199,7 +213,8 @@ final class MainTest {
                             : lifecycleOn(adapter.port());
             lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
             if ("in-fsm".equals(phase)) {
-                adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
+                adapter.sendFrame(
+                        new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 42, 1)));
                 lifecycle.stateReached(GameState.LOBBY).get(10, TimeUnit.SECONDS);
                 // HOSTING is transient: entering it schedules LaunchMatch TEST_LAUNCH_DELAY later.
                 // stateReached is edge triggered and cannot observe a state the FSM has already
@@ -252,7 +267,7 @@ final class MainTest {
         lifecycle.stateReached(GameState.IDLE).get(10, TimeUnit.SECONDS);
 
         CompletableFuture<Void> lobby = lifecycle.stateReached(GameState.LOBBY);
-        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
+        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 42, 1)));
         lobby.get(10, TimeUnit.SECONDS);
 
         CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
@@ -313,18 +328,21 @@ final class MainTest {
     }
 
     /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
-    private static MockGameLifecycle lifecycleOn(final int gpgNetPort) {
+    private MockGameLifecycle lifecycleOn(final int gpgNetPort) {
         return lifecycleOn(gpgNetPort, TEST_LAUNCH_DELAY, TEST_MATCH_DURATION);
     }
 
     /** A lifecycle wired to {@code gpgNetPort}, with its two timers chosen by the caller. */
-    private static MockGameLifecycle lifecycleOn(
+    private MockGameLifecycle lifecycleOn(
             final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
-        return new MockGameLifecycle(
-                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0),
-                new GpgNetConnection(gpgNetPort),
-                launchDelay,
-                matchDuration);
+        MockGameLifecycle created =
+                new MockGameLifecycle(
+                        new MockGameConfig(gpgNetPort, lobbyPort, 42, "Rhiza", 9001, Map.of(), 0),
+                        new GpgNetConnection(gpgNetPort),
+                        launchDelay,
+                        matchDuration);
+        lifecycles.add(created);
+        return created;
     }
 
     /** A never-connected connection that records when the shutdown sequence closes it. */
@@ -335,17 +353,17 @@ final class MainTest {
     }
 
     /** The argv {@code MockGameLauncher} emits, pointed at {@code gpgNetPort}. */
-    private static String[] argv(final int gpgNetPort) {
+    private String[] argv(final int gpgNetPort) {
         return argv(gpgNetPort, 42);
     }
 
     /** As {@link #argv(int)}, with the player id chosen — 0 is the invalid case. */
-    private static String[] argv(final int gpgNetPort, final int playerId) {
+    private String[] argv(final int gpgNetPort, final int playerId) {
         return new String[] {
             "--gpgnet-port",
             Integer.toString(gpgNetPort),
             "--lobby-port",
-            "6112",
+            Integer.toString(lobbyPort),
             "--player-id",
             Integer.toString(playerId),
             "--player-login",

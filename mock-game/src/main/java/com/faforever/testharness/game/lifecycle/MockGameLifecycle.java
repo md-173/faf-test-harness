@@ -7,6 +7,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.GpgNetSender;
 import com.faforever.testharness.game.gpgnet.Peer;
+import com.faforever.testharness.game.net.GameTrafficSession;
 import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.InvalidTransitionPolicy;
@@ -62,6 +63,14 @@ public final class MockGameLifecycle {
 
     /** The one shutdown sequence for this game; see {@link #shutdown()}. */
     private final GameShutdown shutdown;
+
+    /**
+     * This game's peer traffic (WBS-4.3.2): the lobby socket, the UDP sender and receiver over it,
+     * and the progress line. Driven from three transition actions below — bound on {@code
+     * CreateLobby}, given a destination on {@code JoinGame} / {@code ConnectToPeer} — and closed by
+     * the shutdown sequence, which is the only thing that stops it.
+     */
+    private final GameTrafficSession traffic;
 
     /** A timeout for the GpgNet connection. */
     private final Duration gpgnetConnectionTimeout;
@@ -202,6 +211,12 @@ public final class MockGameLifecycle {
                 new StateMachine(
                         states.get(GameState.INITIALIZING), InvalidTransitionPolicy.IGNORE);
         this.shutdown = new GameShutdown(machine, gpgnet);
+
+        // Assigned here rather than at the field, which would read a still-null config. Registered
+        // with the shutdown sequence immediately: that sequence is the only thing that stops the
+        // cadence and closes the socket, on every exit path including a SIGTERM before CreateLobby.
+        this.traffic = new GameTrafficSession(config.playerId());
+        this.shutdown.registerTrafficSession(traffic);
 
         setupStateMachine();
     }
@@ -475,6 +490,10 @@ public final class MockGameLifecycle {
             LOG.warn("CreateLobby frame did not have a GpgNet port argument");
         }
 
+        // Bound before the frame below, not after: the lobby server marks the game hosted on
+        // GameState Lobby, and from that moment a peer's datagrams can arrive at this port.
+        traffic.bind(config.lobbyPort());
+
         try {
             gpgnetSender.gameState("Lobby");
         } catch (IOException e) {
@@ -530,7 +549,9 @@ public final class MockGameLifecycle {
                     playerId,
                     address);
             peers.add(new Peer(address, login, playerId));
-            // TODO(#219): Initiate actual connection with peer
+            // The address is the host's relay socket inside our own adapter; sending to it is what
+            // puts game traffic on the ICE path (WBS-4.3.2). The first peer starts the cadence.
+            traffic.registerPeer(address, playerId);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("JoinGame frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
@@ -582,7 +603,8 @@ public final class MockGameLifecycle {
                     address);
             peer = new Peer(address, login, playerId);
             peers.add(peer);
-            // TODO(#219): Initiate actual connection with peer
+            // As in joinGame: this peer's relay socket is where its share of our traffic goes.
+            traffic.registerPeer(address, playerId);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
