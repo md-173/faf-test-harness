@@ -1,6 +1,7 @@
 package com.faforever.testharness.game.lifecycle;
 
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
+import com.faforever.testharness.game.net.GameTrafficSession;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -8,7 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs three steps, in order:
+ * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs four steps, in order:
  *
  * <ol>
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
@@ -16,13 +17,37 @@ import org.slf4j.LoggerFactory;
  *   <li>stop the lifecycle's own scheduling ({@link MockGameLifecycle#stopSchedules()}), used for
  *       launch delays and timed match durations, similarly to stop transitions firing afterwards.
  *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
- *       no farewell frame is sent.
+ *       no farewell frame is sent;
+ *   <li>close the {@link GameTrafficSession} (WBS-4.3.2), which stops the peer traffic cadence and
+ *       closes the shared lobby socket, ending the receiver's loop.
  * </ol>
  *
  * <p>{@link MockGameLifecycle} uses two separate schedulers: the internal {@link StateMachine} one
  * for timeouts and another for launch-delay and match-duration tasks. This is why there are two
  * very similar steps. Step 1 cancels the StateMachine's own timer while step 2 cancels the other
  * MockGameLifecycle scheduler.
+ *
+ * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
+ * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
+ * point are dropped by an adapter that has already torn down the game session. Nothing joins the
+ * receiver's thread, so its closing totals line races the last lines here and the bootstrap's log
+ * shutdown — which is why the traffic session logs its own final summary synchronously before
+ * closing.
+ *
+ * <p><b>Steps one and two are not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels
+ * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} calls {@code
+ * shutdownNow()} on the launch-delay and match-duration scheduler, which drains the tasks that have
+ * not started yet. What it cannot recall is a task already past its cancellation check and running,
+ * which can still post an event after teardown. That residue is inert: the invalid-transition
+ * policy is IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that
+ * does fire converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears
+ * down twice.
+ *
+ * <p>Step two is what makes that true. Before WBS-2.3.11 added it, nothing stopped that scheduler:
+ * a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in that state
+ * (the local close is filtered, see {@code MockGameLifecycle.setupStateMachine}), and the orphaned
+ * {@code LaunchMatch} then drove the registered transition to LIVE against a socket this sequence
+ * had already closed. Draining the queue removes that case.
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
@@ -90,6 +115,12 @@ public final class GameShutdown implements Runnable {
     private volatile GpgNetConnection connection;
 
     /**
+     * The peer traffic session to close; {@code null} until registered, e.g. a game whose lobby
+     * socket never bound. Volatile for the same reason as {@link #connection}.
+     */
+    private volatile GameTrafficSession traffic;
+
+    /**
      * A reference to the lifecycle of the mock game. This is used by the shutdown sequence to
      * cancel any scheduled transitions that exist outside of the FSM.
      */
@@ -151,9 +182,26 @@ public final class GameShutdown implements Runnable {
     }
 
     /**
-     * Runs the shutdown sequence once: stop FSM (and lifecycle) scheduling, then close the
-     * connection (skipped if none was registered). Subsequent or concurrent calls return
-     * immediately. Each step is exception-isolated.
+     * Registers the peer traffic session to close on shutdown (WBS-4.3.2). As with {@link
+     * #registerConnection(GpgNetConnection)}, registering after {@link #run()} has already executed
+     * leaves the session open and is warned about.
+     *
+     * @param trafficSession the session owning the lobby socket; must not be {@code null}
+     */
+    public void registerTrafficSession(final GameTrafficSession trafficSession) {
+        this.traffic = Objects.requireNonNull(trafficSession, "trafficSession");
+        if (done.get()) {
+            LOG.warn(
+                    "peer traffic session registered after shutdown already ran; "
+                            + "its socket will not be closed by this sequence");
+        }
+    }
+
+    /**
+     * Runs the shutdown sequence once: stop FSM scheduling, stop the lifecycle's own scheduling,
+     * close the connection, then close the peer traffic session (either of the last two skipped if
+     * none was registered). Subsequent or concurrent calls return immediately. Each step is
+     * exception-isolated.
      */
     @Override
     public void run() {
@@ -164,6 +212,7 @@ public final class GameShutdown implements Runnable {
         stopFSM();
         stopScheduling();
         closeConnection();
+        closeTraffic();
         LOG.info("mock game shutdown complete");
     }
 
@@ -195,6 +244,18 @@ public final class GameShutdown implements Runnable {
             current.close();
         } catch (RuntimeException e) {
             LOG.warn("failed to close GPGNet connection: {}", e.getMessage());
+        }
+    }
+
+    private void closeTraffic() {
+        GameTrafficSession current = traffic;
+        if (current == null) {
+            return; // game never exchanged peer traffic — nothing to close
+        }
+        try {
+            current.close();
+        } catch (RuntimeException e) {
+            LOG.warn("failed to close the peer traffic session: {}", e.getMessage());
         }
     }
 }
