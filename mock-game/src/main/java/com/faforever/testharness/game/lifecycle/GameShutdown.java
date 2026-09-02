@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
  * <ol>
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
  *       timeout queued <em>on the FSM itself</em> fires a transition mid-teardown;
+ *   <li>stop the lifecycle's own scheduling, used for launch delays and timed match durations,
+ *       similarly to stop transitions firing mid-teardown.
  *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
  *       no farewell frame is sent.
  * </ol>
@@ -93,6 +95,12 @@ public final class GameShutdown implements Runnable {
      */
     private volatile GpgNetConnection connection;
 
+    /**
+     * A reference to the lifecycle of the mock game. This is used by the shutdown sequence to
+     * cancel any scheduled transitions that exist outside of the FSM.
+     */
+    private final MockGameLifecycle lifecycle;
+
     /** Set by the caller that wins {@link #run()}; the lock-free once-guard. */
     private final AtomicBoolean done = new AtomicBoolean();
 
@@ -103,7 +111,7 @@ public final class GameShutdown implements Runnable {
      * @param fsm the lifecycle FSM; must not be {@code null}
      */
     public GameShutdown(final StateMachine fsm) {
-        this(fsm, null);
+        this(fsm, null, null);
     }
 
     /**
@@ -113,8 +121,23 @@ public final class GameShutdown implements Runnable {
      * @param connection the GPGNet connection to close, or {@code null} if not yet opened
      */
     public GameShutdown(final StateMachine fsm, final GpgNetConnection connection) {
+        this(fsm, connection, null);
+    }
+
+    /**
+     * Creates a shutdown for a game whose GPGNet connection already exists.
+     *
+     * @param fsm the lifecycle FSM; must not be {@code null}
+     * @param connection the GPGNet connection to close, or {@code null} if not yet opened
+     * @param lifecycle the lifecycle of the mock game, or {@code null} if it does not exist yet
+     */
+    public GameShutdown(
+            final StateMachine fsm,
+            final GpgNetConnection connection,
+            final MockGameLifecycle lifecycle) {
         this.fsm = Objects.requireNonNull(fsm, "fsm");
         this.connection = connection;
+        this.lifecycle = lifecycle;
     }
 
     /**
@@ -134,9 +157,9 @@ public final class GameShutdown implements Runnable {
     }
 
     /**
-     * Runs the shutdown sequence once: stop FSM scheduling, then close the connection (skipped if
-     * none was registered). Subsequent or concurrent calls return immediately. Each step is
-     * exception-isolated.
+     * Runs the shutdown sequence once: stop FSM (and lifecycle) scheduling, then close the
+     * connection (skipped if none was registered). Subsequent or concurrent calls return
+     * immediately. Each step is exception-isolated.
      */
     @Override
     public void run() {
@@ -144,16 +167,28 @@ public final class GameShutdown implements Runnable {
             return;
         }
         LOG.info("shutting down mock game");
+        stopFSM();
         stopScheduling();
         closeConnection();
         LOG.info("mock game shutdown complete");
     }
 
-    private void stopScheduling() {
+    private void stopFSM() {
         try {
             fsm.cancel();
         } catch (RuntimeException e) {
             LOG.warn("failed to stop FSM scheduling: {}", e.getMessage());
+        }
+    }
+
+    private void stopScheduling() {
+        if (lifecycle == null) {
+            return;
+        }
+        try {
+            lifecycle.stopSchedules();
+        } catch (RuntimeException e) {
+            LOG.warn("failed to stop lifecycle scheduling: {}", e.getMessage());
         }
     }
 

@@ -201,7 +201,7 @@ public final class MockGameLifecycle {
         this.machine =
                 new StateMachine(
                         states.get(GameState.INITIALIZING), InvalidTransitionPolicy.IGNORE);
-        this.shutdown = new GameShutdown(machine, gpgnet);
+        this.shutdown = new GameShutdown(machine, gpgnet, this);
 
         setupStateMachine();
     }
@@ -288,6 +288,19 @@ public final class MockGameLifecycle {
      */
     public GameShutdown shutdown() {
         return shutdown;
+    }
+
+    /**
+     * Cancels any configured schedules (launch delay and match duration). Called by {@link
+     * GameShutdown.run}.
+     */
+    public void stopSchedules() {
+        if (matchEndFuture != null && !matchEndFuture.isDone()) {
+            matchEndFuture.cancel(true);
+        }
+        if (launchFuture != null && !launchFuture.isDone()) {
+            launchFuture.cancel(true);
+        }
     }
 
     /**
@@ -505,10 +518,11 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new LaunchMatch()),
+                            launchDelay.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -538,10 +552,11 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new LaunchMatch()),
+                            launchDelay.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -555,10 +570,11 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (matchDuration != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new GameEnded()),
-                    matchDuration.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            matchEndFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new GameEnded()),
+                            matchDuration.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
