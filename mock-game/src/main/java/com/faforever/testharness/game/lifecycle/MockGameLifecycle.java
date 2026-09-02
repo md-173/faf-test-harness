@@ -94,16 +94,33 @@ public final class MockGameLifecycle {
     private List<Peer> peers;
 
     /**
-     * Status of the lifecycle. Used mainly to convert to a corresponding exit code. Initially
-     * FAILED, failures set it to other values. A successful ENDED sets it to OK.
+     * Status of the lifecycle, to be mapped to a process exit code by the bootstrap (WBS-3.2.5.1).
+     * That mapping does not exist yet — {@link com.faforever.testharness.game.config.ExitCodes}
+     * currently defines no code for SERVER_CONNECTION_LOST. See {@link #getExitStatus()} for what
+     * this does and does not claim.
+     *
+     * <p>Starts FAILED so that any path reaching ENDED without a deliberate assignment — including
+     * a transition action that throws its way there — reports failure rather than success.
+     *
+     * <p>Volatile only to keep {@link #getExitStatus()} self-contained. Every write already happens
+     * under the state machine's monitor and is program-ordered before the volatile {@code state}
+     * write that publishes it, so the read is safe without this — but only because getExitStatus
+     * reads {@code state} before {@code status}. That ordering should not be load-bearing.
      */
-    private ExitStatus status = ExitStatus.FAILED;
+    private volatile ExitStatus status = ExitStatus.FAILED;
 
     /** Possible exit status of the lifecycle. */
     public enum ExitStatus {
-        /** No issue with the lifecycle. */
+        /**
+         * The lifecycle ran its own program to completion: every frame the mock game owes was
+         * handed to the transport without error. Not a claim that those frames were delivered — see
+         * {@link MockGameLifecycle#getExitStatus()}.
+         */
         OK,
-        /** The server has disconnected. */
+        /**
+         * The GPGNet connection was established and then lost: either the reader observed the
+         * close, or a send failed because the socket was already gone.
+         */
         SERVER_CONNECTION_LOST,
         /** Could not establish initial connection with the server. */
         SERVER_NOT_CONNECTED,
@@ -223,6 +240,24 @@ public final class MockGameLifecycle {
 
     /**
      * Gets the exit status of the lifecycle.
+     *
+     * <p>This reports whether <em>this process completed its own program</em>, not whether the
+     * match ended cleanly at the far end. The two differ, and the difference is not resolvable
+     * here: {@link GpgNetConnection#send} returns once the kernel accepts the bytes, so when the
+     * adapter dies as the match ends, the closing frames can all be written into a dead socket's
+     * send buffer without error and leave the status {@link ExitStatus#OK} having delivered
+     * nothing. Neither the socket API nor GPGNet gives the emitter a delivery test — the write call
+     * reports only local acceptance, and the protocol has no application-level ack for the closing
+     * frames. Deriving OK from the connection still looking live after the writes would only move
+     * the race, since FIN and RST arrive asynchronously and it is the read loop's EOF handling that
+     * actually closes the socket.
+     *
+     * <p>So this side does not pretend to have such a test. The authoritative clean-end signal is
+     * the observer's: {@code MockClientLifecycle.isCleanEndSeen} records the {@code GameEnded}
+     * frame as forwarded by the adapter, confirming delivery at the far end, which is where a false
+     * OK here gets contradicted. Per the analysis in issue #277, that split mirrors the real
+     * client, whose {@code GameRunner.handleTermination} treats the exit code as the crash signal
+     * and reports end-of-game separately rather than from the game's own frames.
      *
      * @return the exit status.
      * @throws IllegalStateException if called before the lifecycle reaches ENDED.
@@ -376,6 +411,31 @@ public final class MockGameLifecycle {
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
     }
 
+    /**
+     * Records a failed GPGNet send as connection loss and builds the transition failure into ENDED.
+     *
+     * <p>Every transition action that sends does so through the one socket, and in every situation
+     * this lifecycle can reach, {@link GpgNetConnection#send} fails because that socket is already
+     * gone — so a send failure is connection loss in whichever phase it happens, never a generic
+     * fault. (Its other two failure modes are unreachable from here: a null stream cannot occur,
+     * because no action sends before the connect future completes and publishes it, and the
+     * over-cap frame check throws IllegalArgumentException, which this does not catch.) Without
+     * this the status would keep its initial FAILED, because throwing into ENDED skips the
+     * assignment at the end of the action; the same physical event would then report
+     * SERVER_CONNECTION_LOST when the reader thread noticed the close first and FAILED when the
+     * send did.
+     *
+     * <p>Parse failures are deliberately not routed here: a malformed inbound frame is a real
+     * generic failure and keeps FAILED.
+     *
+     * @param e the send failure.
+     * @return the exception for the caller to throw.
+     */
+    private FailedTransitionException recordSendFailure(IOException e) {
+        status = ExitStatus.SERVER_CONNECTION_LOST;
+        return new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+    }
+
     /* Transition action for INITIALIZING -> IDLE. */
     private void gpgnetConnected(Event event) throws FailedTransitionException {
         LOG.info("Successful connection with GpgNet server established");
@@ -384,7 +444,7 @@ public final class MockGameLifecycle {
             Thread.sleep(GPGNET_CONNECTION_WAIT);
             gpgnetSender.gameState("Idle");
         } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            throw recordSendFailure(e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
@@ -418,7 +478,7 @@ public final class MockGameLifecycle {
         try {
             gpgnetSender.gameState("Lobby");
         } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            throw recordSendFailure(e);
         }
     }
 
@@ -440,7 +500,7 @@ public final class MockGameLifecycle {
                 gpgnetSender.gameOption(entry.getKey(), entry.getValue());
             }
         } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            throw recordSendFailure(e);
         }
 
         // Set up the scheduler if configured.
@@ -490,7 +550,7 @@ public final class MockGameLifecycle {
         try {
             gpgnetSender.gameState("Launching");
         } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            throw recordSendFailure(e);
         }
 
         // Set up the scheduler if configured.
@@ -538,7 +598,7 @@ public final class MockGameLifecycle {
                 gpgnetSender.playerOption(peer.playerId(), "Faction", peers.size() + 1);
                 gpgnetSender.playerOption(peer.playerId(), "Color", peers.size() + 1);
             } catch (IOException e) {
-                throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+                throw recordSendFailure(e);
             }
         }
     }
@@ -555,10 +615,11 @@ public final class MockGameLifecycle {
             gpgnetSender.gameEnded();
             gpgnetSender.gameState("Ended");
         } catch (IOException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+            throw recordSendFailure(e);
         }
 
-        // This marks the end of the lifecycle through the correct/successful path.
+        // Every closing frame was handed to the transport without error, which is as much as this
+        // side can establish: see getExitStatus() for why that is not proof they were delivered.
         status = ExitStatus.OK;
     }
 }
