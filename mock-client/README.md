@@ -578,7 +578,7 @@ A malformed notification is logged at WARN with the prefix
 
 ### Peer traffic
 
-One line per peer per second, emitted by **mock-game** (`component=MockGame`)
+One line per *sending* peer, at most once a second, emitted by **mock-game** (`component=MockGame`)
 and captured into this stream by the client's subprocess logger. It is the only
 evidence that the ICE path is carrying game traffic, and it is what the two-peer
 exchange test (WBS-4.3.2) asserts on:

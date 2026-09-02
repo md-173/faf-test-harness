@@ -94,6 +94,14 @@ import org.slf4j.LoggerFactory;
  * completes ({@code PeerIceModule.sendViaIce} is guarded by {@code connected}), so a stream that
  * starts mid-sequence with gaps in it is the expected shape, not a defect.
  *
+ * <p><b>One known cause of a slow pass.</b> If an adapter re-announces a peer at a
+ * <em>different</em> relay port, that peer's send sequence restarts at zero (WBS-3.2.2.5 installs a
+ * fresh counter per registration), while the receiving side only ever raises its highest-seen
+ * sequence. The advancing check below then makes no progress until the restarted stream climbs past
+ * the old high — bounded, about a second per ten datagrams already sent, but it can eat most of
+ * {@link #TRAFFIC_TIMEOUT}. The same shape is what WBS-4.3.4 will hit deliberately when a peer
+ * rejoins.
+ *
  * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
  * installed mock-game binary ({@code ./gradlew :mock-game:installDist}), the {@code faf-uid} binary
@@ -180,7 +188,11 @@ final class TwoPeerSessionLiveTest {
      */
     private static final int MIN_PROGRESS_SAMPLES = 2;
 
-    /** The mock game's progress line (WBS-4.3.2), as captured from its stdout. */
+    /**
+     * The mock game's progress line (WBS-4.3.2), as captured from its stdout. {@code
+     * TwoGameTrafficLoopbackTest} in mock-game holds a second copy of this pattern and these
+     * thresholds, and runs in the fast suite; change one and you must change the other.
+     */
     private static final Pattern PROGRESS_LINE =
             Pattern.compile(
                     "player (\\d+) peer traffic from player (\\d+): (\\d+) datagrams, "

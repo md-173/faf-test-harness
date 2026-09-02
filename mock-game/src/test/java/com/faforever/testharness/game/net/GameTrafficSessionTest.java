@@ -35,8 +35,9 @@ import org.slf4j.LoggerFactory;
  * LifecycleTrafficWiringTest}; this class owns everything that needs to see the session's
  * internals.
  *
- * <p>Timings are the test constructor's, not production's, so the whole class runs in about a
- * second. The class-level timeout is a backstop: every wait below is individually bounded.
+ * <p>Timings are the test constructor's, not production's, so the class runs in a couple of
+ * seconds: the positive assertions cost a few cadences each, and the negative ones cost one quiet
+ * window. The class-level timeout is a backstop: every wait below is individually bounded.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class GameTrafficSessionTest {
@@ -125,10 +126,7 @@ final class GameTrafficSessionTest {
     void firstPeerStartsTheCadenceAndDatagramsCarryOurId() throws Exception {
         session.bind(freePort());
         assertFalse(session.isSending(), "no cadence before a peer is registered");
-        assertThrows(
-                SocketTimeoutException.class,
-                this::receiveFromGame,
-                "nothing may be sent before a peer is registered");
+        assertNothingArrives("nothing may be sent before a peer is registered");
 
         session.registerPeer(peerAddress(), PEER_PLAYER_ID);
         assertTrue(session.isSending(), "the first peer starts the cadence");
@@ -175,6 +173,7 @@ final class GameTrafficSessionTest {
                 SocketTimeoutException.class,
                 this::receiveFromGame,
                 "no datagram may be sent after close");
+        assertCadenceStopped();
     }
 
     @Test
@@ -219,7 +218,7 @@ final class GameTrafficSessionTest {
                         event.getFormattedMessage()
                                 .contains("announced before the lobby socket was bound"),
                 "the dropped peer must be logged");
-        assertThrows(SocketTimeoutException.class, this::receiveFromGame, "and nothing is sent");
+        assertNothingArrives("and nothing is sent");
     }
 
     @Test
@@ -232,6 +231,53 @@ final class GameTrafficSessionTest {
         awaitLog(
                 event -> event.getFormattedMessage().contains("unusable address"),
                 "the rejected address must be logged");
+    }
+
+    /**
+     * Asserts nothing reaches the stub peer, waiting one quiet window rather than the full receive
+     * budget — a negative needs only long enough for several cadences to have fired.
+     *
+     * @param what what the silence proves, used verbatim in the failure message
+     */
+    private void assertNothingArrives(final String what) throws IOException {
+        peer.setSoTimeout((int) QUIET_WINDOW.toMillis());
+        try {
+            assertThrows(SocketTimeoutException.class, this::receiveFromGame, what);
+        } finally {
+            peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
+        }
+    }
+
+    /**
+     * Asserts the send cadence really stopped, rather than merely losing its socket.
+     *
+     * <p>A silent socket proves nothing here: {@code close()} shuts the socket, so no datagram
+     * arrives whether the cadence stopped or is still firing into a closed one. What a surviving
+     * cadence does emit is {@link GameUdpSender}'s per-round send failure, once per tick, forever —
+     * so this samples that count and requires it to stop growing. A single straggler is tolerated
+     * deliberately: {@code stop()} does not join an in-flight round, so one late failure is correct
+     * behaviour and a continuing stream is not.
+     */
+    private void assertCadenceStopped() throws InterruptedException {
+        long before = sendFailures();
+        Thread.sleep(QUIET_WINDOW.toMillis());
+        long after = sendFailures();
+        if (after > before) {
+            fail(
+                    "the send cadence is still running after close: send failures went from "
+                            + before
+                            + " to "
+                            + after
+                            + " over "
+                            + QUIET_WINDOW);
+        }
+    }
+
+    /** Captured send-failure warnings, which only a live cadence on a closed socket can produce. */
+    private long sendFailures() {
+        return appender.list.stream()
+                .filter(event -> event.getFormattedMessage().contains("failed to send datagram"))
+                .count();
     }
 
     /** The stub peer's address, in the {@code host:port} form the adapter supplies. */

@@ -40,20 +40,31 @@ final class GameShutdownTest {
         // thread), so every step records its order deterministically.
         List<String> order = new CopyOnWriteArrayList<>();
         StateMachine fsm = recordingFsm(order);
-        GpgNetConnection connection = new GpgNetConnection(1);
-        connection.onDisconnect(event -> order.add("close-connection"));
         GameTrafficSession traffic = boundTrafficSession();
+        GpgNetConnection connection = new GpgNetConnection(1);
+        connection.onDisconnect(
+                event -> {
+                    order.add("close-connection");
+                    // Sampled here rather than after run() returns: read afterwards, this would
+                    // say "closed" no matter which step ran first, and the ordering claim below
+                    // would be unearned.
+                    order.add(traffic.isClosed() ? "traffic-already-closed" : "traffic-still-open");
+                });
 
         GameShutdown shutdown = new GameShutdown(fsm, connection);
         shutdown.registerTrafficSession(traffic);
         shutdown.run();
-        order.add(traffic.isClosed() ? "close-traffic" : "traffic-still-open");
+        order.add(traffic.isClosed() ? "traffic-closed" : "traffic-never-closed");
 
         assertEquals(
-                List.of("stop-scheduling", "close-connection", "close-traffic"),
+                List.of(
+                        "stop-scheduling",
+                        "close-connection",
+                        "traffic-still-open",
+                        "traffic-closed"),
                 order,
-                "scheduling must stop first so no timeout fires mid-teardown, and the lobby "
-                        + "socket closes last");
+                "scheduling must stop first so no timeout fires mid-teardown, and the traffic "
+                        + "session must still be open while the connection closes");
     }
 
     @Test
@@ -64,7 +75,10 @@ final class GameShutdownTest {
         shutdown.registerTrafficSession(traffic);
         shutdown.run();
 
-        assertTrue(traffic.isClosed(), "the lobby socket must be closed by the sequence");
+        assertTrue(
+                traffic.isClosed(),
+                "the sequence must close the traffic session it was given; that closing it really "
+                        + "releases the socket is LifecycleTrafficWiringTest's assertion");
     }
 
     @Test

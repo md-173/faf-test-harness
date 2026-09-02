@@ -480,9 +480,12 @@ public final class MockGameLifecycle {
             // warning.
             int port = frame.intArg(1);
             if (port != config.lobbyPort()) {
+                // Not speculative since WBS-4.3.2: we bind the config port, and the adapter
+                // forwards peer datagrams to the one it named, so a mismatch means no peer traffic
+                // arrives at all.
                 LOG.warn(
-                        "CreateLobby lobby port ({}) differ "
-                                + "from config lobby port ({}), might cause connection issues",
+                        "CreateLobby lobby port ({}) differs from config lobby port ({}); "
+                                + "peer traffic will be sent to a port this game has not bound",
                         port,
                         config.lobbyPort());
             }

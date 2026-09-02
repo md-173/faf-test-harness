@@ -22,10 +22,10 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
  * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
- * point are dropped by an adapter that has already torn down the game session. Nothing joins the
- * receiver's thread, so its closing totals line races the last lines here and the bootstrap's log
- * shutdown — which is why the traffic session logs its own final summary synchronously before
- * closing.
+ * point are dropped by an adapter that has already torn down the game session. That step is
+ * synchronous end to end — it logs its own final summary, closes the socket, and waits briefly for
+ * the receive loop to finish logging — so teardown leaves no thread still writing once this
+ * returns, and the bootstrap can stop the logging context immediately afterwards.
  *
  * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels only the
  * StateMachine's own timer. {@link MockGameLifecycle}'s launch-delay and match-duration tasks run
