@@ -80,15 +80,17 @@ public final class MockGameLifecycle {
 
     /**
      * A future that upon completion, drives the state machine to launch the match. Created by the
-     * {@code scheduler}.
+     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
+     * caller's thread reads from them.
      */
-    private Future launchFuture;
+    private volatile Future<?> launchFuture;
 
     /**
      * A future that upon completion, drives the state machine to end the match. Created by the
-     * {@code scheduler}.
+     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
+     * caller's thread reads from them.
      */
-    private Future matchEndFuture;
+    private volatile Future<?> matchEndFuture;
 
     /** A record of all connected peers. */
     private List<Peer> peers;
