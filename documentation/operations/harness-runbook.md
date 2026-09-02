@@ -64,11 +64,18 @@ items below are pointless to obtain otherwise.
 
 ## 2. Running the game against an adapter, no lobby required
 
-This is the entry point for anyone consuming the release inside another
-project's CI: no account, no OAuth, and — once §1's one-time
+This is the no-account path: no account, no OAuth, and — once §1's one-time
 `downloadIceAdapter` has fetched the jar — no network beyond localhost, save
 the adapter's own telemetry websocket, which 3.3.14 cannot be told to skip and
 which fails harmlessly when it cannot connect (see the note on #236 below).
+
+**Every command in this section assumes the repository**, and drives the
+harness through `./gradlew`. If you have only the published jars — the case for
+someone embedding this in another project's CI — the root
+[`README.md`](../../README.md) carries the two invocations that need no clone:
+`ice-smoke` to prove an adapter is reachable, and `mock-game` driven straight
+at an adapter you started yourself. Giving this section a jar-only path of its
+own is tracked separately.
 
 *Provenance. Every command in this section was re-executed against merged
 `main` on **2026-09-01**, on WSL2 Linux (Ubuntu 24.04, OpenJDK 21.0.12 — the
