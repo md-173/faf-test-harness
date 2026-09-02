@@ -256,16 +256,11 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Cancels any configured schedules (launch delay and match duration). Called by {@link
-     * GameShutdown.run}.
+     * Cancels any configured schedules (launch delay and match duration) and shutdowns the
+     * scheduler. Called by {@link GameShutdown#run()}.
      */
     public void stopSchedules() {
-        if (matchEndFuture != null && !matchEndFuture.isDone()) {
-            matchEndFuture.cancel(true);
-        }
-        if (launchFuture != null && !launchFuture.isDone()) {
-            launchFuture.cancel(true);
-        }
+        scheduler.shutdownNow();
     }
 
     /**
