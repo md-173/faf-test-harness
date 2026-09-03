@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -187,6 +188,13 @@ final class GameTrafficSessionTest {
             awaitLog(
                     event -> event.getFormattedMessage().contains("failed to bind lobby port"),
                     "the failed bind must name itself in the log");
+            // A peer announced after a failed bind must not be reported as arriving too early:
+            // that is a different fault and sends triage to the wrong place.
+            awaitLog(
+                    event ->
+                            event.getFormattedMessage()
+                                    .contains("announced but the lobby socket failed to bind"),
+                    "a peer announced after a failed bind must say so");
         }
     }
 
@@ -253,10 +261,14 @@ final class GameTrafficSessionTest {
      *
      * <p>A silent socket proves nothing here: {@code close()} shuts the socket, so no datagram
      * arrives whether the cadence stopped or is still firing into a closed one. What a surviving
-     * cadence does emit is {@link GameUdpSender}'s per-round send failure, once per tick, forever —
-     * so this samples that count and requires it to stop growing. A single straggler is tolerated
-     * deliberately: {@code stop()} does not join an in-flight round, so one late failure is correct
-     * behaviour and a continuing stream is not.
+     * cadence does emit is a per-round send failure, once per tick, forever — so this samples that
+     * count and requires it not to grow at all.
+     *
+     * <p><b>Where this is called from matters.</b> {@code stop()} does not join a round already in
+     * flight, so one straggler failure can be logged just after {@code close()} — and this
+     * comparison would fail on it. It is safe only because every caller samples well after that
+     * window has passed (each has already spent a drain plus a quiet window on the socket). Called
+     * immediately after {@code close()}, it would flake.
      */
     private void assertCadenceStopped() throws InterruptedException {
         long before = sendFailures();
@@ -273,10 +285,19 @@ final class GameTrafficSessionTest {
         }
     }
 
-    /** Captured send-failure warnings, which only a live cadence on a closed socket can produce. */
+    /**
+     * Captured send failures, which only a live cadence on a closed socket can produce.
+     *
+     * <p>Matched on the logger and level rather than the message text. {@code GameUdpSender} emits
+     * exactly one WARN — the per-round send failure — and {@code GameUdpSenderTest} pins that a
+     * failed send logs at WARN from that class, so this anchor holds even if the wording changes.
+     * Matching the phrase instead would let a reword turn this detector into a permanent pass, the
+     * exact failure it exists to prevent.
+     */
     private long sendFailures() {
         return appender.list.stream()
-                .filter(event -> event.getFormattedMessage().contains("failed to send datagram"))
+                .filter(event -> event.getLevel() == Level.WARN)
+                .filter(event -> GameUdpSender.class.getName().equals(event.getLoggerName()))
                 .count();
     }
 

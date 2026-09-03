@@ -30,11 +30,14 @@ import org.slf4j.LoggerFactory;
  * <p><b>Why the cadence starts on the first peer rather than on LIVE.</b> mock-game has no external
  * launch trigger — {@code LaunchMatch} is posted only in-process or by the launch-delay timer — and
  * the two-peer live session (WBS-4.3.1) disables auto-launch so the host stays joinable, so traffic
- * gated on LIVE would never flow there. It is also the faithful choice: FA's autolobby carries peer
- * datagrams on the lobby socket throughout the lobby phase, before launch. There is deliberately no
- * {@code stateReached(ENDED)} subscription either — that state's entry hook <em>is</em> the
- * shutdown sequence, and a transition runs the entry hook before the awaited future completes, so
- * such a subscription could never be the thing that stops the cadence.
+ * gated on LIVE would never flow there. It is also the faithful choice, source-verified in FA:
+ * {@code CreateLobby(protocol, localPort, …)} builds the one autolobby communications object on
+ * that port, and {@code ConnectToPeer}, {@code SendData} and the pre-launch {@code
+ * ShareLaunchStatusThread} all run on that same object — so the real game is already exchanging
+ * peer datagrams over its lobby socket before it launches. There is deliberately no {@code
+ * stateReached(ENDED)} subscription either — that state's entry hook <em>is</em> the shutdown
+ * sequence, and a transition runs the entry hook before the awaited future completes, so such a
+ * subscription could never be the thing that stops the cadence.
  *
  * <p><b>Nothing here can kill the game.</b> A lobby port that will not bind, a peer address that
  * will not parse, and a send that fails are all logged and dropped: the game's GPGNet duties are
@@ -46,6 +49,11 @@ import org.slf4j.LoggerFactory;
  * FSM thread, that same reader thread (a remote close drives the FSM to ENDED) or the JVM shutdown
  * hook, and the progress tick on its own timer thread. Every method is synchronized on this
  * session; nothing here calls back into the state machine, so no lock order is introduced.
+ *
+ * <p>One edge is load-bearing rather than incidental: {@link #close()} holds this monitor while it
+ * stops the tickers, taking each ticker's monitor, and a ticker thread delivering a progress tick
+ * wants this monitor. That is not an inversion only because {@code GameTicker.deliver} is
+ * deliberately unsynchronized — synchronizing it would deadlock teardown.
  */
 public final class GameTrafficSession implements AutoCloseable {
 
@@ -134,10 +142,10 @@ public final class GameTrafficSession implements AutoCloseable {
     /**
      * Binds the lobby socket and builds the sender and receiver over it.
      *
-     * <p>Called on {@code CreateLobby} with the game's own {@code --lobby-port}, which 3.2.4.1
-     * treats as authoritative over the frame's port argument (the lifecycle warns when the two
-     * disagree). A failure to bind is logged and leaves this session inert rather than failing the
-     * transition.
+     * <p>Called on {@code CreateLobby} with the port that frame named — where the adapter
+     * physically sends peer traffic — falling back to the game's {@code --lobby-port} only when the
+     * frame carries no usable one; the lifecycle warns when the two disagree. A failure to bind is
+     * logged and leaves this session inert rather than failing the transition.
      *
      * @param lobbyPort the UDP port the adapter forwards peer datagrams to
      */
@@ -156,6 +164,7 @@ public final class GameTrafficSession implements AutoCloseable {
                     e.getMessage());
             return;
         }
+        bindFailed = false;
         sender = new GameUdpSender(playerId, socket, cadence);
         receiver = new GameUdpReceiver(socket);
         progress = GameTicker.realTime(progressInterval, () -> logProgress(false));

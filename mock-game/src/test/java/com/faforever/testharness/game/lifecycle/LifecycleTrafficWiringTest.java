@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -15,6 +16,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import com.faforever.testharness.game.net.GameDatagram;
+import com.faforever.testharness.game.net.GameUdpSender;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -129,6 +131,31 @@ final class LifecycleTrafficWiringTest {
     }
 
     @Test
+    void bindsThePortCreateLobbyNamesRatherThanTheLaunchArgument() throws Exception {
+        // The adapter fills CreateLobby from GPGNetServer.getLobbyPort() and relays every inbound
+        // peer datagram to that same port, so the frame decides where traffic physically arrives.
+        // A game that bound its --lobby-port instead would run, look healthy, and hear nothing.
+        int announced = TestPorts.freeUdpPort();
+        assertTrue(
+                announced != config.lobbyPort(),
+                "the two ports must differ for this to prove anything");
+
+        gpgnet.start();
+        gpgnet.awaitClient();
+        gpgnet.pollReceived(1, TimeUnit.SECONDS); // GameState Idle
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, announced, "Rhiza", OWN_PLAYER_ID, 1)));
+        awaitState(GameState.LOBBY);
+
+        sendToPort(announced, new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis()));
+        sendToPort(announced, new GameDatagram(PEER_PLAYER_ID, 1, System.currentTimeMillis()));
+
+        awaitLog(
+                event -> event.getFormattedMessage().startsWith(progressPrefix()),
+                "the game must receive on the port CreateLobby named, not on --lobby-port");
+    }
+
+    @Test
     void connectToPeerStartsTrafficToThatPeerOnTheHostPath() throws Exception {
         reachLobby();
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scmp_007")));
@@ -223,13 +250,16 @@ final class LifecycleTrafficWiringTest {
 
     /** Sends one datagram to the game's lobby port, as the adapter's relay would. */
     private void sendToLobby(final GameDatagram datagram) throws IOException {
+        sendToPort(config.lobbyPort(), datagram);
+    }
+
+    /** Sends one datagram to an explicit port, for the test that pins which port is bound. */
+    private void sendToPort(final int port, final GameDatagram datagram) throws IOException {
         byte[] payload = datagram.toBytes();
         try (DatagramSocket relay = new DatagramSocket()) {
             relay.send(
                     new DatagramPacket(
-                            payload,
-                            payload.length,
-                            new InetSocketAddress("127.0.0.1", config.lobbyPort())));
+                            payload, payload.length, new InetSocketAddress("127.0.0.1", port)));
         }
     }
 
@@ -264,9 +294,12 @@ final class LifecycleTrafficWiringTest {
      *
      * <p>Silence at the stub proves nothing on its own — teardown closes the socket, so nothing
      * arrives either way. A cadence that survived teardown keeps firing into that closed socket and
-     * {@link com.faforever.testharness.game.net.GameUdpSender} logs a send failure every round, so
-     * a count that keeps growing is the tell. One straggler is allowed: stopping does not join a
-     * round already in flight.
+     * logs a send failure every round, so any growth at all is the tell.
+     *
+     * <p><b>Where this is called from matters.</b> Stopping does not join a round already in
+     * flight, so one straggler failure can land just after teardown and this comparison would fail
+     * on it. It is safe only because the caller has already spent a drain plus a quiet window on
+     * the socket first. Called immediately after teardown, it would flake.
      */
     private void assertCadenceStopped() throws InterruptedException {
         long before = sendFailures();
@@ -283,10 +316,19 @@ final class LifecycleTrafficWiringTest {
         }
     }
 
-    /** Captured send-failure warnings, which only a live cadence on a closed socket produces. */
+    /**
+     * Captured send failures, which only a live cadence on a closed socket can produce.
+     *
+     * <p>Matched on the logger and level rather than the message text. {@code GameUdpSender} emits
+     * exactly one WARN — the per-round send failure — and {@code GameUdpSenderTest} pins that a
+     * failed send logs at WARN from that class, so this anchor holds even if the wording changes.
+     * Matching the phrase instead would let a reword turn this detector into a permanent pass, the
+     * exact failure it exists to prevent.
+     */
     private long sendFailures() {
         return appender.list.stream()
-                .filter(event -> event.getFormattedMessage().contains("failed to send datagram"))
+                .filter(event -> event.getLevel() == Level.WARN)
+                .filter(event -> GameUdpSender.class.getName().equals(event.getLoggerName()))
                 .count();
     }
 

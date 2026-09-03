@@ -474,28 +474,35 @@ public final class MockGameLifecycle {
         }
         GpgNetFrame frame = ((CreateLobby) event).frame();
 
+        // The frame's port decides where the socket binds, and the launch argument is only the
+        // fallback (WBS-4.3.2). Source-verified in java-ice-adapter 3.3.14: GPGNetServer fills this
+        // frame from GPGNetServer.getLobbyPort(), and Peer.onIceDataReceived relays every inbound
+        // peer datagram to 127.0.0.1 on that same accessor — so the port named here is where
+        // traffic physically arrives, whatever the launch argument said. 3.2.4.1 called the
+        // argument authoritative when nothing bound a socket and the value only decided what to
+        // log; binding the other one now would leave the game healthy, quiet, and deaf.
+        int lobbyPort = config.lobbyPort();
         try {
-            // Check whether the port given matches the one given as an argument.
-            // The argument is the authoritative source, but we log when this one doesn't match as a
-            // warning.
-            int port = frame.intArg(1);
-            if (port != config.lobbyPort()) {
-                // Not speculative since WBS-4.3.2: we bind the config port, and the adapter
-                // forwards peer datagrams to the one it named, so a mismatch means no peer traffic
-                // arrives at all.
+            int announced = frame.intArg(1);
+            if (announced != config.lobbyPort()) {
                 LOG.warn(
-                        "CreateLobby lobby port ({}) differs from config lobby port ({}); "
-                                + "peer traffic will be sent to a port this game has not bound",
-                        port,
-                        config.lobbyPort());
+                        "CreateLobby names lobby port {} but --lobby-port is {}; binding {} "
+                                + "because that is where the adapter sends peer traffic",
+                        announced,
+                        config.lobbyPort(),
+                        announced);
             }
+            lobbyPort = announced;
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
-            LOG.warn("CreateLobby frame did not have a GpgNet port argument");
+            LOG.warn(
+                    "CreateLobby frame did not have a usable lobby port argument; "
+                            + "falling back to --lobby-port {}",
+                    config.lobbyPort());
         }
 
         // Bound before the frame below, not after: the lobby server marks the game hosted on
         // GameState Lobby, and from that moment a peer's datagrams can arrive at this port.
-        traffic.bind(config.lobbyPort());
+        traffic.bind(lobbyPort);
 
         try {
             gpgnetSender.gameState("Lobby");

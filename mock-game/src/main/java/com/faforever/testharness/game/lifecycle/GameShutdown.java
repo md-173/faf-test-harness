@@ -22,10 +22,13 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
  * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
- * point are dropped by an adapter that has already torn down the game session. That step is
- * synchronous end to end — it logs its own final summary, closes the socket, and waits briefly for
- * the receive loop to finish logging — so teardown leaves no thread still writing once this
- * returns, and the bootstrap can stop the logging context immediately afterwards.
+ * point are dropped by an adapter that has already torn down the game session (verified below).
+ *
+ * <p>That step logs its own final summary, closes the socket, and joins the receive loop, so the
+ * receiver's totals line is written before this returns rather than landing on a daemon thread
+ * afterwards. It does not quiesce everything, though: the send and progress tickers are stopped but
+ * not joined, so one straggler round already past its stopped-check can still log after this
+ * returns — bounded to a single line each, with the bootstrap's log shutdown following.
  *
  * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels only the
  * StateMachine's own timer. {@link MockGameLifecycle}'s launch-delay and match-duration tasks run
@@ -84,9 +87,11 @@ import org.slf4j.LoggerFactory;
  * <p>Runs synchronously on the calling thread ({@code implements Runnable} so the bootstrap can use
  * it directly as a shutdown-hook body). It is not lock-free end to end: the caller that wins the
  * guard still calls {@link StateMachine#cancel()}, which is synchronized, so if the FSM thread is
- * mid-transition this blocks until that transition's action returns. The longest such action is the
- * 500 ms pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, against the client's 5
- * s SIGTERM to SIGKILL grace, so the bound is known rather than merely assumed.
+ * mid-transition this blocks until that transition's action returns. The worst case is the 500 ms
+ * pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, plus the traffic step's 500 ms
+ * receive-loop join — about a second, against the client's 5 s SIGTERM to SIGKILL grace, so the
+ * bound is known rather than merely assumed. Measured against a real adapter it is about 1 ms: the
+ * receive thread wakes the moment its socket closes.
  */
 public final class GameShutdown implements Runnable {
 

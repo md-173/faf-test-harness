@@ -42,6 +42,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>What it deliberately does not cover, because no adapter is involved: ICE establishment, the
  * adapter's pre-connection drop window, and the {@code 'd'} prefix the adapter adds and strips.
+ *
+ * <p>It runs at the <em>production</em> cadence and progress interval, unlike the other traffic
+ * tests, because the line it pins is the one an operator and the live test actually read. That
+ * costs a couple of seconds — two progress intervals per direction — which is deliberate rather
+ * than an oversight to optimise away.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
 final class TwoGameTrafficLoopbackTest {
