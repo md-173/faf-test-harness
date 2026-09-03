@@ -156,11 +156,12 @@ public final class LifecycleFailureTest {
     @Test
     void sendFailureOnLaunchReportsConnectionLost() throws Exception {
         GpgNetConnection conn = new GpgNetConnection(gpgnet.port());
-        MockGameLifecycle lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, conn, null, null);
+        MockGameLifecycle lifecycle = lifecycleOn(conn, null, null);
         lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
@@ -184,11 +185,12 @@ public final class LifecycleFailureTest {
     @Test
     void sendFailureOnMatchEndReportsConnectionLost() throws Exception {
         GpgNetConnection conn = new GpgNetConnection(gpgnet.port());
-        MockGameLifecycle lifecycle = new MockGameLifecycle(DEFAULT_CONFIG, conn, null, null);
+        MockGameLifecycle lifecycle = lifecycleOn(conn, null, null);
         lifecycle.start();
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 50001, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
