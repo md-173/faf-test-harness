@@ -576,6 +576,29 @@ parsed as such, though the values it emits today are widened from `int`.
 A malformed notification is logged at WARN with the prefix
 `dropping malformed <method>` and produces no contract line.
 
+### Peer traffic
+
+One line per *sending* peer, at most once a second, emitted by **mock-game** (`component=MockGame`)
+and captured into this stream by the client's subprocess logger. It is the only
+evidence that the ICE path is carrying game traffic, and it is what the two-peer
+exchange test (WBS-4.3.2) asserts on:
+
+| Line | Meaning |
+|---|---|
+| `player <receiver> peer traffic from player <sender>: <n> datagrams, highest sequence <seq>, gaps <g>` | The game belonging to `<receiver>` has decoded `<n>` datagrams sent by `<sender>`, whose highest sequence number so far is `<seq>`, with `<g>` forward gaps. |
+
+Both ids are on the line, so one record proves one direction without inferring
+who logged it — which is what keeps it usable past two peers. It is emitted only
+when that sender's count has moved since the last sample, so a stalled stream
+goes quiet rather than repeating, and a final line is logged synchronously at
+teardown.
+
+Treat the counts as monotone evidence, never as a measurement: everything a game
+sends before ICE completes is dropped inside the adapter
+(`PeerIceModule.sendViaIce` is guarded by `connected`), so a stream legitimately
+starts mid-sequence and with gaps. Assert "at least N, still advancing", which is
+what two consecutive lines with a rising `highest sequence` show.
+
 > **Why logs and not a health port.** The lobby protocol has no readiness
 > channel to be faithful to: faf-server's `command_match_ready` is an
 > unimplemented stub, and the only liveness mechanism is ping/pong. A harness

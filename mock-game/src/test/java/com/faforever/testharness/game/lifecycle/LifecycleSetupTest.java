@@ -3,14 +3,17 @@ package com.faforever.testharness.game.lifecycle;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -20,17 +23,28 @@ import org.junit.jupiter.api.Test;
 
 public final class LifecycleSetupTest {
 
-    private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
+    /** This test's config, with a lobby port free at setup time (WBS-4.3.2 binds it for real). */
+    private MockGameConfig config;
+
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 
+    /**
+     * Stands in for a peer's relay socket inside the ICE adapter, so the traffic a peer frame
+     * starts has a real destination rather than an address nothing is listening on.
+     */
+    private DatagramSocket peer;
+
+    /** Every lifecycle a test built, torn down after it so no lobby socket outlives the test. */
+    private final List<MockGameLifecycle> lifecycles = new ArrayList<>();
+
     @BeforeEach
     void setup() throws IOException {
+        config = new MockGameConfig(50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0);
         gpgnet = new ScriptedGpgNetServer();
+        peer = new DatagramSocket(0);
         lifecycle =
-                new MockGameLifecycle(
-                        DEFAULT_CONFIG,
+                lifecycleOn(
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
@@ -38,7 +52,26 @@ public final class LifecycleSetupTest {
 
     @AfterEach
     void teardown() {
+        lifecycles.forEach(created -> created.shutdown().run());
+        lifecycles.clear();
+        peer.close();
         gpgnet.stop();
+    }
+
+    /** Builds a lifecycle on this test's config and records it for teardown. */
+    private MockGameLifecycle lifecycleOn(
+            final GpgNetConnection connection,
+            final Duration launchDelay,
+            final Duration matchDuration) {
+        MockGameLifecycle created =
+                new MockGameLifecycle(config, connection, launchDelay, matchDuration);
+        lifecycles.add(created);
+        return created;
+    }
+
+    /** The stub peer's address in the {@code host:port} form the adapter supplies. */
+    private String peerAddress() {
+        return "127.0.0.1:" + peer.getLocalPort();
     }
 
     @Test
@@ -54,8 +87,7 @@ public final class LifecycleSetupTest {
             deadPort = socket.getLocalPort();
         }
 
-        MockGameLifecycle unconnected =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(deadPort), null, null);
+        MockGameLifecycle unconnected = lifecycleOn(new GpgNetConnection(deadPort), null, null);
 
         assertEquals(GameState.INITIALIZING, unconnected.getState());
     }
@@ -70,7 +102,8 @@ public final class LifecycleSetupTest {
         assertMessage("GameState", "Idle");
         lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         assertMessage("GameState", "Lobby");
         lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
     }
@@ -82,16 +115,17 @@ public final class LifecycleSetupTest {
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Army", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Team", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "StartSpot", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Faction", 1);
-        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Color", 1);
+        assertMessage("PlayerOption", config.playerId(), "Army", 1);
+        assertMessage("PlayerOption", config.playerId(), "Team", 1);
+        assertMessage("PlayerOption", config.playerId(), "StartSpot", 1);
+        assertMessage("PlayerOption", config.playerId(), "Faction", 1);
+        assertMessage("PlayerOption", config.playerId(), "Color", 1);
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
         lifecycle.launchMatch();
@@ -115,11 +149,12 @@ public final class LifecycleSetupTest {
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of("127.0.0.1:4000", "Smith", 2)));
+        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", 2)));
         lifecycle.stateReached(GameState.JOINING).get(1, TimeUnit.SECONDS);
 
         lifecycle.launchMatch();
@@ -145,7 +180,8 @@ public final class LifecycleSetupTest {
 
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
@@ -164,7 +200,8 @@ public final class LifecycleSetupTest {
         gpgnet.start();
         gpgnet.awaitClient();
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
@@ -185,7 +222,8 @@ public final class LifecycleSetupTest {
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+        gpgnet.sendFrame(
+                new GpgNetFrame("CreateLobby", List.of(0, config.lobbyPort(), "Rhiza", 1, 1)));
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
@@ -198,7 +236,7 @@ public final class LifecycleSetupTest {
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of("127.0.0.4:4000", "Smith", 2)));
+        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
         // Drop PlayerOption frames for new player
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
         gpgnet.pollReceived(1, TimeUnit.SECONDS);

@@ -1,6 +1,7 @@
 package com.faforever.testharness.game.lifecycle;
 
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
+import com.faforever.testharness.game.net.GameTrafficSession;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -8,14 +9,26 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs two steps, in order:
+ * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs three steps, in order:
  *
  * <ol>
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
  *       timeout queued <em>on the FSM itself</em> fires a transition mid-teardown;
  *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
- *       no farewell frame is sent.
+ *       no farewell frame is sent;
+ *   <li>close the {@link GameTrafficSession} (WBS-4.3.2), which stops the peer traffic cadence and
+ *       closes the shared lobby socket, ending the receiver's loop.
  * </ol>
+ *
+ * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
+ * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
+ * point are dropped by an adapter that has already torn down the game session (verified below).
+ *
+ * <p>That step logs its own final summary, closes the socket, and joins the receive loop, so the
+ * receiver's totals line is written before this returns rather than landing on a daemon thread
+ * afterwards. It does not quiesce everything, though: the send and progress tickers are stopped but
+ * not joined, so one straggler round already past its stopped-check can still log after this
+ * returns — bounded to a single line each, with the bootstrap's log shutdown following.
  *
  * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels only the
  * StateMachine's own timer. {@link MockGameLifecycle}'s launch-delay and match-duration tasks run
@@ -74,9 +87,11 @@ import org.slf4j.LoggerFactory;
  * <p>Runs synchronously on the calling thread ({@code implements Runnable} so the bootstrap can use
  * it directly as a shutdown-hook body). It is not lock-free end to end: the caller that wins the
  * guard still calls {@link StateMachine#cancel()}, which is synchronized, so if the FSM thread is
- * mid-transition this blocks until that transition's action returns. The longest such action is the
- * 500 ms pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, against the client's 5
- * s SIGTERM to SIGKILL grace, so the bound is known rather than merely assumed.
+ * mid-transition this blocks until that transition's action returns. The worst case is the 500 ms
+ * pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, plus the traffic step's 500 ms
+ * receive-loop join — about a second, against the client's 5 s SIGTERM to SIGKILL grace, so the
+ * bound is known rather than merely assumed. Measured against a real adapter it is about 1 ms: the
+ * receive thread wakes the moment its socket closes.
  */
 public final class GameShutdown implements Runnable {
 
@@ -92,6 +107,12 @@ public final class GameShutdown implements Runnable {
      * #run()}.
      */
     private volatile GpgNetConnection connection;
+
+    /**
+     * The peer traffic session to close; {@code null} until registered, e.g. a game whose lobby
+     * socket never bound. Volatile for the same reason as {@link #connection}.
+     */
+    private volatile GameTrafficSession traffic;
 
     /** Set by the caller that wins {@link #run()}; the lock-free once-guard. */
     private final AtomicBoolean done = new AtomicBoolean();
@@ -134,9 +155,25 @@ public final class GameShutdown implements Runnable {
     }
 
     /**
-     * Runs the shutdown sequence once: stop FSM scheduling, then close the connection (skipped if
-     * none was registered). Subsequent or concurrent calls return immediately. Each step is
-     * exception-isolated.
+     * Registers the peer traffic session to close on shutdown (WBS-4.3.2). As with {@link
+     * #registerConnection(GpgNetConnection)}, registering after {@link #run()} has already executed
+     * leaves the session open and is warned about.
+     *
+     * @param trafficSession the session owning the lobby socket; must not be {@code null}
+     */
+    public void registerTrafficSession(final GameTrafficSession trafficSession) {
+        this.traffic = Objects.requireNonNull(trafficSession, "trafficSession");
+        if (done.get()) {
+            LOG.warn(
+                    "peer traffic session registered after shutdown already ran; "
+                            + "its socket will not be closed by this sequence");
+        }
+    }
+
+    /**
+     * Runs the shutdown sequence once: stop FSM scheduling, close the connection, then close the
+     * peer traffic session (either of the last two skipped if none was registered). Subsequent or
+     * concurrent calls return immediately. Each step is exception-isolated.
      */
     @Override
     public void run() {
@@ -146,6 +183,7 @@ public final class GameShutdown implements Runnable {
         LOG.info("shutting down mock game");
         stopScheduling();
         closeConnection();
+        closeTraffic();
         LOG.info("mock game shutdown complete");
     }
 
@@ -166,6 +204,18 @@ public final class GameShutdown implements Runnable {
             current.close();
         } catch (RuntimeException e) {
             LOG.warn("failed to close GPGNet connection: {}", e.getMessage());
+        }
+    }
+
+    private void closeTraffic() {
+        GameTrafficSession current = traffic;
+        if (current == null) {
+            return; // game never exchanged peer traffic — nothing to close
+        }
+        try {
+            current.close();
+        } catch (RuntimeException e) {
+            LOG.warn("failed to close the peer traffic session: {}", e.getMessage());
         }
     }
 }

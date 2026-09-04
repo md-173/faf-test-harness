@@ -9,9 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
+import com.faforever.testharness.game.net.GameTrafficSession;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
+import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -26,27 +28,76 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * Unit tests for {@link GameShutdown}: the idempotent stop-scheduling → close-connection sequence.
- * Stopping the logging context is not part of it — the bootstrap owns that step (WBS-3.2.5.1), so
- * nothing here can silence the rest of the suite.
+ * Unit tests for {@link GameShutdown}: the idempotent stop-scheduling → close-connection →
+ * close-traffic sequence. Stopping the logging context is not part of it — the bootstrap owns that
+ * step (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
  */
 final class GameShutdownTest {
 
     @Test
-    void runsStepsInOrderStopSchedulingThenCloseConnection() {
+    void runsStepsInOrderStopSchedulingThenCloseConnectionThenTraffic() throws Exception {
         // A never-connected GpgNetConnection closes synchronously (its disconnect fires on this
-        // thread), so both steps record their order deterministically.
+        // thread), so every step records its order deterministically.
         List<String> order = new CopyOnWriteArrayList<>();
         StateMachine fsm = recordingFsm(order);
+        GameTrafficSession traffic = boundTrafficSession();
         GpgNetConnection connection = new GpgNetConnection(1);
-        connection.onDisconnect(event -> order.add("close-connection"));
+        connection.onDisconnect(
+                event -> {
+                    order.add("close-connection");
+                    // Sampled here rather than after run() returns: read afterwards, this would
+                    // say "closed" no matter which step ran first, and the ordering claim below
+                    // would be unearned.
+                    order.add(traffic.isClosed() ? "traffic-already-closed" : "traffic-still-open");
+                });
 
-        new GameShutdown(fsm, connection).run();
+        GameShutdown shutdown = new GameShutdown(fsm, connection);
+        shutdown.registerTrafficSession(traffic);
+        shutdown.run();
+        order.add(traffic.isClosed() ? "traffic-closed" : "traffic-never-closed");
 
         assertEquals(
-                List.of("stop-scheduling", "close-connection"),
+                List.of(
+                        "stop-scheduling",
+                        "close-connection",
+                        "traffic-still-open",
+                        "traffic-closed"),
                 order,
-                "scheduling must stop first so no timeout fires mid-teardown");
+                "scheduling must stop first so no timeout fires mid-teardown, and the traffic "
+                        + "session must still be open while the connection closes");
+    }
+
+    @Test
+    void closesTheTrafficSessionRegisteredBeforeRun() throws Exception {
+        GameTrafficSession traffic = boundTrafficSession();
+
+        GameShutdown shutdown = new GameShutdown(quietFsm(), null);
+        shutdown.registerTrafficSession(traffic);
+        shutdown.run();
+
+        assertTrue(
+                traffic.isClosed(),
+                "the sequence must close the traffic session it was given; that closing it really "
+                        + "releases the socket is LifecycleTrafficWiringTest's assertion");
+    }
+
+    @Test
+    void trafficSessionRegisteredAfterRunIsNotClosed() throws Exception {
+        GameTrafficSession traffic = boundTrafficSession();
+
+        GameShutdown shutdown = new GameShutdown(quietFsm(), null);
+        shutdown.run();
+        shutdown.registerTrafficSession(traffic); // too late
+
+        assertFalse(traffic.isClosed(), "a session registered after run() is not closed by it");
+        traffic.close();
+    }
+
+    @Test
+    void rejectsNullTrafficSession() {
+        GameShutdown shutdown = new GameShutdown(quietFsm(), null);
+
+        assertThrows(NullPointerException.class, () -> shutdown.registerTrafficSession(null));
     }
 
     @Test
@@ -183,6 +234,20 @@ final class GameShutdownTest {
     @Test
     void rejectsNullFsm() {
         assertThrows(NullPointerException.class, () -> new GameShutdown(null));
+    }
+
+    /**
+     * A traffic session with its lobby socket bound on a free port. Nothing is sent: the cadence
+     * starts on the first registered peer, and this sequence's only interest is the teardown.
+     */
+    private static GameTrafficSession boundTrafficSession() throws IOException {
+        final int lobbyPort;
+        try (DatagramSocket probe = new DatagramSocket(0)) {
+            lobbyPort = probe.getLocalPort();
+        }
+        GameTrafficSession traffic = new GameTrafficSession(1);
+        traffic.bind(lobbyPort);
+        return traffic;
     }
 
     /** A StateMachine that records "stop-scheduling" when its scheduling is cancelled. */
