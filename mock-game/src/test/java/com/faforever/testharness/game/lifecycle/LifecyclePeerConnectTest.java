@@ -46,6 +46,7 @@ public final class LifecyclePeerConnectTest {
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()), null, null);
+        lifecycle.start();
 
         gpgnet.start();
         gpgnet.awaitClient();
@@ -87,6 +88,7 @@ public final class LifecyclePeerConnectTest {
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         DEFAULT_CONFIG, new GpgNetConnection(gpgnet.port()), null, null);
+        lifecycle.start();
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
         Logger root = ctx.getLogger(Logger.ROOT_LOGGER_NAME);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();

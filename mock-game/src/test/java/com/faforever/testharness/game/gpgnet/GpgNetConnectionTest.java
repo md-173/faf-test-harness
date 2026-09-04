@@ -23,6 +23,14 @@ import org.junit.jupiter.api.Test;
  */
 final class GpgNetConnectionTest {
 
+    /**
+     * A port nothing can be listening on. Fixed and below every platform's ephemeral range, so no
+     * {@code bind(0)} in this JVM can be assigned it — the connect-failure test below therefore
+     * never asserts on a port it has released. Same fix as {@code IceAdapterConnectionTest} in
+     * mock-client (WBS-3.1.4.1-fix, #287).
+     */
+    private static final int UNBOUND_PORT = 1;
+
     private ScriptedGpgNetServer server;
     private GpgNetConnection conn;
 
@@ -52,10 +60,7 @@ final class GpgNetConnectionTest {
 
     @Test
     void connectFailsAfterRetriesWhenNothingListens() throws Exception {
-        int deadPort = server.port();
-        server.stop(); // free the port so connects are refused
-
-        GpgNetConnection c = new GpgNetConnection(deadPort, 3, Duration.ofMillis(20));
+        GpgNetConnection c = new GpgNetConnection(UNBOUND_PORT, 3, Duration.ofMillis(20));
         CountDownLatch disconnected = new CountDownLatch(1);
         AtomicReference<DisconnectEvent> event = new AtomicReference<>();
         c.onDisconnect(

@@ -23,6 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -133,6 +134,9 @@ public final class MockGameLifecycle {
      * machine}.
      */
     private final Map<GameState, State> states;
+
+    /** Guards against {@link #start()} being called more than once. */
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
      * Constructs a lifecycle object.
@@ -400,8 +404,27 @@ public final class MockGameLifecycle {
         // Shutdown sequence, also handed to the bootstrap as its JVM shutdown hook (WBS-3.2.5.1)
         // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
         states.get(GameState.ENDED).onEntry(shutdown::run);
+    }
 
-        // Start connection to GpgNet server and set a timeout if it doesn't occur.
+    /**
+     * Opens the GPGNet connection and arms the timeout that ends the game if it never completes.
+     * Until this is called the lifecycle is fully wired but inert, and sits in INITIALIZING.
+     *
+     * <p>Split out of the constructor by WBS-3.2.4.1-fix (#262). Connecting from a constructor gave
+     * construction a side effect on a timeline the caller could not control: every test that built
+     * a lifecycle in a fixture started a ~500ms clock the moment setup returned, and then raced it
+     * from the test body. That is what made {@code LifecycleSetupTest}'s initial-state assertion
+     * flake on two unrelated branches, and it would have made the next test written in that shape
+     * flake identically. An explicit start also lets a caller register its teardown before anything
+     * is open: {@code Main} installs the JVM shutdown hook between construction and this call,
+     * closing the window WBS-3.2.5.1 had to accept because the socket opened during construction.
+     *
+     * @throws IllegalStateException if called more than once
+     */
+    public void start() {
+        if (!started.compareAndSet(false, true)) {
+            throw new IllegalStateException("start() may only be called once");
+        }
         machine.setTimeout(
                 gpgnetConnectionTimeout.toMillis(),
                 states.get(GameState.ENDED),

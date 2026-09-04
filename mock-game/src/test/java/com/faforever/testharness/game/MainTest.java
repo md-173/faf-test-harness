@@ -320,11 +320,14 @@ final class MainTest {
     /** A lifecycle wired to {@code gpgNetPort}, with its two timers chosen by the caller. */
     private static MockGameLifecycle lifecycleOn(
             final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
-        return new MockGameLifecycle(
-                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0),
-                new GpgNetConnection(gpgNetPort),
-                launchDelay,
-                matchDuration);
+        MockGameLifecycle lifecycle =
+                new MockGameLifecycle(
+                        new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0),
+                        new GpgNetConnection(gpgNetPort),
+                        launchDelay,
+                        matchDuration);
+        lifecycle.start();
+        return lifecycle;
     }
 
     /** A never-connected connection that records when the shutdown sequence closes it. */

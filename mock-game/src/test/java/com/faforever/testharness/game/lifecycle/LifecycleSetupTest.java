@@ -1,6 +1,8 @@
 package com.faforever.testharness.game.lifecycle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.faforever.testharness.game.config.MockGameConfig;
@@ -8,8 +10,6 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +22,21 @@ public final class LifecycleSetupTest {
 
     private static final MockGameConfig DEFAULT_CONFIG =
             new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
+
+    /**
+     * A port nothing can be listening on, so the lifecycle below stays in INITIALIZING for its
+     * whole connect-retry window. Fixed and below every platform's ephemeral range: binding port 0
+     * and closing it — what this test used to do — leaves the assertion racing whatever claims the
+     * released number next (WBS-3.2.4.1-fix, #262; same fix as #287).
+     */
+    private static final int UNBOUND_PORT = 1;
+
+    /**
+     * Mirrors {@code MockGameLifecycle.GPGNET_CONNECTION_WAIT}: how long the INITIALIZING to IDLE
+     * action sleeps once connected. Waiting past it is what makes the assertion above meaningful.
+     */
+    private static final long GPGNET_CONNECTION_WAIT_MILLIS = 500;
+
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 
@@ -34,11 +49,51 @@ public final class LifecycleSetupTest {
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
+        lifecycle.start();
     }
 
     @AfterEach
     void teardown() {
         gpgnet.stop();
+    }
+
+    /**
+     * Construction has no side effect on the wire: built against a <em>started</em> server, and
+     * left well past the 500ms {@code GPGNET_CONNECTION_WAIT} that would carry it to IDLE, the
+     * lifecycle neither connects nor leaves INITIALIZING until {@link MockGameLifecycle#start()}.
+     *
+     * <p>This is the root cause of WBS-3.2.4.1-fix (#262), pinned rather than worked around.
+     * Connecting from the constructor started a clock the moment a fixture returned, and every test
+     * asserting anything about the pre-connect state raced it — which is what made this class's
+     * initial-state assertion flake on two unrelated branches. A port with no listener hides that;
+     * a live server is what proves construction is inert.
+     */
+    @Test
+    void constructionDoesNotConnectUntilStarted() throws Exception {
+        // Its own server, not the shared fixture's: that one already has the fixture's started
+        // lifecycle attached, so awaitClient there would report that connection rather than this
+        // one and the assertion would pass for the wrong reason.
+        ScriptedGpgNetServer live = new ScriptedGpgNetServer();
+        live.start();
+        try {
+            MockGameLifecycle inert =
+                    new MockGameLifecycle(
+                            DEFAULT_CONFIG, new GpgNetConnection(live.port()), null, null);
+
+            assertFalse(
+                    live.awaitClient(2 * GPGNET_CONNECTION_WAIT_MILLIS, TimeUnit.MILLISECONDS),
+                    "the constructor opened a connection; construction must have no side effects");
+            assertEquals(
+                    GameState.INITIALIZING,
+                    inert.getState(),
+                    "an unstarted lifecycle must stay in INITIALIZING however long it is left");
+
+            inert.start();
+            assertTrue(live.awaitClient(5, TimeUnit.SECONDS), "start() should connect");
+            inert.stateReached(GameState.IDLE).get(5, TimeUnit.SECONDS);
+        } finally {
+            live.stop();
+        }
     }
 
     @Test
@@ -48,14 +103,9 @@ public final class LifecycleSetupTest {
     // connect and leave INITIALIZING before the assertion runs, which is what made this a CI flake.
     // With nothing listening, the bounded connect retry holds INITIALIZING for its full window.
     void startsInInitializing() throws IOException {
-        int deadPort;
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.bind(new InetSocketAddress("127.0.0.1", 0));
-            deadPort = socket.getLocalPort();
-        }
-
         MockGameLifecycle unconnected =
-                new MockGameLifecycle(DEFAULT_CONFIG, new GpgNetConnection(deadPort), null, null);
+                new MockGameLifecycle(
+                        DEFAULT_CONFIG, new GpgNetConnection(UNBOUND_PORT), null, null);
 
         assertEquals(GameState.INITIALIZING, unconnected.getState());
     }

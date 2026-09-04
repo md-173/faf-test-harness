@@ -37,6 +37,23 @@ final class IceAdapterConnectionTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * A port nothing can be listening on, used by the connect-failure tests below.
+     *
+     * <p>Those tests previously took the fixture's own port, called {@code server.stop()} to free
+     * it, and then asserted that a connect to it was refused — asserting on the state of a port
+     * they no longer owned (WBS-3.1.4.1-fix, #287). The OS hands ephemeral ports back out, and this
+     * suite runs fixtures concurrently with other tests' threads, so anything that bound port 0 in
+     * the window could be handed exactly this number and make the connect succeed. Rare, and
+     * invisible when it did not happen.
+     *
+     * <p>Port 1 removes the mechanism rather than making it less likely: it sits below every
+     * platform's ephemeral range, so no {@code bind(0)} anywhere in the JVM can ever be assigned
+     * it, and nothing in this repository binds a fixed low port. A connect to it is refused
+     * immediately, so the retry budgets and timings the tests assert on are unchanged.
+     */
+    private static final int UNBOUND_PORT = 1;
+
     private ScriptedJsonRpcServer server;
     private IceAdapterConnection conn;
 
@@ -68,11 +85,10 @@ final class IceAdapterConnectionTest {
 
     @Test
     void connectFailsAfterRetriesWhenNothingListens() throws Exception {
-        int deadPort = server.port();
-        server.stop(); // free the port so connects are refused
 
         IceAdapterConnection c =
-                new IceAdapterConnection(deadPort, 3, Duration.ofMillis(20), Duration.ofSeconds(1));
+                new IceAdapterConnection(
+                        UNBOUND_PORT, 3, Duration.ofMillis(20), Duration.ofSeconds(1));
         CountDownLatch disconnected = new CountDownLatch(1);
         AtomicReference<DisconnectEvent> event = new AtomicReference<>();
         c.onDisconnect(
@@ -99,12 +115,10 @@ final class IceAdapterConnectionTest {
      */
     @Test
     void closeDuringRetryAbandonsTheConnectWindow() throws Exception {
-        int deadPort = server.port();
-        server.stop(); // free the port so connects are refused
 
         IceAdapterConnection c =
                 new IceAdapterConnection(
-                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+                        UNBOUND_PORT, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
         CompletableFuture<Void> connectFuture = c.connect();
 
         // Let a couple of attempts fail so the loop is genuinely mid-flight, then close.
@@ -131,12 +145,10 @@ final class IceAdapterConnectionTest {
      */
     @Test
     void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {
-        int deadPort = server.port();
-        server.stop(); // free the port so connects are refused
 
         IceAdapterConnection c =
                 new IceAdapterConnection(
-                        deadPort, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
+                        UNBOUND_PORT, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
         CountDownLatch fired = new CountDownLatch(1);
         AtomicReference<DisconnectEvent> event = new AtomicReference<>();
         c.onDisconnect(

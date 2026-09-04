@@ -73,14 +73,24 @@ public final class Main {
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     /**
-     * How long the simulated match runs before the game reports its result and ends. Nothing
-     * constrains this value — the client's post-{@code GameEnded} safety net is armed only once
-     * {@code GameEnded} has been observed, so it bounds the exit, not the match. It is a plain
-     * judgement call: long enough that a session looks like a session in the logs, short enough
-     * that an end-to-end harness run does not cost a minute. Revisit it with a real workload rather
-     * than by argument.
+     * How long the simulated match runs before the game reports its result and ends.
+     *
+     * <p>Revisited against a real workload, as the previous javadoc asked (WBS-3.2.5.1-fix, #253).
+     * At 30s it was three quarters of a ~40s end-to-end run, and the integration suite repeats that
+     * cost on every push. Nothing upstream requires the old value: the client's post-{@code
+     * GameEnded} safety net is armed by the {@code GameEnded} frame rather than by match length, so
+     * it bounds the exit and not the match, and no lobby or adapter timeout is measured against
+     * this window.
+     *
+     * <p>What does constrain it is peer overlap. In a multi-peer session (WBS-4.3.1) every peer
+     * runs its own copy of this timer, started when that peer reaches LIVE, so the match must
+     * outlast the spread between the first and last peer getting there. {@code
+     * --launch-delay-seconds} (default 5s) is the floor on that spread, which is why this stays a
+     * multiple of it rather than dropping to a few seconds. Ten seconds leaves a peer that reaches
+     * LIVE a full launch delay late still sharing five seconds of match with the first, and keeps
+     * the session legible in the logs.
      */
-    private static final Duration MATCH_DURATION = Duration.ofSeconds(30);
+    private static final Duration MATCH_DURATION = Duration.ofSeconds(10);
 
     private Main() {}
 
@@ -162,6 +172,11 @@ public final class Main {
             lifecycle.shutdown().run();
             return ExitCodes.RUNTIME;
         }
+        // Only now open the socket. WBS-3.2.4.1-fix (#262) moved this out of the constructor, which
+        // is what lets the hook above be registered first: the teardown that closes the connection
+        // is in place before there is a connection to close, closing the window 3.2.5.1 documented
+        // as unavoidable when construction did the connecting.
+        lifecycle.start();
         try {
             lifecycle.stateReached(GameState.ENDED).join();
             ExitStatus status = lifecycle.getExitStatus();
