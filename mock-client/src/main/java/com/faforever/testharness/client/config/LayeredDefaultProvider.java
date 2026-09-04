@@ -1,5 +1,7 @@
 package com.faforever.testharness.client.config;
 
+import com.fasterxml.jackson.core.JsonLocation;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -107,13 +109,13 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
 
     private static Map<String, String> readJsonFile(final Path path) {
         if (!Files.isReadable(path)) {
-            throw new IllegalArgumentException("config file is not readable: " + path);
+            throw new IllegalArgumentException("config file is not readable: " + oneLine(path));
         }
         try {
             JsonNode root = JSON.readTree(Files.readString(path));
             if (!root.isObject()) {
                 throw new IllegalArgumentException(
-                        "config file root must be a JSON object: " + path);
+                        "config file root must be a JSON object: " + oneLine(path));
             }
             Map<String, String> out = new LinkedHashMap<>();
             Iterator<Map.Entry<String, JsonNode>> fields = root.fields();
@@ -125,9 +127,56 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                 }
             }
             return out;
+        } catch (JsonProcessingException e) {
+            // getMessage() appends a multi-line " at [Source: ...]" block, and the entry point
+            // renders this as a single-line usage error. Take the reason on its own, then put back
+            // the line/column that block carried — that is what tells the user where to look — and
+            // the file name, which Jackson redacts (INCLUDE_SOURCE_IN_LOCATION is off by default).
+            throw new IllegalArgumentException(
+                    "failed to parse config file "
+                            + oneLine(path)
+                            + describeLocation(e.getLocation())
+                            + ": "
+                            + oneLine(e.getOriginalMessage()),
+                    e);
         } catch (IOException e) {
-            throw new IllegalArgumentException("failed to parse config file: " + e.getMessage(), e);
+            throw new IllegalArgumentException(
+                    "failed to parse config file " + oneLine(path) + ": " + oneLine(e.getMessage()),
+                    e);
         }
+    }
+
+    /**
+     * Renders a value for a single-line diagnostic, escaping any line break it contains.
+     *
+     * <p>A path may legally contain a newline on Linux and macOS. Interpolated raw, it splits the
+     * diagnostic the entry point promises to keep on one line, and a path containing {@code
+     * "\nUsage:"} would forge the boundary between the error and picocli's usage block for anything
+     * reading stderr.
+     *
+     * <p>Every caller-controlled value interpolated into one of these messages goes through here,
+     * not just the path: an underlying library's message is no more trustworthy than the filename
+     * that produced it, and one unescaped operand reopens the hole for all of them. Values drawn
+     * from fixed sets, such as the stale-key names, are exempt.
+     *
+     * @param value the value to interpolate — a {@link Path}, or a message from a caught exception
+     * @return the value's text with every line terminator replaced by a literal {@code \n}
+     */
+    static String oneLine(final Object value) {
+        return String.valueOf(value).replaceAll("\\R", "\\\\n");
+    }
+
+    /**
+     * Renders a Jackson parse location as a single parenthesised clause.
+     *
+     * @param location the location reported by the parse failure, possibly {@code null} or unset
+     * @return {@code " (line N, column M)"}, or an empty string if no location is available
+     */
+    private static String describeLocation(final JsonLocation location) {
+        if (location == null || location.getLineNr() < 1) {
+            return "";
+        }
+        return " (line " + location.getLineNr() + ", column " + location.getColumnNr() + ")";
     }
 
     /**

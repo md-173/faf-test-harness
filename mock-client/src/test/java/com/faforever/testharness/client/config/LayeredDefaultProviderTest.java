@@ -3,6 +3,7 @@ package com.faforever.testharness.client.config;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,6 +21,18 @@ import picocli.CommandLine.Model.OptionSpec;
  * rather than picocli.
  */
 final class LayeredDefaultProviderTest {
+
+    /** Vertical tab — a Java {@code \R} terminator with no string-literal escape. */
+    private static final char VT = 0x000B;
+
+    /** Next line. The only terminator observed to survive Jackson into a parse message. */
+    private static final char NEL = 0x0085;
+
+    /** Line separator. */
+    private static final char LS = 0x2028;
+
+    /** Paragraph separator. */
+    private static final char PS = 0x2029;
 
     @Test
     void envValueIsReturnedWhenSet() {
@@ -102,6 +115,53 @@ final class LayeredDefaultProviderTest {
                 () ->
                         new LayeredDefaultProvider(
                                 Map.of(), Path.of("/path/that/does/not/exist.json")));
+    }
+
+    @Test
+    void oneLineEscapesEveryLineTerminator() {
+        // Every terminator Java's \R recognises, not just the three obvious ones — and the exotic
+        // end of this list is the reachable end: LF and CR never survive Jackson's token
+        // accumulator, whereas NEL does. See parseFailureDiagnosticStaysOnOneLine below.
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a\nb"), "LF");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a\r\nb"), "CRLF");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a\rb"), "CR");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a" + VT + "b"), "VT");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a\fb"), "FF");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a" + NEL + "b"), "NEL");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a" + LS + "b"), "LS");
+        assertEquals("a\\nb", LayeredDefaultProvider.oneLine("a" + PS + "b"), "PS");
+        assertEquals("plain", LayeredDefaultProvider.oneLine("plain"));
+        assertEquals("null", LayeredDefaultProvider.oneLine(null));
+    }
+
+    @Test
+    void parseFailureDiagnosticStaysOnOneLine(@TempDir final Path tempDir) throws Exception {
+        // Guards the call site, not the helper: reverting any oneLine(...) wrap inside
+        // readJsonFile must fail a test. NEL is the reachable case — Jackson renders LF and CR as
+        // "(CTRL-CHAR, code N)", but its unrecognised-token accumulator copies NEL through raw
+        // into getOriginalMessage(), and Java's \R treats NEL as a line terminator.
+        Path file = tempDir.resolve("nel.json");
+        Files.writeString(file, "{\"a\": t" + NEL + "rue}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file));
+
+        assertEquals(
+                1, e.getMessage().split("\\R").length, "diagnostic spans lines: " + e.getMessage());
+    }
+
+    @Test
+    void oneLineDefeatsAForgedUsageBoundary() {
+        // The escaping exists so no interpolated value can fake the line that separates the error
+        // from picocli's usage block. This holds for a library's message as much as for a path:
+        // every operand of these diagnostics goes through oneLine, not just the filename.
+        String forged = "boom\nUsage: mock-client FORGED";
+        String rendered = LayeredDefaultProvider.oneLine(forged);
+
+        assertEquals(1, rendered.split("\\R").length, "value still spans lines: " + rendered);
+        assertTrue(rendered.endsWith("FORGED"), "value was truncated: " + rendered);
     }
 
     /**
