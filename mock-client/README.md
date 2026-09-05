@@ -139,6 +139,7 @@ none of the lobby or OAuth rows apply to it.
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
+| `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions — network fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Network fault injection](../documentation/operations/harness-runbook.md#10-network-fault-injection-wbs-51). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this

@@ -270,6 +270,21 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR).")
     private String logLevel;
 
+    /**
+     * Milliseconds the ICE signal relay holds each relayed candidate before forwarding it
+     * (WBS-5.1). Off by default: fault injection is something a test asks for explicitly.
+     */
+    @Option(
+            names = "--ice-relay-delay-ms",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0",
+            description =
+                    "Milliseconds to delay each relayed ICE candidate, in both directions, "
+                            + "simulating slow negotiation (default: ${DEFAULT-VALUE}). Delays "
+                            + "signalling only; the adapter's own connectivity checks are "
+                            + "untouched. Candidates are delayed, never dropped or reordered.")
+    private int iceRelayDelayMs;
+
     /** Optional JSONL log file path. */
     @Option(
             names = "--log-file",
@@ -440,7 +455,8 @@ public final class MockClientCli implements Callable<Integer> {
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
                 buildHostConfig(),
-                buildJoinConfig());
+                buildJoinConfig(),
+                iceRelayDelayMs);
     }
 
     /**

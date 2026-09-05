@@ -31,6 +31,9 @@ import java.util.Optional;
  * @param launchDelaySeconds how long the game sits in the lobby before starting the match on its
  *     own; negative means it never does, and the match is then launched only on an explicit {@code
  *     launchMatch()}. Read through {@link #launchDelay()} rather than directly
+ * @param udpDropPercent percentage of outbound peer datagrams the UDP sender suppresses, {@code 0}
+ *     (the default) to {@code 100} — the network-fault-injection knob of WBS-5.1. Zero is the
+ *     behaviour that existed before the flag
  */
 public record MockGameConfig(
         int gpgNetPort,
@@ -39,7 +42,8 @@ public record MockGameConfig(
         String playerLogin,
         int gameUid,
         Map<String, String> gameOptions,
-        int launchDelaySeconds) {
+        int launchDelaySeconds,
+        int udpDropPercent) {
 
     /**
      * The auto-launch delay as the lifecycle wants it: a duration to arm the timer with, or empty
