@@ -2,6 +2,7 @@ package com.faforever.testharness.client.state;
 
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
+import com.faforever.testharness.client.config.GameQueueConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.GpgNetForwarder;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
@@ -11,6 +12,7 @@ import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.GameHostSender;
 import com.faforever.testharness.client.lobby.GameJoinSender;
 import com.faforever.testharness.client.lobby.GameLaunchHandler;
+import com.faforever.testharness.client.lobby.GameMatchmakingSender;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.SessionState;
@@ -272,6 +274,7 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendGameHostIfConfigured);
         states.get(ClientState.IDLE).onEntry(this::sendGameJoinIfConfigured);
+        registerMatchmakingQueueTransitions();
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -375,6 +378,12 @@ public final class MockClientLifecycle {
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
         lobby.registerHandler(
                 "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
+        lobby.registerHandler("search_info", this::onSearchInfo);
+        lobby.registerHandler("match_found", this::onMatchFound);
+        lobby.registerHandler(
+                "match_cancelled", message -> machine.receiveEvent(new MatchCancelled(message)));
+        lobby.registerHandler("search_timeout", this::onSearchTimeout);
+        lobby.registerHandler("matchmaker_info", this::onMatchmakerInfo);
 
         // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
         // #214): a game that exits near-instantly can complete gameExit on the same thread that
@@ -386,6 +395,33 @@ public final class MockClientLifecycle {
         // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
         // own exit wiring below needs free to observe that death.
         gameExit.thenAcceptAsync(this::onGameProcessExit);
+    }
+
+    /**
+     * Registers the matchmaking queue edges (#224): IDLE to SEARCHING on the server's confirmation
+     * that a search actually started, back to IDLE on either a stop confirmation or a cancelled
+     * match. A found match does not move the FSM by itself (no accept/decline step exists) — it
+     * stays SEARCHING until {@code game_launch} arrives, so the STARTING_GAME edge below is
+     * registered from SEARCHING too, reusing the same {@link LaunchGame} event and action the
+     * custom-game host/join paths already use. Split out of {@link #setupStateMachine()} to keep
+     * that method under the checkstyle length limit.
+     */
+    private void registerMatchmakingQueueTransitions() {
+        states.get(ClientState.IDLE).onEntry(this::sendGameMatchmakingIfConfigured);
+        states.get(ClientState.IDLE)
+                .registerTransition(SearchStarted.class, states.get(ClientState.SEARCHING));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(SearchStopped.class, states.get(ClientState.IDLE));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(MatchCancelled.class, states.get(ClientState.IDLE));
+        states.get(ClientState.SEARCHING)
+                .registerTransition(
+                        LaunchGame.class,
+                        states.get(ClientState.STARTING_GAME),
+                        this::launchGame,
+                        null);
+        states.get(ClientState.SEARCHING)
+                .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
     }
 
     /**
@@ -1048,6 +1084,105 @@ public final class MockClientLifecycle {
         GameJoinConfig joinConfig = config.joinConfig().get();
         LOG.info("Sending game_join for uid={}", joinConfig.targetGameId());
         new GameJoinSender(lobby).sendGameJoin(joinConfig);
+    }
+
+    /**
+     * IDLE entry hook: sends {@code game_matchmaking} state {@code "start"} for {@link
+     * MockClientConfig#queueConfig()} (lobby-protocol-spec.md §4.3 / §10.2). No-op if no queue was
+     * configured for this session — the mock client hosts, joins, queues, or sits idle depending on
+     * what the operator configured.
+     */
+    private void sendGameMatchmakingIfConfigured() {
+        if (config.queueConfig().isEmpty()) {
+            return;
+        }
+        GameQueueConfig queueConfig = config.queueConfig().get();
+        LOG.info("Sending game_matchmaking start for queue={}", queueConfig.queueName());
+        new GameMatchmakingSender(lobby).sendStart(queueConfig);
+    }
+
+    /**
+     * Sends {@code game_matchmaking} state {@code "stop"} for {@link
+     * MockClientConfig#queueConfig()}. Only sends a request; the FSM leaves SEARCHING once the
+     * server confirms via {@code search_info} state {@code "stop"}, not on this call.
+     *
+     * @throws IllegalStateException if no queue is configured for this session
+     */
+    public void stopSearch() {
+        GameQueueConfig queueConfig =
+                config.queueConfig()
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "stopSearch() called without a queue configured"));
+        LOG.info("Sending game_matchmaking stop for queue={}", queueConfig.queueName());
+        new GameMatchmakingSender(lobby).sendStop(queueConfig);
+    }
+
+    /**
+     * {@code search_info} handler (WBS-3.1.1.9, lobby-protocol-spec.md §4.3 / §10.2): the server's
+     * confirmation of a search's actual state, carrying {@code queue_name} and {@code state}
+     * ({@code "start"} or {@code "stop"}). Posts the matching event so the FSM edge (registered in
+     * {@link #setupStateMachine()}) can move IDLE to SEARCHING or SEARCHING to IDLE. An
+     * unrecognised state value is logged and otherwise ignored, since neither FSM edge applies.
+     *
+     * @param message the {@code search_info} frame received.
+     */
+    private void onSearchInfo(JsonNode message) {
+        String state = message.path("state").asText();
+        if ("start".equals(state)) {
+            machine.receiveEvent(new SearchStarted(message));
+        } else if ("stop".equals(state)) {
+            machine.receiveEvent(new SearchStopped(message));
+        } else {
+            LOG.warn("search_info with unrecognised state='{}'", state);
+        }
+    }
+
+    /**
+     * {@code match_found} handler (WBS-3.1.1.9): the server matched this client and is about to
+     * send {@code game_launch}. There is no accept or decline step in the protocol — a found match
+     * proceeds directly to launch and players cannot refuse it — so this only logs; the FSM stays
+     * SEARCHING until {@code game_launch} drives it into STARTING_GAME.
+     *
+     * @param message the {@code match_found} frame received.
+     */
+    private void onMatchFound(JsonNode message) {
+        LOG.info("match found: queue_name={}", message.path("queue_name").asText());
+    }
+
+    /**
+     * {@code search_timeout} handler (WBS-3.1.1.9): the server refused to start a search at all,
+     * carrying a list of {@code {player, expires_at}} violation entries (the violation service, not
+     * a search timeout — see class-level protocol notes on card #224). Without this handler the
+     * client would send {@code game_matchmaking} start, never receive {@code search_info}, and wait
+     * in IDLE forever; this turns that silent hang into a logged, legible failure. No FSM event is
+     * posted — the client was never in SEARCHING and stays in IDLE.
+     *
+     * @param message the {@code search_timeout} frame received.
+     */
+    private void onSearchTimeout(JsonNode message) {
+        JsonNode timeouts = message.path("timeouts");
+        if (!timeouts.isArray() || timeouts.isEmpty()) {
+            LOG.warn("search_timeout received with no timeout entries; search did not start");
+            return;
+        }
+        for (JsonNode entry : timeouts) {
+            LOG.warn(
+                    "search_timeout: player={} expires_at={}",
+                    entry.path("player").asText(),
+                    entry.path("expires_at").asText());
+        }
+    }
+
+    /**
+     * {@code matchmaker_info} handler (WBS-3.1.1.9): periodic queue-statistics broadcast. The mock
+     * client does not model queue statistics, so this is logged at DEBUG and otherwise ignored.
+     *
+     * @param message the {@code matchmaker_info} frame received.
+     */
+    private void onMatchmakerInfo(JsonNode message) {
+        LOG.debug("matchmaker_info received (ignored): {}", message);
     }
 
     /**

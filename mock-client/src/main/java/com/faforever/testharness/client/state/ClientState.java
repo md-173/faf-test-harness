@@ -6,6 +6,8 @@ public enum ClientState {
     CONNECTING,
     /** Waiting for instructions to join or start a game. */
     IDLE,
+    /** Searching a matchmaker queue, waiting for a match or a cancellation. */
+    SEARCHING,
     /** Opening game binary, establishing necessary connections. */
     STARTING_GAME,
     /** Hosting a game, waiting for all players to be connected. */
