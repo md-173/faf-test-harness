@@ -11,22 +11,60 @@ import org.slf4j.LoggerFactory;
  * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs two steps, in order:
  *
  * <ol>
- *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
- *       timeout queued <em>on the FSM itself</em> fires a transition mid-teardown;
  *   <li>close the {@link GpgNetConnection} — closing the socket <em>is</em> the shutdown protocol;
- *       no farewell frame is sent.
+ *       no farewell frame is sent;
+ *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}).
  * </ol>
  *
- * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels only the
- * StateMachine's own timer. {@link MockGameLifecycle}'s launch-delay and match-duration tasks run
- * on a separate scheduler this sequence does not stop, so one can still post an event after
- * teardown. Usually inert — the invalid-transition policy is IGNORE, so a stray event in LIVE or
- * ENDED is logged and dropped — but not always: a {@code SIGTERM} in HOSTING or JOINING with a
- * launch still pending leaves the FSM in that state (the local close is filtered, see {@code
- * MockGameLifecycle.setupStateMachine}), and the orphaned {@code LaunchMatch} then drives the
- * registered transition to LIVE against a socket this sequence has already closed. It fails into
- * ENDED, whose entry hook is this once-guarded sequence, so nothing tears down twice; the JVM is
- * halting regardless. Tracked against WBS-3.2.4.1, which owns those tasks.
+ * <p><b>The close leads because it is the step that can unblock the other one.</b> Every outbound
+ * frame is written from a transition action inside the synchronized {@link
+ * StateMachine#receiveEvent(com.faforever.testharness.shared.statemachine.Event)}, and {@link
+ * GpgNetConnection#send} is a blocking write. If the adapter stops reading, the kernel send buffer
+ * fills and the FSM thread blocks in that write still holding the StateMachine monitor — so {@link
+ * StateMachine#cancel()}, which needs that monitor, would wait behind it forever while the one
+ * action that would break the stall, closing the socket, sat behind the wait. That is not
+ * hypothetical: in the pinned faf-ice-adapter, {@code GPGNetServer$GPGNetClient.listenerThread}
+ * calls {@code processGpgnetMessage} inline in its read loop, which reaches {@code
+ * RPCService.onGpgNetMessageReceived} and then {@code getPeerOrWait}, an untimed {@code
+ * CompletableFuture.get()} on the first JSON-RPC peer. Until a peer attaches, the adapter accepts
+ * this game's connection and then stops reading it with the socket still open. Closing first turns
+ * the stalled write into an immediate {@code IOException}, the action fails into ENDED, and the
+ * monitor is released. Reversing these two steps reinstates the hang (WBS-3.2.5.2 / #299).
+ *
+ * <p><b>Closing first is only safe because a local close is not news to the FSM.</b> The risk is
+ * confined to one of {@link GpgNetConnection#close()}'s two dispatch paths. With a live socket the
+ * disconnect is delivered on the reader thread, which cannot hold up teardown whatever it does; but
+ * on a connection that never opened its socket, {@code close()} fires the listener
+ * <em>synchronously on the calling thread</em>. {@code MockGameLifecycle.setupStateMachine} filters
+ * {@code LOCAL_CLOSE} at the source rather than posting it, so that synchronous call returns
+ * without touching the FSM. Were it ever to post an event instead, this step would take the
+ * StateMachine monitor and block behind the very stall it exists to break — the same defect, moved
+ * one line down. That filter is therefore a precondition of this ordering and not merely a
+ * log-noise fix, which is how it is currently described at its own call site.
+ *
+ * <p><b>The cost: a queued transition can now fire between the two steps.</b> The old order stopped
+ * scheduling first precisely so nothing could. Scoping what is actually left in that window: {@link
+ * MockGameLifecycle} calls {@link StateMachine#setTimeout(long,
+ * com.faforever.testharness.shared.statemachine.State,
+ * com.faforever.testharness.shared.statemachine.TransitionAction)} exactly once, for the GPGNet
+ * connect timeout, and every committed transition cancels and clears all pending timeouts — so the
+ * FSM's own timer can only fire here while the machine is still in INITIALIZING. That timeout
+ * writes nothing; it assigns SERVER_NOT_CONNECTED and targets ENDED, whose entry hook is this
+ * once-guarded sequence, so it converges where teardown was already going and the re-entrant {@link
+ * #run()} returns on the guard. This is a property of {@link MockGameLifecycle}'s call sites rather
+ * than of {@link StateMachine}, so it has to be re-checked if a second {@code setTimeout} is ever
+ * added.
+ *
+ * <p>Two refinements to that scoping. First, the FSM's timer is not the only thing that can fire in
+ * the gap, and not the likeliest: {@link MockGameLifecycle}'s launch-delay and match-duration tasks
+ * run on a separate scheduler this sequence does not stop (WBS-3.2.4.1), so a {@code SIGTERM} in
+ * HOSTING, JOINING or LIVE can still post {@code LaunchMatch} or {@code GameEnded} afterwards.
+ * Under this order they resolve sooner rather than later — the socket is already closed, so the
+ * send fails at once, and the transition fails into ENDED where the once-guard makes it a no-op.
+ * Second, the timeout list is not yet cleared at the instant this runs from ENDED's entry hook:
+ * {@code Transition.transition} fires {@code to.entry()} before {@code receiveEvent} commits.
+ * Harmless, because the FSM thread holds the monitor for that whole window, but "empty outside
+ * INITIALIZING" is only true after the commit.
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
@@ -72,18 +110,22 @@ import org.slf4j.LoggerFactory;
  * must not classify a teardown-time {@code 143} as a crash.
  *
  * <p>Runs synchronously on the calling thread ({@code implements Runnable} so the bootstrap can use
- * it directly as a shutdown-hook body). It is not lock-free end to end: the caller that wins the
- * guard still calls {@link StateMachine#cancel()}, which is synchronized, so if the FSM thread is
- * mid-transition this blocks until that transition's action returns. The longest such action is the
- * 500 ms pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, against the client's 5
- * s SIGTERM to SIGKILL grace, so the bound is known rather than merely assumed.
+ * it directly as a shutdown-hook body). It is still not lock-free end to end: the caller that wins
+ * the guard reaches {@link StateMachine#cancel()}, which is synchronized, so if the FSM thread is
+ * mid-transition this blocks until that transition's action returns. What the ordering above buys
+ * is that the wait is now <em>bounded</em> rather than open-ended — a stalled write is released by
+ * step one, so the worst remaining case is an action that is slow for its own reasons. The longest
+ * of those is the 500 ms pre-first-frame wait in the lifecycle's INITIALIZING to IDLE step, which
+ * closing the socket does not shorten because that action is sleeping rather than writing. Against
+ * the client's 5 s SIGTERM to SIGKILL grace the bound is known rather than merely assumed, and it
+ * is the same 500 ms the previous order paid.
  */
 public final class GameShutdown implements Runnable {
 
     /** SLF4J logger — see logback.xml for the {@code component=MockGame} MDC. */
     private static final Logger LOG = LoggerFactory.getLogger(GameShutdown.class);
 
-    /** The lifecycle FSM whose scheduling is stopped first. */
+    /** The lifecycle FSM whose scheduling is stopped, second, once the socket is closed. */
     private final StateMachine fsm;
 
     /**
@@ -134,9 +176,13 @@ public final class GameShutdown implements Runnable {
     }
 
     /**
-     * Runs the shutdown sequence once: stop FSM scheduling, then close the connection (skipped if
-     * none was registered). Subsequent or concurrent calls return immediately. Each step is
+     * Runs the shutdown sequence once: close the connection (skipped if none was registered), then
+     * stop FSM scheduling. Subsequent or concurrent calls return immediately. Each step is
      * exception-isolated.
+     *
+     * <p>The order matters and is the subject of this class's javadoc: closing first is what lets a
+     * transition action stalled in a blocking write release the StateMachine monitor that stopping
+     * the scheduling needs.
      */
     @Override
     public void run() {
@@ -144,8 +190,8 @@ public final class GameShutdown implements Runnable {
             return;
         }
         LOG.info("shutting down mock game");
-        stopScheduling();
         closeConnection();
+        stopScheduling();
         LOG.info("mock game shutdown complete");
     }
 
