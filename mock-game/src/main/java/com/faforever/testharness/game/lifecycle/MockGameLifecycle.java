@@ -294,10 +294,10 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Cancels any configured schedules (launch delay and match duration) and shutdowns the
-     * scheduler. Called by {@link GameShutdown#run()}.
+     * Cancels any not-yet-started configured schedules (launch delay and match duration) and shuts
+     * the scheduler down. Only called by {@link GameShutdown#run()} hence package-private.
      */
-    public void stopSchedules() {
+    /* package-private */ void stopSchedules() {
         scheduler.shutdownNow();
     }
 

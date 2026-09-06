@@ -48,7 +48,7 @@ final class GameShutdownTest {
         new GameShutdown(fsm, connection).run();
 
         assertEquals(
-                List.of("stop-scheduling", "close-connection"),
+                List.of("stop-fsm", "close-connection"),
                 order,
                 "scheduling must stop first so no timeout fires mid-teardown");
     }
@@ -225,12 +225,12 @@ final class GameShutdownTest {
         assertThrows(NullPointerException.class, () -> new GameShutdown(null));
     }
 
-    /** A StateMachine that records "stop-scheduling" when its scheduling is cancelled. */
+    /** A StateMachine that records "stop-fsm" when its scheduling is cancelled. */
     private static StateMachine recordingFsm(final List<String> order) {
         return new StateMachine(new State("A")) {
             @Override
             public void cancel() {
-                order.add("stop-scheduling");
+                order.add("stop-fsm");
                 super.cancel();
             }
         };
