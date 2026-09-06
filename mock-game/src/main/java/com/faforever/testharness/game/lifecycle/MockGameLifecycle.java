@@ -46,6 +46,12 @@ public final class MockGameLifecycle {
             Map.of("victory", 10, "defeat", -10, "draw", 10);
 
     /**
+     * The numerical values for the teams in the match. We are not using team 1 since that is the
+     * special free-for-all value.
+     */
+    private static final int[] TEAMS = {2, 3};
+
+    /**
      * A delay to wait before sending messages to the GpgNet server on first connection, in
      * milliseconds. Necessary due to a race condition on the adapter.
      */
@@ -578,13 +584,7 @@ public final class MockGameLifecycle {
         LOG.info("Setting up game as host");
 
         try {
-            // Values for these will be 1 (peers list will be empty), but written like this for
-            // consistency and avoiding magic numbers.
-            gpgnetSender.playerOption(config.playerId(), "Army", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Team", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "StartSpot", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Faction", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Color", peers.size() + 1);
+            sendPlayerOptions(config.playerId());
 
             // No game options are required, but any could be passed to test different properties.
             for (var entry : config.gameOptions().entrySet()) {
@@ -680,13 +680,7 @@ public final class MockGameLifecycle {
 
         if (getState() == GameState.HOSTING) {
             try {
-                // First peer assigned number 2, then 3, and so on.
-                // Each player is in a team of 1, i.e. free-for-all.
-                gpgnetSender.playerOption(peer.playerId(), "Army", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Team", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "StartSpot", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Faction", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Color", peers.size() + 1);
+                sendPlayerOptions(peer.playerId());
             } catch (IOException e) {
                 throw recordSendFailure(e);
             }
@@ -697,9 +691,11 @@ public final class MockGameLifecycle {
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
             // TODO(#281): Configurable values.
-            gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
-            for (int i = 2; i <= peers.size() + 1; i++) {
-                gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));
+            // Two teams are configured, we hardcode team 2 to win and team 3 to lose.
+            gpgnetSender.gameResult(TEAMS[0], "victory", SCORES.get("victory"));
+            // Handling the 1-player case where no second team was ever created.
+            if (!peers.isEmpty()) {
+                gpgnetSender.gameResult(TEAMS[1], "defeat", SCORES.get("defeat"));
             }
             gpgnetSender.jsonStats("{\"stats\": []}");
             gpgnetSender.gameEnded();
@@ -725,5 +721,17 @@ public final class MockGameLifecycle {
                             + "likely due to a shut down scheduler");
             return null;
         }
+
+    /* Sends the set of PlayerOption values needed for a player in the match. */
+    private void sendPlayerOptions(int playerId) throws IOException {
+        // Players assigned army number (and start spot, faction, and color) in arrival order, with
+        // the host being first.
+        // Configured for a two-team game so half the players are assigned to team 2 and half to
+        // team 3 (alternating).
+        gpgnetSender.playerOption(playerId, "Army", peers.size() + 1);
+        gpgnetSender.playerOption(playerId, "Team", TEAMS[(peers.size() % 2)]);
+        gpgnetSender.playerOption(playerId, "StartSpot", peers.size() + 1);
+        gpgnetSender.playerOption(playerId, "Faction", peers.size() + 1);
+        gpgnetSender.playerOption(playerId, "Color", peers.size() + 1);
     }
 }
