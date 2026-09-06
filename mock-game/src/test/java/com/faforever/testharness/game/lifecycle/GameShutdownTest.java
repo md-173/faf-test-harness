@@ -24,7 +24,6 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -93,31 +92,38 @@ final class GameShutdownTest {
 
     @Test
     void stopsLifecycleScheduledDelay() throws Exception {
+        Duration launchDelay = Duration.ofSeconds(1);
         MockGameConfig defaultConfig =
                 new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
-        MockGameLifecycle lifecycle =
-                new MockGameLifecycle(
-                        defaultConfig,
-                        new GpgNetConnection(gpgnet.port()),
-                        Duration.ofSeconds(1),
-                        Duration.ofSeconds(1));
+        try {
+            MockGameLifecycle lifecycle =
+                    new MockGameLifecycle(
+                            defaultConfig,
+                            new GpgNetConnection(gpgnet.port()),
+                            launchDelay,
+                            Duration.ofSeconds(1));
 
-        gpgnet.start();
-        gpgnet.awaitClient();
-        lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
-        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
-        lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
-        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+            gpgnet.start();
+            gpgnet.awaitClient();
+            lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
+            gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+            lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
+            gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+            lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
-        lifecycle.shutdown().run();
+            lifecycle.shutdown().run();
 
-        // Because shutdown was run, the launch delay scheduled future should have been cancelled
-        // and LIVE should never be reached.
-        assertThrows(
-                TimeoutException.class,
-                () -> lifecycle.stateReached(GameState.LIVE).get(3, TimeUnit.SECONDS));
+            // Because shutdown was run, the launch delay scheduled future should have been
+            // cancelled
+            // and LIVE should never be reached.
+            // Sleeping 2 seconds vs the 1 second launch delay.
+            Thread.sleep(launchDelay.toMillis() * 2);
+            assertEquals(GameState.HOSTING, lifecycle.getState());
+        } finally {
+            // Make sure gpgnet server is always stopped.
+            gpgnet.stop();
+        }
     }
 
     @Test
