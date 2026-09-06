@@ -101,16 +101,16 @@ public final class LifecyclePeerConnectTest {
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        assertMessage("PlayerOption", config.playerId(), "Army", 1);
-        assertMessage("PlayerOption", config.playerId(), "Team", 1);
-        assertMessage("PlayerOption", config.playerId(), "StartSpot", 1);
-        assertMessage("PlayerOption", config.playerId(), "Faction", 1);
-        assertMessage("PlayerOption", config.playerId(), "Color", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Army", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Team", 2);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "StartSpot", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Faction", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Color", 1);
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
         assertMessage("PlayerOption", 2, "Army", 2);
-        assertMessage("PlayerOption", 2, "Team", 2);
+        assertMessage("PlayerOption", 2, "Team", 3);
         assertMessage("PlayerOption", 2, "StartSpot", 2);
         assertMessage("PlayerOption", 2, "Faction", 2);
         assertMessage("PlayerOption", 2, "Color", 2);

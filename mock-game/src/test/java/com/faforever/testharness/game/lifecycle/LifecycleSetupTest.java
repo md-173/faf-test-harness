@@ -150,11 +150,11 @@ public final class LifecycleSetupTest {
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        assertMessage("PlayerOption", config.playerId(), "Army", 1);
-        assertMessage("PlayerOption", config.playerId(), "Team", 1);
-        assertMessage("PlayerOption", config.playerId(), "StartSpot", 1);
-        assertMessage("PlayerOption", config.playerId(), "Faction", 1);
-        assertMessage("PlayerOption", config.playerId(), "Color", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Army", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Team", 2);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "StartSpot", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Faction", 1);
+        assertMessage("PlayerOption", DEFAULT_CONFIG.playerId(), "Color", 1);
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
         lifecycle.launchMatch();
@@ -163,7 +163,7 @@ public final class LifecycleSetupTest {
 
         lifecycle.endMatch();
 
-        assertMessage("GameResult", 1, "victory 10");
+        assertMessage("GameResult", 2, "victory 10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -193,8 +193,8 @@ public final class LifecycleSetupTest {
         lifecycle.endMatch();
 
         // Two GameResult messages as a joiner always has the host as a peer.
-        assertMessage("GameResult", 1, "victory 10");
-        assertMessage("GameResult", 2, "defeat -10");
+        assertMessage("GameResult", 2, "victory 10");
+        assertMessage("GameResult", 3, "defeat -10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -280,8 +280,8 @@ public final class LifecycleSetupTest {
         lifecycle.endMatch();
 
         // Two GameResults
-        assertMessage("GameResult", 1, "victory 10");
-        assertMessage("GameResult", 2, "defeat -10");
+        assertMessage("GameResult", 2, "victory 10");
+        assertMessage("GameResult", 3, "defeat -10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
