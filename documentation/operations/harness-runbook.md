@@ -435,11 +435,22 @@ What to look for when it is on:
   `IceMsg` frame to the lobby widens by roughly the configured delay, in both
   directions. Compare timestamps on adjacent records in `logs/mockclient.jsonl`.
 - The per-peer ICE connection-state transitions logged by WBS 3.1.6.2
-  (`gathering` → `awaitingCandidates` → `connected`) take correspondingly
-  longer to reach `connected`.
-- A two-peer session should still complete. If it does not, the delay is long
-  enough to be pushing past a timeout rather than exercising one — that is a
-  finding about the timeout, not about the flag.
+  (`gathering` → `awaitingCandidates` → `checking` → `connected`) take
+  correspondingly longer to reach `connected`.
+- A two-peer session should still complete, **up to a ceiling**. In the pinned
+  3.3.14 adapter the offerer arms a 6000 ms timer when it sends its candidates
+  and restarts ICE if the answer has not arrived. That answer crosses four
+  relay hops out and back, each way passing through the sender's client and the
+  receiver's client, so the usable range is:
+
+  | | arithmetic | keep the delay under |
+  |---|---|---|
+  | both clients set the flag | 4 × delay < 6000 ms | ~1500 ms |
+  | one client sets it | 2 × delay < 6000 ms | ~3000 ms |
+
+  minus real WSS latency, so leave margin. Past that you get an ICE restart
+  loop rather than slow negotiation — a different phenomenon, and not the one
+  the flag is for. Start a two-peer manual run at a few hundred milliseconds.
 
 ### `--udp-drop-percent`
 
@@ -468,3 +479,16 @@ WBS 3.2.2.5 built it and no FSM phase constructs one. `--udp-drop-percent` is
 parsed, validated, and carried on `MockGameConfig` today; it takes effect for
 any caller that constructs a `GameUdpSender`, and will apply to the game's own
 peer traffic as soon as the FSM wires the sender in.
+
+WBS 4.3.2 (#219) is the change that wires it in, and the two collide:
+`GameTrafficSession` calls the three-argument `GameUdpSender` constructor, which
+hardcodes a zero drop percentage, and `MockGameLifecycle` builds the session
+from the player id alone — so `udpDropPercent` would never reach the sender and
+this flag would parse, validate, document and do nothing. **Whichever of the two
+merges second must thread `config.udpDropPercent()` through `GameTrafficSession`
+to the four-argument constructor**, and this note should go with it.
+
+Separately, `MockGameLauncher.buildArgv` never emits `--udp-drop-percent` and no
+mock-client flag sources it, so even once the above is done only a hand-run
+`mock-game` can set the percentage; an orchestrated run cannot. That is its own
+card.
