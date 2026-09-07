@@ -69,6 +69,8 @@ path, and a session against the live lobby, are in the runbook.
   seam: [documentation/operations/component-isolation.md](documentation/operations/component-isolation.md)
 - Mock Client subcommands, flags, config keys and exit codes:
   [mock-client/README.md](mock-client/README.md)
+- Mock Game flags, exit codes, and the log lines a pipeline can assert on:
+  [mock-game/README.md](mock-game/README.md)
 - Provisioning the real ICE adapter, and the upstream quirks worked around:
   [documentation/operations/ice-adapter-setup.md](documentation/operations/ice-adapter-setup.md)
 - Captured end-to-end demo transcripts: [documentation/demos/README.md](documentation/demos/README.md)
