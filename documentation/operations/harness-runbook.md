@@ -488,7 +488,9 @@ this flag would parse, validate, document and do nothing. **Whichever of the two
 merges second must thread `config.udpDropPercent()` through `GameTrafficSession`
 to the four-argument constructor**, and this note should go with it.
 
-Separately, `MockGameLauncher.buildArgv` never emits `--udp-drop-percent` and no
-mock-client flag sources it, so even once the above is done only a hand-run
-`mock-game` can set the percentage; an orchestrated run cannot. That is its own
-card.
+An orchestrated run reaches the same fault through the mock client:
+`--game-udp-drop-percent` on `mock-client` is passed straight through to the
+mock-game it launches as `--udp-drop-percent` (WBS-5.1-fix, #322). It is emitted
+only when non-zero, so a default run produces the argv it always produced. Both
+spellings exist because both callers do: `mock-game` takes its own flag when run
+by hand.

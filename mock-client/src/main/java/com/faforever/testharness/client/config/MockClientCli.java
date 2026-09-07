@@ -285,6 +285,25 @@ public final class MockClientCli implements Callable<Integer> {
                             + "untouched. Candidates are delayed, never dropped or reordered.")
     private int iceRelayDelayMs;
 
+    /**
+     * Percentage of outbound peer datagrams the launched mock-game suppresses (WBS-5.1-fix, #322).
+     *
+     * <p>Passed through to mock-game as {@code --udp-drop-percent}. Without this, the flag existed
+     * only on a hand-run mock-game: {@code MockGameLauncher.buildArgv} never emitted it and no
+     * client-side option sourced a value, so an orchestrated run — the normal one — had no way to
+     * turn the fault on at all.
+     */
+    @Option(
+            names = "--game-udp-drop-percent",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0",
+            description =
+                    "Percentage of outbound peer datagrams the launched mock-game suppresses, "
+                            + "drawn independently per peer per round (default: ${DEFAULT-VALUE}). "
+                            + "Dropped datagrams still consume their sequence number, so the "
+                            + "receiving peer sees them as gaps.")
+    private int gameUdpDropPercent;
+
     /** Optional JSONL log file path. */
     @Option(
             names = "--log-file",
@@ -456,7 +475,8 @@ public final class MockClientCli implements Callable<Integer> {
                 playerLogin,
                 buildHostConfig(),
                 buildJoinConfig(),
-                iceRelayDelayMs);
+                iceRelayDelayMs,
+                gameUdpDropPercent);
     }
 
     /**

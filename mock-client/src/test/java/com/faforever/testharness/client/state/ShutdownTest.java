@@ -50,6 +50,7 @@ final class ShutdownTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
+                    0,
                     0);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
