@@ -9,6 +9,15 @@ on:
       version:
         description: 'Release version'
         required: true
+      # GitHub's GET /releases/latest returns "the most recent non-prerelease, non-draft release",
+      # so a release marked prerelease is invisible to it — and pulling the jar from that endpoint
+      # is the route our first consumer named. It was hardcoded true, which made every release
+      # invisible to them; 0.2.0 was fixed by unticking the flag by hand (WBS-7.6, #317).
+      prerelease:
+        description: 'Mark as a pre-release (hides it from the releases/latest API)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   release:
@@ -36,15 +45,30 @@ jobs:
       - name: Create mock game shadow jars
         run: ./gradlew -Pversion="${{ github.event.inputs.version }}" --stacktrace :mock-game:shadowJar
 
+      # An integrity check for the consumer, not a reproducibility one: they pull the *latest*
+      # release rather than pinning a version, and a checksum cannot be pinned to a moving target.
+      # Written beside each jar so the release-action glob picks them up.
+      - name: Write checksums beside each jar
+        run: |
+          for jar in mock-client/build/libs/mock-client-*.jar mock-game/build/libs/mock-game-*.jar; do
+            # Run in the jar's own directory so the file records a bare name: that is what
+            # `sha256sum -c mock-game-<version>-all.jar.sha256` expects beside a downloaded jar.
+            ( cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256" )
+            cat "$jar.sha256"
+          done
+
       - name: Create draft release
         id: create_release
         uses: ncipollo/release-action@v1
         with:
           commit: ${{ github.sha }}
           tag: ${{ github.event.inputs.version }}
+          # Kept: a draft is a useful safety net for checking the jar names and testing the
+          # artifacts before anything is public. Unlike prerelease, it does not hide a *published*
+          # release from the API.
           draft: true
-          prerelease: true
+          prerelease: ${{ github.event.inputs.prerelease }}
           generateReleaseNotes: true
           bodyFile: ".github/RELEASE_BODY.md"
-          artifacts: "mock-game/build/libs/mock-game-*.jar,mock-client/build/libs/mock-client-*.jar"
+          artifacts: "mock-game/build/libs/mock-game-*.jar,mock-game/build/libs/mock-game-*.jar.sha256,mock-client/build/libs/mock-client-*.jar,mock-client/build/libs/mock-client-*.jar.sha256"
 
