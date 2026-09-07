@@ -4,9 +4,14 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.function.Predicate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Represents a state. */
 public class State {
+    /** Logger instance for this class. */
+    private static final Logger LOG = LoggerFactory.getLogger(State.class);
+
     /** A unique name for this state. */
     private final String name;
 
@@ -58,17 +63,63 @@ public class State {
         exitHooks.add(action);
     }
 
-    /** Perform all entry actions. */
+    /**
+     * Perform all entry actions.
+     *
+     * <p>Each hook is isolated: one that throws is logged and the rest still run. See {@link
+     * #runHooks} for why that is not merely tidiness.
+     */
     public void entry() {
-        for (var hook : entryHooks) {
-            hook.run();
-        }
+        runHooks(entryHooks, "entry");
     }
 
-    /** Perform all exit actions. */
+    /**
+     * Perform all exit actions.
+     *
+     * <p>Each hook is isolated, exactly as in {@link #entry()}.
+     */
     public void exit() {
-        for (var hook : exitHooks) {
-            hook.run();
+        runHooks(exitHooks, "exit");
+    }
+
+    /**
+     * Runs every hook in {@code hooks}, containing and logging any that throws.
+     *
+     * <p>An escaping hook used to abort the transition midway (WBS-2.3.7-fix, #258). {@code
+     * Transition.transition} runs {@code from.exit()} then {@code to.entry()} and only then returns
+     * the new state, so a throw from either left the machine reporting the state it had already
+     * left — with that state's exit hooks run and the target's entry hooks half-run — and the
+     * assignment, the timeout cancellation and the {@code stateReached} completion all skipped.
+     *
+     * <p>Each of the three callers disposed of it differently and none of them repaired it. On the
+     * event path the exception propagated into a netty handler or a {@code CompletableFuture}
+     * continuation and vanished with no trace. On the timeout path it was caught and logged as "may
+     * be inconsistent", which was honest but fixed nothing. On the CLI path it hung the process:
+     * the future a subcommand blocks on is completed after the state assignment, so a throwing hook
+     * meant the main thread waited forever, the JVM never exited, and the subprocess registry's
+     * shutdown hook never ran — leaving a live child orphaned.
+     *
+     * <p>Isolating here rather than reordering the assignment is deliberate. Reordering would also
+     * have worked, and is what the card proposed first, but it changes when entry hooks run
+     * relative to the state becoming visible and to pending timeouts being cancelled — and
+     * production depends on that ordering, most visibly in the mock game, whose ENDED entry hook is
+     * the shutdown sequence. Containment fixes every symptom above and moves nothing. It also
+     * matches what this codebase already does where a hook sequence must not be derailed by one
+     * step: {@code GameShutdown.run} isolates each of its own steps for the same reason.
+     *
+     * <p>A hook that throws still did not do its job, and swallowing that silently would be its own
+     * defect — hence ERROR, naming the state and the phase, rather than a debug line.
+     *
+     * @param hooks the hooks to run, in registration order.
+     * @param phase {@code "entry"} or {@code "exit"}, for the diagnostic.
+     */
+    private void runHooks(final List<Runnable> hooks, final String phase) {
+        for (var hook : hooks) {
+            try {
+                hook.run();
+            } catch (RuntimeException e) {
+                LOG.error("{} hook for state {} threw; continuing", phase, name, e);
+            }
         }
     }
 
