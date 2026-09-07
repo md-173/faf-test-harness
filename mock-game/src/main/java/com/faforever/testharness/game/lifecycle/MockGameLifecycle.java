@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -38,7 +39,13 @@ public final class MockGameLifecycle {
     /** The default timeout length for the GpgNet connection,. */
     private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
-    /** A mapping of result strings to numerical scores. */
+    /**
+     * A mapping of result strings to numerical scores.
+     *
+     * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
+     * end-of-match result is fixed at army 1 victory, every other army defeat (WBS-3.2.4.3-fix,
+     * #281). See {@code gameEnds} for why that is the design rather than a gap.
+     */
     private static final Map<String, Integer> SCORES =
             Map.of("victory", 10, "defeat", -10, "draw", 10);
 
@@ -125,7 +132,13 @@ public final class MockGameLifecycle {
         /** Could not establish initial connection with the server. */
         SERVER_NOT_CONNECTED,
         /** Generic failure, obtained when no other failure applies. */
-        FAILED
+        FAILED,
+        /**
+         * Waited in LOBBY for {@code --lobby-timeout-seconds} and nothing ever drove the game into
+         * a role, so it gave up (WBS-3.2.1.3, #323). Not a failure — the game booted, connected and
+         * announced its lobby; it was simply never used. Only reachable when that flag is set.
+         */
+        LOBBY_TIMEOUT
     }
 
     /**
@@ -401,6 +414,8 @@ public final class MockGameLifecycle {
         // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
         states.get(GameState.ENDED).onEntry(shutdown::run);
 
+        armLobbyTimeout();
+
         // Start connection to GpgNet server and set a timeout if it doesn't occur.
         machine.setTimeout(
                 gpgnetConnectionTimeout.toMillis(),
@@ -409,6 +424,47 @@ public final class MockGameLifecycle {
                     status = ExitStatus.SERVER_NOT_CONNECTED;
                 });
         gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
+    }
+
+    /**
+     * Arms the optional LOBBY give-up timer, if one is configured (WBS-3.2.1.3, #323).
+     *
+     * <p>Unset by default, and an unset timer arms nothing at all — a mock game that nothing drives
+     * into a role sits in the lobby exactly as a real game does, which is what a consumer asserting
+     * on the GPGNet handshake wants. What the flag buys is who ends such a run: the consumer's own
+     * {@code timeout} wrapper reports {@code 143} or {@code 130}, so a run that did precisely what
+     * was asked is indistinguishable from one killed for hanging. Given the timer, the game exits
+     * through the normal path with {@link ExitStatus#LOBBY_TIMEOUT}.
+     *
+     * <p>Cancellation is the state machine's, not ours: {@code commitTransition} disarms every
+     * pending timeout on any state change, so a game driven into HOSTING or JOINING — or dropped
+     * into ENDED by a disconnect — never trips this. That is the whole reason it uses {@code
+     * setTimeout} rather than the lifecycle's own scheduler, which would need cancelling at each of
+     * the four ways out of LOBBY.
+     *
+     * <p>It is armed from a {@link StateMachine#stateReached} callback rather than from LOBBY's
+     * entry hook or the transition action, and that is load-bearing: both of those run
+     * <em>before</em> {@code commitTransition}, which then clears every pending timeout — including
+     * one they had just armed. The callback runs inside the same commit, after the clear.
+     */
+    private void armLobbyTimeout() {
+        Optional<Duration> lobbyTimeout = config.lobbyTimeout();
+        if (lobbyTimeout.isEmpty()) {
+            return;
+        }
+        machine.stateReached(states.get(GameState.LOBBY))
+                .thenRun(
+                        () ->
+                                machine.setTimeout(
+                                        lobbyTimeout.get().toMillis(),
+                                        states.get(GameState.ENDED),
+                                        ignored -> {
+                                            LOG.info(
+                                                    "no HostGame or JoinGame within {}s; giving up"
+                                                            + " on the lobby",
+                                                    lobbyTimeout.get().toSeconds());
+                                            status = ExitStatus.LOBBY_TIMEOUT;
+                                        }));
     }
 
     /**
@@ -606,7 +662,12 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            // TODO(#281): Configurable values.
+            // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1 wins and
+            // every other army loses, on every run: the harness asserts on the shape and ordering
+            // of the closing frames, and a result that varied would make those assertions depend
+            // on configuration that no consumer has asked to vary. A mock whose output is the same
+            // every time is the point of it. If a card ever needs a specific outcome, the values
+            // belong on MockGameConfig alongside gameOptions rather than here.
             gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
             for (int i = 2; i <= peers.size() + 1; i++) {
                 gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));

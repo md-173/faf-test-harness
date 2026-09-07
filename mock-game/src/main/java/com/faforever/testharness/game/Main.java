@@ -213,6 +213,7 @@ public final class Main {
         return switch (status) {
             case OK -> ExitCodes.OK;
             case SERVER_CONNECTION_LOST -> ExitCodes.ADAPTER_LOST;
+            case LOBBY_TIMEOUT -> ExitCodes.LOBBY_TIMEOUT;
             // A game that never reached the adapter and a generic failure are both "this run did
             // not work"; the log line above carries which one it was.
             case SERVER_NOT_CONNECTED, FAILED -> ExitCodes.RUNTIME;
