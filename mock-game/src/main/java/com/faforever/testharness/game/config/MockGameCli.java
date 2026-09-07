@@ -51,6 +51,13 @@ public final class MockGameCli {
      */
     private static final String DEFAULT_LAUNCH_DELAY_SECONDS = "5";
 
+    /**
+     * Default for {@code --lobby-timeout-seconds}: negative, meaning wait in LOBBY indefinitely.
+     * That is the behaviour the game has always had, so an unset flag changes nothing (WBS-3.2.1.3,
+     * #323).
+     */
+    private static final String DEFAULT_LOBBY_TIMEOUT_SECONDS = "-1";
+
     /** TCP port of the adapter's GPGNet server; validated to a real port range. */
     @Option(names = "--gpgnet-port", required = true, description = "adapter GPGNet TCP port")
     private int gpgNetPort;
@@ -100,6 +107,20 @@ public final class MockGameCli {
     private int launchDelaySeconds;
 
     /**
+     * How long the game waits in LOBBY for something to drive it into a role before giving up;
+     * negative, the default, waits forever. Unset leaves today's behaviour exactly as it was
+     * (WBS-3.2.1.3, #323).
+     */
+    @Option(
+            names = "--lobby-timeout-seconds",
+            defaultValue = DEFAULT_LOBBY_TIMEOUT_SECONDS,
+            description =
+                    "Seconds to wait in the lobby for a HostGame or JoinGame before giving up and "
+                            + "exiting 75 (default: wait forever). A game driven into a role "
+                            + "never trips it.")
+    private int lobbyTimeoutSeconds;
+
+    /**
      * Percentage of outbound peer datagrams the UDP sender suppresses (WBS-5.1). Off by default:
      * fault injection is something a test asks for explicitly, never something a plain run gets.
      */
@@ -136,6 +157,7 @@ public final class MockGameCli {
                 cli.gameUid,
                 cli.gameOptions,
                 cli.launchDelaySeconds,
+                cli.lobbyTimeoutSeconds,
                 cli.udpDropPercent);
     }
 

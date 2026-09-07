@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -144,7 +145,13 @@ public final class MockGameLifecycle {
         /** Could not establish initial connection with the server. */
         SERVER_NOT_CONNECTED,
         /** Generic failure, obtained when no other failure applies. */
-        FAILED
+        FAILED,
+        /**
+         * Waited in LOBBY for {@code --lobby-timeout-seconds} and nothing ever drove the game into
+         * a role, so it gave up (WBS-3.2.1.3, #323). Not a failure — the game booted, connected and
+         * announced its lobby; it was simply never used. Only reachable when that flag is set.
+         */
+        LOBBY_TIMEOUT
     }
 
     /**
@@ -449,6 +456,11 @@ public final class MockGameLifecycle {
         // Shutdown sequence, also handed to the bootstrap as its JVM shutdown hook (WBS-3.2.5.1)
         // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
         states.get(GameState.ENDED).onEntry(shutdown::run);
+
+        // Stays here rather than moving into start() (#312 split the connect out): this only
+        // registers a callback on stateReached(LOBBY), so it is wiring, not I/O, and it arms
+        // correctly whenever LOBBY is committed regardless of when start() runs.
+        armLobbyTimeout();
     }
 
     /**
@@ -490,6 +502,61 @@ public final class MockGameLifecycle {
                             // reported by onDisconnect and that timeout.
                             if (error != null) {
                                 LOG.debug("GPGNet connect or post-connect handshake failed", error);
+                            }
+                        });
+    }
+
+    /**
+     * Arms the optional LOBBY give-up timer, if one is configured (WBS-3.2.1.3, #323).
+     *
+     * <p>Unset by default, and an unset timer arms nothing at all — a mock game that nothing drives
+     * into a role sits in the lobby exactly as a real game does, which is what a consumer asserting
+     * on the GPGNet handshake wants. What the flag buys is who ends such a run: the consumer's own
+     * {@code timeout} wrapper reports {@code 143} or {@code 130}, so a run that did precisely what
+     * was asked is indistinguishable from one killed for hanging. Given the timer, the game exits
+     * through the normal path with {@link ExitStatus#LOBBY_TIMEOUT}.
+     *
+     * <p>Cancellation is the state machine's, not ours: {@code commitTransition} disarms every
+     * pending timeout on any state change, so a game driven into HOSTING or JOINING — or dropped
+     * into ENDED by a disconnect — never trips this. That is the whole reason it uses {@code
+     * setTimeout} rather than the lifecycle's own scheduler, which would need cancelling at each of
+     * the four ways out of LOBBY.
+     *
+     * <p>It is armed from a {@link StateMachine#stateReached} callback rather than from LOBBY's
+     * entry hook or the transition action, and that is load-bearing: both of those run
+     * <em>before</em> {@code commitTransition}, which then clears every pending timeout — including
+     * one they had just armed. The callback runs inside the same commit, after the clear.
+     */
+    private void armLobbyTimeout() {
+        Optional<Duration> lobbyTimeout = config.lobbyTimeout();
+        if (lobbyTimeout.isEmpty()) {
+            return;
+        }
+        machine.stateReached(states.get(GameState.LOBBY))
+                .thenRun(
+                        () ->
+                                machine.setTimeout(
+                                        lobbyTimeout.get().toMillis(),
+                                        states.get(GameState.ENDED),
+                                        ignored -> {
+                                            LOG.info(
+                                                    "no HostGame or JoinGame within {}s; giving up"
+                                                            + " on the lobby",
+                                                    lobbyTimeout.get().toSeconds());
+                                            status = ExitStatus.LOBBY_TIMEOUT;
+                                        }))
+                // Observed, not discarded — the same reason start()'s chain carries one. A throw
+                // in the arming lambda would otherwise be captured into a future nobody holds:
+                // the timer would silently never arm and nothing would say so. Reachable today:
+                // GameShutdown.run() calls fsm.cancel() after closing the socket, and a
+                // CreateLobby already blocked on the StateMachine monitor still commits
+                // IDLE -> LOBBY afterwards, so setTimeout throws "Timer already cancelled".
+                // Benign — the JVM is halting — but silence is the part worth fixing.
+                .whenComplete(
+                        (ignored, error) -> {
+                            if (error != null) {
+                                LOG.debug(
+                                        "lobby give-up timer was not armed: {}", error.toString());
                             }
                         });
     }
