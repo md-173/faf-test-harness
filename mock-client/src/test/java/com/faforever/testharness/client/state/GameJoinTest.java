@@ -57,7 +57,7 @@ final class GameJoinTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
-                    Optional.empty()),
+                    Optional.empty(),
                     0);
 
     private ScriptedWebSocketServer server;
@@ -107,7 +107,7 @@ final class GameJoinTest {
                 MINIMAL_CONFIG.playerLogin(),
                 MINIMAL_CONFIG.hostConfig(),
                 joinConfig,
-                MINIMAL_CONFIG.queueConfig()),
+                MINIMAL_CONFIG.queueConfig(),
                 0);
     }
 

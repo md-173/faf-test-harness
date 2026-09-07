@@ -52,7 +52,7 @@ final class LifecycleTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
-                    Optional.empty()),
+                    Optional.empty(),
                     0);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
@@ -249,7 +249,7 @@ final class LifecycleTest {
                 MINIMAL_CONFIG.playerLogin(),
                 hostConfig,
                 MINIMAL_CONFIG.joinConfig(),
-                MINIMAL_CONFIG.queueConfig()),
+                MINIMAL_CONFIG.queueConfig(),
                 0);
     }
 

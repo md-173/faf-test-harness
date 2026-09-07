@@ -65,7 +65,7 @@ final class PlayingTransitionTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
-                    Optional.empty()),
+                    Optional.empty(),
                     0);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =

@@ -11,11 +11,11 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.GameQueueConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.GameConfig;
-import com.faforever.testharness.client.lobby.GameMatchmakingSender;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
@@ -67,7 +67,8 @@ final class MatchmakingQueueTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
-                    Optional.empty());
+                    Optional.empty(),
+                    0);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
@@ -90,6 +91,8 @@ final class MatchmakingQueueTest {
     private LobbyConnection lobby;
     private ListAppender<ILoggingEvent> appender;
     private Logger lifecycleLogger;
+    private ListAppender<ILoggingEvent> machineAppender;
+    private Logger machineLogger;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -103,10 +106,24 @@ final class MatchmakingQueueTest {
         appender.start();
         lifecycleLogger = context.getLogger(MockClientLifecycle.class);
         lifecycleLogger.addAppender(appender);
+
+        // Separate capture on the framework's own logger: the unregistered-event WARN that the
+        // IDLE SearchStopped self-loop exists to prevent is emitted by StateMachine, not by
+        // MockClientLifecycle, so it never reaches the appender above.
+        machineAppender = new ListAppender<>();
+        machineAppender.list = new CopyOnWriteArrayList<>();
+        machineAppender.setContext(context);
+        machineAppender.start();
+        machineLogger = context.getLogger(StateMachine.class);
+        machineLogger.addAppender(machineAppender);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        if (machineAppender != null) {
+            machineAppender.stop();
+            machineLogger.detachAppender(machineAppender);
+        }
         if (appender != null) {
             appender.stop();
             lifecycleLogger.detachAppender(appender);
@@ -122,6 +139,11 @@ final class MatchmakingQueueTest {
 
     private List<String> messages() {
         return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    /** The {@link StateMachine} framework's own log records, for the unregistered-event WARN. */
+    private List<String> machineMessages() {
+        return machineAppender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     /** Copies {@link #MINIMAL_CONFIG} with {@code queueConfig} overridden. */
@@ -151,7 +173,8 @@ final class MatchmakingQueueTest {
                 MINIMAL_CONFIG.playerLogin(),
                 MINIMAL_CONFIG.hostConfig(),
                 MINIMAL_CONFIG.joinConfig(),
-                queueConfig);
+                queueConfig,
+                MINIMAL_CONFIG.iceRelayDelayMs());
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameQueueConfig> queueConfig)
@@ -223,9 +246,20 @@ final class MatchmakingQueueTest {
         server.broadcastText(searchInfo("ladder1v1", "stop"));
         idleAgain.get(3, TimeUnit.SECONDS);
 
+        // The stop must actually stick. Re-entering IDLE re-fires its entry hooks (Transition
+        // runs to.entry() on every non-self-loop), so an ungated hook would re-send
+        // game_matchmaking start here and make stopSearch() inert — the client would look unable
+        // to leave the queue. Nothing may reach the wire until the explicit restart below.
+        assertThrows(
+                AssertionError.class,
+                () -> server.pollReceived(500, TimeUnit.MILLISECONDS),
+                "a confirmed stop must not be undone by an automatic re-queue");
+
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
-        new GameMatchmakingSender(lobby).sendStart(queueConfig);
-        server.pollReceived(3, TimeUnit.SECONDS);
+        lifecycle.startSearch();
+        JsonNode restart = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        assertEquals("game_matchmaking", restart.get("command").asText());
+        assertEquals("start", restart.get("state").asText());
         server.broadcastText(searchInfo("ladder1v1", "start"));
         searchingAgain.get(3, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
@@ -247,8 +281,17 @@ final class MatchmakingQueueTest {
         idleAgain.get(3, TimeUnit.SECONDS);
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
+        // A cancelled match must not silently re-queue. faf-server emits match_cancelled from the
+        // handler that also calls violation_service.register_violations, so an automatic re-queue
+        // would loop straight back into the path that earns a matchmaker time-out — and would bury
+        // the cancellation, which is the finding a tester is here to see.
+        assertThrows(
+                AssertionError.class,
+                () -> server.pollReceived(500, TimeUnit.MILLISECONDS),
+                "match_cancelled must not trigger an automatic re-queue");
+
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
-        new GameMatchmakingSender(lobby).sendStart(queueConfig);
+        lifecycle.startSearch();
         server.pollReceived(3, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
         searchingAgain.get(3, TimeUnit.SECONDS);
@@ -284,20 +327,34 @@ final class MatchmakingQueueTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         server.pollReceived(3, TimeUnit.SECONDS); // the outbound game_matchmaking start
 
+        // The real refusal, as faf-server's ladder_service.start_search sends it: three frames,
+        // not one. "player" is a numeric player id ({"player": p.id}), never a login, and the
+        // search_timeout is always paired with a search_info stop for the search that never
+        // started — plus a deprecated notice kept for older clients.
         server.broadcastText(
                 "{\"command\":\"search_timeout\",\"timeouts\":"
-                        + "[{\"player\":\"Rhiza\",\"expires_at\":\"2026-01-01T00:00:00Z\"}]}");
-        // No FSM event follows a search_timeout; give the handler a moment to run and assert
+                        + "[{\"player\":42,\"expires_at\":\"2026-01-01T00:00:00Z\"}]}");
+        server.broadcastText(searchInfo("ladder1v1", "stop"));
+        server.broadcastText(
+                "{\"command\":\"notice\",\"style\":\"info\","
+                        + "\"text\":\"Player Rhiza is timed out for 10 minutes\"}");
+        // No FSM event follows a search_timeout; give the handlers a moment to run and assert
         // the state never moved off IDLE.
         Thread.sleep(200);
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertTrue(
                 messages().stream()
-                        .anyMatch(m -> m.contains("search_timeout") && m.contains("Rhiza")),
-                "the expiry must be logged: " + messages());
+                        .anyMatch(m -> m.contains("search_timeout") && m.contains("player_id=42")),
+                "the expiry must be logged against the player id: " + messages());
         assertTrue(
                 messages().stream().noneMatch(m -> m.equals("state entry: SEARCHING")),
                 "no SEARCHING entry may occur on a search_timeout");
+        // The paired stop is absorbed by the IDLE self-loop rather than surfacing as an
+        // unregistered-event warning on what is an entirely ordinary refusal.
+        assertTrue(
+                machineMessages().stream()
+                        .noneMatch(m -> m.contains("No matching transitions for SearchStopped")),
+                "the paired search_info stop must not warn: " + machineMessages());
     }
 
     @Test

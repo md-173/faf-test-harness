@@ -69,6 +69,7 @@ final class GameExitClassificationTest {
                     "Rhiza",
                     Optional.empty(),
                     Optional.empty(),
+                    Optional.empty(),
                     0);
 
     private ScriptedWebSocketServer server;

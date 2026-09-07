@@ -146,6 +146,29 @@ public final class MockClientLifecycle {
     private volatile TimerTask safetyNetTask;
 
     /**
+     * One-shot latch for the configured session intent — the {@code game_host} / {@code game_join}
+     * / {@code game_matchmaking} start that {@link #sendConfiguredIntentOnFirstIdle()} emits (#224
+     * review).
+     *
+     * <p>Load-bearing since the matchmaking edges made IDLE re-enterable for the first time. IDLE
+     * used to have exactly one edge into it (CONNECTING on {@code welcome}), so an entry hook and a
+     * once-per-session action were the same thing; SEARCHING → IDLE on a stop confirmation or a
+     * {@code match_cancelled} breaks that equivalence, and {@link
+     * com.faforever.testharness.shared.statemachine.Transition#transition} runs {@code to.entry()}
+     * on every non-self-loop. Ungated, a {@link #stopSearch()} the server confirms would be
+     * immediately undone by the re-entry hook re-sending {@code start} — the client would appear
+     * unable to leave the queue — and a {@code match_cancelled} would silently re-queue into the
+     * path that registers violations.
+     *
+     * <p>A latch rather than moving the sends onto the CONNECTING → IDLE transition action, because
+     * a transition action runs <em>before</em> {@code to.entry()}: the sends would then precede the
+     * {@code state entry: IDLE} line and break the ordering the harness log contract documents
+     * (mock-client/README.md § "Harness log contract" — the line precedes that state's side
+     * effects).
+     */
+    private final AtomicBoolean sessionIntentSent = new AtomicBoolean(false);
+
+    /**
      * Effective safety-net window; {@link #GAME_END_SAFETY_NET_WINDOW} unless overridden by test.
      */
     private final Duration safetyNetWindow;
@@ -281,8 +304,7 @@ public final class MockClientLifecycle {
                         states.get(ClientState.STARTING_GAME),
                         this::launchGame,
                         null);
-        states.get(ClientState.IDLE).onEntry(this::sendGameHostIfConfigured);
-        states.get(ClientState.IDLE).onEntry(this::sendGameJoinIfConfigured);
+        states.get(ClientState.IDLE).onEntry(this::sendConfiguredIntentOnFirstIdle);
         registerMatchmakingQueueTransitions();
 
         states.get(ClientState.STARTING_GAME)
@@ -415,11 +437,27 @@ public final class MockClientLifecycle {
      * registered from SEARCHING too, reusing the same {@link LaunchGame} event and action the
      * custom-game host/join paths already use. Split out of {@link #setupStateMachine()} to keep
      * that method under the checkstyle length limit.
+     *
+     * <p>The queue's outbound {@code start} is not registered here: it is part of the once-per-
+     * session intent {@link #sendConfiguredIntentOnFirstIdle()} sends on the first IDLE entry,
+     * alongside {@code game_host} and {@code game_join}. See {@link #sessionIntentSent} for why
+     * that gating became necessary the moment these edges made IDLE re-enterable.
      */
     private void registerMatchmakingQueueTransitions() {
-        states.get(ClientState.IDLE).onEntry(this::sendGameMatchmakingIfConfigured);
         states.get(ClientState.IDLE)
                 .registerTransition(SearchStarted.class, states.get(ClientState.SEARCHING));
+        // A stop confirmation that arrives while already IDLE is expected, not an anomaly: when
+        // faf-server refuses a search it sends search_timeout *and* a paired search_info stop
+        // (ladder_service.start_search sends both, plus a deprecated notice), and the client never
+        // left IDLE to begin with. Without this self-loop the frame would hit StateMachine's
+        // "No matching transitions for SearchStopped" WARN on a perfectly ordinary refusal.
+        // Registered as a deliberate no-op for the same reason TERMINATED registers Disconnected.
+        states.get(ClientState.IDLE)
+                .registerTransition(
+                        SearchStopped.class,
+                        states.get(ClientState.IDLE),
+                        this::logStopWhileIdle,
+                        null);
         states.get(ClientState.SEARCHING)
                 .registerTransition(SearchStopped.class, states.get(ClientState.IDLE));
         states.get(ClientState.SEARCHING)
@@ -1126,6 +1164,46 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * IDLE entry hook: sends this session's configured intent — {@code game_host}, {@code
+     * game_join}, and/or the {@code game_matchmaking} start — exactly once, on the first entry into
+     * IDLE (#224 review).
+     *
+     * <p>Every subsequent IDLE entry sends nothing. Those come from SEARCHING, on a stop
+     * confirmation or a {@code match_cancelled}, and re-sending there would mean a stopped search
+     * immediately restarts itself and a cancelled match silently re-queues. See {@link
+     * #sessionIntentSent} for the full rationale, including why this is a latch rather than a
+     * transition action on the CONNECTING → IDLE edge.
+     *
+     * <p>Re-queueing after a stop or a cancellation is deliberately the caller's decision, made
+     * explicitly through {@link #startSearch()} — {@code match_cancelled} is a finding worth
+     * surfacing (it usually means a peer failed to connect inside the server's {@code
+     * wait_hosted(60)}), and a client that silently re-queued would bury it in an unbounded
+     * start/cancel loop.
+     */
+    private void sendConfiguredIntentOnFirstIdle() {
+        if (!sessionIntentSent.compareAndSet(false, true)) {
+            LOG.debug("Re-entered IDLE; session intent already sent, sending nothing");
+            return;
+        }
+        sendGameHostIfConfigured();
+        sendGameJoinIfConfigured();
+        sendGameMatchmakingIfConfigured();
+    }
+
+    /**
+     * IDLE stay-in-state action for {@link SearchStopped}: logs a stop confirmation that arrived
+     * while the client is already IDLE. Ordinary, not an error — faf-server pairs every {@code
+     * search_timeout} refusal with a {@code search_info} stop for a search that never started. The
+     * self-loop exists so this does not surface as an unregistered-event WARN; see the registration
+     * in {@link #registerMatchmakingQueueTransitions()}.
+     *
+     * @param message the {@link SearchStopped} event; guaranteed by registration.
+     */
+    private void logStopWhileIdle(Event message) {
+        LOG.debug("search_info stop received while already IDLE; no state change");
+    }
+
+    /**
      * IDLE entry hook: sends {@code game_host} for {@link MockClientConfig#hostConfig()}
      * (lobby-protocol-spec.md §4.1 / §10.2). No-op if no host settings were configured for this
      * session — the mock client hosts, joins, or sits idle depending on what the operator
@@ -1165,7 +1243,32 @@ public final class MockClientLifecycle {
         if (config.queueConfig().isEmpty()) {
             return;
         }
-        GameQueueConfig queueConfig = config.queueConfig().get();
+        startSearch();
+    }
+
+    /**
+     * Sends {@code game_matchmaking} state {@code "start"} for {@link
+     * MockClientConfig#queueConfig()} — the explicit counterpart to {@link #stopSearch()}, and the
+     * supported way to queue again after a stop or a {@code match_cancelled}.
+     *
+     * <p>The first search of a session needs no call: {@link #sendConfiguredIntentOnFirstIdle()}
+     * sends it on reaching IDLE. This exists for every search after that, because that hook is
+     * latched to fire once (see {@link #sessionIntentSent}) — without it a harness that stopped a
+     * search would have no in-process way to start another.
+     *
+     * <p>Only sends a request; the FSM enters SEARCHING once the server confirms via {@code
+     * search_info} state {@code "start"}, not on this call. A refusal arrives as {@code
+     * search_timeout} instead and the client stays IDLE.
+     *
+     * @throws IllegalStateException if no queue is configured for this session
+     */
+    public void startSearch() {
+        GameQueueConfig queueConfig =
+                config.queueConfig()
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "startSearch() called without a queue configured"));
         LOG.info("Sending game_matchmaking start for queue={}", queueConfig.queueName());
         new GameMatchmakingSender(lobby).sendStart(queueConfig);
     }
@@ -1228,6 +1331,11 @@ public final class MockClientLifecycle {
      * in IDLE forever; this turns that silent hang into a logged, legible failure. No FSM event is
      * posted — the client was never in SEARCHING and stays in IDLE.
      *
+     * <p>{@code player} is a numeric player <em>id</em>, not a login: faf-server builds the entries
+     * as {@code {"player": p.id, "expires_at": …}} in {@code ladder_service.start_search}. The same
+     * refusal also sends a paired {@code search_info} stop (absorbed by the IDLE self-loop) and a
+     * deprecated {@code notice}, which this client does not handle.
+     *
      * @param message the {@code search_timeout} frame received.
      */
     private void onSearchTimeout(JsonNode message) {
@@ -1238,8 +1346,8 @@ public final class MockClientLifecycle {
         }
         for (JsonNode entry : timeouts) {
             LOG.warn(
-                    "search_timeout: player={} expires_at={}",
-                    entry.path("player").asText(),
+                    "search_timeout: player_id={} expires_at={}",
+                    entry.path("player").asInt(),
                     entry.path("expires_at").asText());
         }
     }
