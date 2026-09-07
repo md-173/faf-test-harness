@@ -1,7 +1,11 @@
 package com.faforever.testharness.client.config;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -39,8 +43,28 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
     /** Prefix applied to environment variables owned by the Mock Client. */
     private static final String ENV_PREFIX = "FAF_MOCK_CLIENT_";
 
-    /** Shared Jackson mapper used to read JSON config files. */
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /**
+     * Shared Jackson mapper used to read JSON config files.
+     *
+     * <p>Two non-default features are on, both of them about what the loader is willing to accept
+     * rather than about how it reports (WBS-3.1.5.1-fix, #290):
+     *
+     * <ul>
+     *   <li>{@code FAIL_ON_TRAILING_TOKENS} — {@code readTree} otherwise stops at the first
+     *       complete value and silently discards the rest, so {@code {"a":1} garbage} and {@code
+     *       {"a":1}{"b":2}} both loaded as {@code {"a":1}}. A file truncated and re-appended, or
+     *       concatenated by a bad generator, then produced a "missing required option" naming a key
+     *       the operator can see in the file.
+     *   <li>{@code STRICT_DUPLICATE_DETECTION} — a repeated key silently took the last value.
+     *       Last-wins is a defensible convention, but not an unstated one: a config with the same
+     *       key twice is a mistake far more often than it is a layering trick.
+     * </ul>
+     */
+    private static final ObjectMapper JSON =
+            JsonMapper.builder()
+                    .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                    .build();
 
     /**
      * JSON keys that belonged to the removed password-grant schema. Listed here so the loader
@@ -125,8 +149,24 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                 }
             }
             return out;
+        } catch (JsonProcessingException e) {
+            // getOriginalMessage rather than getMessage: the latter appends a multi-line " at
+            // [Source: ...]" location block, and a config diagnostic that spans lines can forge a
+            // fake "Usage:" boundary in stderr. Named the file too — a run layers several sources,
+            // and with trailing content and duplicate keys now rejected the likeliest reader of
+            // this message is someone holding a file they believe is fine.
+            String reason = e.getOriginalMessage();
+            throw new IllegalArgumentException(
+                    "failed to parse config file "
+                            + path
+                            + ": "
+                            + (reason == null || reason.isBlank()
+                                    ? e.getClass().getSimpleName()
+                                    : reason),
+                    e);
         } catch (IOException e) {
-            throw new IllegalArgumentException("failed to parse config file: " + e.getMessage(), e);
+            throw new IllegalArgumentException(
+                    "failed to read config file " + path + ": " + e.getMessage(), e);
         }
     }
 
