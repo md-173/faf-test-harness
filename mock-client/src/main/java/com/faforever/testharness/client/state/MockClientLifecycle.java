@@ -128,6 +128,15 @@ public final class MockClientLifecycle {
      */
     private final AtomicBoolean cleanEndSeen = new AtomicBoolean(false);
 
+    /**
+     * Whether this session ever reached PLAYING, i.e. a match actually started.
+     *
+     * <p>Read only by {@link #classifyGameExit}, to tell "the match's closing frames never landed"
+     * apart from "there was never a match". A game that exits cleanly out of HOSTING has no {@code
+     * GameEnded} to have delivered, so the absence of one says nothing about it.
+     */
+    private final AtomicBoolean matchStarted = new AtomicBoolean(false);
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -299,6 +308,7 @@ public final class MockClientLifecycle {
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
+        states.get(ClientState.PLAYING).onEntry(() -> matchStarted.set(true));
         states.get(ClientState.PLAYING)
                 .registerTransition(
                         GameExited.class,
@@ -624,28 +634,87 @@ public final class MockClientLifecycle {
      * local log line carries it, per the card's source verification (no crash-report command exists
      * in the protocol).
      *
-     * <p>Classification: INFO on a zero exit; INFO (not WARN) on a non-zero exit once {@link
-     * #teardown}'s {@link SessionTeardown#hasRun()} is {@code true}, since {@link
-     * SessionTeardown#run()} sets that flag before it sends the SIGTERM that produces exactly this
-     * exit code (143 on POSIX, 1 on Windows) on every ordinary shutdown, not just the #192 safety
-     * net — the real client's {@code gameKilled} flag suppresses the same false crash. Otherwise
-     * WARN with the code. A genuine crash is unaffected: it completes {@link #gameExit} — and so
-     * this handler — before teardown ever runs, so the flag is still false.
+     * <p>Classification is {@link #classifyGameExit}, which reads the exit code against the
+     * observed clean-end signal; see there for the full table and its reasoning.
      *
      * @param exitCode the game process's exit code.
      */
     private void onGameProcessExit(int exitCode) {
-        if (exitCode == 0) {
-            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
-        } else if (teardown.hasRun()) {
-            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
-        } else {
-            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
-        }
-        if (!cleanEndSeen.get()) {
+        boolean cleanEnd = cleanEndSeen.get();
+        classifyGameExit(exitCode, cleanEnd, matchStarted.get());
+        if (!cleanEnd) {
             sendGameStateEnded();
         }
         machine.receiveEvent(new GameExited(exitCode));
+    }
+
+    /**
+     * Reports how the game process ended, reading its exit code alongside whether a {@code
+     * GameEnded} frame was ever observed.
+     *
+     * <p>The exit code alone cannot answer this (WBS-3.1.2.6-fix, #295). {@code
+     * GpgNetConnection.send} returns once the kernel accepts the bytes, never when they are
+     * delivered, so when the adapter dies as a match ends the game can write every closing frame
+     * into a dead socket's buffer without error, reach {@code ExitStatus.OK} and exit {@code 0}
+     * having delivered nothing. #277 settled that the game's {@code 0} is not a lie — it reports
+     * that the process completed its own program — but that leaves a game which delivered nothing
+     * indistinguishable from one that delivered everything.
+     *
+     * <p>The observer has the missing half. {@link #isCleanEndSeen()} records the {@code GameEnded}
+     * frame <em>as forwarded by the adapter</em>, which confirms delivery at the far end, and this
+     * is its first production reader. The split mirrors the real client, whose {@code
+     * GameRunner.handleTermination} treats the exit code as the crash signal and reports
+     * end-of-game separately rather than from the game's own frames.
+     *
+     * <p>Gated on a match having actually started. A game that exits cleanly out of HOSTING never
+     * had a {@code GameEnded} to deliver, so the absence of one is not evidence of anything — an
+     * earlier draft of this warned there too, and {@code CrashRecoveryTest}'s clean-exit case
+     * caught it.
+     *
+     * <p>Harness-initiated teardown suppresses the <em>crash</em> reading only: a non-zero code
+     * after {@link SessionTeardown#hasRun()} is the harness's own SIGTERM (143 on POSIX, 1 on
+     * Windows), not a finding, which is what R41 relies on — the real client's {@code gameKilled}
+     * flag suppresses the same false crash. It deliberately does not suppress the no-delivery
+     * warning below: the adapter's death drives TERMINATED and so teardown, and this handler runs
+     * asynchronously, so in #295's own scenario teardown has usually already run by the time a game
+     * that exited {@code 0} on its own is classified. Checking teardown first would mask precisely
+     * the case this card exists for.
+     *
+     * <p>Takes the two observation signals as parameters rather than reading the fields, so a test
+     * can drive every combination directly; teardown state is still read from {@link #teardown}.
+     * Reaching them through real subprocess exits would mean staging a delivered-versus-undelivered
+     * {@code GameEnded} on a live GPGNet link, which is the very race this exists to describe.
+     *
+     * @param exitCode the code the game process exited with.
+     * @param cleanEnd whether a {@code GameEnded} frame was observed for this session.
+     * @param matchWasStarted whether this session ever reached PLAYING.
+     */
+    void classifyGameExit(
+            final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
+        if (exitCode != 0 && teardown.hasRun()) {
+            LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
+        } else if (exitCode == 0 && cleanEnd) {
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
+        } else if (exitCode == 0 && matchWasStarted) {
+            // The case this card exists for. Not a crash, and not success either: the game ran its
+            // whole program and nothing it sent was ever seen coming back through the adapter.
+            LOG.warn(
+                    "mock-game exited cleanly with exit code {} but no GameEnded frame was ever"
+                            + " observed; its closing frames were written but may never have been"
+                            + " delivered",
+                    exitCode);
+        } else if (exitCode == 0) {
+            // Clean exit with no match ever started: there was no GameEnded to deliver, so its
+            // absence says nothing. Unremarkable, and reported as it always was.
+            LOG.info("mock-game exited cleanly with exit code {}", exitCode);
+        } else if (cleanEnd) {
+            LOG.info(
+                    "mock-game exited with code {} after a confirmed clean game end; the session's"
+                            + " closing frames landed before the process died",
+                    exitCode);
+        } else {
+            LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
+        }
     }
 
     /**
