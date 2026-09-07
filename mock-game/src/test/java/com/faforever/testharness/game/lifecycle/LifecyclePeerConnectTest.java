@@ -25,7 +25,7 @@ import org.slf4j.LoggerFactory;
 
 public final class LifecyclePeerConnectTest {
     private static final MockGameConfig DEFAULT_CONFIG =
-            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
+            new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, 0);
 
     private ScriptedGpgNetServer gpgnet;
 

@@ -56,7 +56,8 @@ final class GameJoinTest {
                     OptionalInt.empty(),
                     "Rhiza",
                     Optional.empty(),
-                    Optional.empty());
+                    Optional.empty(),
+                    0);
 
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
@@ -104,7 +105,8 @@ final class GameJoinTest {
                 MINIMAL_CONFIG.playerIdOverride(),
                 MINIMAL_CONFIG.playerLogin(),
                 MINIMAL_CONFIG.hostConfig(),
-                joinConfig);
+                joinConfig,
+                0);
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameJoinConfig> joinConfig) throws Exception {

@@ -92,7 +92,7 @@ one to read for; `A` is the host, `B` the joiner.
 | B is joining | `state entry: JOINING` | `MockClientLifecycle` |
 | A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
 | Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
-| Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `checking` → `connected` | `IceEventLogger` |
+| Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
 | **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
 | Teardown | `state entry: TERMINATED` → `session teardown complete`, twice | `MockClientLifecycle` |
 

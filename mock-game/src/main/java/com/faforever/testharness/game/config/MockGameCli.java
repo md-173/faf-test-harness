@@ -41,6 +41,9 @@ public final class MockGameCli {
     /** Highest valid TCP/UDP port number. */
     private static final int MAX_PORT = 65535;
 
+    /** Upper bound of {@code --udp-drop-percent}; a percentage cannot exceed this. */
+    private static final int MAX_PERCENT = 100;
+
     /**
      * Default for {@code --launch-delay-seconds}: the 5 s {@code Main} used to hardcode. Long
      * enough that a peer's {@code ConnectToPeer} lands first in a single-peer run, short enough not
@@ -96,6 +99,20 @@ public final class MockGameCli {
                             + "game unjoinable.")
     private int launchDelaySeconds;
 
+    /**
+     * Percentage of outbound peer datagrams the UDP sender suppresses (WBS-5.1). Off by default:
+     * fault injection is something a test asks for explicitly, never something a plain run gets.
+     */
+    @Option(
+            names = "--udp-drop-percent",
+            defaultValue = "0",
+            description =
+                    "Percentage of outbound peer datagrams to drop, simulating a lossy link "
+                            + "(default: ${DEFAULT-VALUE}). The sequence number is still "
+                            + "advanced, so the loss is visible as a gap in the receiving "
+                            + "peer's per-sender counters.")
+    private int udpDropPercent;
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -118,7 +135,8 @@ public final class MockGameCli {
                 cli.playerLogin,
                 cli.gameUid,
                 cli.gameOptions,
-                cli.launchDelaySeconds);
+                cli.launchDelaySeconds,
+                cli.udpDropPercent);
     }
 
     /**
@@ -178,6 +196,12 @@ public final class MockGameCli {
         if (gameUid < 0) {
             throw new ParameterException(
                     commandLine, "--game-uid must not be negative: " + gameUid);
+        }
+        // A percentage outside 0-100 is always a typo, and the sender would reject it later with an
+        // IllegalArgumentException from deep inside the FSM rather than a usage error here.
+        if (udpDropPercent < 0 || udpDropPercent > MAX_PERCENT) {
+            throw new ParameterException(
+                    commandLine, "--udp-drop-percent must be between 0 and 100: " + udpDropPercent);
         }
     }
 
