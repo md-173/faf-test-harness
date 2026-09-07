@@ -225,6 +225,13 @@ public class MockGameLauncher {
         // than inheriting it. mock-game's default exists only for a hand-run binary.
         argv.add("--launch-delay-seconds");
         argv.add(Integer.toString(config.mockGameLaunchDelaySeconds()));
+        // Only emitted when set (WBS-5.1-fix, #322). mock-game defaults it to 0 and an orchestrated
+        // run that wants no fault should produce the argv it always produced, so a reader diffing
+        // two launches sees the flag only where a fault was actually asked for.
+        if (config.gameUdpDropPercent() > 0) {
+            argv.add("--udp-drop-percent");
+            argv.add(Integer.toString(config.gameUdpDropPercent()));
+        }
         return argv;
     }
 }
