@@ -126,6 +126,7 @@ none of the lobby or OAuth rows apply to it.
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 public client identifier. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
+| `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
 | `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
 | `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
@@ -140,11 +141,18 @@ none of the lobby or OAuth rows apply to it.
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
-¹ The refresh-token file is the **only** credential channel: Hydra rotates the
-refresh token on every use and the rotated value is persisted back to this
-file, which a literal option could not do. Omitting it produces a picocli
-`ParameterException` pointing at the bootstrap procedure in
-`documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
+¹ **Exactly one of the two credential channels is required**, and configuring
+both is a config error naming them rather than a precedence rule — they fail
+differently, so silently picking one would hand the operator a failure mode they
+did not choose. Omitting both produces a picocli `ParameterException` pointing at
+the bootstrap procedure in `documentation/research/lobby-protocol-spec.md` §2
+(WBS-2.2.10).
+
+Neither channel accepts a literal token value on the command line. For the
+refresh token that is a correctness requirement — Hydra rotates it on every use
+and the rotated value is persisted back to the file, which a literal option could
+not do. For the pre-signed access token it is a hygiene one: a flag value shows up
+in `ps` output and in build logs.
 
 > **Removed (WBS-2.2.10):** `oauthClientSecret`, `oauthUsername`, and
 > `oauthPassword` are no longer accepted — the seeded FAF Hydra clients with

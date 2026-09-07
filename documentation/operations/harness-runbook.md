@@ -376,6 +376,62 @@ entirely if you only need §2.
    - Full step-by-step reference: `documentation/research/lobby-protocol-spec.md`
      §2 (this is the spec these steps are transcribed from; it is not
      restated further here).
+
+### The other credential channel: a pre-signed access token
+
+`--oauth-access-token-file` takes a token someone else signed and sends it as-is
+— no exchange with Hydra, no rotation, no file rewriting (WBS-3.1.6.4). It is
+mutually exclusive with `--oauth-refresh-token-file`; configuring both is a
+config error naming them, not a precedence rule.
+
+```bash
+printf '%s' "$FAF_ACCESS_TOKEN" > .secrets/access_token.jwt
+mock-client run --oauth-access-token-file=.secrets/access_token.jwt ...
+```
+
+**Why it is worth having.** The refresh-token path above is a manual browser
+bootstrap producing a rotating secret that only the developer who created it
+holds. That is the difference between a live test one person can run and one CI
+can: a statically signed token has no rotation to lose and no bootstrap to
+repeat. A file rather than a flag value so the token stays out of the process
+table and out of build logs.
+
+**What it cannot do is renew.** The refresh channel notices an expired token and
+exchanges for another; this one has nothing to exchange. An expired static token
+is therefore *sent*, and the lobby rejects it — deliberately, because the lobby's
+rejection identifies a bad token far more precisely than a local expiry guess
+could. Expect to see the lobby's own auth failure, not a harness error, and
+re-mint the token.
+
+`--oauth-token-url` and `--oauth-client-id` are not required on this channel,
+since nothing is exchanged.
+
+### Trusting a private certificate authority
+
+If your lobby or Hydra sits behind a certificate the JDK does not trust — a test
+environment with its own CA — nothing in the harness needs changing. Both the
+token exchange and the WebSocket use the JDK `HttpClient`, which honours
+`SSLContext.getDefault()`, so the standard JDK truststore properties apply:
+
+```bash
+java -Djavax.net.ssl.trustStore=/path/to/truststore.jks \
+     -Djavax.net.ssl.trustStorePassword=changeit \
+     -jar mock-client-<version>-all.jar run ...
+```
+
+Build the truststore from the CA certificate once:
+
+```bash
+keytool -importcert -noprompt -alias test-ca \
+  -file test-ca.pem -keystore truststore.jks -storepass changeit
+```
+
+Two practical notes. A truststore **replaces** the JDK's default rather than
+adding to it, so if the run also talks to a publicly trusted host — the ICE
+adapter's telemetry websocket does — start from a copy of `$JAVA_HOME/lib/security/cacerts`
+(default password `changeit`) and import your CA into that. And these are JVM
+flags, not harness flags: they go before `-jar`, and `./gradlew run` needs them
+passed through rather than appended to `--args`.
 3. **Obtain `faf-uid`.** Download the release binary for your platform from
    [FAForever/uid releases](https://github.com/FAForever/uid/releases) and
    make it executable (`chmod +x faf-uid` on Linux/macOS). It embeds the
