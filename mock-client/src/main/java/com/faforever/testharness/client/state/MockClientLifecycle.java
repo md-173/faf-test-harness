@@ -634,13 +634,8 @@ public final class MockClientLifecycle {
      * local log line carries it, per the card's source verification (no crash-report command exists
      * in the protocol).
      *
-     * <p>Classification: INFO on a zero exit; INFO (not WARN) on a non-zero exit once {@link
-     * #teardown}'s {@link SessionTeardown#hasRun()} is {@code true}, since {@link
-     * SessionTeardown#run()} sets that flag before it sends the SIGTERM that produces exactly this
-     * exit code (143 on POSIX, 1 on Windows) on every ordinary shutdown, not just the #192 safety
-     * net — the real client's {@code gameKilled} flag suppresses the same false crash. Otherwise
-     * WARN with the code. A genuine crash is unaffected: it completes {@link #gameExit} — and so
-     * this handler — before teardown ever runs, so the flag is still false.
+     * <p>Classification is {@link #classifyGameExit}, which reads the exit code against the
+     * observed clean-end signal; see there for the full table and its reasoning.
      *
      * @param exitCode the game process's exit code.
      */
@@ -676,14 +671,19 @@ public final class MockClientLifecycle {
      * earlier draft of this warned there too, and {@code CrashRecoveryTest}'s clean-exit case
      * caught it.
      *
-     * <p>Harness-initiated teardown is checked before either: the harness killing the game on
-     * purpose is not a finding, whatever code that produces and whether or not the match had ended.
-     * Keeping it first preserves what R41 already relies on, notably a teardown-time {@code 143}.
+     * <p>Harness-initiated teardown suppresses the <em>crash</em> reading only: a non-zero code
+     * after {@link SessionTeardown#hasRun()} is the harness's own SIGTERM (143 on POSIX, 1 on
+     * Windows), not a finding, which is what R41 relies on — the real client's {@code gameKilled}
+     * flag suppresses the same false crash. It deliberately does not suppress the no-delivery
+     * warning below: the adapter's death drives TERMINATED and so teardown, and this handler runs
+     * asynchronously, so in #295's own scenario teardown has usually already run by the time a game
+     * that exited {@code 0} on its own is classified. Checking teardown first would mask precisely
+     * the case this card exists for.
      *
-     * <p>Takes both signals as parameters rather than reading the fields, so it is a pure function
-     * of the three inputs and a test can drive every combination directly. Reaching them through
-     * real subprocess exits would mean staging a delivered-versus-undelivered {@code GameEnded} on
-     * a live GPGNet link, which is the very race this classification exists to describe.
+     * <p>Takes the two observation signals as parameters rather than reading the fields, so a test
+     * can drive every combination directly; teardown state is still read from {@link #teardown}.
+     * Reaching them through real subprocess exits would mean staging a delivered-versus-undelivered
+     * {@code GameEnded} on a live GPGNet link, which is the very race this exists to describe.
      *
      * @param exitCode the code the game process exited with.
      * @param cleanEnd whether a {@code GameEnded} frame was observed for this session.

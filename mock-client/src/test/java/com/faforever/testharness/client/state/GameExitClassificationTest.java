@@ -156,6 +156,21 @@ final class GameExitClassificationTest {
     }
 
     /**
+     * A clean exit with no match ever started: there was no {@code GameEnded} to deliver, so its
+     * absence is not evidence of anything. This is the gate the second commit adds, and the only
+     * case in this class that drives {@code matchStarted = false}.
+     */
+    @Test
+    void zeroWithNoCleanEndStaysInfoWhenNoMatchEverStarted() {
+        ILoggingEvent event = classify(0, false, false);
+        assertEquals(
+                Level.INFO,
+                event.getLevel(),
+                "a session that never reached PLAYING was owed no GameEnded");
+        assertTrue(event.getFormattedMessage().contains("exited cleanly"));
+    }
+
+    /**
      * Non-zero after the frames landed: the session completed, the process then died. Not a crash.
      */
     @Test
@@ -174,8 +189,9 @@ final class GameExitClassificationTest {
     }
 
     /**
-     * Harness-initiated teardown wins over both, whatever the code and whether or not the match
-     * ended. R41 relies on this for a teardown-time 143, and #295 must not disturb it.
+     * Harness-initiated teardown suppresses the crash reading, whatever the non-zero code and
+     * whether or not the match ended. R41 relies on this for a teardown-time 143, and #295 must not
+     * disturb it.
      */
     @Test
     void aNonZeroExitAfterTeardownStaysInfoRegardlessOfTheCleanEndFlag() {
@@ -189,5 +205,23 @@ final class GameExitClassificationTest {
                     "deliberate teardown is not a finding (cleanEnd=" + cleanEnd + ")");
             assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
         }
+    }
+
+    /**
+     * Teardown suppresses the crash reading, not the no-delivery reading. In #295's own scenario
+     * the adapter's death drives TERMINATED, so teardown has usually already run by the time the
+     * async exit handler classifies a game that exited 0 on its own; checking teardown first would
+     * suppress the warning in exactly the case the card exists for.
+     */
+    @Test
+    void teardownDoesNotSuppressTheNoDeliveryWarningOnACleanExit() {
+        teardown.run();
+
+        ILoggingEvent event = classify(0, false, true);
+        assertEquals(
+                Level.WARN,
+                event.getLevel(),
+                "teardown must not mask a match that delivered nothing");
+        assertTrue(event.getFormattedMessage().contains("no GameEnded frame"));
     }
 }
