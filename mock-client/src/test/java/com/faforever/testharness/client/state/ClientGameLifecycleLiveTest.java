@@ -132,17 +132,18 @@ final class ClientGameLifecycleLiveTest {
 
     /**
      * Budget for {@code GameState Launching}. mock-game sits in the lobby for its own launch delay
-     * (5 s at the time of writing, {@code Main.LAUNCH_DELAY}) before starting the match; this is
+     * (5 s by default, set by {@code --launch-delay-seconds}) before starting the match; this is
      * generous headroom over that, not a measurement of it.
      */
     private static final Duration LAUNCHING_TIMEOUT = Duration.ofSeconds(30);
 
     /**
      * Budget for the match to play out and the result frames to arrive. mock-game's simulated match
-     * runs for {@code Main.MATCH_DURATION} (30 s at the time of writing) with no flag to shorten
-     * it, which is the single largest contributor to this test's wall-clock cost.
+     * runs for {@code Main.MATCH_DURATION} (10 s at the time of writing) with no flag to shorten
+     * it. Roughly 3x that, which is the headroom this budget has always carried — it is waited on
+     * twice, so it also bounds what a stuck match costs the suite before it reports.
      */
-    private static final Duration MATCH_TIMEOUT = Duration.ofSeconds(90);
+    private static final Duration MATCH_TIMEOUT = Duration.ofSeconds(30);
 
     /** Budget for the game process to exit under its own power after {@code GameEnded}. */
     private static final Duration GAME_EXIT_TIMEOUT = Duration.ofSeconds(30);

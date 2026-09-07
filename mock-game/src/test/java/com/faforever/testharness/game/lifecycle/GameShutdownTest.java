@@ -105,6 +105,7 @@ final class GameShutdownTest {
                             Duration.ofSeconds(1));
 
             gpgnet.start();
+            lifecycle.start();
             gpgnet.awaitClient();
             lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
             gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));

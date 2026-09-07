@@ -69,7 +69,7 @@ done
 
 Neither game auto-launches its match (`--mock-game-launch-delay-seconds=-1`),
 so the run costs roughly the two sessions' setup rather than a simulated match:
-**14–30 seconds**, against the 3.1.2.7 test's ~45.
+**14–30 seconds**, against the 3.1.2.7 test's ~25.
 That flag is load-bearing: faf-server accepts a `game_join` only while the game
 is in `GameState.LOBBY` and drops it out of that state as soon as the host
 reports `GameState Launching`, so a host on the default 5 s timer makes itself
@@ -171,10 +171,17 @@ it. A skip is not a pass — check for the `[3.1.2.7] skipping` line before beli
 > which also re-runs compile, checkstyle, spotless and `installDist` and so inflates the timing
 > below.
 
-Roughly **45 seconds**, most of it the mock game's own simulated match
-(`Main.MATCH_DURATION`, 30 s) plus its lobby wait (`--launch-delay-seconds`,
+Roughly **25 seconds**, most of it the mock game's own simulated match
+(`Main.MATCH_DURATION`, 10 s) plus its lobby wait (`--launch-delay-seconds`,
 5 s by default). The match duration has no flag; the lobby wait grew one in
 WBS-4.3.1, and this test takes the default.
+
+> The **45 s** recorded here previously was a measured figure, taken when
+> `MATCH_DURATION` was 30 s. WBS-3.2.5.1-fix (#253) shortened it to 10 s, and
+> the number above is that change applied to the same breakdown rather than a
+> fresh measurement — the twenty seconds come off the match, and nothing else
+> in the run was touched. Re-time it on the next live run and drop this note.
+
 The acceptance bar is three consecutive passes:
 
 ```bash

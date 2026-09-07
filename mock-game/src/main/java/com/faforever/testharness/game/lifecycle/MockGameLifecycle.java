@@ -24,6 +24,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -136,6 +137,9 @@ public final class MockGameLifecycle {
      * machine}.
      */
     private final Map<GameState, State> states;
+
+    /** Guards against {@link #start()} being called more than once. */
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
      * Constructs a lifecycle object.
@@ -278,8 +282,12 @@ public final class MockGameLifecycle {
      *
      * <p>Exposed so the bootstrap can install the <em>same</em> instance as the JVM shutdown hook
      * rather than build a second one: the sequence is once-guarded, so a self-initiated exit and a
-     * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase,
-     * including before the GPGNet connection ever opened.
+     * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase, the
+     * pre-{@link #start()} one included — but there it is <em>terminal</em> for the object rather
+     * than merely early: it cancels the FSM's scheduling and burns the sequence's one-shot guard,
+     * so a {@code start()} afterwards arms no timeout and the lifecycle can never reach ENDED. The
+     * one production path that reaches it, the bootstrap's belt-and-braces teardown, is already on
+     * its way out of the JVM.
      *
      * <p>Running it out of band does not end the lifecycle. It closes the connection and cancels
      * the FSM's scheduling without posting any event, so the machine stays in whatever state it was
@@ -304,10 +312,19 @@ public final class MockGameLifecycle {
     /**
      * Gives a future that completes when the state is reached.
      *
+     * <p>Guarded against a pre-{@link #start()} call, matching {@link #getExitStatus()}. Nothing
+     * moves the FSM until {@code start()} opens the connection and arms the timeout, so waiting on
+     * a state before then is an unbounded wait with nothing to end it — {@code Main} joins on
+     * exactly this future. Failing loudly at the call is better than hanging at the join.
+     *
      * @param state the state to wait for.
      * @return a future that only completes when the state is reached.
+     * @throws IllegalStateException if called before {@link #start()}.
      */
     public CompletableFuture<Void> stateReached(GameState state) {
+        if (!started.get()) {
+            throw new IllegalStateException("Tried to await " + state + " before start()");
+        }
         return machine.stateReached(states.get(state));
     }
 
@@ -411,15 +428,49 @@ public final class MockGameLifecycle {
         // Shutdown sequence, also handed to the bootstrap as its JVM shutdown hook (WBS-3.2.5.1)
         // so a self-initiated exit and a SIGTERM converge on the same once-guarded instance.
         states.get(GameState.ENDED).onEntry(shutdown::run);
+    }
 
-        // Start connection to GpgNet server and set a timeout if it doesn't occur.
+    /**
+     * Opens the GPGNet connection and arms the timeout that ends the game if it never completes.
+     * Until this is called the lifecycle is fully wired but inert, and sits in INITIALIZING.
+     *
+     * <p>Split out of the constructor by WBS-3.2.4.1-fix (#262). Connecting from a constructor gave
+     * construction a side effect on a timeline the caller could not control: every test that built
+     * a lifecycle in a fixture started a ~500ms clock the moment setup returned, and then raced it
+     * from the test body. That is what made {@code LifecycleSetupTest}'s initial-state assertion
+     * flake on two unrelated branches, and it would have made the next test written in that shape
+     * flake identically. An explicit start also lets a caller register its teardown before anything
+     * is open: {@code Main} installs the JVM shutdown hook between construction and this call,
+     * closing the window WBS-3.2.5.1 had to accept because the socket opened during construction.
+     *
+     * @throws IllegalStateException if called more than once
+     */
+    public void start() {
+        if (!started.compareAndSet(false, true)) {
+            throw new IllegalStateException("start() may only be called once");
+        }
         machine.setTimeout(
                 gpgnetConnectionTimeout.toMillis(),
                 states.get(GameState.ENDED),
                 ignored -> {
                     status = ExitStatus.SERVER_NOT_CONNECTED;
                 });
-        gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
+        gpgnet.connect()
+                .thenRun(() -> machine.receiveEvent(new ServerConnected()))
+                .whenComplete(
+                        (ignored, error) -> {
+                            // Without this the derived future is discarded, so a throw out of the
+                            // INITIALIZING -> IDLE chain is captured into it and never observed:
+                            // the reader thread carries on into readLoop as though the handshake
+                            // succeeded, the FSM stays in INITIALIZING, and the timeout armed above
+                            // eventually reports SERVER_NOT_CONNECTED — the opposite of what
+                            // happened, since the adapter was reached and the socket is open.
+                            // DEBUG because a plain connect failure lands here too and is already
+                            // reported by onDisconnect and that timeout.
+                            if (error != null) {
+                                LOG.debug("GPGNet connect or post-connect handshake failed", error);
+                            }
+                        });
     }
 
     /**
@@ -514,7 +565,9 @@ public final class MockGameLifecycle {
             throw recordSendFailure(e);
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Keeping the handle is what lets a manual
+        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
+        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
         if (launchDelay != null) {
             launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
         }
@@ -544,7 +597,9 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Keeping the handle is what lets a manual
+        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
+        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
         if (launchDelay != null) {
             launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
         }
@@ -558,7 +613,8 @@ public final class MockGameLifecycle {
             throw recordSendFailure(e);
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Kept for the same reason as launchFuture above: a
+        // manual endMatch() cancels this one rather than leaving it to fire in ENDED.
         if (matchDuration != null) {
             matchEndFuture = schedule(() -> machine.receiveEvent(new GameEnded()), matchDuration);
         }

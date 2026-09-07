@@ -32,6 +32,12 @@ public class StateMachine implements EventListener {
     private final Map<State, CompletableFuture<Void>> awaitedStates;
 
     /**
+     * Whether {@link #cancel()} has run. Guarded by the same monitor as {@link #setTimeout(long,
+     * State, TransitionAction)}, which reads it to become a no-op rather than throwing.
+     */
+    private boolean cancelled;
+
+    /**
      * Initializes the machine with its initial state and policy.
      *
      * @param initialState the initial state of the machine.
@@ -182,6 +188,16 @@ public class StateMachine implements EventListener {
      * @param action the action to fire when the timeout occurs.
      */
     public synchronized void setTimeout(long millis, State to, TransitionAction action) {
+        if (cancelled) {
+            // The machine is shutting down and the timer is dead, so Timer.schedule would throw
+            // IllegalStateException. Silently arming nothing is the honest reading of the request:
+            // cancel() means no scheduled transition may fire after it, and this is one. It also
+            // stops a caller having to know the ordering — a SIGTERM landing between the shutdown
+            // hook being installed and a lifecycle arming its first timeout used to take the
+            // process down with an uncaught throw instead of an exit code.
+            LOG.debug("Ignoring timeout into {}; scheduling is already cancelled", to.getName());
+            return;
+        }
         LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
         UpdateStateTask task = new UpdateStateTask(to, action);
         timeouts.add(task);
@@ -191,11 +207,12 @@ public class StateMachine implements EventListener {
     /**
      * Stops the machine's time-based scheduling: cancels every pending timeout and shuts down the
      * timer thread, so no scheduled transition can fire after this returns. Intended for the
-     * shutdown path — it is terminal, so {@link #setTimeout(long, State)} must not be called again
-     * afterwards (the underlying timer is dead). Event-driven transitions via {@link
+     * shutdown path — it is terminal, so a later {@link #setTimeout(long, State)} arms nothing and
+     * returns rather than throwing on the dead timer. Event-driven transitions via {@link
      * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
      */
     public synchronized void cancel() {
+        cancelled = true;
         for (var timeout : timeouts) {
             timeout.cancel();
         }

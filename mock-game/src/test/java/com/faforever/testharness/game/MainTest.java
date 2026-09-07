@@ -1,5 +1,6 @@
 package com.faforever.testharness.game;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,12 +18,11 @@ import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CyclicBarrier;
@@ -68,6 +68,18 @@ final class MainTest {
     /** The lifecycle-level launch delay for the tests that build a lifecycle directly. */
     private static final Duration TEST_LAUNCH_DELAY = Duration.ofMillis(100);
 
+    /**
+     * A port nothing in this JVM can be listening on. Port 1 sits below every platform's ephemeral
+     * range, so no {@code bind(0)} anywhere in the suite can be handed it — unlike the released
+     * ephemeral port this file used to bind and close, which another fixture could reclaim between
+     * the release and the connect. That reclaim had two distinct costs here: {@code
+     * unreachableAdapterExitsWithRuntimeCodeInsideTheConnectWindow} would connect, sit in IDLE with
+     * no timeout and burn its whole 20s budget, and the {@code pre-connect} shutdown case would
+     * quietly degrade into the {@code connected} one and stop testing the phase it names
+     * (WBS-3.1.4.1-fix, #287).
+     */
+    private static final int UNBOUND_PORT = 1;
+
     private ScriptedGpgNetServer adapter;
 
     @BeforeEach
@@ -92,7 +104,7 @@ final class MainTest {
         // note what it does not pin: by the time we send, registration has long since happened, and
         // the lifecycle's 500ms pre-first-frame wait leaves so much slack that a late registration
         // would still pass here. That handlers precede the first outbound frame is structural — the
-        // constructor registers them, and only then calls connect().
+        // constructor registers them, and start() only then calls connect().
         adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 6112, "Rhiza", 42, 1)));
         assertEquals("Lobby", nextGameState(), "CreateLobby is handled and answered");
 
@@ -138,7 +150,7 @@ final class MainTest {
 
     @Test
     void unreachableAdapterExitsWithRuntimeCodeInsideTheConnectWindow() throws Exception {
-        CompletableFuture<Integer> exit = boot(argv(closedPort()));
+        CompletableFuture<Integer> exit = boot(argv(UNBOUND_PORT));
 
         // Well inside the FSM's 30s not-established timeout: the bounded connect retry gives up
         // first, so this is the no-infinite-retry, no-hang assertion.
@@ -177,17 +189,29 @@ final class MainTest {
     }
 
     /**
-     * The three phases a client-initiated SIGTERM can land in. The hook body must complete at each
+     * The four phases a client-initiated SIGTERM can land in. The hook body must complete at each
      * of them — pre-connect it has no socket to close at all, and mid-FSM it must not be blocked by
      * a transition in flight.
+     *
+     * <p>{@code pre-start} is the phase WBS-3.2.4.1-fix (#262) created and is the reason this case
+     * exists: {@code Main} now installs the hook between construction and {@link
+     * MockGameLifecycle#start()}, so a signal can land in a window where the hook has already
+     * cancelled the FSM's scheduling and {@code start()} has yet to arm its timeout. {@code
+     * Timer.schedule} after {@code Timer.cancel()} throws {@code IllegalStateException: Timer
+     * already cancelled}, which escaped {@code run()} past its {@code finally} and took the process
+     * down with a stack trace instead of an exit code. It is a no-op in {@code
+     * StateMachine.setTimeout} now, and the {@code start()} below is what would catch a regression.
      */
     @ParameterizedTest(name = "SIGTERM during {0}")
-    @ValueSource(strings = {"pre-connect", "connected", "in-fsm"})
+    @ValueSource(strings = {"pre-start", "pre-connect", "connected", "in-fsm"})
     void shutdownHookCompletesAtEveryPhase(final String phase) throws Exception {
         MockGameLifecycle lifecycle;
-        if ("pre-connect".equals(phase)) {
+        if ("pre-start".equals(phase)) {
+            // Constructed, hook registered, nothing opened and no timeout armed yet.
+            lifecycle = unstartedLifecycleOn(UNBOUND_PORT);
+        } else if ("pre-connect".equals(phase)) {
             // Nothing is listening, so the connection is still retrying: no socket exists yet.
-            lifecycle = lifecycleOn(closedPort());
+            lifecycle = lifecycleOn(UNBOUND_PORT);
         } else {
             adapter.start();
             // NO_AUTO_ADVANCE for the in-fsm case: with the 100ms timers the FSM would run itself
@@ -224,6 +248,13 @@ final class MainTest {
         // Generous, but the point is bounded-vs-hung: the real hook runs inside the client's
         // SIGTERM->SIGKILL grace.
         ran.get(10, TimeUnit.SECONDS);
+
+        if ("pre-start".equals(phase)) {
+            // The rest of Main.run's boot path after the signal: start() must not throw on the
+            // timer the hook has just cancelled.
+            assertDoesNotThrow(
+                    lifecycle::start, "a signal before start() must not take the boot path down");
+        }
     }
 
     /**
@@ -312,24 +343,70 @@ final class MainTest {
         thread.start();
     }
 
+    /**
+     * The match must outlast the spread between peers reaching LIVE, and the launch delay is
+     * settable end to end while the match length is not — so a long delay against the fixed 10s
+     * match gave a session where the peers never overlapped and nothing said so.
+     */
+    @Test
+    void aMatchTooShortToOverlapIsStretchedToTwiceTheLaunchDelay() {
+        assertEquals(
+                Duration.ofSeconds(40),
+                Main.matchDuration(Duration.ofSeconds(10), Optional.of(Duration.ofSeconds(20))),
+                "a 20s launch delay leaves a 10s match with no overlap at all");
+    }
+
+    /** The default pairing is already sound, and must be left exactly as it is. */
+    @Test
+    void theDefaultLaunchDelayLeavesTheMatchDurationAlone() {
+        assertEquals(
+                Duration.ofSeconds(10),
+                Main.matchDuration(Duration.ofSeconds(10), Optional.of(Duration.ofSeconds(5))),
+                "10s already covers twice the default 5s delay");
+    }
+
+    /**
+     * Taking the larger of the two rather than always deriving is what keeps the test hook usable:
+     * a suite asking for a 100ms match with auto-launch off still gets one.
+     */
+    @Test
+    void manualLaunchLeavesEvenAVeryShortMatchAlone() {
+        assertEquals(
+                TEST_MATCH_DURATION,
+                Main.matchDuration(TEST_MATCH_DURATION, Optional.empty()),
+                "with no auto-launch there is no spread to cover");
+    }
+
     /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
     private static MockGameLifecycle lifecycleOn(final int gpgNetPort) {
         return lifecycleOn(gpgNetPort, TEST_LAUNCH_DELAY, TEST_MATCH_DURATION);
     }
 
-    /** A lifecycle wired to {@code gpgNetPort}, with its two timers chosen by the caller. */
-    private static MockGameLifecycle lifecycleOn(
-            final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
+    /** As {@link #lifecycleOn(int)}, left unstarted: constructed, inert, nothing opened. */
+    private static MockGameLifecycle unstartedLifecycleOn(final int gpgNetPort) {
         return new MockGameLifecycle(
                 new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0, 0),
                 new GpgNetConnection(gpgNetPort),
-                launchDelay,
-                matchDuration);
+                TEST_LAUNCH_DELAY,
+                TEST_MATCH_DURATION);
+    }
+
+    /** A lifecycle wired to {@code gpgNetPort}, with its two timers chosen by the caller. */
+    private static MockGameLifecycle lifecycleOn(
+            final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
+        MockGameLifecycle lifecycle =
+                new MockGameLifecycle(
+                        new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0, 0),
+                        new GpgNetConnection(gpgNetPort),
+                        launchDelay,
+                        matchDuration);
+        lifecycle.start();
+        return lifecycle;
     }
 
     /** A never-connected connection that records when the shutdown sequence closes it. */
     private static GpgNetConnection recordingConnection(final List<String> order) {
-        GpgNetConnection connection = new GpgNetConnection(1);
+        GpgNetConnection connection = new GpgNetConnection(UNBOUND_PORT);
         connection.onDisconnect(event -> order.add("close-connection"));
         return connection;
     }
@@ -366,14 +443,6 @@ final class MainTest {
         thread.setDaemon(true);
         thread.start();
         return exit;
-    }
-
-    /** A port nothing is listening on: bound to claim it, then released. */
-    private static int closedPort() throws IOException {
-        try (ServerSocket socket = new ServerSocket()) {
-            socket.bind(new InetSocketAddress("127.0.0.1", 0));
-            return socket.getLocalPort();
-        }
     }
 
     /**

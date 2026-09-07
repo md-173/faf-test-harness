@@ -10,6 +10,7 @@ import com.faforever.testharness.game.lifecycle.MockGameLifecycle;
 import com.faforever.testharness.game.lifecycle.MockGameLifecycle.ExitStatus;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
+import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,36 +24,31 @@ import org.slf4j.LoggerFactory;
  *   <li><b>Parse and validate the argv</b> ({@link MockGameCli#parseOrReport}, WBS-3.2.1.2). A bad
  *       argument returns {@link ExitCodes#USAGE} here, before a socket is opened or a thread
  *       started, so a mis-launch never looks like an adapter problem.
- *   <li><b>Construct the lifecycle</b> (WBS-3.2.4.1). It owns the FSM, registers the inbound
- *       handlers (WBS-3.2.2.2), and only then calls {@code connect()} — so a handler is never
- *       registered late enough to drop the adapter's {@code CreateLobby} reply to our first {@code
- *       GameState Idle}. Connect-with-retry lives in {@link GpgNetConnection} (bounded attempts, no
- *       infinite loop) and the not-established window is the FSM's own 30 s timeout into ENDED,
- *       matching the state diagram; the bootstrap adds no window of its own.
+ *   <li><b>Construct the lifecycle</b> (WBS-3.2.4.1). It wires the FSM and registers the inbound
+ *       handlers (WBS-3.2.2.2), and opens nothing — so a handler is never registered late enough to
+ *       drop the adapter's {@code CreateLobby} reply to our first {@code GameState Idle}.
  *   <li><b>Install the JVM shutdown hook</b> (WBS-3.2.5.2) on the very next line, sharing the
  *       lifecycle's one {@link com.faforever.testharness.game.lifecycle.GameShutdown} instance so a
  *       {@code SIGTERM} and a self-initiated exit converge on the same once-guarded teardown.
+ *   <li><b>Start the lifecycle</b> ({@link MockGameLifecycle#start()}), which opens the GPGNet
+ *       connection and arms the FSM's timeout — after the hook, so the teardown that closes the
+ *       connection exists before there is a connection to close (WBS-3.2.4.1-fix, #262).
+ *       Connect-with-retry lives in {@link GpgNetConnection} (bounded attempts, no infinite loop)
+ *       and the not-established window is the FSM's own 30 s timeout into ENDED, matching the state
+ *       diagram; the bootstrap adds no window of its own.
  *   <li><b>Wait for ENDED</b>, then map {@link MockGameLifecycle#getExitStatus()} onto the process
  *       exit code. Every failure the FSM models — connect failure, adapter loss, a failed
  *       transition — ends in ENDED, so this one wait covers them all.
  * </ol>
  *
- * <p><b>Deviation from the card's step order.</b> The card asks for the hook to be installed before
- * any resource opens. That is not reachable: the hook is the lifecycle's {@code GameShutdown},
- * which needs the {@code StateMachine} at construction, and the {@code StateMachine} is built by
- * {@link MockGameLifecycle} — whose constructor also calls {@code connect()}. So the connect
- * attempt does start a few microseconds before any hook exists. Nothing leaks in that window: a
- * signal there kills the JVM and the OS closes the socket; the only casualty is the final log
- * flush.
- *
  * <p><b>The ENDED wait is not unconditionally hang-proof</b>, by design. The FSM arms one timeout,
- * into ENDED, at construction, and {@code StateMachine} clears pending timeouts on every transition
- * — so IDLE and LOBBY, which sit waiting on the adapter for {@code CreateLobby} and {@code
- * HostGame}, have no timeout of their own. An adapter that accepts the socket and then goes quiet
- * leaves the game waiting, exactly as the real game would; state-diagram.md gives a timeout only
- * out of INITIALIZING and states that teardown of the game is always client-led. The card's no-hang
- * criterion is about the <em>unreachable</em> adapter, which the bounded connect retry settles in
- * about two seconds.
+ * into ENDED, in {@code start()}, and {@code StateMachine} clears pending timeouts on every
+ * transition — so IDLE and LOBBY, which sit waiting on the adapter for {@code CreateLobby} and
+ * {@code HostGame}, have no timeout of their own. An adapter that accepts the socket and then goes
+ * quiet leaves the game waiting, exactly as the real game would; state-diagram.md gives a timeout
+ * only out of INITIALIZING and states that teardown of the game is always client-led. The card's
+ * no-hang criterion is about the <em>unreachable</em> adapter, which the bounded connect retry
+ * settles in about two seconds.
  *
  * <p>Stopping the logging context is the last thing this class does, on both exit paths. It is
  * process-global and one-way, so it belongs to whoever knows the process is ending — not to the
@@ -73,14 +69,22 @@ public final class Main {
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
 
     /**
-     * How long the simulated match runs before the game reports its result and ends. Nothing
-     * constrains this value — the client's post-{@code GameEnded} safety net is armed only once
-     * {@code GameEnded} has been observed, so it bounds the exit, not the match. It is a plain
-     * judgement call: long enough that a session looks like a session in the logs, short enough
-     * that an end-to-end harness run does not cost a minute. Revisit it with a real workload rather
-     * than by argument.
+     * How long the simulated match runs before the game reports its result and ends.
+     *
+     * <p>Revisited against a real workload, as the previous javadoc asked (WBS-3.2.5.1-fix, #253).
+     * At 30s it was three quarters of a ~40s end-to-end run. That cost falls on local integration
+     * runs and the live demo capture rather than on CI, which invokes {@code build} and so excludes
+     * the {@code integration} tag; CI's own mock-game runs use a 100 ms match. Nothing upstream
+     * requires the old value: the client's post-{@code GameEnded} safety net is armed by the {@code
+     * GameEnded} frame rather than by match length, so it bounds the exit and not the match, and no
+     * lobby or adapter timeout is measured against this window.
+     *
+     * <p>What does constrain it is peer overlap, which {@link #matchDuration(Duration, Optional)}
+     * now enforces rather than leaving to this number. This is the floor for the default 5s launch
+     * delay: it leaves a peer that reaches LIVE a full launch delay late still sharing five seconds
+     * of match with the first, and keeps the session legible in the logs.
      */
-    private static final Duration MATCH_DURATION = Duration.ofSeconds(30);
+    private static final Duration MATCH_DURATION = Duration.ofSeconds(10);
 
     private Main() {}
 
@@ -147,7 +151,7 @@ public final class Main {
                         config,
                         new GpgNetConnection(config.gpgNetPort()),
                         config.launchDelay().orElse(null),
-                        matchDuration);
+                        matchDuration(matchDuration, config.launchDelay()));
         Thread hook =
                 new Thread(
                         shutdownHook(lifecycle.shutdown(), LoggingSetup::shutdown),
@@ -163,6 +167,13 @@ public final class Main {
             return ExitCodes.RUNTIME;
         }
         try {
+            // Only now open the socket, and inside the try so the finally below covers it. A throw
+            // out of start() would otherwise escape run() with the hook still registered and the
+            // teardown unrun. WBS-3.2.4.1-fix (#262) moved the connect out of the constructor,
+            // which is what lets the hook above be registered first: the teardown that closes the
+            // connection is in place before there is a connection to close, closing the window
+            // 3.2.5.1 documented as unavoidable when construction did the connecting.
+            lifecycle.start();
             lifecycle.stateReached(GameState.ENDED).join();
             ExitStatus status = lifecycle.getExitStatus();
             int exitCode = exitCode(status);
@@ -175,6 +186,46 @@ public final class Main {
             lifecycle.shutdown().run();
             removeHook(hook);
         }
+    }
+
+    /**
+     * The match length to actually use: {@code base}, stretched if it is too short to produce any
+     * peer overlap.
+     *
+     * <p>{@link #MATCH_DURATION}'s reasoning is about overlap between peers, and until now nothing
+     * made that reasoning executable. Every peer in a multi-peer session (WBS-4.3.1) runs its own
+     * copy of the match timer from when <em>it</em> reaches LIVE, so the match has to outlast the
+     * spread between the first and last peer getting there, and {@code --launch-delay-seconds} is
+     * the floor on that spread. But the delay is settable end to end — {@code MockGameCli}, and
+     * from the client side {@code --mock-game-launch-delay-seconds} — while the match length is
+     * not, so {@code --mock-game-launch-delay-seconds=20} against a 10s match gave a host whose
+     * timer fired ten seconds before the joiner even entered JOINING. The peers never shared a live
+     * match and the harness reported a clean session that exercised no overlap at all, silently.
+     *
+     * <p>Twice the delay is the same multiple {@link #MATCH_DURATION} already picks for the default
+     * 5s: enough that a peer arriving a full launch delay late still shares half the match. Taking
+     * the larger of the two rather than always deriving keeps the test hook meaningful — a suite
+     * asking for a 100 ms match with no launch delay still gets one.
+     *
+     * <p>This becomes load-bearing on WBS-4.3.2, where the traffic-exchange window <em>is</em> the
+     * overlap this protects.
+     *
+     * @param base the requested match length
+     * @param launchDelay the configured auto-launch delay, empty when auto-launch is off
+     * @return {@code base}, or twice the launch delay when that is longer
+     */
+    static Duration matchDuration(final Duration base, final Optional<Duration> launchDelay) {
+        Duration floor = launchDelay.map(delay -> delay.multipliedBy(2)).orElse(Duration.ZERO);
+        if (base.compareTo(floor) >= 0) {
+            return base;
+        }
+        LOG.warn(
+                "match duration {}s is shorter than twice the launch delay ({}s); extending it to"
+                        + " {}s so peers can overlap",
+                base.toSeconds(),
+                launchDelay.orElse(Duration.ZERO).toSeconds(),
+                floor.toSeconds());
+        return floor;
     }
 
     /**
