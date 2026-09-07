@@ -286,6 +286,7 @@ public class IceAdapterConnection {
             return;
         }
         this.socket = opened;
+        socketPublished();
         if (closeRequested.get()) {
             // close() raced the connect while we were still retrying — honour it.
             try {
@@ -294,12 +295,38 @@ public class IceAdapterConnection {
                 // best effort
             }
             connected.completeExceptionally(new IOException("connection closed during connect"));
+            // Both halves matter, and neither used to run here (WBS-3.1.4.1-fix, #278). This is
+            // the one window where a close fired no disconnect at all: close() only fires
+            // LOCAL_CLOSE itself when it finds a null socket, and the assignment above has just
+            // made it non-null, so close() took its current.close() branch and left the event to
+            // this thread — which returned without firing one. fireDisconnect's one-shot CAS
+            // makes this safe in the interleaving where close() did win the race.
+            //
+            // failAllPending is not optional either: `out` was assigned before this branch, so a
+            // concurrent call() can already have registered a pending future that nothing else
+            // will ever complete.
+            fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
+            failAllPending(DisconnectReason.LOCAL_CLOSE, null);
             return;
         }
         LOG.info("connected to ICE adapter JSON-RPC at {}:{}", LOOPBACK, port);
         connectionOpened.set(true);
         connected.complete(null);
         readLoop(opened);
+    }
+
+    /**
+     * Called on the connect thread once {@link #socket} is visible but before the close flag is
+     * read. A no-op in production.
+     *
+     * <p>This exists as a seam and says so. The window it marks is two instructions wide and its
+     * defect — a {@link #close()} landing inside it firing no disconnect at all — is not otherwise
+     * reachable from outside the class, because both participants would have to be scheduled into a
+     * gap with no observable edge. A test overrides this to call {@code close()} exactly here,
+     * which is the interleaving rather than an approximation of it (WBS-3.1.4.1-fix, #278).
+     */
+    void socketPublished() {
+        // Production does nothing here; see the javadoc for why the method exists at all.
     }
 
     /**
