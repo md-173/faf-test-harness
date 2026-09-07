@@ -115,10 +115,14 @@ final class StateMachineHookFailureTest {
         b.onEntry(throwing("entry blew up"));
         a.registerTransition(Go.class, b);
         StateMachine machine = new StateMachine(a);
-        machine.setTimeout(200, timedOut, ignored -> {});
+        // The timeout is armed one statement before the receiveEvent that cancels it, so the
+        // budget has to cover that window under load. Measured worst case on a loaded 16-core
+        // box is ~113 ms, with the ERROR-plus-stack-trace logging this test provokes inside it;
+        // 2 s is ~18x that and still well inside the class's @Timeout(15).
+        machine.setTimeout(2000, timedOut, ignored -> {});
 
         machine.receiveEvent(new Go());
-        Thread.sleep(600);
+        Thread.sleep(2500);
 
         assertEquals(b, machine.getState(), "a cancelled timeout must not move the machine");
     }

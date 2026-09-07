@@ -237,13 +237,12 @@ public class StateMachine implements EventListener {
                     newState = transition.transition(null);
                 } catch (RuntimeException e) {
                     // Letting this escape would kill the timer thread, and every later setTimeout
-                    // would then throw IllegalStateException. The thrower may be the action or
-                    // either state's hooks, so do not name one; and if it was `entry()`, `exit()`
-                    // has already run, leaving the machine inconsistent rather than untouched.
-                    // The stack trace is the only reliable guide to which.
+                    // would then throw IllegalStateException. The thrower can only be the
+                    // transition action: `State.runHooks` contains every RuntimeException a hook
+                    // raises, so no hook failure reaches this catch. The transition therefore
+                    // never half-ran — nothing was assigned and the machine is still in `state`.
                     LOG.error(
-                            "Timeout transition out of {} threw; state left as {}, which may be"
-                                    + " inconsistent if exit or entry hooks had already run",
+                            "Timeout transition out of {} threw in its action; state left as {}",
                             state.getName(),
                             state.getName(),
                             e);
