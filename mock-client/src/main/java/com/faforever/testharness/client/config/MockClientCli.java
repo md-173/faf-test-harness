@@ -50,12 +50,21 @@ import picocli.CommandLine.Spec;
  *
  * <p>When the root is invoked with no subcommand, {@link #call()} prints usage and exits with
  * {@link ExitCodes#USAGE}.
+ *
+ * <p>Every {@code @Command} in this tree — this root and every subcommand — sets {@code
+ * exitCodeOnExecutionException} to {@link ExitCodes#RUNTIME}. An exception escaping a subcommand's
+ * {@code call()} is normally handled by {@link
+ * com.faforever.testharness.client.cli.ExecutionExceptionHandler}, which never returns picocli's
+ * default of {@code 1}; the annotation is the backstop for the routes that bypass that handler and
+ * land in picocli's {@code handleUnhandled}. It must be set on the leaf commands, not just here —
+ * see that class for why.
  */
 @Command(
         name = "mock-client",
         mixinStandardHelpOptions = true,
         version = "mock-client 1.0-SNAPSHOT",
         description = "Headless FAF lobby client used by the integration test harness.",
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         subcommands = {
             RunCommand.class,
             LaunchIceCommand.class,
@@ -270,6 +279,21 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR).")
     private String logLevel;
 
+    /**
+     * Milliseconds the ICE signal relay holds each relayed candidate before forwarding it
+     * (WBS-5.1). Off by default: fault injection is something a test asks for explicitly.
+     */
+    @Option(
+            names = "--ice-relay-delay-ms",
+            scope = ScopeType.INHERIT,
+            defaultValue = "0",
+            description =
+                    "Milliseconds to delay each relayed ICE candidate, in both directions, "
+                            + "simulating slow negotiation (default: ${DEFAULT-VALUE}). Delays "
+                            + "signalling only; the adapter's own connectivity checks are "
+                            + "untouched. Candidates are delayed, never dropped or reordered.")
+    private int iceRelayDelayMs;
+
     /** Optional JSONL log file path. */
     @Option(
             names = "--log-file",
@@ -440,7 +464,8 @@ public final class MockClientCli implements Callable<Integer> {
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
                 buildHostConfig(),
-                buildJoinConfig());
+                buildJoinConfig(),
+                iceRelayDelayMs);
     }
 
     /**
@@ -600,5 +625,31 @@ public final class MockClientCli implements Callable<Integer> {
     private static void applyLoggingProperties(final String level, final Optional<Path> file) {
         System.setProperty(LoggingSetup.LOG_LEVEL_ENV, level);
         file.ifPresent(path -> System.setProperty(LoggingSetup.LOG_FILE_ENV, path.toString()));
+    }
+
+    /**
+     * Same bridge as {@link #applyLoggingProperties(MockClientConfig)}, but reading the populated
+     * option fields directly instead of a validated {@link MockClientConfig}.
+     *
+     * <p>Exists because {@link ConfigLoader#newCommandLine} applies logging before any subcommand
+     * runs, and at that point there is no {@link MockClientConfig} to hand the sibling method.
+     * Building one would mean running the whole validation, which throws on any missing or
+     * malformed field — taking the process down before it could explain why. Picocli has already
+     * populated these fields by then, from every layer including the environment and the config
+     * file, so they carry the operator's real intent.
+     *
+     * <p>Nothing here needs validating in any case. {@link MockClientConfig}'s compact constructor
+     * checks the URLs, the OAuth fields and the identity strings, and says nothing whatever about
+     * {@code logLevel} or {@code logFile}, so the two methods agree by construction — this one
+     * simply reaches the same values a step earlier. An unrecognised level reaches Logback either
+     * way, which treats it as {@code DEBUG}.
+     */
+    void applyLoggingPropertiesFromOptions() {
+        if (logLevel != null) {
+            System.setProperty(LoggingSetup.LOG_LEVEL_ENV, logLevel);
+        }
+        if (logFile != null) {
+            System.setProperty(LoggingSetup.LOG_FILE_ENV, logFile.toString());
+        }
     }
 }

@@ -38,6 +38,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "launch-game",
         mixinStandardHelpOptions = true,
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description = "Spawn mock-game only and forward its output through the harness logger.")
 public final class LaunchGameCommand implements Callable<Integer> {
 

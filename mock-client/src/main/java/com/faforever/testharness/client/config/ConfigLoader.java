@@ -1,5 +1,8 @@
 package com.faforever.testharness.client.config;
 
+import com.faforever.testharness.client.cli.ExecutionExceptionHandler;
+import com.faforever.testharness.shared.logging.LoggingSetup;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
@@ -16,8 +19,9 @@ import picocli.CommandLine.ParseResult;
  *
  * <ul>
  *   <li>{@link #newCommandLine(String[], Map)} — builds the {@link CommandLine} with the {@link
- *       LayeredDefaultProvider} attached. Used by {@code Main} to drive {@link
- *       CommandLine#execute(String...)}, and by tests that want to exercise the subcommand tree.
+ *       LayeredDefaultProvider} and the {@link ExecutionExceptionHandler} attached. Used by {@code
+ *       Main} to drive {@link CommandLine#execute(String...)}, and by tests that want to exercise
+ *       the subcommand tree.
  *   <li>{@link #load(String[], Map)} — parses {@code args} and returns a validated config (or
  *       {@link Optional#empty()} on {@code --help}/{@code --version}). The headless test seam used
  *       by all existing {@code ConfigLoader*Test} classes — its contract is stable and must not
@@ -90,17 +94,97 @@ public final class ConfigLoader {
      *     read or parsed
      */
     public static CommandLine newCommandLine(final String[] args, final Map<String, String> env) {
-        Path configFile = preParseConfigFlag(args);
         MockClientCli cli = new MockClientCli();
         CommandLine commandLine = new CommandLine(cli);
 
+        // Installed here rather than in Main so every caller of this factory — Main, and the
+        // exit-code tests that drive execute() directly — observes the same failure shape. Picocli
+        // only consults it from execute(), so the parseArgs path used by load() never calls it.
+        //
+        // Constructing it must stay free of side effects. Nothing on this path may create an SLF4J
+        // logger: Logback resolves ${LOG_LEVEL:-INFO} when the first logger is created, and every
+        // subcommand sets that property later, inside call(). A logger here would pin the whole
+        // process at INFO and silently disable --log-level. See ExecutionExceptionHandler.
+        commandLine.setExecutionExceptionHandler(new ExecutionExceptionHandler());
+        commandLine.setExecutionStrategy(ConfigLoader::applyLoggingThenRun);
+
         try {
+            Path configFile = preParseConfigFlag(args);
             commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
         }
 
         return commandLine;
+    }
+
+    /**
+     * Execution strategy: bridge the resolved {@code --log-level} / {@code --log-file} into the
+     * system properties Logback reads, then run the selected subcommand.
+     *
+     * <p>Logback resolves {@code ${LOG_LEVEL:-INFO}} and {@code ${LOG_FILE:-…}} exactly once, when
+     * the first logger in the process is created. Whoever creates that logger therefore decides the
+     * level and the file for the whole run. Applying the values here — after parsing, so every
+     * layer has been merged, and before any {@code call()}, so nothing has logged yet — makes that
+     * moment deterministic instead of a property of which code path happened to log first.
+     *
+     * <p>This replaces a guard that tried to detect whether logging had already been configured by
+     * testing whether the {@code LOG_LEVEL} system property was set. That test could not work:
+     * {@code -DLOG_LEVEL=…} on the command line, or the variable in the environment, both set the
+     * signal without any subcommand having run, so the configuration was skipped and {@code
+     * --log-file} was silently ignored. One unconditional application point needs no such signal.
+     *
+     * <p>Subcommands still call {@link MockClientCli#applyLoggingProperties} themselves. That is
+     * now redundant rather than wrong — same values, already applied — and is left in place because
+     * those calls belong to their own WBS items.
+     *
+     * @param parseResult the parsed command line
+     * @return the exit code produced by the executed subcommand
+     */
+    private static int applyLoggingThenRun(final ParseResult parseResult) {
+        if (willRunASubcommand(parseResult)
+                && parseResult.commandSpec().userObject() instanceof MockClientCli cli) {
+            cli.applyLoggingPropertiesFromOptions();
+            // Also stamps the component onto every record. Without it the label resolves to
+            // "Unknown", which is what a harness filtering by component would have to match on.
+            LoggingSetup.configure(MockClientCli.COMPONENT_NAME);
+        }
+        return new CommandLine.RunLast().execute(parseResult);
+    }
+
+    /**
+     * Whether this invocation will actually run a subcommand's {@code call()}, as opposed to
+     * printing help or version text and returning.
+     *
+     * <p>Configuring logging opens the appender, which creates the log file. Doing that for an
+     * invocation that only prints text leaves an empty file behind — and with {@code --log-file} it
+     * leaves it wherever the operator pointed, so {@code mock-client run --help --log-file=X} would
+     * create {@code X} for someone checking a flag name.
+     *
+     * <p>{@code hasSubcommand()} alone is not that question: it is true for {@code run --help}. The
+     * help flags are declared on every command by {@code mixinStandardHelpOptions}, so the request
+     * can be recorded anywhere in the parse chain. This is the same test picocli itself applies —
+     * {@code CommandLine.executeHelpRequest} walks {@code asCommandLineList()} checking these two
+     * predicates, and {@code RunLast} calls it on its first line. The strategy runs one line
+     * earlier, which is exactly why the check has to be repeated here.
+     *
+     * <p>This does not cover a usage error raised inside {@code call()} — a non-positive {@code
+     * --duration-seconds}, or a config that fails validation. Those reach the subcommand, so
+     * logging is legitimately configured before they fail, and they exit {@code 2} leaving an empty
+     * file. Removing that would mean deferring file creation until the first record is written,
+     * which Logback's {@code FileAppender} has no option for. Accepted: the file is empty, the next
+     * real run appends to it, and nothing reads it for existence.
+     *
+     * @param parseResult the parsed command line
+     * @return {@code true} if a subcommand will run and logging should be configured for it
+     */
+    private static boolean willRunASubcommand(final ParseResult parseResult) {
+        return parseResult.hasSubcommand()
+                && parseResult.asCommandLineList().stream()
+                        .noneMatch(
+                                command ->
+                                        command.isUsageHelpRequested()
+                                                || command.isVersionHelpRequested());
     }
 
     /**
@@ -120,13 +204,40 @@ public final class ConfigLoader {
             String token = args[i];
             if (token != null) {
                 if (token.equals(CONFIG_FLAG) && i + 1 < args.length) {
-                    return Path.of(args[i + 1]);
+                    return toPath(args[i + 1]);
                 }
                 if (token.startsWith(CONFIG_FLAG + "=")) {
-                    return Path.of(token.substring(CONFIG_FLAG.length() + 1));
+                    return toPath(token.substring(CONFIG_FLAG.length() + 1));
                 }
             }
         }
         return null;
+    }
+
+    /**
+     * Converts a {@code --config} value to a {@link Path}, turning a syntactically invalid one into
+     * the {@link IllegalArgumentException} the caller already maps to a usage error. {@link
+     * java.nio.file.InvalidPathException} is itself an {@code IllegalArgumentException}, but its
+     * message names neither the flag nor the whole value, and on Windows the reserved characters
+     * {@code < > : " | ? *} make this reachable from an ordinary shell.
+     *
+     * @param value the raw {@code --config} argument
+     * @return the parsed path
+     * @throws IllegalArgumentException if {@code value} is not a valid path on this platform
+     */
+    private static Path toPath(final String value) {
+        try {
+            return Path.of(value);
+        } catch (InvalidPathException e) {
+            throw new IllegalArgumentException(
+                    "invalid "
+                            + CONFIG_FLAG
+                            + " path: "
+                            + LayeredDefaultProvider.oneLine(value)
+                            + " ("
+                            + LayeredDefaultProvider.oneLine(e.getReason())
+                            + ")",
+                    e);
+        }
     }
 }
