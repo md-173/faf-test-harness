@@ -96,18 +96,12 @@ Build the two binaries, then point the subcommand at the built `mock-game`:
 ./gradlew :mock-client:installDist :mock-game:installDist
 
 mock-client/build/install/mock-client/bin/mock-client launch-game --duration-seconds=5 \
-  --mock-game-binary-path="$PWD/mock-game/build/install/mock-game/bin/mock-game" \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
-  --oauth-token-url=https://hydra.faforever.xyz/oauth2/token \
-  --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth \
-  --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \
-  --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
-  --oauth-refresh-token-file=dummy-unused-by-launch-game
+  --mock-game-binary-path="$PWD/mock-game/build/install/mock-game/bin/mock-game"
 ```
 
-The OAuth flags are required by config validation but unused by `launch-game` (it only spawns the
-game); any syntactically valid placeholders work — same convention as `launch-ice`. Observed:
+No lobby or OAuth flags: `launch-game` opens no lobby connection, so it validates only the fields
+the launch reads (WBS-3.1.5.2-fix, #308) — same convention as `launch-ice` and `ice-smoke`.
+Observed:
 
 ```
 [MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0 --launch-delay-seconds 5
