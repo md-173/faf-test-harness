@@ -85,17 +85,26 @@ public class IceAdapterConnection {
      * IceAdapterConnectionTest} uses 3 × 20 ms against a dead port), and every lifecycle-level test
      * overrides {@link #connect()} outright rather than opening a socket at all.
      *
-     * <p><b>The failure path does get slower, and the cost lands on the state machine.</b> {@code
-     * MockClientLifecycle.launchGame} calls {@code connect().get()} from inside a transition
-     * action, and {@code StateMachine.receiveEvent} is {@code synchronized} — so an adapter that
-     * never binds now holds the FSM lock for this whole window, with {@code AdapterExited} and
-     * {@code ShutdownRequested} queued behind it. Two things bound that: {@link
-     * #connectWithRetry()} aborts the moment {@link #close()} is requested (the CLI's signal hook
-     * reaches teardown without going through the FSM), and {@code SubprocessManager}'s own JVM
-     * shutdown hook kills both children regardless of FSM state, so nothing is orphaned. What
-     * remains is that a broken adapter is noticed late. Moving the bring-up off the transition
-     * action is tracked separately as a 3.1.3.3 fix; this constant is deliberately not the place to
-     * work around it.
+     * <p><b>The failure path costs more, and the cost lands on the state machine.</b> {@code
+     * MockClientLifecycle.launchGame} waits for this connect from inside a transition action, and
+     * {@code StateMachine.receiveEvent} is {@code synchronized}, so events arriving meanwhile queue
+     * behind it. Three things bound that, and the third is why this window is no longer the problem
+     * it was:
+     *
+     * <ul>
+     *   <li>{@link #connectWithRetry()} aborts the moment {@link #close()} is requested, and the
+     *       CLI's signal hook reaches teardown without going through the FSM — so Ctrl-C still cuts
+     *       the window short (WBS-3.1.2.7).
+     *   <li>{@code SubprocessManager}'s own JVM shutdown hook kills both children regardless of FSM
+     *       state, so nothing is orphaned whatever the FSM is doing.
+     *   <li>The lifecycle races this connect against the adapter's process-exit future
+     *       (WBS-3.1.3.3-fix, #266), so an adapter that dies — the case a usage error produces, and
+     *       it exits {@code 0} while doing so — ends the wait at once instead of after the budget.
+     * </ul>
+     *
+     * <p>What remains is an adapter that stays alive and never binds: that still holds the lock for
+     * the full window. Taking the bring-up off the transition action entirely is #266's preferred
+     * fix and is still open; this constant is deliberately not the place to work around it.
      */
     private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 

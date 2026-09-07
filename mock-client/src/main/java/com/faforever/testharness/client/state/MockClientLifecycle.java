@@ -30,6 +30,7 @@ import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -725,6 +726,56 @@ public final class MockClientLifecycle {
         sessionIdentity = ((WelcomeReceived) event).state();
     }
 
+    /**
+     * Waits for the adapter's JSON-RPC socket, giving up the moment the adapter process dies
+     * (WBS-3.1.3.3-fix, #266).
+     *
+     * <p>This runs inside a transition action, and {@link
+     * com.faforever.testharness.shared.statemachine.StateMachine#receiveEvent} is {@code
+     * synchronized}, so every event arriving meanwhile queues behind it — {@code AdapterExited}
+     * from a dying adapter, {@code ShutdownRequested}, {@code Disconnected}. On the happy path that
+     * is invisible: a real adapter connects in about a second. It matters when the adapter never
+     * binds its RPC port, because the connect then retries for its full budget — widened from 2s to
+     * 20s by WBS-3.1.2.7 to match downlords-faf-client's 50 × 250 ms loop — and a failed launch is
+     * noticed that much late.
+     *
+     * <p>Racing the connect against the process's own exit future removes that wait in the case the
+     * budget exists for. An adapter given a bad argument exits almost immediately, and exits {@code
+     * 0} while doing so (subprocess-orchestration-spec §2.6), so nothing else about the run says it
+     * is gone — this is the signal. The connect drops from a full budget to about the process's own
+     * start-up time, and the queued events are released with it.
+     *
+     * <p>What this does <em>not</em> do is take the bring-up off the lock: an adapter that stays
+     * alive and never binds still holds it for the whole budget. #266 lists that as the preferred
+     * fix and it is a larger change — it moves when the game binary is launched relative to the
+     * STARTING_GAME transition, which is observable — so it stays that card's, not this commit's.
+     *
+     * @param iceAdapter the adapter process, for its exit future
+     * @throws ExecutionException if the connect failed, or the adapter exited before it completed
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private void awaitAdapterConnect(final SubprocessManager iceAdapter)
+            throws ExecutionException, InterruptedException {
+        CompletableFuture<Void> connected = iceConnection.connect();
+        // anyOf rather than a timeout: the point is to stop waiting on a specific event, not to
+        // guess a shorter budget. A dead adapter and a slow one are different things.
+        CompletableFuture.anyOf(connected, iceAdapter.onExit()).get();
+        if (!connected.isDone()) {
+            // The adapter lost the race, so the socket will never open. Its exit code is not
+            // evidence of anything by itself — a usage error exits 0 — so the message names the
+            // sequence rather than the code.
+            iceConnection.close();
+            throw new ExecutionException(
+                    new IOException(
+                            "ICE adapter exited (code "
+                                    + iceAdapter.exitCode().orElse(-1)
+                                    + ") before its JSON-RPC port accepted a connection"));
+        }
+        // Completed one way or the other; get() surfaces a connect failure as ExecutionException,
+        // which is what the caller already handles.
+        connected.get();
+    }
+
     private void launchGame(Event message) throws FailedTransitionException {
         if (!(message instanceof LaunchGame)) {
             throw new AssertionError(
@@ -775,7 +826,7 @@ public final class MockClientLifecycle {
             // were built and tested under 3.1.4.5/3.1.4.6 and wired into no session until now.
             new IceSignalRelay(lobby, iceConnection).start();
             new GpgNetForwarder(lobby, iceConnection).start();
-            iceConnection.connect().get();
+            awaitAdapterConnect(iceAdapter);
             iceConnection
                     .call(
                             "setLobbyInitMode",
