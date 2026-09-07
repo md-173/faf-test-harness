@@ -556,6 +556,57 @@ public final class MockClientCli implements Callable<Integer> {
     }
 
     /**
+     * Validates the mock-game slice of the configuration, for the subcommands that launch {@code
+     * mock-game} without a lobby session (WBS-3.1.5.2-fix, #308).
+     *
+     * <p>The sibling of {@link #toValidatedAdapterSettings(CommandSpec)}, and the reason is the
+     * same: {@code launch-game} opens no lobby connection, so requiring the seven lobby/OAuth
+     * fields plus {@code --unique-id} meant every one of them was a placeholder invented to get
+     * past validation, which the runbook then had to explain. This validates the fields {@code
+     * MockGameLauncher} actually reads, and nothing else.
+     *
+     * <p>Both ports are checked because a nonsense value reaches {@code mock-game} as a launch
+     * argument and comes back as its usage error rather than as this one. They are <em>not</em>
+     * required to differ: one is the adapter's TCP GPGNet port and the other the game's own UDP
+     * lobby port, so an overlap is legal and the full-session path allows it.
+     *
+     * @param callerSpec the invoking subcommand's spec, so a failure is reported against it
+     * @return the validated mock-game settings
+     * @throws CommandLine.ParameterException if any value the launch reads is missing or invalid
+     */
+    public MockGameSettings toValidatedGameSettings(final CommandSpec callerSpec) {
+        List<String> problems = new ArrayList<>();
+        checkPort(problems, "--ice-adapter-gpg-net-port", iceAdapterGpgNetPort);
+        checkPort(problems, "--ice-adapter-lobby-port", iceAdapterLobbyPort);
+        // Checked here rather than on the record, matching toValidatedAdapterSettings: the
+        // full-session path accepts a blank level, and this must not change what run accepts.
+        if (logLevel == null || logLevel.isBlank()) {
+            problems.add("--log-level must not be blank");
+        }
+        if (!problems.isEmpty()) {
+            throw new CommandLine.ParameterException(
+                    callerSpec.commandLine(), String.join("; ", problems));
+        }
+        try {
+            return new MockGameSettings(
+                    mockGameBinaryPath,
+                    iceAdapterGpgNetPort,
+                    iceAdapterLobbyPort,
+                    iceAdapterGameId,
+                    playerIdOverride == null
+                            ? OptionalInt.empty()
+                            : OptionalInt.of(playerIdOverride),
+                    playerLogin,
+                    mockGameLaunchDelaySeconds,
+                    hostGameOption,
+                    logLevel,
+                    Optional.ofNullable(logFile));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
+        }
+    }
+
+    /**
      * Records a range problem for {@code port} under {@code flag}, if there is one.
      *
      * @param problems accumulator every check appends to, so one error lists them all
@@ -587,6 +638,16 @@ public final class MockClientCli implements Callable<Integer> {
      * @param settings the validated adapter settings whose logging fields should be applied
      */
     public static void applyLoggingProperties(final IceAdapterSettings settings) {
+        applyLoggingProperties(settings.logLevel(), settings.logFile());
+    }
+
+    /**
+     * As {@link #applyLoggingProperties(MockClientConfig)}, for the mock-game slice a no-lobby
+     * {@code launch-game} runs on.
+     *
+     * @param settings the validated mock-game settings
+     */
+    public static void applyLoggingProperties(final MockGameSettings settings) {
         applyLoggingProperties(settings.logLevel(), settings.logFile());
     }
 

@@ -1,7 +1,7 @@
 package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.MockClientCli;
-import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockGameSettings;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.shared.logging.LoggingSetup;
@@ -30,6 +30,13 @@ import picocli.CommandLine.Spec;
  * config-derivable subset of spec §2.8 ({@code --gpgnet-port}, {@code --lobby-port}, {@code
  * --player-id}, {@code --player-login}); the {@code game_launch}-derived flags (uid, mod, map,
  * faction, team) are FSM scope and arrive with orchestration.
+ *
+ * <p><b>No lobby credentials.</b> This validates only the fields the launch actually reads ({@link
+ * MockClientCli#toValidatedGameSettings}), so {@code mock-client launch-game
+ * --mock-game-binary-path=…} runs with no other flags. It previously demanded the seven lobby/OAuth
+ * fields and {@code --unique-id}, every one of which was a placeholder invented to get past
+ * validation — the runbook printed {@code --oauth-refresh-token-file=dummy-unused-by-launch-ice}
+ * and a paragraph explaining it (WBS-3.1.5.2-fix, #308).
  *
  * <p>Exit codes: {@link ExitCodes#OK} when mock-game ran for the full window and was terminated
  * cleanly; {@link ExitCodes#RUNTIME} when the binary could not be launched or mock-game exited on
@@ -74,14 +81,14 @@ public final class LaunchGameCommand implements Callable<Integer> {
                     "--duration-seconds must be a positive integer; got " + durationSeconds);
         }
 
-        MockClientConfig config = parent.toValidatedConfig(spec);
-        MockClientCli.applyLoggingProperties(config);
+        MockGameSettings settings = parent.toValidatedGameSettings(spec);
+        MockClientCli.applyLoggingProperties(settings);
         LoggingSetup.configure(MockClientCli.COMPONENT_NAME);
         Logger log = LoggerFactory.getLogger(LaunchGameCommand.class);
 
         SubprocessManager game;
         try {
-            game = new MockGameLauncher(config).start();
+            game = new MockGameLauncher(settings).start();
         } catch (MockGameLaunchException e) {
             // Single-line, log-ready message — no stack trace (WBS-3.1.2.3 acceptance criteria).
             log.error(e.getMessage());

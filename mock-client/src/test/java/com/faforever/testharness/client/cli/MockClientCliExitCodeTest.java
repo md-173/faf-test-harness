@@ -113,6 +113,38 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
+    void launchIceRunsWithoutAnyLobbyOrOauthFlags() {
+        // #308's guarantee for launch-ice, the same shape as ice-smoke's above: given only an
+        // adapter path and no credentials at all, a guaranteed-absent binary must reach the
+        // command's own logic and report RUNTIME rather than the USAGE a missing-required-options
+        // rejection would produce.
+        String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
+        assertEquals(
+                ExitCodes.RUNTIME,
+                execute(
+                        new String[] {
+                            "launch-ice",
+                            "--ice-adapter-binary-path=" + absentBinary,
+                            "--duration-seconds=1"
+                        }));
+    }
+
+    @Test
+    void launchGameRunsWithoutAnyLobbyOrOauthFlags() {
+        // And for launch-game, which reads a different slice of the config: the mock-game binary,
+        // the two ports, the identity and the launch delay. None of them is a lobby credential.
+        String absentBinary = tempDir.resolve("no-such-mock-game").toString();
+        assertEquals(
+                ExitCodes.RUNTIME,
+                execute(
+                        new String[] {
+                            "launch-game",
+                            "--mock-game-binary-path=" + absentBinary,
+                            "--duration-seconds=1"
+                        }));
+    }
+
+    @Test
     void iceSmokeWithNonPositiveTimeoutExitsUsage() {
         assertEquals(ExitCodes.USAGE, execute(new String[] {"ice-smoke", "--timeout-seconds=0"}));
     }
