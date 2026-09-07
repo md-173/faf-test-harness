@@ -1,6 +1,7 @@
 package com.faforever.testharness.game.net;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -12,6 +13,8 @@ import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 import java.time.Duration;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,6 +42,13 @@ final class GameUdpSenderDropTest {
 
     /** How far the observed drop rate may sit from the configured one, in percentage points. */
     private static final int TOLERANCE_POINTS = 15;
+
+    /**
+     * Rounds driven by the per-peer independence case, at 50%. Each round is one independent draw
+     * per peer, so a sender sharing one draw across peers produces identical sequence sets and is
+     * caught with probability 1 - 2^-{@value}.
+     */
+    private static final int INDEPENDENCE_ROUNDS = 40;
 
     private DatagramSocket senderSocket;
     private DatagramSocket peer;
@@ -133,7 +143,7 @@ final class GameUdpSenderDropTest {
             sender.sendRound();
         }
         assertTrue(
-                await(() -> receiver.highestSequence(42) >= ROUNDS - 10, 5000),
+                await(() -> receiver.highestSequence(42) >= ROUNDS - 40, 5000),
                 "the receiver never saw a sequence near the end of the run; highest was "
                         + receiver.highestSequence(42));
 
@@ -194,20 +204,49 @@ final class GameUdpSenderDropTest {
                         + " points)");
     }
 
-    /** Per-peer draws: one peer's losses do not decide another's, so a gap names one sender. */
+    /**
+     * Per-peer draws: one peer's losses do not decide another's, so a gap names one sender — which
+     * is #90's third acceptance criterion.
+     *
+     * <p>At 50% over {@value #INDEPENDENCE_ROUNDS} rounds, since 100% cannot show this: every
+     * implementation drops both peers at 100%, including one taking a single draw per round and
+     * applying it to all peers, which is exactly the implementation this has to rule out. A shared
+     * per-round draw makes the two received sequence sets identical, so a false pass here is
+     * 2^-{@value #INDEPENDENCE_ROUNDS}.
+     */
     @Test
     void eachPeerIsDrawnIndependently() throws Exception {
         try (DatagramSocket secondPeer =
                 new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
-            sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 100);
+            sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 50);
             sender.registerPeer(local(peer), 7);
             sender.registerPeer(local(secondPeer), 8);
 
-            sender.sendRound();
+            for (int i = 0; i < INDEPENDENCE_ROUNDS; i++) {
+                sender.sendRound();
+            }
 
-            assertNull(receive(peer, 300), "peer 7 should have been dropped");
-            assertNull(receive(secondPeer, 300), "peer 8 should have been dropped");
+            Set<Long> first = drainSequences(peer);
+            Set<Long> second = drainSequences(secondPeer);
+
+            assertNotEquals(
+                    first,
+                    second,
+                    "both peers lost exactly the same rounds over "
+                            + INDEPENDENCE_ROUNDS
+                            + " draws, which means one draw is deciding for both: "
+                            + first);
         }
+    }
+
+    /** Every sequence number that reached {@code socket}, read until the socket goes quiet. */
+    private static Set<Long> drainSequences(final DatagramSocket socket) throws IOException {
+        Set<Long> sequences = new HashSet<>();
+        GameDatagram datagram;
+        while ((datagram = receive(socket, 300)) != null) {
+            sequences.add(datagram.sequence());
+        }
+        return sequences;
     }
 
     /** A percentage outside 0-100 is a typo, not a mode; it is rejected at construction. */

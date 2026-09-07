@@ -152,6 +152,28 @@ final class MockGameCliTest {
         assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }
 
+    /**
+     * The one branch of the WBS-5.1 flag that has to be a usage error: the sender rejects an
+     * out-of-range percentage too, but from inside a live session, where it surfaces as an
+     * IllegalArgumentException rather than a diagnostic naming the flag.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"-1", "101"})
+    void outOfRangeUdpDropPercentFailsTheParse(final String percent) {
+        String[] args = withExtra(VALID_ARGS, "--udp-drop-percent", percent);
+
+        assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
+    }
+
+    /** The boundaries themselves are legal: 0 is off and 100 is a total blackhole. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "100"})
+    void theUdpDropPercentBoundsAreAccepted(final String percent) {
+        String[] args = withExtra(VALID_ARGS, "--udp-drop-percent", percent);
+
+        assertEquals(Integer.parseInt(percent), MockGameCli.parse(args).udpDropPercent());
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"0", "-1", "65536"})
     void outOfRangeLobbyPortFailsTheParse(final String port) {
