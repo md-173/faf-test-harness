@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -80,15 +81,17 @@ public final class MockGameLifecycle {
 
     /**
      * A future that upon completion, drives the state machine to launch the match. Created by the
-     * {@code scheduler}.
+     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
+     * caller's thread reads from them.
      */
-    private Future launchFuture;
+    private volatile Future<?> launchFuture;
 
     /**
      * A future that upon completion, drives the state machine to end the match. Created by the
-     * {@code scheduler}.
+     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
+     * caller's thread reads from them.
      */
-    private Future matchEndFuture;
+    private volatile Future<?> matchEndFuture;
 
     /** A record of all connected peers. */
     private List<Peer> peers;
@@ -201,7 +204,7 @@ public final class MockGameLifecycle {
         this.machine =
                 new StateMachine(
                         states.get(GameState.INITIALIZING), InvalidTransitionPolicy.IGNORE);
-        this.shutdown = new GameShutdown(machine, gpgnet);
+        this.shutdown = new GameShutdown(machine, gpgnet, this);
 
         setupStateMachine();
     }
@@ -288,6 +291,14 @@ public final class MockGameLifecycle {
      */
     public GameShutdown shutdown() {
         return shutdown;
+    }
+
+    /**
+     * Cancels any not-yet-started configured schedules (launch delay and match duration) and shuts
+     * the scheduler down. Only called by {@link GameShutdown#run()} hence package-private.
+     */
+    /* package-private */ void stopSchedules() {
+        scheduler.shutdownNow();
     }
 
     /**
@@ -505,10 +516,7 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
         }
     }
 
@@ -538,10 +546,7 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
         }
     }
 
@@ -555,10 +560,7 @@ public final class MockGameLifecycle {
 
         // Set up the scheduler if configured.
         if (matchDuration != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new GameEnded()),
-                    matchDuration.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            matchEndFuture = schedule(() -> machine.receiveEvent(new GameEnded()), matchDuration);
         }
     }
 
@@ -621,5 +623,19 @@ public final class MockGameLifecycle {
         // Every closing frame was handed to the transport without error, which is as much as this
         // side can establish: see getExitStatus() for why that is not proof they were delivered.
         status = ExitStatus.OK;
+    }
+
+    /* Wrapper around ScheduledExecutorService.schedule that catches RejectedExecutionExceptions
+     * and logs them. */
+    private Future<?> schedule(Runnable command, Duration delay) {
+        try {
+            return scheduler.schedule(command, delay.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // The scheduler has likely been shut down, so we log and return null.
+            LOG.debug(
+                    "Could not schedule mock game lifecycle task, "
+                            + "likely due to a shut down scheduler");
+            return null;
+        }
     }
 }

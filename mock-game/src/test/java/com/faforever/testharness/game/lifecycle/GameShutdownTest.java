@@ -6,9 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
+import com.faforever.testharness.game.gpgnet.GpgNetFrame;
+import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
@@ -17,6 +20,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -44,7 +48,7 @@ final class GameShutdownTest {
         new GameShutdown(fsm, connection).run();
 
         assertEquals(
-                List.of("stop-scheduling", "close-connection"),
+                List.of("stop-fsm", "close-connection"),
                 order,
                 "scheduling must stop first so no timeout fires mid-teardown");
     }
@@ -84,6 +88,42 @@ final class GameShutdownTest {
 
         Thread.sleep(300); // past the 150ms timeout — it must not fire after shutdown
         assertSame(idle, fsm.getState(), "shutdown must cancel the FSM's scheduled timeout");
+    }
+
+    @Test
+    void stopsLifecycleScheduledDelay() throws Exception {
+        Duration launchDelay = Duration.ofSeconds(1);
+        MockGameConfig defaultConfig =
+                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
+        ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
+        try {
+            MockGameLifecycle lifecycle =
+                    new MockGameLifecycle(
+                            defaultConfig,
+                            new GpgNetConnection(gpgnet.port()),
+                            launchDelay,
+                            Duration.ofSeconds(1));
+
+            gpgnet.start();
+            gpgnet.awaitClient();
+            lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
+            gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+            lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
+            gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+            lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+
+            lifecycle.shutdown().run();
+
+            // Because shutdown was run, the launch delay scheduled future should have been
+            // cancelled
+            // and LIVE should never be reached.
+            // Sleeping 2 seconds vs the 1 second launch delay.
+            Thread.sleep(launchDelay.toMillis() * 2);
+            assertEquals(GameState.HOSTING, lifecycle.getState());
+        } finally {
+            // Make sure gpgnet server is always stopped.
+            gpgnet.stop();
+        }
     }
 
     @Test
@@ -185,12 +225,12 @@ final class GameShutdownTest {
         assertThrows(NullPointerException.class, () -> new GameShutdown(null));
     }
 
-    /** A StateMachine that records "stop-scheduling" when its scheduling is cancelled. */
+    /** A StateMachine that records "stop-fsm" when its scheduling is cancelled. */
     private static StateMachine recordingFsm(final List<String> order) {
         return new StateMachine(new State("A")) {
             @Override
             public void cancel() {
-                order.add("stop-scheduling");
+                order.add("stop-fsm");
                 super.cancel();
             }
         };
