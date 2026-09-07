@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -92,11 +93,18 @@ public final class IceSignalRelay {
     /** Guards against {@link #start()} being called more than once. */
     private final AtomicBoolean started = new AtomicBoolean(false);
 
-    /** How long each forward is held before it goes out; {@link Duration#ZERO} forwards inline. */
-    private final Duration forwardDelay;
+    /**
+     * How long each forward is held before it goes out, in milliseconds; {@code 0} forwards inline.
+     *
+     * <p>Milliseconds rather than the {@code Duration} it came from, computed once, so the
+     * allocate-a-scheduler test and the schedule-with-this-delay call cannot disagree: {@code
+     * Duration.ofNanos(500_000)} is not zero but truncates to a zero millisecond delay, which used
+     * to allocate a scheduler and then schedule everything on it with no delay at all.
+     */
+    private final long delayMillis;
 
     /**
-     * Schedules delayed forwards, or {@code null} when {@link #forwardDelay} is zero. Single-
+     * Schedules delayed forwards, or {@code null} when {@link #delayMillis} is zero. Single-
      * threaded so equal delays fire in submission order, and daemon so it can never hold the JVM
      * open — this relay outlives no explicit teardown in the session path that builds it.
      */
@@ -130,13 +138,14 @@ public final class IceSignalRelay {
             final Duration forwardDelay) {
         this.lobby = Objects.requireNonNull(lobby, "lobby");
         this.adapter = Objects.requireNonNull(adapter, "adapter");
-        this.forwardDelay = Objects.requireNonNull(forwardDelay, "forwardDelay");
+        Objects.requireNonNull(forwardDelay, "forwardDelay");
         if (forwardDelay.isNegative()) {
             throw new IllegalArgumentException(
                     "forwardDelay must not be negative: " + forwardDelay);
         }
+        this.delayMillis = forwardDelay.toMillis();
         this.scheduler =
-                forwardDelay.isZero()
+                delayMillis == 0
                         ? null
                         : Executors.newSingleThreadScheduledExecutor(
                                 runnable -> {
@@ -275,7 +284,16 @@ public final class IceSignalRelay {
             action.run();
             return;
         }
-        scheduler.schedule(action, forwardDelay.toMillis(), TimeUnit.MILLISECONDS);
+        try {
+            scheduler.schedule(action, delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // Only reachable after stop(), which today only tests call. Saying so out loud matters
+            // because the alternative is a silently dropped candidate against this class's "delay,
+            // never drop" contract — and the connections' catch (RuntimeException) would swallow
+            // the rejection without a word. If stop() ever moves into session teardown, this line
+            // is what will show which candidates the teardown ate.
+            LOG.warn("ICE relay is stopped; candidate not forwarded");
+        }
     }
 
     /**
