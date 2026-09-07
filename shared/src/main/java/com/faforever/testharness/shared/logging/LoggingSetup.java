@@ -2,7 +2,10 @@ package com.faforever.testharness.shared.logging;
 
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.core.ContextBase;
+import ch.qos.logback.core.rolling.RollingFileAppender;
+import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
 import ch.qos.logback.core.rolling.helper.FileNamePattern;
+import ch.qos.logback.core.util.FileSize;
 import java.util.regex.Pattern;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -68,6 +71,16 @@ public final class LoggingSetup {
      */
     public static final String INSTANCE_NAME_ENV = "INSTANCE_NAME";
 
+    /**
+     * The suffix {@code logback.xml} appends to {@value #LOG_FILE_ENV} to form the rolling
+     * appender's {@code fileNamePattern}. Mirrored here so {@link #isUsableLogFile} validates the
+     * pattern Logback will actually build; the two must be changed together.
+     */
+    private static final String ROLLOVER_SUFFIX = ".%d{yyyy-MM-dd}.%i.gz";
+
+    /** Mirrors {@code logback.xml}'s {@code maxFileSize}; see {@link #isUsableLogFile}. */
+    private static final String MAX_FILE_SIZE = "10MB";
+
     private LoggingSetup() {}
 
     /**
@@ -101,7 +114,7 @@ public final class LoggingSetup {
 
         // Before anything touches SLF4J. The next statement initialises Logback, and an unusable
         // path takes the whole logging subsystem down with it (WBS-2.3.6-fix, #305).
-        rejectUnusableLogFile(defaultLogFile);
+        replaceUnusableLogFile(defaultLogFile);
 
         MDC.put(COMPONENT_MDC_KEY, componentName);
 
@@ -135,6 +148,12 @@ public final class LoggingSetup {
      * {@code [}, {@code {} and {@code (} all do it, and all are legal in a filename on Linux and
      * macOS. {@code ${LOG_FILE}} fails the same way, through self-referential substitution.
      *
+     * <p>That conversion is not the only way the path can be fatal — a bare {@code %} is a
+     * malformed conversion specifier to the pattern parser, and a path carrying its own {@code
+     * %d{...}} takes down the rolling policy instead. {@link #isUsableLogFile} covers all three;
+     * the notice below deliberately names the effect and offers the usual characters as examples
+     * rather than diagnosing which of the three it was.
+     *
      * <p>The consequence was worse than a missing file. Logback failed to configure at all, so the
      * run had no logging of any kind — and since every subcommand reports its own failures through
      * the logger, an operator who mistyped a path was told nothing about why the run then failed.
@@ -152,7 +171,7 @@ public final class LoggingSetup {
      *
      * @param fallback the default path to use when the configured one is unusable.
      */
-    private static void rejectUnusableLogFile(final String fallback) {
+    private static void replaceUnusableLogFile(final String fallback) {
         String configured = System.getProperty(LOG_FILE_ENV);
         if (configured == null) {
             configured = System.getenv(LOG_FILE_ENV);
@@ -163,8 +182,8 @@ public final class LoggingSetup {
         System.err.println(
                 "log file path cannot be used by the log rotator and was ignored: "
                         + configured
-                        + " (it contains a regular-expression metacharacter such as '[', '{' or"
-                        + " '('); logging to "
+                        + " (it cannot be used as a log-rotation pattern; characters such as '[',"
+                        + " '{', '(' and '%' are not usable here); logging to "
                         + fallback
                         + " instead");
         System.err.flush();
@@ -172,20 +191,48 @@ public final class LoggingSetup {
     }
 
     /**
-     * Whether {@code path} survives the conversion Logback performs on the rolling appender's
-     * {@code fileNamePattern}.
+     * Whether {@code path} survives everything Logback does with the rolling appender's {@code
+     * fileNamePattern}.
      *
-     * <p>The suffix mirrors {@code logback.xml}'s {@code fileNamePattern} exactly; the two must be
-     * changed together. Package-private so a test can assert the boundary directly.
+     * <p>There are two independent hard-failure sites and both are exercised here. The first is the
+     * pattern-to-regex conversion used to find previous rollovers, which a regex metacharacter in
+     * the path breaks. The second is starting the rolling policy, which derives the rollover
+     * periodicity from the date token — so a path carrying its own {@code %d{...}} (for example
+     * {@code logs/%d{yyyy}/app.jsonl}) converts to a regex fine and then dies with {@code Unknown
+     * periodicity type}. Checking only the first left that case failing exactly as it did before
+     * this guard existed.
+     *
+     * <p>{@code setMaxFileSize} is load-bearing rather than cosmetic: it is what builds the
+     * size-and-time triggering policy that computes the period. {@code maxHistory} and {@code
+     * totalSizeCap} change no verdict and are left out.
+     *
+     * <p>The verdict is the throw and nothing else. Scanning {@link
+     * ch.qos.logback.core.status.StatusManager} for errors instead would reject paths that log
+     * perfectly well today, {@code a%b.jsonl} and {@code a%X{k}b.jsonl} among them.
+     *
+     * <p>The suffix and the max file size mirror {@code logback.xml}'s {@code rollingPolicy}
+     * exactly; the two must be changed together. Package-private so a test can assert the boundary
+     * directly, which {@link UsableLogFileTest} does.
      *
      * @param path the candidate log file path.
-     * @return {@code true} if Logback can build a usable rollover pattern from it.
+     * @return {@code true} if Logback can build and start a rollover policy from it.
      */
     static boolean isUsableLogFile(final String path) {
+        String pattern = path + ROLLOVER_SUFFIX;
         try {
-            Pattern.compile(
-                    new FileNamePattern(path + ".%d{yyyy-MM-dd}.%i.gz", new ContextBase())
-                            .toRegex());
+            ContextBase context = new ContextBase();
+            Pattern.compile(new FileNamePattern(pattern, context).toRegex());
+
+            RollingFileAppender<Object> parent = new RollingFileAppender<>();
+            parent.setContext(context);
+            parent.setFile(path);
+            SizeAndTimeBasedRollingPolicy<Object> policy = new SizeAndTimeBasedRollingPolicy<>();
+            policy.setContext(context);
+            policy.setParent(parent);
+            policy.setFileNamePattern(pattern);
+            policy.setMaxFileSize(FileSize.valueOf(MAX_FILE_SIZE));
+            policy.start();
+            policy.stop();
             return true;
         } catch (RuntimeException e) {
             return false;
