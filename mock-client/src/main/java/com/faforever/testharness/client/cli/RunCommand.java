@@ -68,8 +68,16 @@ public final class RunCommand implements Callable<Integer> {
      * Validate config, open the lobby session through the lifecycle FSM, and block until the FSM
      * terminates — on a lobby disconnect or a shutdown signal.
      *
+     * <p><b>The returned code reaches the process only when this method is what ended the run.</b>
+     * On the {@code Ctrl-C} / {@code SIGTERM} path it is computed and then discarded: the shutdown
+     * hook installed below is already running by the time this returns, so {@code Main}'s {@link
+     * System#exit(int)} never completes and the JVM exits with the signal's own code, 130 or 143
+     * (WBS-3.1.3.2-fix, #296). That is the documented outcome for {@code run}; see {@code Main}'s
+     * class javadoc for why it is accepted rather than worked around.
+     *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
-     *     could not be established or the connection dropped unexpectedly
+     *     could not be established or the connection dropped unexpectedly. Superseded by the
+     *     signal's own exit code whenever a signal is what ended the run.
      */
     @Override
     public Integer call() {
