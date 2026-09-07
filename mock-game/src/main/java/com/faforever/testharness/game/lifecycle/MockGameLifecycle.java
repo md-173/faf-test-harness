@@ -20,8 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
@@ -82,14 +82,17 @@ public final class MockGameLifecycle {
     /**
      * A future that upon completion, drives the state machine to launch the match. Created by the
      * {@code scheduler}.
+     *
+     * <p>Volatile because it is written from the FSM thread that runs the transition action and
+     * read from whichever thread calls {@link #launchMatch()}.
      */
-    private Future launchFuture;
+    private volatile ScheduledFuture<?> launchFuture;
 
     /**
      * A future that upon completion, drives the state machine to end the match. Created by the
-     * {@code scheduler}.
+     * {@code scheduler}. Volatile for the same reason as {@link #launchFuture}.
      */
-    private Future matchEndFuture;
+    private volatile ScheduledFuture<?> matchEndFuture;
 
     /** A record of all connected peers. */
     private List<Peer> peers;
@@ -244,8 +247,12 @@ public final class MockGameLifecycle {
      *
      * <p>Exposed so the bootstrap can install the <em>same</em> instance as the JVM shutdown hook
      * rather than build a second one: the sequence is once-guarded, so a self-initiated exit and a
-     * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase,
-     * including before the GPGNet connection ever opened.
+     * {@code SIGTERM} converge on it with no double-teardown. It is safe to run at any phase, the
+     * pre-{@link #start()} one included — but there it is <em>terminal</em> for the object rather
+     * than merely early: it cancels the FSM's scheduling and burns the sequence's one-shot guard,
+     * so a {@code start()} afterwards arms no timeout and the lifecycle can never reach ENDED. The
+     * one production path that reaches it, the bootstrap's belt-and-braces teardown, is already on
+     * its way out of the JVM.
      *
      * <p>Running it out of band does not end the lifecycle. It closes the connection and cancels
      * the FSM's scheduling without posting any event, so the machine stays in whatever state it was
@@ -262,10 +269,19 @@ public final class MockGameLifecycle {
     /**
      * Gives a future that completes when the state is reached.
      *
+     * <p>Guarded against a pre-{@link #start()} call, matching {@link #getExitStatus()}. Nothing
+     * moves the FSM until {@code start()} opens the connection and arms the timeout, so waiting on
+     * a state before then is an unbounded wait with nothing to end it — {@code Main} joins on
+     * exactly this future. Failing loudly at the call is better than hanging at the join.
+     *
      * @param state the state to wait for.
      * @return a future that only completes when the state is reached.
+     * @throws IllegalStateException if called before {@link #start()}.
      */
     public CompletableFuture<Void> stateReached(GameState state) {
+        if (!started.get()) {
+            throw new IllegalStateException("Tried to await " + state + " before start()");
+        }
         return machine.stateReached(states.get(state));
     }
 
@@ -396,7 +412,22 @@ public final class MockGameLifecycle {
                 ignored -> {
                     status = ExitStatus.SERVER_NOT_CONNECTED;
                 });
-        gpgnet.connect().thenRun(() -> machine.receiveEvent(new ServerConnected()));
+        gpgnet.connect()
+                .thenRun(() -> machine.receiveEvent(new ServerConnected()))
+                .whenComplete(
+                        (ignored, error) -> {
+                            // Without this the derived future is discarded, so a throw out of the
+                            // INITIALIZING -> IDLE chain is captured into it and never observed:
+                            // the reader thread carries on into readLoop as though the handshake
+                            // succeeded, the FSM stays in INITIALIZING, and the timeout armed above
+                            // eventually reports SERVER_NOT_CONNECTED — the opposite of what
+                            // happened, since the adapter was reached and the socket is open.
+                            // DEBUG because a plain connect failure lands here too and is already
+                            // reported by onDisconnect and that timeout.
+                            if (error != null) {
+                                LOG.debug("GPGNet connect or post-connect handshake failed", error);
+                            }
+                        });
     }
 
     /* Transition action for INITIALIZING -> IDLE. */
@@ -466,12 +497,15 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Keeping the handle is what lets a manual
+        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
+        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new LaunchMatch()),
+                            launchDelay.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -499,12 +533,15 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Keeping the handle is what lets a manual
+        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
+        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
         if (launchDelay != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new LaunchMatch()),
-                    launchDelay.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            launchFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new LaunchMatch()),
+                            launchDelay.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
@@ -516,12 +553,14 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured.
+        // Set up the scheduler if configured. Kept for the same reason as launchFuture above: a
+        // manual endMatch() cancels this one rather than leaving it to fire in ENDED.
         if (matchDuration != null) {
-            scheduler.schedule(
-                    () -> machine.receiveEvent(new GameEnded()),
-                    matchDuration.toMillis(),
-                    TimeUnit.MILLISECONDS);
+            matchEndFuture =
+                    scheduler.schedule(
+                            () -> machine.receiveEvent(new GameEnded()),
+                            matchDuration.toMillis(),
+                            TimeUnit.MILLISECONDS);
         }
     }
 
