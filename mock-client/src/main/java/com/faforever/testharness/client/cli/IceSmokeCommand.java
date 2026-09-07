@@ -41,6 +41,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "ice-smoke",
         mixinStandardHelpOptions = true,
+        exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "ICE-adapter reachability check: bring up the adapter, verify its JSON-RPC and "
                         + "GPGNet endpoints are serving, tear it down. Needs no lobby account.")
