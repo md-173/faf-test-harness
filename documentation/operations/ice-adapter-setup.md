@@ -53,14 +53,7 @@ downlords' `gradle.properties`.
 
 # 2. Confirm the R34 launcher can spawn it headless and capture its output (12s smoke run).
 mock-client/build/install/mock-client/bin/mock-client launch-ice --duration-seconds=12 \
-  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar" \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
-  --oauth-token-url=https://hydra.faforever.xyz/oauth2/token \
-  --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth \
-  --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \
-  --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
-  --oauth-refresh-token-file=dummy-unused-by-launch-ice
+  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar"
 # (build the launcher first if needed: ./gradlew :mock-client:installDist)
 ```
 
@@ -82,8 +75,10 @@ download. It is deliberately **not** wired into `build`/`check`, so CI stays off
 explicitly. The jar lands at `./faf-ice-adapter.jar`, which is the launcher's default
 `--ice-adapter-binary-path`, so `launch-ice` / `run` find it with no extra config.
 
-The OAuth flags above are required by config validation but are **not used** by `launch-ice` (it
-only spawns the adapter); any syntactically valid placeholders work.
+`launch-ice` needs no lobby or OAuth flags: it opens no lobby connection, so it validates only the
+adapter settings (WBS-3.1.5.2-fix, #308). It does attach a JSON-RPC peer and hold it open for the
+run window (WBS-3.1.6.3, #279), which is what lets a separately launched `mock-game` complete a
+GPGNet handshake against the adapter it is holding up.
 
 ## Headless caveat — why the launcher overrides logback
 
