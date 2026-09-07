@@ -31,6 +31,9 @@ import java.util.Optional;
  * @param launchDelaySeconds how long the game sits in the lobby before starting the match on its
  *     own; negative means it never does, and the match is then launched only on an explicit {@code
  *     launchMatch()}. Read through {@link #launchDelay()} rather than directly
+ * @param lobbyTimeoutSeconds how long the game waits in LOBBY for something to drive it into a role
+ *     before giving up; negative, the default, waits forever, which is the behaviour the game has
+ *     always had. Read through {@link #lobbyTimeout()} rather than directly
  */
 public record MockGameConfig(
         int gpgNetPort,
@@ -39,7 +42,8 @@ public record MockGameConfig(
         String playerLogin,
         int gameUid,
         Map<String, String> gameOptions,
-        int launchDelaySeconds) {
+        int launchDelaySeconds,
+        int lobbyTimeoutSeconds) {
 
     /**
      * The auto-launch delay as the lifecycle wants it: a duration to arm the timer with, or empty
@@ -57,5 +61,25 @@ public record MockGameConfig(
         return launchDelaySeconds < 0
                 ? Optional.empty()
                 : Optional.of(Duration.ofSeconds(launchDelaySeconds));
+    }
+
+    /**
+     * How long to wait in LOBBY before giving up, or empty to wait indefinitely (WBS-3.2.1.3,
+     * #323).
+     *
+     * <p>Empty is the default and is the behaviour the game has always had: a mock game that
+     * nothing drives into a role sits in the lobby exactly as a real game does, which is what a
+     * consumer asserting on the GPGNet handshake wants. The cost of that is who ends the run — the
+     * consumer has to, and a signal-terminated run reports 143 or 130 rather than a harness code,
+     * so a run that did what was asked looks like one that was killed for hanging. Setting this
+     * lets the game give up on its own and exit through {@link
+     * com.faforever.testharness.game.config.ExitCodes#LOBBY_TIMEOUT} instead.
+     *
+     * @return the lobby wait to arm, or empty to wait forever
+     */
+    public Optional<Duration> lobbyTimeout() {
+        return lobbyTimeoutSeconds < 0
+                ? Optional.empty()
+                : Optional.of(Duration.ofSeconds(lobbyTimeoutSeconds));
     }
 }
