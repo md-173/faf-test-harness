@@ -411,7 +411,8 @@ final class MainTest {
             final int gpgNetPort, final Duration launchDelay, final Duration matchDuration) {
         MockGameLifecycle created =
                 new MockGameLifecycle(
-                        new MockGameConfig(gpgNetPort, lobbyPort, 42, "Rhiza", 9001, Map.of(), 0, 0),
+                        new MockGameConfig(
+                                gpgNetPort, lobbyPort, 42, "Rhiza", 9001, Map.of(), 0, 0),
                         new GpgNetConnection(gpgNetPort),
                         launchDelay,
                         matchDuration);

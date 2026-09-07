@@ -49,7 +49,9 @@ public final class LifecyclePeerConnectTest {
 
     @BeforeEach
     void setup() throws IOException {
-        config = new MockGameConfig(50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0);
+        config =
+                new MockGameConfig(
+                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, 0);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         secondPeer = new DatagramSocket(0);

@@ -91,7 +91,14 @@ final class LifecycleTrafficWiringTest {
     void setUp() throws IOException {
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), OWN_PLAYER_ID, "Rhiza", 9001, Map.of(), 0);
+                        50000,
+                        TestPorts.freeUdpPort(),
+                        OWN_PLAYER_ID,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        0);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
@@ -141,6 +148,8 @@ final class LifecycleTrafficWiringTest {
                 "the two ports must differ for this to prove anything");
 
         gpgnet.start();
+        // Since WBS-3.2.4.1-fix (#262) construction is inert, so the connect needs start().
+        lifecycle.start();
         gpgnet.awaitClient();
         gpgnet.pollReceived(1, TimeUnit.SECONDS); // GameState Idle
         gpgnet.sendFrame(
@@ -224,6 +233,8 @@ final class LifecycleTrafficWiringTest {
     /** Drives the FSM to LOBBY, which is where the lobby socket binds. */
     private void reachLobby() throws Exception {
         gpgnet.start();
+        // Since WBS-3.2.4.1-fix (#262) construction is inert, so the connect needs start().
+        lifecycle.start();
         gpgnet.awaitClient();
         gpgnet.pollReceived(1, TimeUnit.SECONDS); // GameState Idle
         gpgnet.sendFrame(
@@ -332,7 +343,15 @@ final class LifecycleTrafficWiringTest {
                 .count();
     }
 
-    /** Re-binding the lobby port proves the shared socket was closed. */
+    /**
+     * Re-binding the lobby port proves the shared socket was closed.
+     *
+     * <p>The mirror of the TOCTOU window in {@link TestPorts#freeUdpPort()}: between teardown
+     * releasing the port and this re-bind, something else on the machine can take it, and the
+     * assertion then fails despite the release having worked. Left alone rather than retried —
+     * losing that race surfaces as a bind failure here, which is a visibly flaky test rather than a
+     * silent pass, and a retry loop would weaken what the assertion actually pins.
+     */
     private void assertLobbyPortReleased() throws IOException {
         try (DatagramSocket rebound = new DatagramSocket(config.lobbyPort())) {
             assertTrue(rebound.isBound(), "the lobby port must be free once the game is torn down");

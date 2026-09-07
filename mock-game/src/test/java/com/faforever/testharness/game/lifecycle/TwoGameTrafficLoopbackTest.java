@@ -107,7 +107,7 @@ final class TwoGameTrafficLoopbackTest {
             this.gpgnet = new ScriptedGpgNetServer();
             this.config =
                     new MockGameConfig(
-                            50000, TestPorts.freeUdpPort(), playerId, login, 9001, Map.of(), 0);
+                            50000, TestPorts.freeUdpPort(), playerId, login, 9001, Map.of(), 0, 0);
             this.lifecycle =
                     new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
         }
@@ -200,6 +200,8 @@ final class TwoGameTrafficLoopbackTest {
     /** Drives one game to LOBBY, which is where it binds its lobby socket. */
     private void reachLobby(final Game game) throws Exception {
         game.gpgnet.start();
+        // Since WBS-3.2.4.1-fix (#262) construction is inert, so the connect needs start().
+        game.lifecycle.start();
         game.gpgnet.awaitClient();
         game.gpgnet.pollReceived(1, TimeUnit.SECONDS); // GameState Idle
         game.gpgnet.sendFrame(
