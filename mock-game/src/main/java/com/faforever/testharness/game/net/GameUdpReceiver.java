@@ -148,9 +148,10 @@ public final class GameUdpReceiver {
     }
 
     /**
-     * The receive thread, or {@code null} before {@link #start()}. Package-private so a test can
-     * {@link Thread#join(long)} on it to assert the loop ends within a bound after the socket
-     * closes.
+     * The receive thread, or {@code null} before {@link #start()}. Package-private so the loop's
+     * end can be waited on: {@code GameTrafficSession.close} joins it briefly so the totals line
+     * below is written before teardown returns, and a test joins it to assert the loop ends within
+     * a bound after the socket closes.
      *
      * @return the receive thread
      */

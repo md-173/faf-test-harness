@@ -4,6 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
@@ -32,15 +36,21 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.slf4j.LoggerFactory;
 
 /**
  * The two-peer milestone (WBS-4.3.1): two Mock Clients on one host, each with its own lobby
@@ -71,8 +81,26 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * WBS-4.3.1). faf-server accepts a {@code game_join} only while the game is in {@code
  * GameState.LOBBY} and leaves that state the moment the host reports {@code GameState Launching},
  * so a host on the default 5 s timer would make itself unjoinable while B is still booting two
- * JVMs. Nothing is lost here: the peer link is established during the lobby phase, and game traffic
- * is 4.3.2's card.
+ * JVMs. Nothing is lost here: the peer link is established during the lobby phase, and so is the
+ * game traffic this test now also asserts.
+ *
+ * <p><b>Game traffic (WBS-4.3.2).</b> Each mock game binds its lobby port on {@code CreateLobby}
+ * and starts sending to a peer as soon as the adapter names one, so datagrams cross the finished
+ * ICE path during the lobby phase — as the real game's autolobby does, and without needing a launch
+ * this session deliberately never performs. The evidence is each game's own progress line, captured
+ * off its stdout by {@code ProcessOutputLogger}: a line naming a <em>receiving</em> and a
+ * <em>sending</em> player id is one direction proven, and both lines together are the round trip.
+ * Counts are asserted as "at least", never exactly: the adapter drops everything sent before ICE
+ * completes ({@code PeerIceModule.sendViaIce} is guarded by {@code connected}), so a stream that
+ * starts mid-sequence with gaps in it is the expected shape, not a defect.
+ *
+ * <p><b>One known cause of a slow pass.</b> If an adapter re-announces a peer at a
+ * <em>different</em> relay port, that peer's send sequence restarts at zero (WBS-3.2.2.5 installs a
+ * fresh counter per registration), while the receiving side only ever raises its highest-seen
+ * sequence. The advancing check below then makes no progress until the restarted stream climbs past
+ * the old high — bounded, about a second per ten datagrams already sent, but it can eat most of
+ * {@link #TRAFFIC_TIMEOUT}. The same shape is what WBS-4.3.4 will hit deliberately when a peer
+ * rejoins.
  *
  * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
@@ -141,6 +169,38 @@ final class TwoPeerSessionLiveTest {
      */
     private static final Duration PEER_CONNECTED_TIMEOUT = Duration.ofSeconds(90);
 
+    /**
+     * Budget for peer traffic to show up in both games' logs once ICE is established. Generous
+     * against a 1 s progress interval: two samples per direction need two intervals plus whatever
+     * the first datagrams cost, and this is headroom rather than a measurement.
+     */
+    private static final Duration TRAFFIC_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Datagrams a game must have attributed to the other player before the exchange counts as
+     * proven. Small on purpose: this asserts that the path carries traffic, not how much.
+     */
+    private static final int MIN_DATAGRAMS = 3;
+
+    /**
+     * Progress lines required per direction. Two, because one line proves a count and two
+     * consecutive lines are what proves the sequence is still advancing.
+     */
+    private static final int MIN_PROGRESS_SAMPLES = 2;
+
+    /**
+     * The mock game's progress line (WBS-4.3.2), as captured from its stdout. {@code
+     * TwoGameTrafficLoopbackTest} in mock-game holds a second copy of this pattern and these
+     * thresholds, and runs in the fast suite; change one and you must change the other.
+     */
+    private static final Pattern PROGRESS_LINE =
+            Pattern.compile(
+                    "player (\\d+) peer traffic from player (\\d+): (\\d+) datagrams, "
+                            + "highest sequence (-?\\d+), gaps (\\d+)");
+
+    /** A game that could not bind its lobby port, quoted into a failed traffic wait. */
+    private static final String BIND_FAILURE = "failed to bind lobby port";
+
     /** Budget for a requested shutdown to drive a session to TERMINATED and run its teardown. */
     private static final Duration TEARDOWN_TIMEOUT = Duration.ofSeconds(30);
 
@@ -166,6 +226,58 @@ final class TwoPeerSessionLiveTest {
      * the session fails.
      */
     private Peer joiner;
+
+    /** Root logger the mock-game capture appender is attached to. */
+    private Logger root;
+
+    /**
+     * Captures every log record in this JVM, which includes both mock games' stdout as re-emitted
+     * by {@code ProcessOutputLogger}. Backed by a copy-on-write list: two subprocess reader threads
+     * and the test thread touch it at once.
+     */
+    private ListAppender<ILoggingEvent> captured;
+
+    /**
+     * One captured progress line, parsed.
+     *
+     * @param receiverId the game that logged the line
+     * @param senderId the peer whose datagrams it counted
+     * @param datagrams how many it had attributed to that peer
+     * @param highestSequence the highest sequence number seen from that peer
+     */
+    private record TrafficSample(
+            int receiverId, int senderId, long datagrams, long highestSequence) {
+        @Override
+        public String toString() {
+            return "player "
+                    + receiverId
+                    + " <- player "
+                    + senderId
+                    + ": "
+                    + datagrams
+                    + " datagrams, highest sequence "
+                    + highestSequence;
+        }
+    }
+
+    @BeforeEach
+    void captureSubprocessLogs() {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        root = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        captured = new ListAppender<>();
+        captured.list = new CopyOnWriteArrayList<>();
+        captured.setContext(context);
+        captured.start();
+        root.addAppender(captured);
+    }
+
+    @AfterEach
+    void stopCapturingSubprocessLogs() {
+        if (captured != null) {
+            captured.stop();
+            root.detachAppender(captured);
+        }
+    }
 
     /**
      * One peer verdict as the adapter reported it.
@@ -341,6 +453,116 @@ final class TwoPeerSessionLiveTest {
         // The card's definitive signal, on both sides, for the ids the lobby assigned.
         awaitPeerConnected(host, joiner);
         awaitPeerConnected(joiner, host);
+
+        // WBS-4.3.2: with the link up, each game's traffic must be reaching the other.
+        awaitPeerTraffic(host, joiner);
+    }
+
+    /**
+     * Wait until both games report receiving the other's datagrams (WBS-4.3.2).
+     *
+     * <p>Gated on the {@code onConnected} checkpoints above, deliberately: the adapter drops
+     * anything sent before ICE completes, so counting from the start of the session would be
+     * counting a window that is expected to be lossy. Each direction needs {@link
+     * #MIN_PROGRESS_SAMPLES} progress lines whose datagram count reaches {@link #MIN_DATAGRAMS} and
+     * whose highest sequence has moved between the first and the last — which is what "still
+     * advancing" means, and is why a count alone is not enough.
+     *
+     * @param first one peer
+     * @param second the other
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private void awaitPeerTraffic(final Peer first, final Peer second) throws InterruptedException {
+        int firstId = first.identity.id();
+        int secondId = second.identity.id();
+        long deadline = System.nanoTime() + TRAFFIC_TIMEOUT.toNanos();
+        do {
+            if (exchangeProven(firstId, secondId) && exchangeProven(secondId, firstId)) {
+                return;
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        } while (System.nanoTime() < deadline);
+
+        fail(
+                "no two-way peer traffic within "
+                        + TRAFFIC_TIMEOUT
+                        + " (wanted "
+                        + MIN_PROGRESS_SAMPLES
+                        + " progress lines per direction reaching "
+                        + MIN_DATAGRAMS
+                        + " datagrams with an advancing sequence). "
+                        + first.name
+                        + " received: "
+                        + samples(firstId, secondId)
+                        + "; "
+                        + second.name
+                        + " received: "
+                        + samples(secondId, firstId)
+                        + bindFailureHint());
+    }
+
+    /**
+     * Whether {@code receiverId}'s game has proven it is receiving {@code senderId}'s traffic.
+     *
+     * @param receiverId the game doing the receiving
+     * @param senderId the game whose datagrams it must have counted
+     * @return {@code true} once the samples meet the thresholds and the sequence has advanced
+     */
+    private boolean exchangeProven(final int receiverId, final int senderId) {
+        List<TrafficSample> seen = samples(receiverId, senderId);
+        if (seen.size() < MIN_PROGRESS_SAMPLES) {
+            return false;
+        }
+        TrafficSample oldest = seen.get(0);
+        TrafficSample newest = seen.get(seen.size() - 1);
+        return newest.datagrams() >= MIN_DATAGRAMS
+                && newest.highestSequence() > oldest.highestSequence();
+    }
+
+    /**
+     * Every progress line captured so far for one direction, oldest first.
+     *
+     * @param receiverId the game that logged the line
+     * @param senderId the peer the line is about
+     * @return the parsed samples
+     */
+    private List<TrafficSample> samples(final int receiverId, final int senderId) {
+        List<TrafficSample> found = new ArrayList<>();
+        for (ILoggingEvent event : captured.list) {
+            Matcher matcher = PROGRESS_LINE.matcher(event.getFormattedMessage());
+            if (!matcher.find()) {
+                continue;
+            }
+            TrafficSample sample =
+                    new TrafficSample(
+                            Integer.parseInt(matcher.group(1)),
+                            Integer.parseInt(matcher.group(2)),
+                            Long.parseLong(matcher.group(3)),
+                            Long.parseLong(matcher.group(4)));
+            if (sample.receiverId() == receiverId && sample.senderId() == senderId) {
+                found.add(sample);
+            }
+        }
+        return found;
+    }
+
+    /**
+     * A game that could not bind its lobby port explains a silent traffic path, so say so rather
+     * than leaving a bare timeout to be re-diagnosed.
+     *
+     * @return the captured bind-failure lines in parentheses, or an empty string
+     */
+    private String bindFailureHint() {
+        List<String> failures = new ArrayList<>();
+        for (ILoggingEvent event : captured.list) {
+            String message = event.getFormattedMessage();
+            if (message.contains(BIND_FAILURE)) {
+                failures.add(message);
+            }
+        }
+        return failures.isEmpty()
+                ? ""
+                : " (a game could not bind its lobby port: " + failures + ")";
     }
 
     /**
