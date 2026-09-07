@@ -1,7 +1,6 @@
 package com.faforever.testharness.client.ice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -102,11 +101,10 @@ final class IceSignalRelayDelayTest {
         long start = System.nanoTime();
         adapterServer.send(onIceMsgNotification(2, ICE_MSG_JSON));
 
-        // The scripted servers' pollReceived fails rather than returning null, so "not yet" is
-        // asserted by the clock instead of a negative poll: an undelayed relay forwards on the
-        // reader thread and lands here in single-digit milliseconds.
+        // The scripted servers' pollReceived throws on timeout and never returns null, so "not
+        // yet" is asserted by the clock rather than a negative poll or a null check: an undelayed
+        // relay forwards on the reader thread and lands here in single-digit milliseconds.
         String frame = lobbyServer.pollReceived(ARRIVES_SECONDS, TimeUnit.SECONDS);
-        assertNotNull(frame, "the candidate never arrived; a delay must not become a drop");
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         assertTrue(
                 elapsedMillis >= DELAY.toMillis(),
@@ -128,7 +126,6 @@ final class IceSignalRelayDelayTest {
         lobbyServer.broadcastText(iceMsgFrame(1, ICE_MSG_JSON));
 
         String raw = adapterServer.pollReceived(ARRIVES_SECONDS, TimeUnit.SECONDS);
-        assertNotNull(raw, "the candidate never arrived; a delay must not become a drop");
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
         assertTrue(
                 elapsedMillis >= DELAY.toMillis(),
@@ -159,7 +156,6 @@ final class IceSignalRelayDelayTest {
         List<String> arrived = new ArrayList<>();
         for (int i = 0; i < sdps.size(); i++) {
             String frame = lobbyServer.pollReceived(ARRIVES_SECONDS, TimeUnit.SECONDS);
-            assertNotNull(frame, "only " + arrived.size() + " of 3 candidates arrived");
             JsonNode payload =
                     MAPPER.readTree(MAPPER.readTree(frame.strip()).get("args").get(1).asText());
             arrived.add(payload.get("sdp").asText());
@@ -178,10 +174,11 @@ final class IceSignalRelayDelayTest {
         adapterServer.send("{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1]}\n");
         adapterServer.send(onIceMsgNotification(9, ICE_MSG_JSON));
 
-        // The good candidate must be the *first* thing to arrive. Had the malformed one been queued
-        // on the scheduler and rejected a delay later, it would surface here ahead of this one.
+        // A rejected frame produces no forward at all, so what this proves is narrower than an
+        // ordering claim: the malformed notification did not kill the relay, and the next good
+        // candidate still arrives — with args[0] naming it, so it is that candidate and not one
+        // manufactured from the bad frame.
         String frame = lobbyServer.pollReceived(ARRIVES_SECONDS, TimeUnit.SECONDS);
-        assertNotNull(frame, "the relay stopped working after a malformed frame");
         assertEquals(
                 9,
                 MAPPER.readTree(frame.strip()).get("args").get(0).asInt(),

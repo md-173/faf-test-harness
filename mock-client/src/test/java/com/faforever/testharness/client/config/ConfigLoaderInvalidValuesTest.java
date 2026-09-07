@@ -40,6 +40,27 @@ final class ConfigLoaderInvalidValuesTest {
                         + ex.getMessage());
     }
 
+    /**
+     * The WBS-5.1 relay delay, rejected at load time rather than from inside a live session. The
+     * range check lives in {@link MockClientConfig}'s compact constructor and had no test on this
+     * path, which is the one an operator actually takes.
+     */
+    @Test
+    void negativeIceRelayDelayThrowsParameterException() {
+        String[] args =
+                concat(TestFixtures.minimalRequiredCli(), new String[] {"--ice-relay-delay-ms=-1"});
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        String lower = ex.getMessage().toLowerCase(Locale.ROOT);
+        assertTrue(
+                lower.contains("icerelaydelayms") || lower.contains("ice-relay-delay-ms"),
+                "Error message should name the offending option. Got: " + ex.getMessage());
+    }
+
     @Test
     void malformedUriThrowsParameterException() {
         String[] args =
