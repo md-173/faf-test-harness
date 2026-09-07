@@ -85,7 +85,6 @@ final class IceAdapterConnectionTest {
 
     @Test
     void connectFailsAfterRetriesWhenNothingListens() throws Exception {
-
         IceAdapterConnection c =
                 new IceAdapterConnection(
                         UNBOUND_PORT, 3, Duration.ofMillis(20), Duration.ofSeconds(1));
@@ -115,7 +114,6 @@ final class IceAdapterConnectionTest {
      */
     @Test
     void closeDuringRetryAbandonsTheConnectWindow() throws Exception {
-
         IceAdapterConnection c =
                 new IceAdapterConnection(
                         UNBOUND_PORT, 200, Duration.ofMillis(100), Duration.ofSeconds(1));
@@ -145,7 +143,6 @@ final class IceAdapterConnectionTest {
      */
     @Test
     void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {
-
         IceAdapterConnection c =
                 new IceAdapterConnection(
                         UNBOUND_PORT, 200, Duration.ofMillis(100), Duration.ofSeconds(1));

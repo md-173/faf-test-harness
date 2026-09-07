@@ -23,98 +23,76 @@ public final class LifecycleSetupTest {
     private static final MockGameConfig DEFAULT_CONFIG =
             new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0);
 
-    /**
-     * A port nothing can be listening on, so the lifecycle below stays in INITIALIZING for its
-     * whole connect-retry window. Fixed and below every platform's ephemeral range: binding port 0
-     * and closing it — what this test used to do — leaves the assertion racing whatever claims the
-     * released number next (WBS-3.2.4.1-fix, #262; same fix as #287).
-     */
-    private static final int UNBOUND_PORT = 1;
-
-    /**
-     * Mirrors {@code MockGameLifecycle.GPGNET_CONNECTION_WAIT}: how long the INITIALIZING to IDLE
-     * action sleeps once connected. Waiting past it is what makes the assertion above meaningful.
-     */
-    private static final long GPGNET_CONNECTION_WAIT_MILLIS = 500;
-
     private ScriptedGpgNetServer gpgnet;
     private MockGameLifecycle lifecycle;
 
+    /**
+     * Builds the fixture and starts the <em>server</em>, but not the lifecycle.
+     *
+     * <p>The server is started here rather than in each test because {@code ScriptedGpgNetServer}
+     * binds its {@code ServerSocket} in its constructor: an unstarted fixture still completes TCP
+     * handshakes out of the listen backlog, so a connect landed but was never accepted, and
+     * stopping the server in teardown then RST'd it — running each lifecycle's IDLE to ENDED
+     * cleanup on a background thread inside the <em>next</em> test's window.
+     *
+     * <p>The lifecycle is left unstarted so each test opts in. Since WBS-3.2.4.1-fix (#262)
+     * construction is inert, which is what lets {@link #constructionDoesNotConnectUntilStarted()}
+     * use this same fixture rather than standing up a second server of its own.
+     */
     @BeforeEach
     void setup() throws IOException {
         gpgnet = new ScriptedGpgNetServer();
+        gpgnet.start();
         lifecycle =
                 new MockGameLifecycle(
                         DEFAULT_CONFIG,
                         new GpgNetConnection(gpgnet.port()),
                         Duration.ofSeconds(1),
                         Duration.ofSeconds(1));
-        lifecycle.start();
     }
 
+    /** Tears the lifecycle down deterministically rather than by RST from the server's close. */
     @AfterEach
     void teardown() {
+        lifecycle.shutdown().run();
         gpgnet.stop();
     }
 
     /**
-     * Construction has no side effect on the wire: built against a <em>started</em> server, and
-     * left well past the 500ms {@code GPGNET_CONNECTION_WAIT} that would carry it to IDLE, the
+     * Construction has no side effect on the wire: pointed at a <em>started</em> server, the
      * lifecycle neither connects nor leaves INITIALIZING until {@link MockGameLifecycle#start()}.
      *
      * <p>This is the root cause of WBS-3.2.4.1-fix (#262), pinned rather than worked around.
      * Connecting from the constructor started a clock the moment a fixture returned, and every test
      * asserting anything about the pre-connect state raced it — which is what made this class's
      * initial-state assertion flake on two unrelated branches. A port with no listener hides that;
-     * a live server is what proves construction is inert.
+     * a live server is what proves construction is inert. It also subsumes the old {@code
+     * startsInInitializing}, which never called {@code start()} and so held for any port at all,
+     * live ones included.
+     *
+     * <p>250ms is a 50x margin: a loopback connect and accept measures under 5ms here, so a
+     * constructor-issued connect would have landed many times over.
      */
     @Test
     void constructionDoesNotConnectUntilStarted() throws Exception {
-        // Its own server, not the shared fixture's: that one already has the fixture's started
-        // lifecycle attached, so awaitClient there would report that connection rather than this
-        // one and the assertion would pass for the wrong reason.
-        ScriptedGpgNetServer live = new ScriptedGpgNetServer();
-        live.start();
-        try {
-            MockGameLifecycle inert =
-                    new MockGameLifecycle(
-                            DEFAULT_CONFIG, new GpgNetConnection(live.port()), null, null);
+        assertFalse(
+                gpgnet.awaitClient(250, TimeUnit.MILLISECONDS),
+                "the constructor opened a connection; construction must have no side effects");
+        assertEquals(
+                GameState.INITIALIZING,
+                lifecycle.getState(),
+                "an unstarted lifecycle must stay in INITIALIZING however long it is left");
 
-            assertFalse(
-                    live.awaitClient(2 * GPGNET_CONNECTION_WAIT_MILLIS, TimeUnit.MILLISECONDS),
-                    "the constructor opened a connection; construction must have no side effects");
-            assertEquals(
-                    GameState.INITIALIZING,
-                    inert.getState(),
-                    "an unstarted lifecycle must stay in INITIALIZING however long it is left");
-
-            inert.start();
-            assertTrue(live.awaitClient(5, TimeUnit.SECONDS), "start() should connect");
-            inert.stateReached(GameState.IDLE).get(5, TimeUnit.SECONDS);
-        } finally {
-            live.stop();
-        }
-    }
-
-    @Test
-    // The FSM's starting state, asserted against a port with no listener. The shared fixture binds
-    // its ServerSocket in its constructor, and a bound socket completes TCP handshakes out of the
-    // listen backlog whether or not start() has been called — so a lifecycle pointed at it can
-    // connect and leave INITIALIZING before the assertion runs, which is what made this a CI flake.
-    // With nothing listening, the bounded connect retry holds INITIALIZING for its full window.
-    void startsInInitializing() throws IOException {
-        MockGameLifecycle unconnected =
-                new MockGameLifecycle(
-                        DEFAULT_CONFIG, new GpgNetConnection(UNBOUND_PORT), null, null);
-
-        assertEquals(GameState.INITIALIZING, unconnected.getState());
+        lifecycle.start();
+        assertTrue(gpgnet.awaitClient(5, TimeUnit.SECONDS), "start() should connect");
+        lifecycle.stateReached(GameState.IDLE).get(5, TimeUnit.SECONDS);
     }
 
     @Test
     // Tests initial gpgnet connection causes a GameState("Idle") and following CreateLobby causes a
     // GameState("Lobby"), with similar internal state.
     void gpgnetSetup() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
 
         gpgnet.awaitClient();
         assertMessage("GameState", "Idle");
@@ -127,7 +105,7 @@ public final class LifecycleSetupTest {
 
     @Test
     void hostBranch() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
         gpgnet.awaitClient();
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
@@ -160,7 +138,7 @@ public final class LifecycleSetupTest {
 
     @Test
     void joinBranch() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
         gpgnet.awaitClient();
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
@@ -190,7 +168,7 @@ public final class LifecycleSetupTest {
 
     @Test
     void delayedStartAndEnd() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
         gpgnet.awaitClient();
 
         // Drop frame
@@ -211,7 +189,7 @@ public final class LifecycleSetupTest {
 
     @Test
     void cleanShutdown() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
         gpgnet.awaitClient();
 
         gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
@@ -230,7 +208,7 @@ public final class LifecycleSetupTest {
 
     @Test
     void perArmyGameResult() throws Exception {
-        gpgnet.start();
+        lifecycle.start();
         gpgnet.awaitClient();
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
