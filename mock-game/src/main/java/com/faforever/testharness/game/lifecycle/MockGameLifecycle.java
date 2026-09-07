@@ -38,7 +38,13 @@ public final class MockGameLifecycle {
     /** The default timeout length for the GpgNet connection,. */
     private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
-    /** A mapping of result strings to numerical scores. */
+    /**
+     * A mapping of result strings to numerical scores.
+     *
+     * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
+     * end-of-match result is fixed at army 1 victory, every other army defeat (WBS-3.2.4.3-fix,
+     * #281). See {@code gameEnds} for why that is the design rather than a gap.
+     */
     private static final Map<String, Integer> SCORES =
             Map.of("victory", 10, "defeat", -10, "draw", 10);
 
@@ -606,7 +612,12 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            // TODO(#281): Configurable values.
+            // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1 wins and
+            // every other army loses, on every run: the harness asserts on the shape and ordering
+            // of the closing frames, and a result that varied would make those assertions depend
+            // on configuration that no consumer has asked to vary. A mock whose output is the same
+            // every time is the point of it. If a card ever needs a specific outcome, the values
+            // belong on MockGameConfig alongside gameOptions rather than here.
             gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
             for (int i = 2; i <= peers.size() + 1; i++) {
                 gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));
