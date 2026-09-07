@@ -1,9 +1,12 @@
 package com.faforever.testharness.client.config;
 
 import com.fasterxml.jackson.core.JsonLocation;
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -41,8 +44,28 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
     /** Prefix applied to environment variables owned by the Mock Client. */
     private static final String ENV_PREFIX = "FAF_MOCK_CLIENT_";
 
-    /** Shared Jackson mapper used to read JSON config files. */
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /**
+     * Shared Jackson mapper used to read JSON config files.
+     *
+     * <p>Two non-default features are on, both of them about what the loader is willing to accept
+     * rather than about how it reports (WBS-3.1.5.1-fix, #290):
+     *
+     * <ul>
+     *   <li>{@code FAIL_ON_TRAILING_TOKENS} — {@code readTree} otherwise stops at the first
+     *       complete value and silently discards the rest, so {@code {"a":1} garbage} and {@code
+     *       {"a":1}{"b":2}} both loaded as {@code {"a":1}}. A file truncated and re-appended, or
+     *       concatenated by a bad generator, then produced a "missing required option" naming a key
+     *       the operator can see in the file.
+     *   <li>{@code STRICT_DUPLICATE_DETECTION} — a repeated key silently took the last value.
+     *       Last-wins is a defensible convention, but not an unstated one: a config with the same
+     *       key twice is a mistake far more often than it is a layering trick.
+     * </ul>
+     */
+    private static final ObjectMapper JSON =
+            JsonMapper.builder()
+                    .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+                    .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
+                    .build();
 
     /**
      * JSON keys that belonged to the removed password-grant schema. Listed here so the loader
