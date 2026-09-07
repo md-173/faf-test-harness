@@ -178,5 +178,51 @@ public record MockClientConfig(
                     "playerLogin must not be blank: it is passed to faf-ice-adapter as --login. "
                             + "Set --player-login or remove the empty value from the config file.");
         }
+        requireAtMostOneRole(hostConfig, joinConfig);
+    }
+
+    /**
+     * Rejects a configuration that asks the client to play more than one role in the same run
+     * (WBS-3.1.1.9-fix, #310).
+     *
+     * <p>Every role is an IDLE entry hook, so nothing sequences them: configuring two means both
+     * fire on the same entry to IDLE and the client sends conflicting requests to the lobby in
+     * whatever order the hooks happen to be registered. There is no reading of that run that is
+     * useful, and the lobby's answer to the second request depends on what its answer to the first
+     * did to the session — so the failure is neither deterministic nor legible.
+     *
+     * <p>Checked in the record rather than with a picocli {@code @ArgGroup(exclusive = true)}
+     * because a config file reaches this constructor without passing through the CLI at all, and
+     * that is the entry point an {@code @ArgGroup} would not cover. The message names flags rather
+     * than record components, since flags are what the operator typed.
+     *
+     * <p>Written as a list so a third role slots in as one line. #304 is adding a matchmaking queue
+     * role, which is what turned this from a two-way collision into a three-way one and surfaced
+     * it.
+     *
+     * @param hostConfig the host role, if configured
+     * @param joinConfig the join role, if configured
+     * @throws IllegalArgumentException if more than one role is configured
+     */
+    private static void requireAtMostOneRole(
+            final Optional<GameHostConfig> hostConfig, final Optional<GameJoinConfig> joinConfig) {
+        List<String> roles = new ArrayList<>();
+        if (hostConfig != null && hostConfig.isPresent()) {
+            roles.add("host (--host-title, --host-map, --host-mod, --host-visibility)");
+        }
+        if (joinConfig != null && joinConfig.isPresent()) {
+            roles.add("join (--target-game-id)");
+        }
+        if (roles.size() > 1) {
+            throw new IllegalArgumentException(
+                    "the mock client can play only one role per run, but "
+                            + roles.size()
+                            + " are configured: "
+                            + String.join(" and ", roles)
+                            + ". Each is an IDLE entry hook, so configuring several sends "
+                            + "conflicting requests on the same entry to IDLE. Keep one and "
+                            + "remove the other's flags, environment variables or config-file "
+                            + "keys.");
+        }
     }
 }
