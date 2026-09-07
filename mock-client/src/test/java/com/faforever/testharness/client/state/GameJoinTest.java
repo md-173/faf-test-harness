@@ -58,6 +58,7 @@ final class GameJoinTest {
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
+                    0,
                     0);
 
     private ScriptedWebSocketServer server;
@@ -108,6 +109,7 @@ final class GameJoinTest {
                 MINIMAL_CONFIG.hostConfig(),
                 joinConfig,
                 MINIMAL_CONFIG.queueConfig(),
+                0,
                 0);
     }
 

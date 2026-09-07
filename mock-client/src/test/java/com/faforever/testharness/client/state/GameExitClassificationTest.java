@@ -70,6 +70,7 @@ final class GameExitClassificationTest {
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
+                    0,
                     0);
 
     private ScriptedWebSocketServer server;

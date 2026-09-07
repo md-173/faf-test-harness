@@ -70,6 +70,7 @@ final class MatchmakingQueueTest {
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
+                    0,
                     0);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
@@ -197,7 +198,8 @@ final class MatchmakingQueueTest {
                 MINIMAL_CONFIG.hostConfig(),
                 MINIMAL_CONFIG.joinConfig(),
                 queueConfig,
-                MINIMAL_CONFIG.iceRelayDelayMs());
+                MINIMAL_CONFIG.iceRelayDelayMs(),
+                0);
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameQueueConfig> queueConfig)
