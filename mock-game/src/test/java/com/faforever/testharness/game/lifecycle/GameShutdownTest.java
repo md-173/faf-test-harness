@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.abort;
 
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
@@ -13,6 +14,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import com.faforever.testharness.game.net.GameTrafficSession;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
@@ -28,18 +30,39 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
- * Unit tests for {@link GameShutdown}: the idempotent stop-scheduling → close-connection →
- * close-traffic sequence. Stopping the logging context is not part of it — the bootstrap owns that
- * step (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
+ * Unit tests for {@link GameShutdown}: the idempotent stop-schedules → close-connection → stop-fsm
+ * → close-traffic sequence. Stopping the logging context is not part of it — the bootstrap owns
+ * that step (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
+ *
+ * <p>The close sitting ahead of {@link StateMachine#cancel()} is load-bearing rather than cosmetic,
+ * so it is covered twice: once directly, and once by {@link
+ * #completesWhileATransitionActionIsStalledMidWrite()}, which reproduces the stall the order exists
+ * to break (WBS-3.2.5.2 / #299).
  */
 final class GameShutdownTest {
 
+    /**
+     * Payload per frame in the stall test. Measured on this project's JDK 21 toolchain: with the
+     * server's receive buffer pinned small, four of these fill the pair of kernel buffers and the
+     * fifth write blocks.
+     */
+    private static final int STALL_FRAME_BYTES = 512 * 1024;
+
+    /** Safety cap on the stall loop — 64MB, far past any plausible loopback buffer pair. */
+    private static final int STALL_FRAME_CAP = 128;
+
+    private static final String STILL_WRITING = "still-writing";
+    private static final String WRITE_FAILED = "write-failed";
+    private static final String CAP_REACHED = "cap-reached";
+
     @Test
-    void runsStepsInOrderStopSchedulingThenCloseConnectionThenTraffic() throws Exception {
+    void runsStepsInOrderCloseConnectionThenStopFsmThenTraffic() throws Exception {
         // A never-connected GpgNetConnection closes synchronously (its disconnect fires on this
         // thread), so every step records its order deterministically.
         List<String> order = new CopyOnWriteArrayList<>();
@@ -61,10 +84,11 @@ final class GameShutdownTest {
         order.add(traffic.isClosed() ? "traffic-closed" : "traffic-never-closed");
 
         assertEquals(
-                List.of("stop-fsm", "close-connection", "traffic-still-open", "traffic-closed"),
+                List.of("close-connection", "traffic-still-open", "stop-fsm", "traffic-closed"),
                 order,
-                "scheduling must stop first so no timeout fires mid-teardown, and the traffic "
-                        + "session must still be open while the connection closes");
+                "the connection must close before StateMachine.cancel() so a transition action "
+                        + "stalled mid-write can release the monitor cancel() needs (#299), and "
+                        + "the traffic session must still be open while the connection closes");
     }
 
     @Test
@@ -271,6 +295,207 @@ final class GameShutdownTest {
     @Test
     void rejectsNullFsm() {
         assertThrows(NullPointerException.class, () -> new GameShutdown(null));
+    }
+
+    /**
+     * The defect itself (#299). A transition action blocked mid-write holds the StateMachine
+     * monitor; teardown on another thread must still return, because closing the socket is what
+     * releases that write. Reverting the close back behind {@link StateMachine#cancel()} makes this
+     * fail by assertion in about 8s rather than hanging — deliberate, as the repo has no global
+     * JUnit timeout, hence the explicit {@code @Timeout}, daemon threads and bounded joins.
+     */
+    @Test
+    @Timeout(30)
+    void completesWhileATransitionActionIsStalledMidWrite() throws Exception {
+        try (ServerSocket server = deafServer()) {
+            acceptAndNeverRead(server);
+            GpgNetConnection connection =
+                    new GpgNetConnection(server.getLocalPort(), 20, Duration.ofMillis(20));
+            connection.connect().get(5, TimeUnit.SECONDS);
+
+            CountDownLatch actionEntered = new CountDownLatch(1);
+            AtomicLong framesSent = new AtomicLong();
+            AtomicReference<String> outcome = new AtomicReference<>(STILL_WRITING);
+            State stalling = new State("STALLING");
+            stalling.registerTransition(
+                    StallEvent.class,
+                    new State("RELEASED"),
+                    ignored -> stallInWrite(connection, actionEntered, framesSent, outcome),
+                    null);
+            StateMachine fsm = new StateMachine(stalling);
+
+            // receiveEvent is synchronized for its whole body, so once the action reports itself
+            // running the FSM thread provably holds the monitor cancel() needs.
+            Thread fsmThread =
+                    startDaemon(() -> fsm.receiveEvent(new StallEvent()), "stalled-transition");
+            assertTrue(actionEntered.await(5, TimeUnit.SECONDS), "the action should be running");
+            awaitStalledWrite(framesSent, outcome);
+
+            CountDownLatch teardownReturned = new CountDownLatch(1);
+            startDaemon(
+                    () -> {
+                        new GameShutdown(fsm, connection).run();
+                        teardownReturned.countDown();
+                    },
+                    "stalled-teardown");
+
+            assertTrue(
+                    teardownReturned.await(5, TimeUnit.SECONDS),
+                    "teardown must not block behind the write its own close step unblocks");
+            fsmThread.join(5_000);
+            assertFalse(
+                    fsmThread.isAlive(), "closing the socket should release the stalled action");
+            // The vacuity guard. Had the writes all gone through instead of stalling, the action
+            // would have reported CAP_REACHED and awaitStalledWrite would have aborted the test as
+            // inapplicable rather than passing it on a window that was never contended.
+            assertEquals(
+                    WRITE_FAILED,
+                    outcome.get(),
+                    "the stalled write should have failed, not caught up");
+        }
+    }
+
+    /**
+     * The invariant this order trades away, confirmed rather than assumed. Modelled on the only
+     * timeout the mock game actually arms ({@code MockGameLifecycle}'s GPGNet connect timeout): its
+     * action writes nothing, it targets ENDED, and ENDED's entry hook is this same once-guarded
+     * sequence. Firing it in the window between the close and {@link StateMachine#cancel()} must
+     * therefore converge where teardown was already going, without tearing down twice.
+     */
+    @Test
+    @Timeout(30)
+    void timeoutFiringBetweenCloseAndCancelIsBenign() throws Exception {
+        // Ordered rather than merely counted: the point of the test is that the timeout fires
+        // inside the window, so the close has to be observably already done when it does.
+        List<String> order = new CopyOnWriteArrayList<>();
+        GpgNetConnection connection = new GpgNetConnection(1);
+        connection.onDisconnect(event -> order.add("close-connection"));
+
+        CountDownLatch timeoutFired = new CountDownLatch(1);
+        AtomicInteger entryHookRuns = new AtomicInteger();
+        State initializing = new State("INITIALIZING");
+        State ended = new State("ENDED");
+        // Not synchronized: UpdateStateTask.run takes this machine's monitor, so an override that
+        // held it while waiting would block the very timer thread expected to release the latch.
+        StateMachine fsm =
+                new StateMachine(initializing) {
+                    @Override
+                    public void cancel() {
+                        try {
+                            timeoutFired.await(5, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        super.cancel();
+                    }
+                };
+        GameShutdown shutdown = new GameShutdown(fsm, connection);
+        ended.onEntry(
+                () -> {
+                    entryHookRuns.incrementAndGet();
+                    shutdown.run(); // re-entrant; must no-op on the once-guard
+                });
+        fsm.setTimeout(
+                50,
+                ended,
+                ignored -> {
+                    order.add("timeout-fired");
+                    timeoutFired.countDown();
+                });
+
+        CountDownLatch teardownReturned = new CountDownLatch(1);
+        startDaemon(
+                () -> {
+                    shutdown.run();
+                    teardownReturned.countDown();
+                },
+                "teardown-with-armed-timeout");
+
+        assertTrue(teardownReturned.await(10, TimeUnit.SECONDS), "teardown must still return");
+        assertEquals(
+                List.of("close-connection", "timeout-fired"),
+                order,
+                "the timeout must fire after the close — otherwise this is not the traded window");
+        assertSame(ended, fsm.getState(), "a timeout in the window converges on its target state");
+        assertEquals(1, entryHookRuns.get(), "the target state was entered once");
+    }
+
+    /** Event with no meaning beyond triggering the stalling transition. */
+    private static final class StallEvent implements Event {}
+
+    /**
+     * A server that accepts but never reads, with its receive buffer pinned small before bind —
+     * which on Linux also disables receive-window autotuning, so the buffer pair the writer has to
+     * fill stays small and the stall arrives in milliseconds.
+     */
+    private static ServerSocket deafServer() throws IOException {
+        ServerSocket server = new ServerSocket();
+        server.setReceiveBufferSize(8192);
+        server.bind(new InetSocketAddress("127.0.0.1", 0));
+        return server;
+    }
+
+    /** Accepts one client and holds it open without ever reading a byte. */
+    private static void acceptAndNeverRead(final ServerSocket server) {
+        startDaemon(
+                () -> {
+                    try (Socket held = server.accept()) {
+                        while (!server.isClosed() && held.isConnected()) {
+                            Thread.sleep(50);
+                        }
+                    } catch (IOException | InterruptedException ignored) {
+                        // Server stopped or the test ended.
+                    }
+                },
+                "deaf-gpgnet-server");
+    }
+
+    /** Sends until the socket blocks, reporting how it ended. Runs as a transition action. */
+    private static void stallInWrite(
+            final GpgNetConnection connection,
+            final CountDownLatch entered,
+            final AtomicLong framesSent,
+            final AtomicReference<String> outcome) {
+        String payload = "x".repeat(STALL_FRAME_BYTES);
+        entered.countDown();
+        try {
+            for (int i = 0; i < STALL_FRAME_CAP; i++) {
+                connection.send(GpgNetFrame.of("Stall", payload));
+                framesSent.incrementAndGet();
+            }
+            outcome.set(CAP_REACHED);
+        } catch (IOException e) {
+            outcome.set(WRITE_FAILED);
+        }
+    }
+
+    /**
+     * Waits until the send count stops advancing, which is the only usable signal that the write
+     * has blocked: a thread parked in {@code NioSocketImpl}'s write poll reports {@code RUNNABLE},
+     * so {@link Thread.State} cannot distinguish it from one that is simply busy.
+     *
+     * <p>Releasing early can only weaken this test, never redden it — the close then makes the next
+     * send throw and every assertion still holds. Releasing late is bounded by {@link
+     * #STALL_FRAME_CAP}, and exhausting the cap aborts as an unmet assumption rather than failing,
+     * so a host with unusually large TCP buffers reports "not applicable" instead of a red build.
+     */
+    private static void awaitStalledWrite(
+            final AtomicLong framesSent, final AtomicReference<String> outcome)
+            throws InterruptedException {
+        long previous = -1;
+        int stableChecks = 0;
+        while (stableChecks < 3) {
+            Thread.sleep(100);
+            if (CAP_REACHED.equals(outcome.get())) {
+                abort(
+                        "could not fill the socket buffers within "
+                                + STALL_FRAME_CAP
+                                + " frames; this host's TCP buffers exceed what the test assumes");
+            }
+            long sent = framesSent.get();
+            stableChecks = sent == previous ? stableChecks + 1 : 0;
+            previous = sent;
+        }
     }
 
     /**
