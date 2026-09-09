@@ -23,6 +23,16 @@ test {
     useJUnitPlatform {
         excludeTags 'integration'
     }
+    // #261/#268: three lobby tests have timed out waiting for a frame and each was re-run green
+    // with nothing captured. LobbyConnection already logs every inbound frame with a timestamp,
+    // and ScriptedWebSocketServer now logs every frame it sends and receives, but both are at
+    // DEBUG and logback.xml defaults to INFO — so today the suite throws away exactly the
+    // evidence that would say whether a frame was late or never sent. Turning the level up here
+    // puts both ends of every exchange in the Gradle test report, which CI uploads on failure
+    // (see CONTRIBUTING.md § 3). LOG_LEVEL is read by logback.xml at config-parse time; the
+    // child JVMs in LogLevelFlagEndToEndTest scrub it from their environment, so the tests that
+    // assert on the default level are unaffected.
+    environment 'LOG_LEVEL', 'DEBUG'
 }
 
 tasks.register('integrationTest', Test) {
