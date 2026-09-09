@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -25,6 +26,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -144,6 +146,27 @@ final class MatchmakingQueueTest {
     /** The {@link StateMachine} framework's own log records, for the unregistered-event WARN. */
     private List<String> machineMessages() {
         return machineAppender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+    }
+
+    /**
+     * Waits for a lifecycle log record matching {@code predicate}. Send failures surface on the
+     * future the sender returns, so the record can land slightly after the call that triggered it;
+     * polling avoids the fixed sleep that would make this timing-dependent.
+     *
+     * @param predicate matcher for the formatted message.
+     * @param timeoutMillis how long to wait before giving up.
+     * @return {@code true} if a matching record arrived in time.
+     */
+    private boolean awaitMessage(Predicate<String> predicate, long timeoutMillis)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            if (messages().stream().anyMatch(predicate)) {
+                return true;
+            }
+            Thread.sleep(20);
+        }
+        return messages().stream().anyMatch(predicate);
     }
 
     /** Copies {@link #MINIMAL_CONFIG} with {@code queueConfig} overridden. */
@@ -319,6 +342,89 @@ final class MatchmakingQueueTest {
         assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
     }
 
+    /**
+     * The wide path for {@code match_cancelled} is a failure <em>after</em> {@code game_launch}
+     * (#304 review): {@code ladder_service.launch_match} writes the launch frame, then times out in
+     * {@code game.wait_hosted(60)}, and {@code _start_game} answers by broadcasting {@code
+     * match_cancelled}. Registered only on SEARCHING, that frame found no transition and the run
+     * hung with a live adapter and game.
+     */
+    @Test
+    void matchCancelledAfterGameLaunchTerminates() throws Exception {
+        GameQueueConfig queueConfig = new GameQueueConfig("ladder1v1", Optional.empty());
+        MockClientLifecycle lifecycle = newLifecycle(Optional.of(queueConfig));
+
+        var searching = lifecycle.stateReached(ClientState.SEARCHING);
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        server.pollReceived(3, TimeUnit.SECONDS);
+        server.broadcastText(searchInfo("ladder1v1", "start"));
+        searching.get(3, TimeUnit.SECONDS);
+
+        server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
+        var terminated = lifecycle.stateReached(ClientState.TERMINATED);
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+        assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
+
+        server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":12345}");
+        terminated.get(3, TimeUnit.SECONDS);
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertTrue(
+                messages().stream()
+                        .anyMatch(
+                                m ->
+                                        m.startsWith("match_cancelled after game_launch")
+                                                && m.contains("12345")),
+                "the cancellation must be reported with its game id: " + messages());
+        assertTrue(
+                machineMessages().stream().noneMatch(m -> m.contains("MatchCancelled")),
+                "match_cancelled must not hit the unregistered-event WARN: " + machineMessages());
+    }
+
+    /**
+     * faf-server accepts {@code game_matchmaking} start from SEARCHING_LADDER as well as IDLE and
+     * re-confirms each time, and the public {@link MockClientLifecycle#startSearch()} lets a
+     * harness trigger it directly. Without the SEARCHING self-loop this produced the same
+     * unregistered-event WARN the IDLE stop self-loop was added to prevent (#304 review).
+     */
+    @Test
+    void searchInfoStartWhileSearchingCausesNoStateChangeOrWarning() throws Exception {
+        GameQueueConfig queueConfig = new GameQueueConfig("ladder1v1", Optional.empty());
+        MockClientLifecycle lifecycle = newLifecycle(Optional.of(queueConfig));
+
+        var searching = lifecycle.stateReached(ClientState.SEARCHING);
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        server.pollReceived(3, TimeUnit.SECONDS);
+        server.broadcastText(searchInfo("ladder1v1", "start"));
+        searching.get(3, TimeUnit.SECONDS);
+
+        // DEBUG so the self-loop's own line is captured: waiting for it proves the second frame was
+        // actually processed. A bare sleep would let this pass vacuously if the frame never
+        // arrived, which is the failure mode the stop/cancel tests originally had.
+        Level previous = lifecycleLogger.getLevel();
+        lifecycleLogger.setLevel(Level.DEBUG);
+        try {
+            server.broadcastText(searchInfo("ladder1v1", "start"));
+            assertTrue(
+                    awaitMessage(
+                            m -> m.contains("search_info start received while already SEARCHING"),
+                            3000),
+                    "the repeated start confirmation must be handled: " + messages());
+        } finally {
+            lifecycleLogger.setLevel(previous);
+        }
+
+        assertEquals(ClientState.SEARCHING, lifecycle.getState());
+        assertTrue(
+                machineMessages().stream().noneMatch(m -> m.contains("SearchStarted")),
+                "a repeated start confirmation must not warn: " + machineMessages());
+        // The self-loop must not re-run SEARCHING's entry hooks, so no second state-entry line.
+        assertEquals(
+                1,
+                messages().stream().filter(m -> m.equals("state entry: SEARCHING")).count(),
+                "self-loop must not re-emit the state entry line: " + messages());
+    }
+
     @Test
     void searchTimeoutInResponseToStartProducesNoStateChangeAndLogsExpiry() throws Exception {
         MockClientLifecycle lifecycle =
@@ -371,6 +477,38 @@ final class MatchmakingQueueTest {
         server.broadcastText("{\"command\":\"matchmaker_info\",\"queues\":[]}");
         Thread.sleep(200);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
+    }
+
+    /**
+     * {@code LobbyConnection.send} resets its internal chain to a non-failed stage so one bad send
+     * cannot poison the next, which leaves the failure visible only on the future the caller gets
+     * back. The senders discarded it, so a send that never reached the socket said nothing anywhere
+     * (#304 review).
+     */
+    @Test
+    void failedGameMatchmakingSendIsLogged() throws Exception {
+        MockClientLifecycle lifecycle =
+                newLifecycle(Optional.of(new GameQueueConfig("ladder1v1", Optional.empty())));
+
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        server.pollReceived(3, TimeUnit.SECONDS); // the initial game_matchmaking start
+
+        // Closing the lobby also drives the FSM to TERMINATED, which runs teardown, and a send
+        // failing after teardown is deliberately demoted to DEBUG as an expected shutdown artefact.
+        // Capture both levels so this asserts "not silent" rather than one particular severity.
+        Level previous = lifecycleLogger.getLevel();
+        lifecycleLogger.setLevel(Level.DEBUG);
+        try {
+            lobby.close().get(2, TimeUnit.SECONDS);
+
+            lifecycle.startSearch();
+
+            assertTrue(
+                    awaitMessage(m -> m.contains("game_matchmaking start send failed"), 3000),
+                    "a failed send must not be silent: " + messages());
+        } finally {
+            lifecycleLogger.setLevel(previous);
+        }
     }
 
     @Test

@@ -61,6 +61,94 @@ final class ConfigLoaderInvalidValuesTest {
                 "Error message should name the offending option. Got: " + ex.getMessage());
     }
 
+    /**
+     * {@code --queue-faction} without {@code --queue-name} used to build no queue config at all, so
+     * the session started, never queued, and sat in IDLE until killed (#304 review). {@code
+     * buildQueueConfig} now triggers on either option so the record names the missing one.
+     */
+    @Test
+    void queueFactionWithoutQueueNameThrowsParameterException() {
+        String[] args =
+                concat(TestFixtures.minimalRequiredCli(), new String[] {"--queue-faction=3"});
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(
+                ex.getMessage().contains("--queue-name"),
+                "Error message should name the missing option. Got: " + ex.getMessage());
+    }
+
+    /**
+     * An out-of-range faction used to reach the wire and fail opaquely inside faf-server's {@code
+     * Faction.from_value} (#304 review). The bound is the server enum's, so {@code nomad=5} stays
+     * valid and only genuinely undecodable values are rejected.
+     */
+    @Test
+    void outOfRangeQueueFactionThrowsParameterException() {
+        String[] args =
+                concat(
+                        TestFixtures.minimalRequiredCli(),
+                        new String[] {"--queue-name=ladder1v1", "--queue-faction=7"});
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(
+                ex.getMessage().contains("--queue-faction"),
+                "Error message should name the offending option. Got: " + ex.getMessage());
+    }
+
+    /** The server's own upper bound, {@code nomad=5}, must not be rejected. */
+    @Test
+    void queueFactionAtServerUpperBoundIsAccepted() {
+        String[] args =
+                concat(
+                        TestFixtures.minimalRequiredCli(),
+                        new String[] {"--queue-name=ladder1v1", "--queue-faction=5"});
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertTrue(config.queueConfig().isPresent(), "queue config should be built");
+        assertTrue(
+                config.queueConfig().get().faction().isPresent()
+                        && config.queueConfig().get().faction().get() == 5,
+                "nomad should survive validation");
+    }
+
+    /**
+     * Hosting, joining and queueing all fire on the same IDLE entry, so combining them sends
+     * conflicting intents; queueing while in a custom game is also how a matchmaker violation is
+     * earned (#304 review, #224 operational risk).
+     */
+    @Test
+    void queueingAndHostingTogetherThrowsParameterException() {
+        String[] args =
+                concat(
+                        TestFixtures.minimalRequiredCli(),
+                        new String[] {
+                            "--queue-name=ladder1v1",
+                            "--host-title=Test Game",
+                            "--host-map=scmp_007",
+                            "--host-mod=faf",
+                            "--host-visibility=public",
+                        });
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        String message = ex.getMessage();
+        assertTrue(
+                message.contains("--queue-name") && message.contains("--host-"),
+                "Error message should name both conflicting intents. Got: " + message);
+    }
+
     @Test
     void malformedUriThrowsParameterException() {
         String[] args =

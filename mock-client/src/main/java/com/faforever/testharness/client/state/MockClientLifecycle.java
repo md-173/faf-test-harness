@@ -34,6 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -460,6 +461,18 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.SEARCHING)
                 .registerTransition(SearchStopped.class, states.get(ClientState.IDLE));
+        // A second search_info start while already SEARCHING is ordinary, not an anomaly. The
+        // server accepts game_matchmaking start from SEARCHING_LADDER as well as IDLE (see
+        // lobbyconnection.command_game_matchmaking) and start_search re-sends the confirmation
+        // every time; a harness calling the public startSearch() during a search triggers it
+        // directly. Self-loop for the same reason the IDLE/SearchStopped one above exists:
+        // without it this hits StateMachine's unregistered-event WARN.
+        states.get(ClientState.SEARCHING)
+                .registerTransition(
+                        SearchStarted.class,
+                        states.get(ClientState.SEARCHING),
+                        this::logStartWhileSearching,
+                        null);
         states.get(ClientState.SEARCHING)
                 .registerTransition(MatchCancelled.class, states.get(ClientState.IDLE));
         states.get(ClientState.SEARCHING)
@@ -470,6 +483,41 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.SEARCHING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
+        registerPostLaunchMatchCancelledTransitions();
+    }
+
+    /**
+     * Registers {@code match_cancelled} on the states reachable after {@code game_launch} (#304
+     * review). The SEARCHING edge above covers only the window between {@code match_found} and
+     * {@code game_launch}, which faf-server sends back to back; its wider path is a failure
+     * <em>after</em> the launch frame has already gone out. {@code ladder_service.launch_match}
+     * writes {@code game_launch} to the host, then awaits {@code game.wait_hosted(60)} and raises
+     * {@code NotConnectedError} on timeout, and {@code _start_game}'s handler answers that by
+     * broadcasting {@code match_cancelled}. By then this client is in STARTING_GAME, HOSTING or
+     * JOINING with a live adapter and mock game.
+     *
+     * <p>TERMINATED rather than back to IDLE: the matched game will never start, so the session is
+     * over, and TERMINATED's entry hook is what tears the subprocesses down. This is how those same
+     * states already treat {@link Disconnected} and {@link GameExited} — an unrecoverable setup
+     * failure ends the run rather than trying to recover it. Without these edges the event finds no
+     * transition and the run hangs with a live game and adapter, which is the silent failure this
+     * card's {@code search_timeout} handling exists to eliminate.
+     *
+     * <p>PLAYING is deliberately not included. A {@code wait_launched} timeout can in principle
+     * cancel a match this client already reached PLAYING for, but killing a running game on a lobby
+     * frame would contradict the "play on" rule that state is built around (see the lobby-loss
+     * self-loop): established peer connections are peer-to-peer, and the session already ends
+     * deterministically through the game's own exit.
+     */
+    private void registerPostLaunchMatchCancelledTransitions() {
+        for (var s : List.of(ClientState.STARTING_GAME, ClientState.HOSTING, ClientState.JOINING)) {
+            states.get(s)
+                    .registerTransition(
+                            MatchCancelled.class,
+                            states.get(ClientState.TERMINATED),
+                            this::onMatchCancelledAfterLaunch,
+                            null);
+        }
     }
 
     /**
@@ -1204,6 +1252,71 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * SEARCHING stay-in-state action for {@link SearchStarted}: logs a start confirmation for a
+     * search that is already running. Ordinary, not an error — faf-server accepts {@code
+     * game_matchmaking} start from SEARCHING_LADDER as well as IDLE and re-confirms each time. The
+     * self-loop exists so this does not surface as an unregistered-event WARN; see the registration
+     * in {@link #registerMatchmakingQueueTransitions()}.
+     *
+     * @param message the {@link SearchStarted} event; guaranteed by registration.
+     */
+    private void logStartWhileSearching(Event message) {
+        LOG.debug("search_info start received while already SEARCHING; no state change");
+    }
+
+    /**
+     * Transition action for a {@code match_cancelled} that arrives after {@code game_launch}, on
+     * the way to TERMINATED (#304 review). Logs at WARN with the game id, because this is a real
+     * failure the harness needs to see: the server gave up on the matched game, usually because a
+     * peer did not connect inside its {@code wait_hosted(60)}, and that is also the path that
+     * registers a matchmaker violation against the player who failed to connect.
+     *
+     * <p>Teardown itself is not done here — TERMINATED's entry hook owns it, so this only reports.
+     *
+     * @param message the {@link MatchCancelled} event; guaranteed by registration.
+     */
+    private void onMatchCancelledAfterLaunch(Event message) {
+        JsonNode command = ((MatchCancelled) message).command();
+        LOG.warn(
+                "match_cancelled after game_launch (game_id={}); the matched game will not start,"
+                        + " terminating",
+                command.path("game_id").asText("null"));
+    }
+
+    /**
+     * Attaches failure logging to an outbound lobby send, for the three configured-intent senders
+     * below and the queue's start/stop (#304 review). {@link LobbyConnection#send} deliberately
+     * resets its internal chain to a non-failed stage so one bad send cannot poison every send
+     * after it, which means a failure is observable <em>only</em> on the future handed back to the
+     * caller. Discarding that future, as these senders did, makes a failed send completely silent:
+     * a lobby that drops while the IDLE entry hook is running would leave a session that queued (or
+     * hosted, or joined) for nothing and reported it nowhere.
+     *
+     * <p>{@code whenComplete} rather than {@code whenCompleteAsync}: this continuation only logs
+     * and never touches the FSM, so it cannot cause the monitor re-entry the {@code connectToPeer}
+     * path has to guard against, and running it inline keeps the failure ordered against the
+     * surrounding state-entry line the harness log contract documents.
+     *
+     * @param sent the future returned by the sender.
+     * @param what names the frame, for the log line.
+     */
+    private void logIfSendFails(final CompletableFuture<?> sent, final String what) {
+        sent.whenComplete(
+                (ok, error) -> {
+                    if (error == null) {
+                        return;
+                    }
+                    // Teardown closes the lobby, so an in-flight send failing on the way out is
+                    // expected rather than a fault; same reasoning as the connectToPeer path.
+                    if (teardown.hasRun()) {
+                        LOG.debug("{} send failed during teardown ({})", what, error.getMessage());
+                        return;
+                    }
+                    LOG.warn("{} send failed: {}", what, error.getMessage());
+                });
+    }
+
+    /**
      * IDLE entry hook: sends {@code game_host} for {@link MockClientConfig#hostConfig()}
      * (lobby-protocol-spec.md §4.1 / §10.2). No-op if no host settings were configured for this
      * session — the mock client hosts, joins, or sits idle depending on what the operator
@@ -1215,7 +1328,7 @@ public final class MockClientLifecycle {
         }
         GameHostConfig hostConfig = config.hostConfig().get();
         LOG.info("Sending game_host for title={}", hostConfig.title());
-        new GameHostSender(lobby).sendGameHost(hostConfig);
+        logIfSendFails(new GameHostSender(lobby).sendGameHost(hostConfig), "game_host");
     }
 
     /**
@@ -1230,7 +1343,7 @@ public final class MockClientLifecycle {
         }
         GameJoinConfig joinConfig = config.joinConfig().get();
         LOG.info("Sending game_join for uid={}", joinConfig.targetGameId());
-        new GameJoinSender(lobby).sendGameJoin(joinConfig);
+        logIfSendFails(new GameJoinSender(lobby).sendGameJoin(joinConfig), "game_join");
     }
 
     /**
@@ -1270,7 +1383,8 @@ public final class MockClientLifecycle {
                                         new IllegalStateException(
                                                 "startSearch() called without a queue configured"));
         LOG.info("Sending game_matchmaking start for queue={}", queueConfig.queueName());
-        new GameMatchmakingSender(lobby).sendStart(queueConfig);
+        logIfSendFails(
+                new GameMatchmakingSender(lobby).sendStart(queueConfig), "game_matchmaking start");
     }
 
     /**
@@ -1288,7 +1402,8 @@ public final class MockClientLifecycle {
                                         new IllegalStateException(
                                                 "stopSearch() called without a queue configured"));
         LOG.info("Sending game_matchmaking stop for queue={}", queueConfig.queueName());
-        new GameMatchmakingSender(lobby).sendStop(queueConfig);
+        logIfSendFails(
+                new GameMatchmakingSender(lobby).sendStop(queueConfig), "game_matchmaking stop");
     }
 
     /**

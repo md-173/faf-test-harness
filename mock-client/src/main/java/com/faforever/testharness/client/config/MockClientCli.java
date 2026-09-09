@@ -438,8 +438,8 @@ public final class MockClientCli implements Callable<Integer> {
             names = "--queue-faction",
             scope = ScopeType.INHERIT,
             description =
-                    "Faction to search with (1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim). Sent only on "
-                            + "game_matchmaking start. See --queue-name.")
+                    "Faction to search with (1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad). Sent "
+                            + "only on game_matchmaking start. See --queue-name.")
     private Integer queueFaction;
 
     /**
@@ -528,14 +528,18 @@ public final class MockClientCli implements Callable<Integer> {
     }
 
     /**
-     * Builds the queue config from {@code --queue-name} and {@code --queue-faction}, or empty if no
-     * queue was set.
+     * Builds the queue config from {@code --queue-name} and {@code --queue-faction}, or empty if
+     * neither was set. Triggers on <em>either</em> option, the same shape {@link
+     * #buildHostConfig()} uses, so a partial set is rejected by {@link GameQueueConfig}'s compact
+     * constructor naming the missing option rather than silently starting a session that never
+     * queues (#304 review). Gating on {@code queueName} alone would also make that record's
+     * "--queue-name must not be blank" message unreachable from this path.
      *
      * @return the queue config, or {@link Optional#empty()} if the operator did not request
      *     queueing
      */
     private Optional<GameQueueConfig> buildQueueConfig() {
-        if (queueName == null) {
+        if (queueName == null && queueFaction == null) {
             return Optional.empty();
         }
         return Optional.of(new GameQueueConfig(queueName, Optional.ofNullable(queueFaction)));
