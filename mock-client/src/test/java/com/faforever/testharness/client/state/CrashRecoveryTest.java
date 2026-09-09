@@ -279,6 +279,27 @@ final class CrashRecoveryTest {
         lifecycle.post(new GameExited(0));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState(), "must stay TERMINATED");
+        // #252: the state was already right before the TERMINATED self-loop existed — the IGNORE
+        // policy saw to that. What was wrong was the WARN it left behind on every clean run.
+        assertNoUnmatchedTransitionWarning();
+    }
+
+    /**
+     * Fails if the framework logged its unregistered-event warning (#252). Teardown reaps the mock
+     * game and the ICE adapter after TERMINATED has been entered, so both exits are posted into a
+     * state that has to handle them deliberately rather than let {@code StateMachine} warn.
+     */
+    private void assertNoUnmatchedTransitionWarning() {
+        assertFalse(
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("No matching transitions")),
+                "a post-teardown subprocess exit must be a deliberate no-op, not an "
+                        + "unregistered-event warning. captured: "
+                        + appender.list);
     }
 
     /**

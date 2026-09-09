@@ -364,6 +364,7 @@ public final class MockClientLifecycle {
                         states.get(ClientState.TERMINATED),
                         this::logSelfInflictedDisconnect,
                         null);
+        registerPostTeardownExitTransitions();
 
         // Manual shutdown valid from every state.
         for (var s : ClientState.values()) {
@@ -458,6 +459,33 @@ public final class MockClientLifecycle {
                         AdapterExited.class,
                         states.get(ClientState.TERMINATED),
                         this::onAdapterExited,
+                        null);
+    }
+
+    /**
+     * Registers the TERMINATED self-loops for the two subprocess exits (#252). Teardown reaps the
+     * ICE adapter and the mock game after the FSM has already entered TERMINATED, so without these
+     * both events land in a state with no edge and {@code StateMachine} logs "No matching
+     * transitions" on every clean run — noise that reads as a fault to anyone scanning the output.
+     *
+     * <p>Handled here rather than filtered at the event source: both events carry an exit code that
+     * genuinely matters in the other four states, so the events are real and only the timing makes
+     * them uninteresting. Same treatment {@link Disconnected} already gets, and for the same reason
+     * — a deliberate debug-level no-op beats the framework's generic WARN. Self-loops skip entry
+     * hooks, so neither can re-run teardown.
+     */
+    private void registerPostTeardownExitTransitions() {
+        states.get(ClientState.TERMINATED)
+                .registerTransition(
+                        AdapterExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::logAdapterExitAfterTeardown,
+                        null);
+        states.get(ClientState.TERMINATED)
+                .registerTransition(
+                        GameExited.class,
+                        states.get(ClientState.TERMINATED),
+                        this::logGameExitAfterTeardown,
                         null);
     }
 
@@ -940,6 +968,31 @@ public final class MockClientLifecycle {
     private void logSelfInflictedDisconnect(Event message) {
         Disconnected disconnected = (Disconnected) message;
         LOG.debug("Disconnected from lobby after session teardown ({})", disconnected.event());
+    }
+
+    /**
+     * TERMINATED no-op action for {@link AdapterExited} (#252): teardown kills the ICE adapter,
+     * whose exit is then reported on a session that has already torn down. Logged at debug level
+     * only and does not re-run teardown.
+     *
+     * @param message the {@link AdapterExited} event; guaranteed by registration, never anything
+     *     else.
+     */
+    private void logAdapterExitAfterTeardown(Event message) {
+        AdapterExited exited = (AdapterExited) message;
+        LOG.debug("ICE adapter exited after session teardown (code={})", exited.exitCode());
+    }
+
+    /**
+     * TERMINATED no-op action for {@link GameExited} (#252): the mock game's exit arrives after the
+     * session has already torn down, either because teardown killed it or because it died on its
+     * own once the machine had moved on. Logged at debug level only and does not re-run teardown.
+     *
+     * @param message the {@link GameExited} event; guaranteed by registration, never anything else.
+     */
+    private void logGameExitAfterTeardown(Event message) {
+        GameExited exited = (GameExited) message;
+        LOG.debug("mock-game exited after session teardown (code={})", exited.exitCode());
     }
 
     private void hostGame(Event message) throws FailedTransitionException {
