@@ -151,6 +151,21 @@ public final class MockClientCli implements Callable<Integer> {
                             + "rotation.")
     private Path oauthRefreshTokenFile;
 
+    /**
+     * Path to a file holding a pre-signed access token, used verbatim (WBS-3.1.6.4, #325).
+     *
+     * <p>The alternative to {@code --oauth-refresh-token-file}, and mutually exclusive with it. A
+     * file rather than a bare value so the token stays out of the process table and out of CI logs.
+     */
+    @Option(
+            names = "--oauth-access-token-file",
+            scope = ScopeType.INHERIT,
+            description =
+                    "Path to a file holding a pre-signed OAuth access token, used as-is with no "
+                            + "exchange and no renewal. Mutually exclusive with "
+                            + "--oauth-refresh-token-file.")
+    private Path oauthAccessTokenFile;
+
     /** Stable hardware identifier sent in the lobby auth message. */
     @Option(
             names = "--unique-id",
@@ -448,6 +463,7 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthScopes,
                 oauthClientId,
                 oauthRefreshTokenFile,
+                Optional.ofNullable(oauthAccessTokenFile),
                 uniqueId,
                 clientVersion,
                 userAgent,

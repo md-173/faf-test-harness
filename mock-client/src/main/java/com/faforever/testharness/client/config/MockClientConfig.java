@@ -29,6 +29,10 @@ import java.util.OptionalInt;
  *     rotated by Hydra on every use); rewritten atomically on each rotation. The file is the only
  *     credential channel: a literal token value cannot receive the rotated token back, so it would
  *     silently break on the next run.
+ * @param oauthAccessTokenFile path to a file holding a pre-signed access token, used verbatim with
+ *     no exchange and no rotation (WBS-3.1.6.4, #325). The alternative credential channel to {@code
+ *     oauthRefreshTokenFile}, and mutually exclusive with it. A file rather than a bare flag so the
+ *     token stays out of the process table and out of CI logs
  * @param uniqueId stable hardware identifier sent in the lobby auth message
  * @param clientVersion client version string sent in the {@code ask_session} message (a required
  *     field of that command; lobby-protocol-spec.md §3)
@@ -81,6 +85,7 @@ public record MockClientConfig(
         String oauthScopes,
         String oauthClientId,
         Path oauthRefreshTokenFile,
+        Optional<Path> oauthAccessTokenFile,
         String uniqueId,
         String clientVersion,
         String userAgent,
@@ -127,9 +132,7 @@ public record MockClientConfig(
         if (lobbyWebSocketUrl == null) {
             missing.add("--lobby-websocket-url");
         }
-        if (oauthTokenUrl == null) {
-            missing.add("--oauth-token-url");
-        }
+
         if (oauthAuthEndpoint == null) {
             missing.add("--oauth-auth-endpoint");
         }
@@ -139,11 +142,33 @@ public record MockClientConfig(
         if (oauthScopes == null || oauthScopes.isBlank()) {
             missing.add("--oauth-scopes");
         }
-        if (oauthClientId == null || oauthClientId.isBlank()) {
-            missing.add("--oauth-client-id");
-        }
+
         if (uniqueId == null || uniqueId.isBlank()) {
             missing.add("--unique-id");
+        }
+        boolean hasAccessTokenFile =
+                oauthAccessTokenFile != null && oauthAccessTokenFile.isPresent();
+        // Only the refresh-token channel exchanges anything, so only it needs the endpoint and the
+        // client id (WBS-3.1.6.4, #325). Demanding them of a pre-signed token would be the same
+        // wall the placeholder OAuth flags used to be for the no-lobby diagnostics: values invented
+        // to get past validation, never used.
+        if (!hasAccessTokenFile) {
+            if (oauthTokenUrl == null) {
+                missing.add("--oauth-token-url");
+            }
+            if (oauthClientId == null || oauthClientId.isBlank()) {
+                missing.add("--oauth-client-id");
+            }
+        }
+        if (oauthRefreshTokenFile != null && hasAccessTokenFile) {
+            // Rejected rather than resolved by precedence: the two channels behave differently —
+            // one renews itself and rewrites its file, the other cannot renew at all — so silently
+            // picking either would produce a run whose failure mode the operator did not choose.
+            throw new IllegalArgumentException(
+                    "two OAuth credential channels configured: --oauth-refresh-token-file and "
+                            + "--oauth-access-token-file. Supply exactly one. The refresh-token "
+                            + "file is the steady-state headless path; the access-token file is a "
+                            + "pre-signed token used verbatim, with no exchange and no renewal.");
         }
         if (!missing.isEmpty()) {
             throw new IllegalArgumentException(
@@ -152,11 +177,11 @@ public record MockClientConfig(
                             + ". Supply each via its CLI flag, the matching FAF_MOCK_CLIENT_* "
                             + "environment variable, or a --config file.");
         }
-
-        if (oauthRefreshTokenFile == null) {
+        if (oauthRefreshTokenFile == null && !hasAccessTokenFile) {
             throw new IllegalArgumentException(
                     "no OAuth credentials supplied: set --oauth-refresh-token-file for headless "
-                            + "refresh-token rotation. See "
+                            + "refresh-token rotation, or --oauth-access-token-file to use a "
+                            + "pre-signed token as-is. See "
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
         }
