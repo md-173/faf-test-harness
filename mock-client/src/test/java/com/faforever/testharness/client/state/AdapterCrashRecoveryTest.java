@@ -227,6 +227,18 @@ final class AdapterCrashRecoveryTest {
         lifecycle.post(new AdapterExited(1));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        // #252: the state was already right before the TERMINATED self-loop existed — the IGNORE
+        // policy saw to that. What was wrong was the WARN it left behind on every clean run.
+        assertFalse(
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("No matching transitions")),
+                "a post-teardown adapter exit must be a deliberate no-op, not an "
+                        + "unregistered-event warning. captured: "
+                        + appender.list);
     }
 
     /** Kills the running adapter subprocess and returns the exit code it actually produced. */
