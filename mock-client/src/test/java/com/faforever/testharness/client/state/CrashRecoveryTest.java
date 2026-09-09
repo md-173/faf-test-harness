@@ -28,6 +28,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -280,8 +281,31 @@ final class CrashRecoveryTest {
         assertEquals(ClientState.TERMINATED, lifecycle.getState(), "must stay TERMINATED");
     }
 
+    /**
+     * Drives a fresh lifecycle to HOSTING with a launched child game, and hands it back once
+     * HOSTING has been reached.
+     *
+     * <p>HOSTING is legitimately transient here (#255). {@code LaunchGame} spawns a real child that
+     * in most of these tests exits immediately, and {@link MockClientLifecycle} fans that exit into
+     * {@code gameExit.thenAcceptAsync(this::onGameProcessExit)}, which drives the machine on to
+     * TERMINATED. Reading {@code getState()} after the posts therefore races the reaper: it failed
+     * under three different test names, always on this one line, because every test in the file
+     * comes through this fixture. The async hop is deliberate and load-bearing, so the fixture's
+     * assumption is what has to go, not the production code.
+     *
+     * <p>The future is taken <em>before</em> the posts on purpose. {@link
+     * com.faforever.testharness.shared.statemachine.StateMachine#stateReached} short-circuits only
+     * while the state is still current, so one taken afterwards would never complete once the
+     * machine had moved on — whereas one registered up front is completed the moment HOSTING is
+     * committed and stays completed however fast the child dies.
+     *
+     * @param launcher the game launcher whose child this fixture starts
+     * @param teardown the teardown to run on TERMINATED
+     * @return the lifecycle, having reached HOSTING at least once
+     * @throws Exception if HOSTING is never reached
+     */
     private MockClientLifecycle hostingLifecycle(
-            ChildGameLauncher launcher, SessionTeardown teardown) {
+            ChildGameLauncher launcher, SessionTeardown teardown) throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         MockClientLifecycle lifecycle =
@@ -293,10 +317,11 @@ final class CrashRecoveryTest {
                         iceLauncher,
                         teardown);
 
+        CompletableFuture<Void> hosting = lifecycle.stateReached(ClientState.HOSTING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(hostGameMessage()));
-        assertEquals(ClientState.HOSTING, lifecycle.getState());
+        hosting.get(15, TimeUnit.SECONDS);
         return lifecycle;
     }
 
