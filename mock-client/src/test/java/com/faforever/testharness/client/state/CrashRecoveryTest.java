@@ -24,6 +24,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
@@ -36,6 +37,7 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -100,6 +102,14 @@ final class CrashRecoveryTest {
      */
     private static final ProcessBuilder HANGING_PROCESS = new ProcessBuilder("sort");
 
+    @TempDir private Path tempDir;
+
+    /**
+     * Sentinel whose creation releases a child started by {@link #exitingOnCue(int)}. Per-test, so
+     * one test's cue can never reach another's child.
+     */
+    private Path exitCue;
+
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
     private ChildGameLauncher gameLauncher;
@@ -109,6 +119,7 @@ final class CrashRecoveryTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        exitCue = tempDir.resolve("exit-now");
         server = new ScriptedWebSocketServer();
         server.startAndAwait();
 
@@ -129,6 +140,9 @@ final class CrashRecoveryTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        // Release any child still waiting on the cue before terminating it, so a test that failed
+        // before reaching its release cannot leave one spinning.
+        releaseGameChild();
         appender.stop();
         root.detachAppender(appender);
         if (gameLauncher != null && gameLauncher.manager != null) {
@@ -154,11 +168,62 @@ final class CrashRecoveryTest {
                 : new ProcessBuilder("sh", "-c", "exit " + code);
     }
 
+    /**
+     * As {@link #exitingWith(int)}, but the child waits for {@link #exitCue} to appear before
+     * exiting with {@code code}. {@link #releaseGameChild()} is the trigger.
+     *
+     * <p>Needed by every test that reaches HOSTING through {@link #hostingLifecycle} and then wants
+     * the game's own exit. {@code LaunchGame} spawns the child during its transition (the launch is
+     * that transition's action) and the lifecycle fans the exit out through {@code
+     * gameExit.thenAcceptAsync}, so a child that exits by itself races the fixture's next post: if
+     * the exit lands first, STARTING_GAME goes straight to TERMINATED on {@code GameExited} (#211),
+     * the following {@code HostGame} is ignored in TERMINATED, and HOSTING is never entered at all.
+     * The fixture then waits out its whole budget for a state the machine has already skipped.
+     *
+     * <p>That is a real CI failure, not a hypothetical: run 34503947174 timed out here. It survived
+     * #255 because that fix addressed the other half of the same race — reading {@code getState()}
+     * after HOSTING had been left — which taking the future up front does solve. Nothing can make a
+     * future for HOSTING complete if HOSTING never happens, so the child has to stop exiting on its
+     * own schedule. {@code shutdownFromHostingProducesNoWarn} already used {@code HANGING_PROCESS}
+     * for exactly this reason; these tests could not, because they assert on the game's own exit
+     * code, which a teardown SIGTERM would replace with 143.
+     *
+     * @param code the exit code the child reports once released
+     * @return a builder for a child that exits with {@code code} on cue
+     */
+    private ProcessBuilder exitingOnCue(int code) {
+        String path = exitCue.toString();
+        return System.getProperty("os.name").toLowerCase().contains("win")
+                ? new ProcessBuilder(
+                        "cmd",
+                        "/c",
+                        "for /l %i in (0,0,1) do @if exist \"" + path + "\" exit " + code)
+                : new ProcessBuilder(
+                        "sh",
+                        "-c",
+                        "while [ ! -e \"$1\" ]; do sleep 0.05; done; exit " + code,
+                        "sh",
+                        path);
+    }
+
+    /**
+     * Releases a child started by {@link #exitingOnCue(int)}, which then exits with its code.
+     * Idempotent, so {@link #tearDown()} can call it after a test already has.
+     *
+     * @throws IOException if the cue file cannot be created
+     */
+    private void releaseGameChild() throws IOException {
+        if (exitCue != null && !Files.exists(exitCue)) {
+            Files.createFile(exitCue);
+        }
+    }
+
     @Test
     void exitDuringHostingReachesTerminatedAndRunsTeardown() throws Exception {
-        gameLauncher = new ChildGameLauncher(exitingWith(1));
+        gameLauncher = new ChildGameLauncher(exitingOnCue(1));
         SessionTeardown teardown = new SessionTeardown(lobby);
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, teardown);
+        releaseGameChild();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
@@ -175,8 +240,9 @@ final class CrashRecoveryTest {
 
     @Test
     void nonZeroExitProducesWarnLineWithExitCode() throws Exception {
-        gameLauncher = new ChildGameLauncher(exitingWith(42));
+        gameLauncher = new ChildGameLauncher(exitingOnCue(42));
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+        releaseGameChild();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
@@ -191,8 +257,9 @@ final class CrashRecoveryTest {
 
     @Test
     void cleanExitDuringHostingProducesInfoLine() throws Exception {
-        gameLauncher = new ChildGameLauncher(exitingWith(0));
+        gameLauncher = new ChildGameLauncher(exitingOnCue(0));
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+        releaseGameChild();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
@@ -207,8 +274,9 @@ final class CrashRecoveryTest {
 
     @Test
     void gameStateEndedSentToLobbyOnCrash() throws Exception {
-        gameLauncher = new ChildGameLauncher(exitingWith(1));
+        gameLauncher = new ChildGameLauncher(exitingOnCue(1));
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+        releaseGameChild();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
@@ -270,8 +338,9 @@ final class CrashRecoveryTest {
 
     @Test
     void lateGameExitedAfterTerminatedIsNoOp() throws Exception {
-        gameLauncher = new ChildGameLauncher(exitingWith(1));
+        gameLauncher = new ChildGameLauncher(exitingOnCue(1));
         MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+        releaseGameChild();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
