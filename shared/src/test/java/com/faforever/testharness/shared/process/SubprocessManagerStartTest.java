@@ -175,20 +175,42 @@ class SubprocessManagerStartTest {
     /**
      * Regression for the race where a fast-exiting child's deregister callback fires before {@link
      * SubprocessManager#start} adds the manager to {@link SubprocessRegistry}, leaving the manager
-     * pinned in the active set for the JVM lifetime. {@code /bin/true} is the most-aggressive
-     * trigger and is always present on the supported Linux substrate (spec §1.1); the assertion
-     * remains valid on any platform that ships the binary.
+     * pinned in the active set for the JVM lifetime. The {@code true} utility is the
+     * most-aggressive trigger available; {@link TestSupport#fastExitingNativeChild()} resolves it
+     * from {@code PATH} rather than assuming a path, because the two supported platforms disagree
+     * about where it lives (#227).
      */
     @Test
     void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
-        ProcessBuilder pb = new ProcessBuilder("/bin/true");
-        SubprocessManager m = SubprocessManager.start(pb, TAG, GRACE);
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.fastExitingNativeChild(), TAG, GRACE);
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
-        // Give any racing deregister on the reaper thread time to settle.
-        Thread.sleep(50);
-        assertFalse(
-                SubprocessRegistry.contains(m),
-                "manager leaked into SubprocessRegistry.ACTIVE after process exited");
+        awaitDeregistered(m);
+    }
+
+    /**
+     * Waits for {@code m} to leave {@link SubprocessRegistry}, failing if it has not within {@link
+     * #POLL_BUDGET_MS}.
+     *
+     * <p>Deregistration happens on the reaper thread, so it is not ordered against {@code onExit()}
+     * completing on the test thread. The previous fixed 50ms sleep was a guess at how long that
+     * takes rather than a wait for it to have happened; polling asserts the condition and lets a
+     * machine under load take longer without failing. The leak this guards against is permanent —
+     * the manager stays pinned for the JVM's lifetime — so a budget cannot mask it, only delay the
+     * report.
+     *
+     * @param m the manager whose deregistration to await
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private static void awaitDeregistered(final SubprocessManager m) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
+        while (System.currentTimeMillis() < deadline) {
+            if (!SubprocessRegistry.contains(m)) {
+                return;
+            }
+            Thread.sleep(POLL_INTERVAL_MS);
+        }
+        fail("manager leaked into SubprocessRegistry.ACTIVE after process exited");
     }
 
     private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {
