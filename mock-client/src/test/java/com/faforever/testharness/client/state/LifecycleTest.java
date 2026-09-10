@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.faforever.testharness.client.config.GameHostConfig;
@@ -10,11 +11,14 @@ import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -89,6 +93,25 @@ final class LifecycleTest {
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
 
+    /**
+     * One lifecycle handed out by {@link #lifecycleWithConfig}, together with the two launchers it
+     * was built on — kept so teardown can both drive the lifecycle to TERMINATED and check that the
+     * children those launchers spawned actually died with it.
+     *
+     * @param lifecycle the lifecycle under test
+     * @param game the game launcher it was built with
+     * @param ice the ICE adapter launcher it was built with
+     */
+    private record Launched(
+            MockClientLifecycle lifecycle, DummyGameLauncher game, DummyIceLauncher ice) {}
+
+    /**
+     * Everything {@link #lifecycleWithConfig} handed out, in creation order. Tests here build more
+     * than one — {@link #disconnection()} builds five — and each that posts {@code LaunchGame}
+     * spawns a game and an ICE adapter child.
+     */
+    private final List<Launched> launched = new ArrayList<>();
+
     @BeforeEach
     void setUp() throws Exception {
         server = new ScriptedWebSocketServer();
@@ -101,6 +124,37 @@ final class LifecycleTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        // Drive every lifecycle to TERMINATED before the lobby goes (#303). Its entry action runs
+        // SessionTeardown, which is what actually reaps the two subprocesses each LaunchGame
+        // spawned; without it they lived until SubprocessRegistry's JVM-exit hook SIGTERMed them as
+        // the forked test JVM died, long after Gradle had moved on to another task. That produced
+        // four "exited abnormally with exit code 143" warnings on every green build, filed under
+        // whichever task banner happened to be current.
+        //
+        // Before the lobby close below, not after: teardown closes the lobby itself, and running
+        // it second found the socket already shut and warned about it. Reverse order so the
+        // lifecycle that owns the live session is torn down first, and best-effort throughout —
+        // a test that already drove one to TERMINATED, or closed the socket under it, must not
+        // fail in teardown.
+        for (int i = launched.size() - 1; i >= 0; i--) {
+            try {
+                launched.get(i).lifecycle().shutdown();
+            } catch (RuntimeException ignored) {
+                // teardown is best effort; the assertions have already run
+            }
+        }
+
+        // Then say so out loud. The default stub blocks on stdin and never exits by itself, so a
+        // test that spawns one and does not tear it down leaks silently — the JVM-exit hook reaps
+        // it eventually and the only trace is a warning under some later Gradle task. Asserting it
+        // here turns the next occurrence into a failure in the test that caused it, which is the
+        // half of #303 that stops this coming back.
+        for (Launched entry : launched) {
+            assertChildDied(entry.game().getSubprocess(), "mock-game");
+            assertChildDied(entry.ice().getSubprocess(), "ICE adapter");
+        }
+        launched.clear();
+
         if (lobby != null) {
             try {
                 lobby.close().get(2, TimeUnit.SECONDS);
@@ -219,6 +273,23 @@ final class LifecycleTest {
     }
 
     /**
+     * Asserts one launched child is gone. {@link SessionTeardown} terminates synchronously —
+     * SIGTERM then, if needed, SIGKILL — so by the time {@code shutdown()} has returned for every
+     * lifecycle there is nothing left to wait for and no budget to pick.
+     *
+     * @param child the subprocess handle, or {@code null} if this launcher was never asked to start
+     * @param label human-readable name for the failure message
+     */
+    private static void assertChildDied(final SubprocessManager child, final String label) {
+        if (child == null) {
+            return;
+        }
+        assertFalse(
+                child.isAlive(),
+                label + " child was still running after teardown, so it will outlive this test");
+    }
+
+    /**
      * Copies {@link #MINIMAL_CONFIG} with {@code hostConfig} overridden — used by host-on-IDLE
      * tests that need a config distinct from the shared minimal fixture.
      */
@@ -251,15 +322,28 @@ final class LifecycleTest {
                 0);
     }
 
+    /**
+     * Builds a lifecycle and registers it for teardown. Every lifecycle in this class goes through
+     * here, which is what makes {@link #tearDown()}'s guarantee — no child process outlives the
+     * test method that started it — hold for tests that build several.
+     *
+     * @param config the configuration to build the lifecycle against
+     * @return the registered lifecycle
+     */
     private MockClientLifecycle lifecycleWithConfig(MockClientConfig config) {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
-        return new MockClientLifecycle(
-                config,
-                session,
-                new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
-                new DummyGameLauncher(config),
-                new DummyIceLauncher(config),
-                new SessionTeardown(lobby));
+        DummyGameLauncher game = new DummyGameLauncher(config);
+        DummyIceLauncher ice = new DummyIceLauncher(config);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        config,
+                        session,
+                        new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
+                        game,
+                        ice,
+                        new SessionTeardown(lobby));
+        launched.add(new Launched(lifecycle, game, ice));
+        return lifecycle;
     }
 
     private MockClientLifecycle defaultLifecycle() {

@@ -19,6 +19,15 @@ class DummyGameLauncher extends MockGameLauncher {
     // a test is asserting on. "sort" with no arguments blocks on stdin EOF on both Windows and
     // POSIX (the GameEndReportingTest HANGING_PROCESS pattern), keeping the process alive for the
     // test's duration unless a test explicitly supplies its own (quick-exiting) builder.
+    //
+    // #303 asked whether that default should be a stub that exits promptly instead, on the grounds
+    // that blocking forever is a trap for the next person. It stays as it is, for two reasons: a
+    // quick-exiting default reintroduces exactly the race #211 removed, and every alternative that
+    // blocks portably is either this or a POSIX-only "sleep" (#302). What changed instead is where
+    // the obligation lives. A test that spawns one of these owns it until it drives the lifecycle
+    // to TERMINATED — SessionTeardown is what actually reaps it — and LifecycleTest now asserts in
+    // @AfterEach that nothing it launched is still alive, so the next leak fails in the test that
+    // caused it rather than surfacing as a stray SIGTERM warning under a later Gradle task.
     DummyGameLauncher(MockClientConfig config) {
         this(config, false, new ProcessBuilder("sort"));
     }
