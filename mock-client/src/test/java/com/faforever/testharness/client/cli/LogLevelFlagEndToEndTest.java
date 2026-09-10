@@ -71,6 +71,46 @@ final class LogLevelFlagEndToEndTest {
     }
 
     @Test
+    void aBareLogLevelInTheEnvironmentDoesNotRaiseTheLevel() throws Exception {
+        // #306. Logback resolves the LOG_LEVEL *system property* ahead of the environment variable
+        // of the same name, and the resolved --log-level — including its built-in default of INFO
+        // — is written to that property before the first logger exists. So a bare LOG_LEVEL is not
+        // a fifth configuration layer for this component: it is overridden on every path, which is
+        // what mock-client/README.md's precedence section and LoggingSetup's javadoc now say.
+        //
+        // Asserting the override rather than the variable is deliberate. mock-game has no
+        // --log-level flag and does honour LOG_LEVEL, so the same name behaves differently per
+        // component; the half that keeps surprising people is this one.
+        //
+        // That the extra environment actually reaches the child is pinned by
+        // environmentLayerReachesLoggingBeforeTheSubcommandStarts, which raises the level through
+        // the same map — without it, an assertion of absence like this one could pass on a child
+        // that never saw the variable at all.
+        List<JsonNode> records = runChildWithEnv(Map.of(LoggingSetup.LOG_LEVEL_ENV, "DEBUG"));
+
+        assertFalse(
+                records.stream().anyMatch(LogLevelFlagEndToEndTest::isDebugMarker),
+                "a bare LOG_LEVEL=DEBUG raised the level, so mock-client's own resolved value no "
+                        + "longer wins and the documented precedence is wrong. Records: "
+                        + records);
+        assertFalse(records.isEmpty(), "the child wrote no records at all, so it never ran");
+    }
+
+    @Test
+    void theResolvedLogLevelBeatsABareLogLevelInTheEnvironment() throws Exception {
+        // The other direction, and the reason the test above is not simply asserting that DEBUG is
+        // off: with LOG_LEVEL=ERROR ambient, a DEBUG record can only exist if --log-level reached
+        // Logback and displaced it. Without this case a regression that pinned the process at INFO
+        // regardless of either input would satisfy the first assertion and prove nothing.
+        List<JsonNode> records =
+                runChildWithEnv(Map.of(LoggingSetup.LOG_LEVEL_ENV, "ERROR"), "--log-level=DEBUG");
+
+        assertTrue(
+                records.stream().anyMatch(LogLevelFlagEndToEndTest::isDebugMarker),
+                "--log-level=DEBUG lost to a bare LOG_LEVEL=ERROR. Records: " + records);
+    }
+
+    @Test
     void failureBeforeTheSubcommandConfiguresLoggingStillHonoursBothFlags() throws Exception {
         // The handler is the first logger in the process on this path, so whatever it finds in the
         // system properties is what Logback pins for good. Left alone it pins INFO and the default
@@ -254,6 +294,29 @@ final class LogLevelFlagEndToEndTest {
         return runChild(
                 LogLevelFlagChild.class,
                 true,
+                CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary),
+                extraArgs);
+    }
+
+    /**
+     * As {@link #runChild(String...)}, with extra environment variables set on the child. Used by
+     * the {@code LOG_LEVEL} precedence cases, which are the only ones here that need a variable the
+     * ambient scrub in {@code runChild} otherwise removes.
+     *
+     * @param extraEnv variables to set on the child, applied after that scrub
+     * @param extraArgs arguments appended to the invocation
+     * @return the parsed records, in order
+     * @throws IOException if the child cannot be started or its output cannot be read
+     * @throws InterruptedException if the wait for the child is interrupted
+     */
+    private List<JsonNode> runChildWithEnv(
+            final Map<String, String> extraEnv, final String... extraArgs)
+            throws IOException, InterruptedException {
+        String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
+        return runChild(
+                LogLevelFlagChild.class,
+                true,
+                extraEnv,
                 CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary),
                 extraArgs);
     }
