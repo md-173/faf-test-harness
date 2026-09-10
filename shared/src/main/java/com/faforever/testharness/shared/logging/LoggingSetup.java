@@ -32,6 +32,19 @@ import org.slf4j.MDC;
  * config-parse time via {@code ${LOG_LEVEL:-INFO}} in {@code logback.xml} — this class does not
  * apply it programmatically. The default is {@code INFO}.
  *
+ * <p><b>A component that configures its own level overrides it</b> (WBS-2.3.6-fix, #306). Logback
+ * resolves the system property ahead of the environment variable, so a component that writes {@code
+ * LOG_LEVEL} as a system property before the first logger exists decides the level for that
+ * process, whatever the environment says. Mock Client does exactly that: {@code
+ * MockClientCli.applyLoggingProperties} writes its resolved {@code --log-level} — including the
+ * built-in default of {@code INFO} — so {@code LOG_LEVEL=DEBUG mock-client run …} produces no
+ * {@code DEBUG} records and {@code --log-level} / {@code FAF_MOCK_CLIENT_LOG_LEVEL} is the knob to
+ * reach for. Mock Game has no such flag and honours the variable directly. This is the intended
+ * split, not an accident: the harness documents a precedence of {@code --log-level} &gt; {@code
+ * FAF_MOCK_CLIENT_LOG_LEVEL} &gt; config file &gt; default, and a bare {@code LOG_LEVEL} is
+ * Logback's own channel rather than one of those four. Treat this variable as the level for
+ * components that configure nothing themselves.
+ *
  * <p>The log file path is read from the {@value #LOG_FILE_ENV} environment variable. The default is
  * {@code logs/test-harness.jsonl}.
  *
@@ -55,7 +68,12 @@ public final class LoggingSetup {
      */
     public static final String INSTANCE_MDC_KEY = "instance";
 
-    /** Environment variable controlling the minimum log level for all components. */
+    /**
+     * Environment variable controlling the minimum log level, for components that do not configure
+     * one themselves. Logback reads the system property of the same name first, so a component
+     * writing it — Mock Client, from {@code --log-level} — overrides whatever the environment
+     * carries. See this class's javadoc.
+     */
     public static final String LOG_LEVEL_ENV = "LOG_LEVEL";
 
     /** Environment variable controlling the JSONL output file path. */
@@ -90,7 +108,9 @@ public final class LoggingSetup {
      * tagged with {@code componentName} and sets the JSONL file output name to {@code
      * logs/<componentName>.jsonl}, or {@code logs/<componentName>-<instance>.jsonl} when an
      * instance is named. Logback picks up {@value #LOG_LEVEL_ENV} and {@value #LOG_FILE_ENV} on its
-     * own via {@code ${…}} substitution in {@code logback.xml}.
+     * own via {@code ${…}} substitution in {@code logback.xml}, resolving the system property of
+     * each name ahead of the environment variable — which is what lets a component's own
+     * configuration win. See this class's javadoc.
      *
      * @param componentName label that appears in every log line, e.g. {@code "MockClient"} or
      *     {@code "MockGame"}
