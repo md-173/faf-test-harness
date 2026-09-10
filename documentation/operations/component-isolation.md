@@ -132,10 +132,10 @@ is unchanged.
 
 ## Reproducing the offline runs
 
-All offline rows are network-free and deterministic. Scope Gradle to the relevant module — the
-`shared` module has a pre-existing `/bin/true`-style test that fails on macOS
-(`SubprocessManagerStartTest > fastExitingChildDoesNotLeakIntoRegistry`, tracked as #227), unrelated
-to any row here; run per-module test filters rather than the whole `build` when validating on a Mac.
+All offline rows are network-free and deterministic. Scope Gradle to the relevant module so a run
+exercises the row rather than the whole tree. The macOS caveat that used to sit here is gone: the
+`shared` test that failed on a Mac assumed `/bin/true`, which macOS does not ship, and #227 replaced
+that with a `PATH` lookup — `./gradlew build` is green on macOS and Linux alike.
 
 ```bash
 export JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home
