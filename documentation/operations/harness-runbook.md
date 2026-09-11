@@ -137,11 +137,12 @@ exiting as soon as a verdict exists, which is what makes it the right tool for
 reading the adapter's own output after a version bump
 ([`ice-adapter-setup.md`](ice-adapter-setup.md)).
 
-That gives the two commands a fault-localisation split worth keeping: if
-`ice-smoke` reports `RPC_UNREACHABLE` but `launch-ice` shows a healthy adapter
-running out its window, the fault is in the RPC layer, not the spawn. Whether
-`launch-ice` should keep that boundary or start dialling JSON-RPC itself is an
-open question, tracked in #279.
+Since WBS-3.1.6.3 (#279) `launch-ice` also **attaches a JSON-RPC peer** and holds
+it open for the window. That is what makes the pair below work: the adapter
+will not serve a game until an RPC client exists, so a `launch-ice` without one
+was an adapter no game could use. The two commands still split usefully — one
+gives a verdict and exits, the other holds a live adapter up for something else
+to talk to.
 
 Build the launcher and fetch the adapter (§1), then spawn the adapter alone
 with `launch-ice`:
@@ -151,22 +152,15 @@ with `launch-ice`:
 ./gradlew downloadIceAdapter
 
 ./mock-client/build/install/mock-client/bin/mock-client launch-ice --duration-seconds=15 \
-  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar" \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
-  --oauth-token-url=https://hydra.faforever.xyz/oauth2/token \
-  --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth \
-  --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \
-  --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
-  --oauth-refresh-token-file=dummy-unused-by-launch-ice
+  --ice-adapter-binary-path="$PWD/faf-ice-adapter.jar"
 ```
 
-The OAuth flags are required by config validation but are never used by
-`launch-ice` (it only spawns the adapter subprocess and never connects to its
-JSON-RPC socket — there is no handshake in this path, adapter or otherwise);
-any syntactically valid placeholders work, as they do above. A successful
-adapter-only run looks like this in the log (`[MockClient]` = the harness,
-`[ICEAdapter]` = the real jar's own output):
+That is the whole invocation. `launch-ice` opens no lobby connection, so since
+WBS-3.1.5.2-fix (#308) it validates only the adapter settings and needs no
+credentials — the eight placeholder OAuth flags this section used to print,
+`--oauth-refresh-token-file=dummy-unused-by-launch-ice` among them, are gone.
+A successful adapter-only run looks like this in the log (`[MockClient]` = the
+harness, `[ICEAdapter]` = the real jar's own output):
 
 ```text
 [MockClient] Launching ICE adapter: <java> -Dlogback.configurationFile=... -jar .../faf-ice-adapter.jar --id 1 --login mock-client --game-id 0 --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
@@ -175,9 +169,16 @@ adapter-only run looks like this in the log (`[MockClient]` = the harness,
 [ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started
 [ICEAdapter] c.f.i.rpc.RPCService - Creating RPC server on port 7236
 [ICEAdapter] c.n.jjsonrpc.TcpServer - TCP Server started.
+[MockClient] connected to ICE adapter JSON-RPC at 127.0.0.1:7236
+[ICEAdapter] c.n.j.SocketListener - New client connected on port <ephemeral>
+[MockClient] JSON-RPC peer attached on port 7236; the adapter can now serve a game
 [MockClient] Run window of 15s elapsed; terminating ICE adapter
 [MockClient] ICE adapter terminated; exit code <code>
 ```
+
+`JSON-RPC peer attached` is the line that says this adapter can serve a game. If
+it is missing, the run failed (`70`, `RUNTIME`) rather than leaving you an
+adapter that looks healthy and drops the first game that connects to it.
 
 **Exit code is environment-dependent.** `IceAdapterLauncher` sends the
 platform's normal termination signal at the end of the run window; on Linux
@@ -188,25 +189,29 @@ platform difference, not a failure. Either way, `mock-client` itself reports
 success: no `ERROR` line, and the process exits `0` (`OK`; see the exit-code
 table in [`mock-client/README.md`](../../mock-client/README.md#exit-codes)).
 
-**What §2 stops short of.** The obvious next step — also launching the
-in-repo `mock-game` against the adapter's GPGNet port with `launch-game`, to
-show a full GPGNet handshake with no lobby at all — does not currently work
-end to end, and this runbook will not present a workaround as if it were the
-process. Since 3.2.5.1 landed, one thing blocks it, and it is **not** that the
-game fails to connect. `faf-ice-adapter` 3.3.14 *accepts* the connection, then
-parks the accepting thread inside `GPGNetClient`'s constructor at
-`RPCService.getPeerOrWait()` — an unbounded wait for a JSON-RPC peer that
-`launch-ice` alone never supplies. `GPGNetServer.currentClient` is therefore
-never assigned, while that same constructor has already started the listener
-thread. So the game connects successfully and is even answered; the session
-dies a beat later. The full chain, with line anchors into 3.3.14, is in
+**The pair completes a GPGNet handshake with no lobby at all.** Launching the
+in-repo `mock-game` against the adapter's GPGNet port with `launch-game` is the
+next step, and since WBS-3.1.6.3 (#279) it works end to end.
+
+What used to block it was the missing RPC peer, and it is worth knowing because
+it is the shape of every "the game connects and then the session dies" report.
+`faf-ice-adapter` 3.3.14 *accepts* the game's connection, then parks the
+accepting thread inside `GPGNetClient`'s constructor at
+`RPCService.getPeerOrWait()` — an unbounded wait for a JSON-RPC peer. With no
+peer, `GPGNetServer.currentClient` is never assigned while that same constructor
+has already started the listener thread, so the game connects, is even answered,
+and the session dies a beat later with `IllegalStateException: gameState must
+not change to null`. `launch-ice` now supplies the peer, so none of that happens.
+The full chain, with line anchors into 3.3.14, is in
 [`gpgnet-format-spec.md` §8.1](../research/gpgnet-format-spec.md#section-8-1-preconditions);
 `GpgNetConnectionLiveSmokeTest`'s class javadoc (WBS 3.2.2.4) carries the same
 finding from the test side.
 
-To see it for yourself, run the pair **concurrently, in two terminals**. The
-adapter has to outlive the game. Build the game first — a cold Gradle
-invocation can eat most of the adapter's window if you leave it until later:
+Run the pair **concurrently, in two terminals**. The adapter has to outlive the
+game — the game's exit is otherwise the adapter's termination reaching it, which
+reports as `SERVER_CONNECTION_LOST` and looks like a fault. Build the game first;
+a cold Gradle invocation can eat most of the adapter's window if you leave it
+until later:
 
 ```bash
 ./gradlew :mock-game:installDist
@@ -217,68 +222,56 @@ terminal, wait for its `GPGNetServer started` line, and in the second point
 `launch-game` at the same GPGNet port:
 
 ```bash
-./mock-client/build/install/mock-client/bin/mock-client launch-game --duration-seconds=20 \
-  --mock-game-binary-path="$PWD/mock-game/build/install/mock-game/bin/mock-game" \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
-  --oauth-token-url=https://hydra.faforever.xyz/oauth2/token \
-  --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth \
-  --oauth-redirect-uri=http://127.0.0.1 --oauth-scopes="openid offline lobby" \
-  --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
-  --oauth-refresh-token-file=dummy-unused-by-launch-game
+./mock-client/build/install/mock-client/bin/mock-client launch-game --duration-seconds=12 \
+  --mock-game-binary-path="$PWD/mock-game/build/install/mock-game/bin/mock-game"
 ```
 
-The OAuth flags are placeholders here for the same reason as in `launch-ice`.
-Both commands default to GPGNet port `7237`, so nothing needs wiring up. That
-produces this — game side first, then the adapter's own output:
+No credentials here either, for the same reason as `launch-ice` (#308). Both
+commands default to GPGNet port `7237`, so nothing needs wiring up. That
+produces this — game side first, then the adapter's own output (captured
+against the real 3.3.14 jar):
 
 ```text
+[MockClient] Launching mock-game: .../mock-game --gpgnet-port 7237 --lobby-port 7238 --player-id 1 --player-login mock-client --game-uid 0 --launch-delay-seconds 5
+[MockGame]   mock game started: playerId=1 login=mock-client gameUid=0 gpgNetPort=7237 lobbyPort=7238 gameOptions={} launch=auto after 5s
 [MockGame]   connected to GPGNet server at 127.0.0.1:7237
 [MockGame]   Successful connection with GpgNet server established
-[MockGame]   shutting down mock game
-[MockGame]   mock game finished: status=SERVER_CONNECTION_LOST, exit code 69
-[MockClient] [ERROR] mock-game exited on its own before the 20s run window; exit code 69
 
+[ICEAdapter] c.f.i.g.GPGNetServer - GPGNetClient has connected
 [ICEAdapter] c.f.i.g.GPGNetServer - Sent GPGNet message: CreateLobby 0 7238 mock-client 1 1
-[ICEAdapter] Exception in thread "" java.lang.IllegalStateException: gameState must not change to null
-	at ...debug.TelemetryDebugger.gameStateChanged(TelemetryDebugger.java:154)
-	at ...gpgnet.GPGNetServer$GPGNetClient.processGpgnetMessage(GPGNetServer.java:131)
-	at ...gpgnet.GPGNetServer$GPGNetClient.listenerThread(GPGNetServer.java:186)
+[ICEAdapter] c.f.i.g.GPGNetServer - Received GPGNet message: GameState Idle
+[ICEAdapter] c.n.j.JJsonPeer - Sending Notification:{"method":"onGpgNetMessageReceived","params":["GameState",["Idle"]],"jsonrpc":"2.0"}
+[ICEAdapter] c.f.i.g.GPGNetServer - Received GPGNet message: GameState Lobby
 ```
 
-**That transcript is the trap this section exists to close.** The connect
-succeeds, the adapter replies `CreateLobby`, and only then does its listener
-thread die and drop the socket — a half-completed handshake, which reads like a
-codec fault and is not one. The diagnostic marker is a line that is *absent*:
-`GPGNetServer - GPGNetClient has connected` never appears, because the
-constructor that logs it never returned. The `ice-smoke` run above, which does
-attach a peer, logs it. Three practical notes:
+**That is the handshake, and the lines to read are the ones that used to be
+missing.** `GPGNetClient has connected` is logged by the constructor that used
+to park forever, so its presence is the proof that a peer was attached. The
+`IllegalStateException: gameState must not change to null` that this section
+used to document does not occur. `GameState Idle` → `CreateLobby` → `GameState
+Lobby` is the full exchange.
+
+Two practical notes:
 
 - The adapter's output reaches the harness pipe block-buffered, so those
   `[ICEAdapter]` lines may not surface until the run window ends and the adapter
-  is terminated. Do not read their absence mid-run as absence of the fault.
-- The exception is raised on a thread the adapter does not reap, so the adapter
-  itself keeps running and still terminates normally with `143`.
-- **The exception is the signature on a networked box, not a law.** It is
-  thrown from the adapter's telemetry debugger, which deregisters itself when
-  its websocket cannot connect. Where telemetry is unreachable — an
-  egress-filtered CI runner — the listener thread instead blocks at
-  `onGpgNetMessageReceived`, which calls `getPeerOrWait()` again: same blocker,
-  no exception, no dropped socket, and the game waits rather than exiting `69`.
-  §8.1 sets out both variants; the blocker is the missing peer either way.
+  is terminated. Do not read their absence mid-run as absence of anything.
+- **Give the adapter the longer window.** If `launch-ice` ends first, its
+  termination reaches the game as a lost connection and the game exits `69`
+  (`SERVER_CONNECTION_LOST`) — a correct report of what happened to it, and easy
+  to misread as a handshake failure. `--duration-seconds=30` on the adapter
+  against `12` on the game leaves plenty of room.
 
-**Two exit codes are in play here, and confusing them is easy.** The *game*
-reports `SERVER_CONNECTION_LOST` and exits `69` (`ADAPTER_LOST`) — five for five
-across the run quoted above and four shorter repeats, though not yet
+**Two exit codes are in play once the adapter goes away, and confusing them is
+easy.** When the adapter's window ends first, the *game* reports
+`SERVER_CONNECTION_LOST` and exits `69` (`ADAPTER_LOST`) — though not yet
 *guaranteed*: two paths race for the state machine once the socket is gone, and
 the loser reports `FAILED` and exits `70` instead (#277). #294, still open,
-would make `SERVER_CONNECTION_LOST` deterministic here. #277's third outcome, a
-clean `OK`, needs the match to have ended and cannot arise from a half-completed
-handshake.
-The `launch-game` *subcommand* still exits `70` (`RUNTIME`) regardless, because
-it returns `RUNTIME` whenever the child exits before its run window. So `70`
-from the subcommand means "the game stopped early", not "the game could not
-reach an adapter" — for that, read the game's own status line.
+would make `SERVER_CONNECTION_LOST` deterministic here.
+The `launch-game` *subcommand* exits `70` (`RUNTIME`) regardless, because it
+returns `RUNTIME` whenever the child exits before its run window. So `70` from
+the subcommand means "the game stopped early", not "the game could not reach an
+adapter" — for that, read the game's own status line.
 
 `mock-game` itself is no longer an obstacle, and the reason a bare
 `launch-game` — with **no adapter running at all**, the other case worth
@@ -292,13 +285,13 @@ before 3.2.5.1, for the opposite cause: the game used to exit `0` before its
 run window was ever reached, and `launch-game` supplied the `RUNTIME` itself.
 Reading the `70` as "the game died early" is now wrong — it boots fine and
 finds no adapter. Here the game's own code and the subcommand's agree at `70`,
-which is what distinguishes this case from the adapter-with-no-peer one above.
+which is what distinguishes this case from an adapter that went away mid-session.
 Row 5 of [`component-isolation.md`](component-isolation.md) carries the
 re-recorded output.
 
-**The handshake is proven — by tests, not by the CLI pair.** Two live tests
-cover it, at different widths, and both supply the JSON-RPC peer the pair
-cannot:
+**The handshake is also covered by tests, at two widths.** The CLI pair above
+shows it by hand; these assert it, and both drive more of the path than the pair
+does:
 
 - `ClientGameLifecycleLiveTest` (WBS 3.1.2.7) — the **stronger evidence, and
   the one to cite**. It drives the whole client → adapter → game path with both
@@ -341,15 +334,15 @@ to disable. It is non-blocking — off-network it logs an error and the run
 proceeds — so treat that noise as expected, not as a broken harness. See
 [`ice-adapter-setup.md`](ice-adapter-setup.md).)
 
-What is *not* met is the same thing by way of the **CLI pair** —
-`launch-ice` alongside `launch-game` — which is what the rest of this section
-is about and what #279 would fix. `ice-smoke` does not close that gap either:
-it connects a JSON-RPC client, but only for the couple of seconds its own check
-runs and it terminates the adapter on the way out, so it cannot hold a peer
-open for a separately launched game. It also deliberately sends no GPGNet
-frame, so it proves *reachability*, never a handshake. A `launch-ice`-only run,
-as captured above, remains the right and sufficient adapter-alone check for a
-CI embedding this release today.
+Since WBS-3.1.6.3 (#279) it is also met by way of the **CLI pair** —
+`launch-ice` alongside `launch-game`, captured above — because `launch-ice` now
+holds a JSON-RPC peer open for the whole run window. `ice-smoke` still does not
+close that gap and is not meant to: it attaches a peer only for the couple of
+seconds its own check runs and terminates the adapter on the way out, so it
+cannot hold one open for a separately launched game, and it deliberately sends
+no GPGNet frame — it proves *reachability*, never a handshake. Three commands,
+three questions: `ice-smoke` for a verdict, `launch-ice` for an adapter to talk
+to, the pair for a handshake by hand.
 
 ## 3. Credentials
 
