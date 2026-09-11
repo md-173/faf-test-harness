@@ -69,6 +69,9 @@ import java.util.OptionalInt;
  * @param joinConfig join-an-existing-game settings (lobby-protocol-spec §4.2 / §10.2); present only
  *     when the operator configured the mock client to join — empty means this run does not join
  *     (e.g. it hosts a game instead)
+ * @param queueConfig matchmaking-queue settings (lobby-protocol-spec §4.3 / §10.2); present only
+ *     when the operator configured the mock client to queue — empty means this run does not queue
+ *     (e.g. it hosts or joins a custom game instead)
  * @param iceRelayDelayMs how long the ICE signal relay holds each relayed candidate before
  *     forwarding it, in milliseconds; {@code 0} (the default) forwards inline. The delayed-ICE half
  *     of WBS-5.1's fault injection. Read through {@link #iceRelayDelay()} rather than directly
@@ -98,6 +101,7 @@ public record MockClientConfig(
         String playerLogin,
         Optional<GameHostConfig> hostConfig,
         Optional<GameJoinConfig> joinConfig,
+        Optional<GameQueueConfig> queueConfig,
         int iceRelayDelayMs) {
 
     /**
@@ -188,6 +192,27 @@ public record MockClientConfig(
         if (iceRelayDelayMs < 0) {
             throw new IllegalArgumentException(
                     "iceRelayDelayMs must not be negative: " + iceRelayDelayMs);
+        }
+        // Hosting, joining and queueing are three ways to spend the same session, and the client
+        // sends every one that is configured on the same IDLE entry. Combining them is always a
+        // mistake: game_host plus game_matchmaking start puts the client in a custom game while
+        // still queued, and being matched from there is exactly what earns a matchmaker violation
+        // (#224 operational risk). Checked here rather than with a picocli @ArgGroup so that the
+        // JSON config-file path is covered too, not just the CLI flags (#304 review).
+        List<String> intents = new ArrayList<>();
+        if (hostConfig != null && hostConfig.isPresent()) {
+            intents.add("--host-* (host a custom game)");
+        }
+        if (joinConfig != null && joinConfig.isPresent()) {
+            intents.add("--target-game-id (join a custom game)");
+        }
+        if (queueConfig != null && queueConfig.isPresent()) {
+            intents.add("--queue-name (queue for a matchmaker game)");
+        }
+        if (intents.size() > 1) {
+            throw new IllegalArgumentException(
+                    "a session can host, join, or queue, but not more than one at once; got "
+                            + String.join(" and ", intents));
         }
     }
 

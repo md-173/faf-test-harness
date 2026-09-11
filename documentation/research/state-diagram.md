@@ -69,19 +69,22 @@ Disconnection may occur from ICE adapter crashes, ICE negotiation timeouts, game
 
 ## Client State Machine
 
-The mock client has 6 states:
+The mock client has 7 states:
 | State         | Description                                                 |
 |---------------|-------------------------------------------------------------|
 | CONNECTING    | Connecting to the server                                    |
-| IDLE          | Waiting for player input (to join or start a game)          |
+| IDLE          | Waiting for player input (to join, start, or queue for a game) |
+| SEARCHING     | Queued in a matchmaker queue, waiting for a match           |
 | STARTING_GAME | Opening game binary, establising necessary connections      |
 | HOSTING       | Hosting a game, waiting for players/for user to launch game |
 | JOINING       | Join an existing game                                       |
 | PLAYING       | Game simulation running                                     |
 
-There are two additional states considered by the server: SEARCHING_LADDER and STARTING_AUTOMATCH.
-These are used for ladder/matchmaking games (as opposed to custom games).
-While adding this is a feature worth considering, it is not a priority at this moment.
+`SEARCHING` covers the matchmaking queue (WBS-3.1.1.9). It corresponds to the server's own
+`SEARCHING_LADDER` player state; the server's `STARTING_AUTOMATCH` has no separate client state,
+because there is no accept/decline step in the protocol — a `match_found` is followed directly by
+`game_launch`, so the client stays `SEARCHING` until that arrives and then takes the same
+`STARTING_GAME` edge a custom game does.
 
 ```mermaid
 stateDiagram-v2
@@ -92,10 +95,18 @@ stateDiagram-v2
 
     state "SETUP" as SETUP {
         state "IDLE" as IDLE
-        IDLE : Send game_host command if hosting
-        IDLE : Send game_join command if joining
+        IDLE : On first entry only, send the configured intent:
+        IDLE : game_host if hosting, game_join if joining,
+        IDLE : game_matchmaking(start) if queueing
 
         IDLE --> STARTING_GAME: game_launch command from server
+
+        state "SEARCHING" as SEARCHING
+        SEARCHING : Queued in a matchmaker queue
+
+        IDLE --> SEARCHING : search_info(start) from server
+        SEARCHING --> IDLE : search_info(stop) or match_cancelled from server
+        SEARCHING --> STARTING_GAME : game_launch command from server
 
         state "STARTING_GAME" as STARTING_GAME
         STARTING_GAME : Launch game binary
