@@ -288,7 +288,7 @@ single-instance output is unchanged.
 
 | Variable | Default                  | Description |
 | :--- |:-------------------------| :--- |
-| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`), for components that do not configure one themselves. Logback resolves the system property of this name ahead of the environment variable, so `mock-client`, which writes its resolved `--log-level` there, ignores a bare `LOG_LEVEL` — use `--log-level` or `FAF_MOCK_CLIENT_LOG_LEVEL` for it. `mock-game` has no such flag and honours the variable. |
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 | `INSTANCE_NAME` | unset                    | Labels one of several concurrent instances of a component. Pairs with `LOG_FILE`; see `mock-client/README.md` § "Harness log contract". Set it as an environment variable so subprocesses inherit it. |
 
