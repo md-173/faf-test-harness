@@ -721,6 +721,7 @@ public final class MockGameLifecycle {
                             + "likely due to a shut down scheduler");
             return null;
         }
+    }
 
     /* Sends the set of PlayerOption values needed for a player in the match. */
     private void sendPlayerOptions(int playerId) throws IOException {

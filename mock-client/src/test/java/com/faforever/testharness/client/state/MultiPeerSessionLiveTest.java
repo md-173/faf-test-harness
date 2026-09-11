@@ -47,21 +47,23 @@ import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 /**
- * The two-peer milestone (WBS-4.3.1): two Mock Clients on one host, each with its own lobby
- * account, its own port set, and its own real {@code faf-ice-adapter} and mock-game, complete a
- * host/join through the <em>live</em> lobby, and both adapters report the peer link established.
+ * The two-peer (WBS-4.3.1) and three/four-peer (WBS-4.3.3) milestones: two to four Mock Clients on
+ * one host, each with its own lobby account, its own port set, and its own real {@code
+ * faf-ice-adapter} and mock-game, complete a host/join through the <em>live</em> lobby, and both
+ * adapters report the peer link established.
  *
- * <p>The two clients never touch each other in-process. A's game uid reaches B through {@link
- * MockClientLifecycle#gameLaunched()} — the same value an operator reads off A's {@code game
- * launch:} log line — and every other exchange between them (the {@code game_host}/{@code
- * game_join} pair, {@code JoinGame}, {@code ConnectToPeer}, and every ICE candidate) crosses the
- * FAF test lobby, exactly as two separate machines would.
+ * <p>The clients never touch each other in-process. In the two client game, A's game uid reaches B
+ * through {@link MockClientLifecycle#gameLaunched()} — the same value an operator reads off A's
+ * {@code game launch:} log line — and every other exchange between them (the {@code
+ * game_host}/{@code game_join} pair, {@code JoinGame}, {@code ConnectToPeer}, and every ICE
+ * candidate) crosses the FAF test lobby, exactly as two separate machines would.
  *
  * <p><b>The signal.</b> The definitive one is the adapter's {@code onConnected(localId, remoteId,
  * connected)} notification — {@code RPCService.onConnected(long, long, boolean)}, json-rpc-spec.md
@@ -77,7 +79,7 @@ import org.slf4j.LoggerFactory;
  * over host candidates and never need STUN or TURN. The session's only network dependence is that
  * the lobby is reachable, which this test probes and self-skips on.
  *
- * <p><b>Auto-launch is off on both peers</b> ({@code --mock-game-launch-delay-seconds=-1},
+ * <p><b>Auto-launch is off on all peers</b> ({@code --mock-game-launch-delay-seconds=-1},
  * WBS-4.3.1). faf-server accepts a {@code game_join} only while the game is in {@code
  * GameState.LOBBY} and leaves that state the moment the host reports {@code GameState Launching},
  * so a host on the default 5 s timer would make itself unjoinable while B is still booting two
@@ -105,7 +107,7 @@ import org.slf4j.LoggerFactory;
  * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
  * installed mock-game binary ({@code ./gradlew :mock-game:installDist}), the {@code faf-uid} binary
- * (the lobby's policy server rejects a placeholder {@code unique_id}), and <b>two</b> seeded
+ * (the lobby's policy server rejects a placeholder {@code unique_id}), and <b>four</b> seeded
  * accounts' refresh tokens — {@code .secrets/refresh_token.txt} and {@code
  * .secrets/refresh_token_b.txt}, each overridable by environment variable. One account cannot host
  * and join its own game. Both files are rewritten in place on every run, because Hydra rotates the
@@ -117,7 +119,7 @@ import org.slf4j.LoggerFactory;
  */
 @Tag("integration")
 @Timeout(value = 600, unit = TimeUnit.SECONDS)
-final class TwoPeerSessionLiveTest {
+final class MultiPeerSessionLiveTest {
 
     /** Environment override for the adapter jar, consistent with R74's documented setup. */
     private static final String ADAPTER_JAR_ENV = "FAF_ICE_ADAPTER_JAR";
@@ -131,8 +133,14 @@ final class TwoPeerSessionLiveTest {
     /** Environment override for the hosting account's refresh-token file. */
     private static final String TOKEN_A_ENV = "FAF_REFRESH_TOKEN_A";
 
-    /** Environment override for the joining account's refresh-token file. */
+    /** Environment override for the joining (peer B) account's refresh-token file. */
     private static final String TOKEN_B_ENV = "FAF_REFRESH_TOKEN_B";
+
+    /** Environment override for the joining (peer C) account's refresh-token file. */
+    private static final String TOKEN_C_ENV = "FAF_REFRESH_TOKEN_C";
+
+    /** Environment override for the joining (peer D) account's refresh-token file. */
+    private static final String TOKEN_D_ENV = "FAF_REFRESH_TOKEN_D";
 
     /** Environment override for the lobby endpoint. */
     private static final String LOBBY_URL_ENV = "FAF_LOBBY_URL";
@@ -221,11 +229,11 @@ final class TwoPeerSessionLiveTest {
     private static final String HOST_MOD = "faf";
 
     /**
-     * The joining peer, once {@link #runSession} has built it. A field rather than a local, so the
+     * The joining peers, once {@link #runSession} has built it. A field rather than a local, so the
      * test's teardown can reach it even when a checkpoint between its construction and the end of
      * the session fails.
      */
-    private Peer joiner;
+    private List<Peer> joiners;
 
     /** Root logger the mock-game capture appender is attached to. */
     private Logger root;
@@ -381,9 +389,12 @@ final class TwoPeerSessionLiveTest {
         }
     }
 
-    @Test
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2, 3})
     @EnabledIf("liveEnvironmentAvailable")
-    void twoPeersEstablishTheirLinkThroughTheLiveLobby() throws Exception {
+    void multiplePeersEstablishTheirLinkThroughTheLiveLobby(int joinerAmount) throws Exception {
+        // Not part of EnabledIf as it needs the number of joiners.
+        assumeTrue(refreshFilesAvailable(joinerAmount));
         assumeTrue(
                 lobbyReachable(),
                 "lobby "
@@ -391,27 +402,34 @@ final class TwoPeerSessionLiveTest {
                         + " unreachable from this network (TCP timeout on :443). Self-skips "
                         + "off-net; runs on a FAF-allowlisted host/VPN.");
 
+        // Initialise joiner list
+        joiners = new ArrayList<>();
+
         // Unique per run, so a stale game from an earlier run is never what this one observes —
         // though it is the uid, not the title, that B actually targets.
         Peer host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
         try {
-            runSession(host);
+            runSession(host, joinerAmount);
         } finally {
             // Always runs, so a failed checkpoint still leaves no adapter and no game behind.
-            // Joiner first: it is the side that may not exist yet.
+            // Joiners first: it is the side that may not exist yet.
             //
-            // The joiner is read out of the field rather than from runSession's return value: it
+            // The joiners are read out of the field rather than from runSession's return value: it
             // is constructed partway through that method, and four bounded waits follow. A failure
-            // in any of them would leave a returned-value binding null while B's adapter, game and
+            // in any of them would leave a returned-value binding null while a joiner's adapter,
+            // game and
             // lobby session were all up — the exact leak this block exists to prevent, and one
             // that also leaves B logged into the game server for the next run to trip over.
-            try {
-                shutdown(joiner);
-            } finally {
-                // Nested, so an unexpected throw while shutting B down cannot leave A's adapter
-                // and game running — the same class of hole as the joiner field above.
-                shutdown(host);
+            for (var joiner : joiners) {
+                // Wrap each in a try statement so that an unexpected throw while shuttind down one
+                // doesn't stop the others (or host) from shutting down.
+                try {
+                    shutdown(joiner);
+                } catch (Exception e) {
+                    continue;
+                }
             }
+            shutdown(host);
         }
 
         assertNoSurvivingSubprocesses(host.config);
@@ -422,15 +440,23 @@ final class TwoPeerSessionLiveTest {
      * the test method so the shutdown above wraps every one of them.
      *
      * @param host the hosting peer, not yet started
+     * @param joinerAmount a number between 1 and 3 for the total number of joiners to create.
      * @throws InterruptedException if any bounded wait is interrupted
      */
-    private void runSession(final Peer host) throws InterruptedException {
+    private void runSession(final Peer host, final int joinerAmount) throws InterruptedException {
+        // Sanity check, though we are only calling this method with joinerAmount within these
+        // bounds.
+        assumeTrue(
+                1 <= joinerAmount && joinerAmount <= 3,
+                "runSession called with joinerAmount <1 or >3");
         // Taken before the events that can reach them. StateMachine.stateReached only
         // short-circuits while the state is still current, so a future asked for after the FSM has
         // been through and left that state can never complete — and HOSTING is left the moment a
         // session dies. Taking it up front is what makes this checkpoint honest; it does not make a
         // dead session report faster, since nothing here races the wait against TERMINATED.
         CompletableFuture<Void> hosting = host.lifecycle.stateReached(ClientState.HOSTING);
+
+        List<String> joinerNames = List.of("B", "C", "D");
 
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what
         // spawns A's adapter and game and completes gameLaunched with the uid.
@@ -443,19 +469,47 @@ final class TwoPeerSessionLiveTest {
         // which reaches the server only because R72 forwards it. B is started with A's uid as its
         // join target — the one value that crosses between the two clients in-process. Assigned to
         // the field before anything can fail, so the teardown in the caller can always reach it.
-        joiner = new Peer("B(joiner)", joinConfig(hosted.uid()));
-        CompletableFuture<Void> joining = joiner.lifecycle.stateReached(ClientState.JOINING);
-        joiner.identity =
-                await(joiner.lifecycle.start(tokensFor(joiner)), SESSION_TIMEOUT, "B: welcome");
-        await(joiner.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "B: game_launch", joiner);
-        await(joining, ROLE_TIMEOUT, "B: JOINING");
+        for (int i = 0; i < joinerAmount; i++) {
+            String joinerName = joinerNames.get(i);
+            Peer joiner = new Peer(joinerName + "(joiner)", joinConfig(hosted.uid(), i));
+            joiners.add(joiner);
+            CompletableFuture<Void> joining = joiner.lifecycle.stateReached(ClientState.JOINING);
+            joiner.identity =
+                    await(
+                            joiner.lifecycle.start(tokensFor(joiner)),
+                            SESSION_TIMEOUT,
+                            joinerName + ": welcome");
+            await(
+                    joiner.lifecycle.gameLaunched(),
+                    GAME_LAUNCH_TIMEOUT,
+                    joinerName + ": game_launch",
+                    joiner);
+            await(joining, ROLE_TIMEOUT, joinerName + ": JOINING");
+        }
 
-        // The card's definitive signal, on both sides, for the ids the lobby assigned.
-        awaitPeerConnected(host, joiner);
-        awaitPeerConnected(joiner, host);
+        List<Peer> allPeers = new ArrayList<>(joiners);
+        allPeers.add(host);
 
-        // WBS-4.3.2: with the link up, each game's traffic must be reaching the other.
-        awaitPeerTraffic(host, joiner);
+        // Establish that each peer has connected with each other peer, in both directions.
+        for (var p1 : allPeers) {
+            for (var p2 : allPeers) {
+                if (p1 != p2) {
+                    // The card's definitive signal, on both sides, for the ids the lobby assigned.
+                    awaitPeerConnected(p1, p2);
+                }
+            }
+        }
+
+        // Done differently as awaitPeerTraffic should be called once per pair rather than for each
+        // direction.
+        for (var p1 : allPeers) {
+            // Every peer after this one, done so that a pair is not tested twice.
+            List<Peer> others = allPeers.subList(allPeers.indexOf(p1) + 1, allPeers.size());
+            for (var p2 : others) {
+                // WBS-4.3.2: with the link up, each game's traffic must be reaching the other.
+                awaitPeerTraffic(p1, p2);
+            }
+        }
     }
 
     /**
@@ -736,13 +790,29 @@ final class TwoPeerSessionLiveTest {
     }
 
     /**
-     * The joining client's config: a second port set, account B, and A's uid as the target.
+     * The joining client's config: a second port set, for either account B, C, or D, and A's uid as
+     * the target.
      *
      * @param targetGameId the uid A's session was launched under
+     * @param joinerPosition 0 for the joiner B, 1 for joiner C, 2 for joiner D
      * @return the validated config
      */
-    private static MockClientConfig joinConfig(final int targetGameId) {
-        List<String> args = new ArrayList<>(commonArgs(tokenFileB()));
+    private static MockClientConfig joinConfig(final int targetGameId, final int joinerPosition) {
+        Path tokenFile = null;
+        switch (joinerPosition) {
+            case 0:
+                tokenFile = tokenFileB();
+                break;
+            case 1:
+                tokenFile = tokenFileC();
+                break;
+            case 2:
+                tokenFile = tokenFileD();
+                break;
+            default:
+                break;
+        }
+        List<String> args = new ArrayList<>(commonArgs(tokenFile));
         args.add("--target-game-id=" + targetGameId);
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
@@ -873,13 +943,42 @@ final class TwoPeerSessionLiveTest {
                         findTokenA(),
                         TOKEN_A_ENV,
                         "bootstrap .secrets/refresh_token.txt");
-        boolean tokenB =
-                present(
-                        "joining account's refresh token",
-                        findTokenB(),
-                        TOKEN_B_ENV,
-                        "bootstrap .secrets/refresh_token_b.txt for a SECOND seeded account");
-        return adapter && game && uid && tokenA && tokenB;
+        return adapter && game && uid && tokenA;
+    }
+
+    static boolean refreshFilesAvailable(int joinerAmount) {
+        // Default to true for the cases where joinerAmount < 3.
+        boolean tokenB = true;
+        boolean tokenC = true;
+        boolean tokenD = true;
+
+        if (joinerAmount >= 1) {
+            tokenB =
+                    present(
+                            "joining account's refresh token",
+                            findTokenB(),
+                            TOKEN_B_ENV,
+                            "bootstrap .secrets/refresh_token_b.txt for a SECOND seeded account");
+        }
+
+        if (joinerAmount >= 2) {
+            tokenC =
+                    present(
+                            "joining account's refresh token",
+                            findTokenC(),
+                            TOKEN_C_ENV,
+                            "bootstrap .secrets/refresh_token_c.txt for a THIRD seeded account");
+        }
+
+        if (joinerAmount >= 3) {
+            tokenD =
+                    present(
+                            "joining account's refresh token",
+                            findTokenD(),
+                            TOKEN_D_ENV,
+                            "bootstrap .secrets/refresh_token_b.txt for a FOURTH seeded account");
+        }
+        return tokenB && tokenC && tokenD;
     }
 
     /**
@@ -897,7 +996,7 @@ final class TwoPeerSessionLiveTest {
             return true;
         }
         System.out.println(
-                "[4.3.1] skipping two-peer session test: no "
+                "[4.3.1] skipping multi-peer session test: no "
                         + what
                         + " (set "
                         + env
@@ -924,7 +1023,15 @@ final class TwoPeerSessionLiveTest {
     }
 
     private static Path tokenFileB() {
-        return required(findTokenB(), "joining account's refresh token");
+        return required(findTokenB(), "joining (peer B) account's refresh token");
+    }
+
+    private static Path tokenFileC() {
+        return required(findTokenC(), "joining (peer C) account's refresh token");
+    }
+
+    private static Path tokenFileD() {
+        return required(findTokenD(), "joining (peer D) account's refresh token");
     }
 
     /**
@@ -963,6 +1070,16 @@ final class TwoPeerSessionLiveTest {
     private static Path findTokenB() {
         return resolve(
                 TOKEN_B_ENV, ".secrets/refresh_token_b.txt", "../.secrets/refresh_token_b.txt");
+    }
+
+    private static Path findTokenC() {
+        return resolve(
+                TOKEN_B_ENV, ".secrets/refresh_token_c.txt", "../.secrets/refresh_token_c.txt");
+    }
+
+    private static Path findTokenD() {
+        return resolve(
+                TOKEN_B_ENV, ".secrets/refresh_token_d.txt", "../.secrets/refresh_token_d.txt");
     }
 
     /**
