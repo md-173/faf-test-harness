@@ -69,13 +69,12 @@ This is the no-account path: no account, no OAuth, and — once §1's one-time
 the adapter's own telemetry websocket, which 3.3.14 cannot be told to skip and
 which fails harmlessly when it cannot connect (see the note on #236 below).
 
-**Every command in this section assumes the repository**, and drives the
-harness through `./gradlew`. If you have only the published jars — the case for
-someone embedding this in another project's CI — the root
-[`README.md`](../../README.md) carries the two invocations that need no clone:
-`ice-smoke` to prove an adapter is reachable, and `mock-game` driven straight
-at an adapter you started yourself. Giving this section a jar-only path of its
-own is tracked separately.
+**Two ways in.** [§2a](#2a-the-jar-only-path-no-clone) is the jar-only path: pull
+the published jars from the latest release and run them, which is what embedding
+this in another project's CI looks like. Everything after it assumes the
+repository and drives the harness through `./gradlew`. The two produce the same
+runs; the clone buys you the adapter-provisioning task, the live tests, and the
+ability to point the harness at an adapter you built yourself.
 
 *Provenance. Every command in this section was re-executed against merged
 `main` on **2026-09-01**, on WSL2 Linux (Ubuntu 24.04, OpenJDK 21.0.12 — the
@@ -88,6 +87,91 @@ because the exit-code note below turns on the difference between the two
 platforms. The one piece of evidence this section defers to —
 [`component-isolation.md`](component-isolation.md) row 5 — was re-recorded in
 the same 2026-09-01 pass.*
+
+### 2a. The jar-only path (no clone)
+
+Everything here runs from the two published jars. No Gradle, no checkout.
+
+**Fetch the latest release.** This is the route to use; it needs no
+authentication and no pinned version:
+
+```bash
+curl -s https://api.github.com/repos/md-173/faf-test-harness/releases/latest \
+  | grep -o '"browser_download_url": *"[^"]*-all\.jar"' \
+  | cut -d'"' -f4 \
+  | xargs -n1 curl -sLO
+```
+
+That leaves `mock-client-<version>-all.jar` and `mock-game-<version>-all.jar` in
+the working directory. Each jar also has a `.sha256` beside it on the release;
+fetch it the same way and `sha256sum -c mock-game-<version>-all.jar.sha256` to
+check the download. Both assets are named on that pattern deliberately — a
+consumer matching on it is relying on a contract, so the names do not change
+without notice.
+
+You also need `faf-ice-adapter` itself, which is not ours to publish. Take the
+pinned version from
+[FAForever/java-ice-adapter](https://github.com/FAForever/java-ice-adapter/releases)
+— the `-nojfx` build, headless — or point the harness at one you built:
+
+```bash
+export FAF_ICE_ADAPTER_JAR=/path/to/faf-ice-adapter-3.3.14-nojfx.jar
+```
+
+**Shape 1 — is the harness working?** `ice-smoke` spawns the adapter, checks
+both of its endpoints and tears it down, with no credentials of any kind:
+
+```bash
+java -jar mock-client-<version>-all.jar ice-smoke \
+  --ice-adapter-binary-path="$FAF_ICE_ADAPTER_JAR" \
+  --timeout-seconds=20
+```
+
+Exit `0` means reachable. Any other code names the phase that failed; the
+verdict table is in
+[`mock-client/README.md`](../../mock-client/README.md#ice-smoke--is-a-local-adapter-reachable).
+
+**Shape 2 — mock-game against an adapter you started.** If your pipeline already
+runs an adapter of its own, drive the game straight at it and skip mock-client
+entirely:
+
+```bash
+java -jar mock-game-<version>-all.jar \
+  --gpgnet-port 21000 --lobby-port 6112 \
+  --player-id 42 --player-login ci-runner --game-uid 0
+```
+
+Its flags and exit codes are in [`mock-game/README.md`](../../mock-game/README.md).
+Note that a game nothing drives into a role waits in the lobby indefinitely, by
+design — so in CI it is your step timeout that ends the run, and the exit code is
+the signal's (`143`), not one of the harness's. Wrap it in `timeout 30 java -jar
+…` if you would rather bound it yourself.
+
+**Ports.** Three overrides move everything the adapter binds, for a runner where
+`7236`–`7238` are taken. Note the hyphenation of the second one:
+
+| Flag | Default | What it moves |
+| :--- | :--- | :--- |
+| `--ice-adapter-rpc-port` | `7236` | The adapter's JSON-RPC port. |
+| `--ice-adapter-gpg-net-port` | `7237` | The GPGNet TCP port the game connects to. |
+| `--ice-adapter-lobby-port` | `7238` | The UDP port used for game traffic. |
+
+`ice-smoke` pre-flights both TCP ports before launching anything and reports
+`PORTS_IN_USE` naming the port, which is the common case: another adapter left
+running by an earlier step. **The pre-flight is not airtight, though** — it tests
+the port by binding it, and a bind can succeed alongside an existing listener
+depending on the platform and how that listener bound. Measured on macOS with a
+process holding `0.0.0.0:7236`, the pre-flight passed and the run failed later as
+`RPC_SILENT` instead. Treat `RPC_SILENT` or `RPC_UNREACHABLE` on a runner as
+"check the ports too", not only as "the adapter is broken".
+
+**Exit `70` is ambiguous, and there is no way around it from the code alone.** It
+covers both "the binary is missing or would not start" and "the ports were busy",
+because both are runtime failures of the same command. A consumer branching on
+exit codes cannot tell them apart — read the log line, which names which it was.
+`ice-smoke` is the reason to prefer it over `launch-ice` in a pipeline: its verdict
+is in the output, so a missing binary, a busy port and a silent adapter are three
+different lines rather than three identical `70`s.
 
 ### Start here: `ice-smoke`
 
@@ -493,6 +577,11 @@ and is not repeated here.**
 | `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. Full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery — get a fresh `code=` and refresh token. |
 | `run` hangs on connect, then times out with no `lobby WebSocket connected` line | (none — silence is the symptom) | `wss://ws.faforever.xyz` is Cloudflare-fronted and publicly reachable (§3, §8 verified this directly) — no FAF allowlist or VPN is needed for it. Look locally first: DNS resolution, an intercepting proxy, or an outbound firewall rule on this machine/network. Confirm with a raw TCP probe to `ws.faforever.xyz:443` before assuming a code problem. |
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
+| `ice-smoke` exits `70` and you cannot tell why | `ice-smoke: <verdict>` | `70` covers both a missing binary and busy ports. The verdict line distinguishes them: `PORTS_IN_USE` names the port to free, anything about the binary means the path is wrong. This is the no-account path's most common first failure. |
+| `ice-smoke` reports `PORTS_IN_USE` on a CI runner | `ice-smoke: PORTS_IN_USE` | Something else on the runner holds `7236`–`7238` — often a previous step's adapter that outlived it. Free the port, or move all three with `--ice-adapter-rpc-port`, `--ice-adapter-gpg-net-port` and `--ice-adapter-lobby-port` (§2a). |
+| `ice-smoke` reports `RPC_SILENT` or `RPC_UNREACHABLE` and the adapter looks fine | `ice-smoke: FAIL [RPC_SILENT]` | Check the ports before the adapter. The port pre-flight tests by binding, and a bind can succeed alongside an existing listener — measured on macOS against a process holding `0.0.0.0:7236`, which slipped past the pre-flight and surfaced here instead. `lsof -i :7236` settles it. |
+| `mock-game` exits `143` from a run that looked fine | `mock game started: …` with no `mock game finished` line | Nothing drove the game out of the lobby, so it waited as designed and your step timeout killed it. That is not a harness failure — a game sitting in a lobby is what a real one does. Bound it yourself with `timeout 30 java -jar …` if you want the wait to be your own. |
+| The release jar you downloaded is not the one you expected | — | Fetch the `.sha256` beside it and `sha256sum -c`. The API's `releases/latest` is a moving target, so a pipeline pulling it gets whatever was published last. |
 
 ## 8. Contradictions in prior documentation, resolved here
 
