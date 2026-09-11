@@ -61,6 +61,14 @@ bin/
 # Provisioned faf-ice-adapter binary (fetch via ./gradlew downloadIceAdapter)
 /faf-ice-adapter.jar
 
+# Release jars downloaded to the repo root by the README's own no-clone instructions, and the
+# directory logback creates in the working directory when LOG_DIR is unset — which the ICE adapter
+# reads, so running it from a clone leaves one behind. Anyone following the README lands here, so
+# this is not just tidying after ourselves (WBS-7.6, #317).
+/mock-client-*-all.jar
+/mock-game-*-all.jar
+/LOG_DIR_IS_UNDEFINED/
+
 # Provisioned faf-uid binary (download per documentation/demos/README.md; also .exe / -macos)
 /faf-uid*
 # Windows/WSL NTFS alternate-data-stream artifacts
