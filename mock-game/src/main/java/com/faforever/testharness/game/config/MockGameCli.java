@@ -28,8 +28,14 @@ import picocli.CommandLine.ParameterException;
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
- * --game-uid <uid> [--launch-delay-seconds <seconds>]
+ * --game-uid <uid> [--game-option <k=v>]... [--launch-delay-seconds <seconds>]
+ * [--udp-drop-percent <percent>] [--crash-after-seconds <seconds>]
  * }</pre>
+ *
+ * <p>The two fault-injection arguments ({@code --udp-drop-percent}, WBS-5.1, and {@code
+ * --crash-after-seconds}, WBS-5.2) are defaulted like {@code --launch-delay-seconds} and for the
+ * same reason: they are behavioural knobs rather than session facts. Both default to off, so a run
+ * that does not ask for a fault behaves exactly as it did before either flag existed.
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
  * PrintStream)} (WBS-3.2.1.2) catches it, prints the error and usage text to stderr, and returns a
@@ -50,6 +56,12 @@ public final class MockGameCli {
      * to pad every harness run.
      */
     private static final String DEFAULT_LAUNCH_DELAY_SECONDS = "5";
+
+    /**
+     * Default for {@code --crash-after-seconds}: negative, meaning never. Fault injection is
+     * opt-in, so the default has to be the behaviour mock-game had before the flag existed.
+     */
+    private static final String DEFAULT_CRASH_AFTER_SECONDS = "-1";
 
     /** TCP port of the adapter's GPGNet server; validated to a real port range. */
     @Option(names = "--gpgnet-port", required = true, description = "adapter GPGNet TCP port")
@@ -113,6 +125,22 @@ public final class MockGameCli {
                             + "peer's per-sender counters.")
     private int udpDropPercent;
 
+    /**
+     * How long after entering a real session the game halts the JVM without an orderly shutdown,
+     * standing in for a game crash (WBS-5.2). Off by default, for the same reason {@code
+     * --udp-drop-percent} is: fault injection is something a test asks for explicitly.
+     */
+    @Option(
+            names = "--crash-after-seconds",
+            defaultValue = DEFAULT_CRASH_AFTER_SECONDS,
+            description =
+                    "Seconds after the game enters a session before it halts the JVM without a "
+                            + "shutdown, simulating a game crash (default: ${DEFAULT-VALUE}). "
+                            + "Negative never crashes. The timer starts when a peer connects or "
+                            + "the match goes live, whichever comes first, so the crash lands "
+                            + "while there is a session to lose.")
+    private int crashAfterSeconds;
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -136,7 +164,8 @@ public final class MockGameCli {
                 cli.gameUid,
                 cli.gameOptions,
                 cli.launchDelaySeconds,
-                cli.udpDropPercent);
+                cli.udpDropPercent,
+                cli.crashAfterSeconds);
     }
 
     /**

@@ -261,7 +261,9 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
   "--game-uid",    game_launch.uid,
-  "--launch-delay-seconds", mockGameLaunchDelaySeconds ]
+  "--launch-delay-seconds", mockGameLaunchDelaySeconds,
+  // only when mockGameCrashAfterSeconds >= 0 (WBS-5.2)
+  "--crash-after-seconds", mockGameCrashAfterSeconds ]
 ```
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
@@ -282,6 +284,20 @@ FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
 the host reports `GameState Launching` (`gameconnection._handle_game_state` →
 `game.launch()`), so a host that auto-launches on a timer makes its own game
 unjoinable while the joiner is still booting its adapter and game.
+
+`--crash-after-seconds` (WBS-5.2) is the other defaulted argument, and the one
+the launcher emits **conditionally**. It defaults to `-1`, meaning never, at
+both ends; the launcher emits it only when the client's own
+`--mock-game-crash-after-seconds` is non-negative, so an orchestrated run that
+asks for no fault produces exactly the argv it produced before the flag
+existed. Zero is a real value rather than a second spelling of "off": it
+crashes the moment the game enters a session.
+
+That difference from `--launch-delay-seconds` is deliberate. The launch delay is
+always stated because its value decides whether the session's game stays
+joinable, so inheriting mock-game's default would be a silent behavioural
+choice. A crash delay is off unless asked for, and stating it everywhere would
+put a flag in every argv that does nothing in almost all of them.
 
 All three identity values have the same two sources as the adapter's
 (WBS-3.1.2.9, implemented). An orchestrated `run` passes the welcome identity

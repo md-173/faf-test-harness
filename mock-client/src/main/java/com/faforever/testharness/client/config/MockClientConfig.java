@@ -75,6 +75,10 @@ import java.util.OptionalInt;
  * @param iceRelayDelayMs how long the ICE signal relay holds each relayed candidate before
  *     forwarding it, in milliseconds; {@code 0} (the default) forwards inline. The delayed-ICE half
  *     of WBS-5.1's fault injection. Read through {@link #iceRelayDelay()} rather than directly
+ * @param mockGameCrashAfterSeconds how long after entering a session the launched mock-game halts
+ *     itself without an orderly shutdown, standing in for a game crash (WBS-5.2); negative, the
+ *     default, never crashes. Passed through to mock-game as {@code --crash-after-seconds}, and
+ *     emitted only when set so a run that asks for no fault produces the argv it always did
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -102,7 +106,8 @@ public record MockClientConfig(
         Optional<GameHostConfig> hostConfig,
         Optional<GameJoinConfig> joinConfig,
         Optional<GameQueueConfig> queueConfig,
-        int iceRelayDelayMs) {
+        int iceRelayDelayMs,
+        int mockGameCrashAfterSeconds) {
 
     /**
      * Validates that an OAuth credential channel is present. The mock client supports one channel:

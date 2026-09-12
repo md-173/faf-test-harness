@@ -32,6 +32,8 @@ package com.faforever.testharness.game.config;
  *       <td>{@code ExitStatus.SERVER_CONNECTION_LOST}</td></tr>
  *   <tr><td>{@link #RUNTIME}</td><td>never reached the adapter, or any other failed run</td>
  *       <td>{@code ExitStatus.SERVER_NOT_CONNECTED}, {@code ExitStatus.FAILED}</td></tr>
+ *   <tr><td>{@link #INJECTED_CRASH}</td><td>the {@code --crash-after-seconds} fault fired</td>
+ *       <td>{@code MockGameLifecycle}'s halt, bypassing the mapping entirely</td></tr>
  *   <tr><td>{@code 1}</td><td>an unchecked throw escaped the bootstrap; the JVM's
  *       uncaught-exception default, not set here</td>
  *       <td>{@code Error} or an unforeseen bug — no modelled failure produces it</td></tr>
@@ -41,6 +43,10 @@ package com.faforever.testharness.game.config;
  *
  * <p>The last two rows are the JVM's, not this class's: they are listed because a consumer reading
  * a mock-game exit code will see them, not because anything here sets them.
+ *
+ * <p>{@link #INJECTED_CRASH} is the one row that does <em>not</em> come from the {@code ExitStatus}
+ * mapping. Every other code above is chosen once the FSM reaches ENDED; an injected crash never
+ * reaches ENDED at all, because it halts the JVM from the lifecycle's scheduler.
  */
 public final class ExitCodes {
 
@@ -70,6 +76,24 @@ public final class ExitCodes {
      * sysexits' {@code EX_SOFTWARE}, and matches the mock client's {@code ExitCodes.RUNTIME}.
      */
     public static final int RUNTIME = 70;
+
+    /**
+     * The {@code --crash-after-seconds} fault injection fired (WBS-5.2): the game halted the JVM
+     * mid-session without running its shutdown sequence, standing in for a Forged Alliance crash.
+     *
+     * <p>{@code 134} is {@code 128 + SIGABRT}, the status a POSIX shell reports for a process that
+     * aborted, so a reader who knows nothing about this harness still reads it as "that process
+     * died". It sits outside the sysexits range the codes above use deliberately: an injected crash
+     * is not a category of failure the game diagnosed, it is the absence of any orderly end.
+     *
+     * <p>What this code does and does not tell a consumer. It is distinct from every other code
+     * mock-game emits ({@link #OK}, {@link #USAGE}, {@link #ADAPTER_LOST}, {@link #RUNTIME}) and
+     * from the JVM's own {@code 1} and {@code 143}, which is what the fault needs: an operator can
+     * tell an injected crash from a genuine adapter loss. It is not globally unique, because a real
+     * JVM {@code SIGABRT} produces the same status, and nothing can prevent that without giving up
+     * the faithfulness that made {@code 128 + SIGABRT} the right choice.
+     */
+    public static final int INJECTED_CRASH = 134;
 
     private ExitCodes() {}
 }

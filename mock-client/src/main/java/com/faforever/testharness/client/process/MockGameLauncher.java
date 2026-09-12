@@ -28,7 +28,12 @@ import org.slf4j.LoggerFactory;
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
  *          --player-id <id> --player-login <login> --game-uid <uid>
  *          --launch-delay-seconds <seconds>
+ *          [--crash-after-seconds <seconds>]
  * }</pre>
+ *
+ * <p>{@code --crash-after-seconds} (WBS-5.2) is the only optional argument, emitted just when the
+ * client's own {@code --mock-game-crash-after-seconds} is non-negative, so a launch that asks for
+ * no fault produces exactly the argv it produced before that flag existed.
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
@@ -225,6 +230,16 @@ public class MockGameLauncher {
         // than inheriting it. mock-game's default exists only for a hand-run binary.
         argv.add("--launch-delay-seconds");
         argv.add(Integer.toString(config.mockGameLaunchDelaySeconds()));
+        // Conditional, unlike the launch delay directly above, and deliberately so (WBS-5.2). That
+        // one is always stated because its value decides whether the session's game stays joinable,
+        // so inheriting mock-game's default would be a silent behaviour choice. This one is off by
+        // default at both ends, and a run that asks for no fault must produce the argv it always
+        // produced, so a reader diffing two launches sees the flag only where a fault was asked
+        // for.
+        if (config.mockGameCrashAfterSeconds() >= 0) {
+            argv.add("--crash-after-seconds");
+            argv.add(Integer.toString(config.mockGameCrashAfterSeconds()));
+        }
         return argv;
     }
 }

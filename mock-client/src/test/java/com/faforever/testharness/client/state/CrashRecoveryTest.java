@@ -74,7 +74,8 @@ final class CrashRecoveryTest {
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
-                    0);
+                    0,
+                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(

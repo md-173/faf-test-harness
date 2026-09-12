@@ -43,7 +43,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--help`, `--version`, plus the 32 config options —
+Global flags (`--config`, `--help`, `--version`, plus the 36 config options)
 are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag, and `ice-smoke`
@@ -56,6 +56,7 @@ a `--timeout-seconds` flag.
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window, or `ice-smoke` returned any verdict other than reachable. Also any exception that escapes a subcommand uncaught. |
+| `71` | `GAME_CRASHED`    | `run` only: the session ran, but the game process died unaccounted for: a non-zero exit with no `GameEnded` frame observed and no harness-initiated teardown, the same condition that logs `mock-game exited abnormally`. Covers a game that failed to start as well as one that died mid-match. Before this existed, such a run exited `0`. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
@@ -166,7 +167,8 @@ none of the lobby or OAuth rows apply to it.
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
-| `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions — network fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Network fault injection](../documentation/operations/harness-runbook.md#10-network-fault-injection-wbs-51). |
+| `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions, for fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
+| `mockGameCrashAfterSeconds` | `FAF_MOCK_CLIENT_MOCK_GAME_CRASH_AFTER_SECONDS` | `--mock-game-crash-after-seconds` | `-1` | no | Seconds after the launched `mock-game` enters a session before it halts without a shutdown, simulating a game crash (WBS 5.2). Negative never crashes; `0` crashes as soon as the game has a session to lose. Passed through as `--crash-after-seconds`, and only when set. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
 
 ¹ The refresh-token file is the **only** credential channel: Hydra rotates the
 refresh token on every use and the rotated value is persisted back to this

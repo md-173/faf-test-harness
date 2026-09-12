@@ -104,7 +104,8 @@ final class PeerSessionWiringTest {
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
-                    0);
+                    0,
+                    -1);
 
     private static final GameConfig GAME_CONFIG =
             new GameConfig(

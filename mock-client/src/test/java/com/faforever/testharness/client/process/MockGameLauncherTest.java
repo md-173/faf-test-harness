@@ -135,6 +135,59 @@ final class MockGameLauncherTest {
                         + "the config → argv hop intact");
     }
 
+    /**
+     * The unset case, and the criterion that this flag changes nothing until asked for (WBS-5.2).
+     *
+     * <p>Asserted as the absence of the flag rather than as a {@code -1} value, because those are
+     * different promises: mock-game would treat an explicit {@code -1} identically, but emitting it
+     * would change the argv of every existing launch and make a reader diffing two runs work out
+     * that the difference is inert.
+     */
+    @Test
+    void argvOmitsTheCrashFlagWhenNoFaultIsRequested() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithBinary(binary)).buildArgv(binary);
+
+        assertFalse(
+                argv.contains("--crash-after-seconds"),
+                "an unrequested fault must leave the argv byte-identical. argv: " + argv);
+    }
+
+    @Test
+    void argvCarriesTheConfiguredCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithCrashDelay(binary, 3)).buildArgv(binary);
+
+        assertEquals("3", valueAfter(argv, "--crash-after-seconds"));
+    }
+
+    /**
+     * Zero is a real delay rather than a second spelling of "off", so it must reach the argv. The
+     * emission guard is {@code >= 0} for exactly this reason; a {@code > 0} guard would silently
+     * drop the shortest fault the flag can express.
+     */
+    @Test
+    void argvCarriesAZeroCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithCrashDelay(binary, 0)).buildArgv(binary);
+
+        assertEquals("0", valueAfter(argv, "--crash-after-seconds"));
+    }
+
+    /** An explicitly negative value is the disable sentinel, so it stays off the argv. */
+    @Test
+    void argvOmitsAnExplicitlyNegativeCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv =
+                new MockGameLauncher(configWithCrashDelay(binary, -5)).buildArgv(binary);
+
+        assertFalse(argv.contains("--crash-after-seconds"), "argv: " + argv);
+    }
+
     @Test
     void argvCarriesEveryGameOption() throws Exception {
         Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
@@ -288,6 +341,24 @@ final class MockGameLauncherTest {
     /** As {@link #configWithBinary(Path)}, with an explicit mock-game launch delay. */
     private static MockClientConfig configWithLaunchDelay(final Path binary, final int seconds) {
         return configWithBinaryAndPlayerId(binary, null, seconds);
+    }
+
+    /** As {@link #configWithBinary(Path)}, with an explicit mock-game crash delay (WBS-5.2). */
+    private static MockClientConfig configWithCrashDelay(final Path binary, final int seconds) {
+        List<String> args =
+                new ArrayList<>(
+                        List.of(
+                                "--lobby-websocket-url=wss://lobby.faforever.xyz",
+                                "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
+                                "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
+                                "--oauth-redirect-uri=http://127.0.0.1",
+                                "--oauth-scopes=openid offline lobby",
+                                "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+                                "--oauth-refresh-token-file=/nonexistent/test-refresh-token",
+                                "--unique-id=00000000-0000-0000-0000-000000000000",
+                                "--mock-game-binary-path=" + binary,
+                                "--mock-game-crash-after-seconds=" + seconds));
+        return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
     private static MockClientConfig configWithBinaryAndPlayerId(

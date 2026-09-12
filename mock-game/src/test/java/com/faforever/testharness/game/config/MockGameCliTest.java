@@ -200,6 +200,46 @@ final class MockGameCliTest {
         assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }
 
+    @Test
+    void crashInjectionIsOffByDefault() {
+        // Fault injection is opt-in (WBS-5.2), so an argv that does not ask for it must produce a
+        // game that behaves exactly as it did before the flag existed.
+        assertEquals(Optional.empty(), MockGameCli.parse(VALID_ARGS).crashDelay());
+    }
+
+    @Test
+    void explicitCrashDelayIsHonoured() {
+        String[] args = withExtra(VALID_ARGS, "--crash-after-seconds", "3");
+
+        assertEquals(Optional.of(Duration.ofSeconds(3)), MockGameCli.parse(args).crashDelay());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"-1", "-30"})
+    void negativeCrashDelayNeverCrashes(final String seconds) {
+        String[] args = withExtra(VALID_ARGS, "--crash-after-seconds", seconds);
+
+        assertEquals(Optional.empty(), MockGameCli.parse(args).crashDelay());
+    }
+
+    @Test
+    void zeroCrashDelayCrashesImmediatelyRatherThanNever() {
+        // The same boundary zeroLaunchDelayLaunchesImmediatelyRatherThanNever pins, and pinned for
+        // a sharper reason: the card this came from contradicted itself, asking for negative to
+        // mean never in one place and zero to mean never in another. Negative is the sentinel,
+        // zero is the shortest real delay, matching --launch-delay-seconds.
+        String[] args = withExtra(VALID_ARGS, "--crash-after-seconds", "0");
+
+        assertEquals(Optional.of(Duration.ZERO), MockGameCli.parse(args).crashDelay());
+    }
+
+    @Test
+    void malformedCrashDelayFailsTheParse() {
+        String[] args = withExtra(VALID_ARGS, "--crash-after-seconds", "eventually");
+
+        assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
+    }
+
     /**
      * Copies {@code base} with two extra tokens appended.
      *
