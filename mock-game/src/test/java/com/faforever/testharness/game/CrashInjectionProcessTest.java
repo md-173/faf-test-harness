@@ -9,6 +9,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
 import java.io.IOException;
 import java.net.DatagramSocket;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -92,7 +93,11 @@ final class CrashInjectionProcessTest {
     @AfterEach
     void tearDown() {
         if (child != null) {
-            child.destroyForcibly();
+            try {
+                child.destroyForcibly().waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
         gpgnet.stop();
         peer.close();
@@ -109,7 +114,7 @@ final class CrashInjectionProcessTest {
             throws Exception {
         gpgnet.start();
         child = startChild(tempDir);
-        gpgnet.awaitClient();
+        awaitChildConnected();
 
         // GameState Idle, then the lobby handshake, exactly as the adapter would drive it.
         assertEquals(
@@ -133,9 +138,6 @@ final class CrashInjectionProcessTest {
                 child.exitValue(),
                 "a halted game must report the documented injected-crash code");
 
-        // Nothing the game owes at a clean end may have been written. This is what halt buys over
-        // System.exit: no shutdown hook ran, so GameShutdown never closed the socket in order and
-        // gameEnds never got the chance to send anything.
         List<String> commands = drainCommands();
         assertTrue(
                 commands.stream().noneMatch(c -> c.equals("GameEnded")),
@@ -143,6 +145,23 @@ final class CrashInjectionProcessTest {
         assertTrue(
                 commands.stream().noneMatch(c -> c.equals("GameResult")),
                 "a crashed game must never report a result. saw: " + commands);
+
+        // The assertions above are necessary but not sufficient, and it is worth being explicit
+        // about why. This run dies out of JOINING, so it never reached the LIVE to ENDED
+        // transition that sends the closing frames, and GameShutdown sends none of its own. A
+        // System.exit in place of the halt would therefore produce the same exit code and the same
+        // empty frame list, and every assertion above would still pass.
+        //
+        // What separates the two is the shutdown sequence itself. Only GameShutdown.run() logs
+        // "mock game shutdown complete", and only a JVM shutdown hook reaches it. Its absence,
+        // alongside the crash line that does appear, is the evidence that no orderly teardown ran.
+        String log = Files.readString(tempDir.resolve("mock-game.jsonl"));
+        assertTrue(
+                log.contains("injected crash firing"),
+                "the pre-halt warning must reach disk, since nothing flushes after it");
+        assertFalse(
+                log.contains("mock game shutdown complete"),
+                "a halted game must not run its shutdown sequence; System.exit would have");
     }
 
     /** The clean-run control: the same argv without the flag must not produce the crash code. */
@@ -150,17 +169,43 @@ final class CrashInjectionProcessTest {
     void withoutTheFlagTheSameRunDoesNotCrash(@TempDir final Path tempDir) throws Exception {
         gpgnet.start();
         child = startChild(tempDir, "--crash-after-seconds", "-1");
-        gpgnet.awaitClient();
+        awaitChildConnected();
 
+        // Driven to the same arming point as the positive case, and that is the whole point of
+        // this control. An earlier version stopped at the first frame, so the child sat in IDLE
+        // where armCrash is unreachable whatever the flag says, and the test would have passed
+        // just as happily with the fault switched on.
         assertEquals(
                 "GameState",
                 gpgnet.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).command());
+        gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 1, 1)));
+        assertEquals(
+                "GameState",
+                gpgnet.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).command());
+        gpgnet.sendFrame(
+                new GpgNetFrame(
+                        "JoinGame", List.of("127.0.0.1:" + peer.getLocalPort(), "Smith", 2)));
 
-        // Nothing drives this run to an end, so the assertion is about what it is not: the crash
-        // timer must not fire while it sits there. Killed by teardown.
+        // Nothing drives this run to an end, so the assertion is about what it is not: with the
+        // fault disabled the game keeps running past the delay the positive case dies at. Killed
+        // by teardown.
         assertFalse(
                 child.waitFor(CRASH_DELAY_MARGIN_SECONDS, TimeUnit.SECONDS),
                 "with the fault disabled nothing may halt the process");
+    }
+
+    /**
+     * Waits for the child to connect, on the same generous budget as the rest of this test.
+     *
+     * <p>{@code ScriptedGpgNetServer.awaitClient()}'s no-argument form allows a hardcoded five
+     * seconds, which here has to cover fork and exec, JVM boot, logging setup, argument parsing and
+     * the GPGNet connect. That is comfortable locally and marginal on a cold or loaded CI runner,
+     * and it was the tightest budget in a test whose every other budget is generous.
+     */
+    private void awaitChildConnected() throws InterruptedException {
+        assertTrue(
+                gpgnet.awaitClient(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the child JVM must connect to the scripted GPGNet server");
     }
 
     /** Every command the scripted server has queued, without blocking once it runs dry. */

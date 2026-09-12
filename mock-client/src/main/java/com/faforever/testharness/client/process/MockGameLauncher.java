@@ -28,7 +28,12 @@ import org.slf4j.LoggerFactory;
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
  *          --player-id <id> --player-login <login> --game-uid <uid>
  *          --launch-delay-seconds <seconds>
+ *          [--crash-after-seconds <seconds>]
  * }</pre>
+ *
+ * <p>{@code --crash-after-seconds} (WBS-5.2) is the only optional argument, emitted just when the
+ * client's own {@code --mock-game-crash-after-seconds} is non-negative, so a launch that asks for
+ * no fault produces exactly the argv it produced before that flag existed.
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
