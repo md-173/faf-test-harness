@@ -139,7 +139,7 @@ final class LobbyTimeoutTest {
     private MockGameLifecycle lifecycleWithLobbyTimeout(final int seconds) {
         MockGameConfig config =
                 new MockGameConfig(
-                        gpgnet.port(), 50001, 1, "Rhiza", 9001, Map.of(), -1, seconds, 0);
+                        gpgnet.port(), 50001, 1, "Rhiza", 9001, Map.of(), -1, seconds, 0, -1);
         MockGameLifecycle created =
                 new MockGameLifecycle(
                         config,
