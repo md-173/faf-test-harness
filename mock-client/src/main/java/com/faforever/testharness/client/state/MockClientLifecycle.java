@@ -321,6 +321,7 @@ public final class MockClientLifecycle {
                 .registerTransition(StartMatch.class, states.get(ClientState.PLAYING));
 
         registerConnectToPeerTransitions();
+        registerPeerDepartureHandling();
         registerAdapterExitedTransitions();
 
         // Disconnection on any of these states results in termination.
@@ -546,6 +547,63 @@ public final class MockClientLifecycle {
                         states.get(ClientState.JOINING),
                         this::connectToPeer,
                         null);
+    }
+
+    /**
+     * Wires peer departure end to end (WBS-4.3.4): the lobby handler for faf-server's {@code
+     * DisconnectFromPeer}, and the edges that accept it in every state this client can occupy while
+     * the server's game is still in its LOBBY phase.
+     *
+     * <p>Both halves live here rather than beside the other lobby handlers in {@link
+     * #setupStateMachine()} because that method is at its checkstyle length limit, and because a
+     * registration whose transitions are registered nowhere would be a silent no-op worth keeping
+     * adjacent to them.
+     *
+     * <p>Stay-in-state on all four, for the same reason {@link #registerConnectToPeerTransitions()}
+     * self-loops: the frame changes what the adapter is doing, not what phase this client is in. A
+     * two-peer session ends anyway, but through the game's own exit rather than through this edge.
+     *
+     * <p><b>Why four states and not the two {@code ConnectToPeer} uses.</b> The server's guard is
+     * on <em>its</em> {@code Game.state}, which is not this FSM's state, and its LOBBY phase spans
+     * more of our states than the host/join pair:
+     *
+     * <ul>
+     *   <li><b>STARTING_GAME.</b> faf-server sets {@code game.state = LOBBY} when the host's game
+     *       reports {@code GameState Idle}, one adapter round trip before the {@code HostGame}
+     *       frame that moves this client to HOSTING. This is the same window #239's breadcrumb
+     *       records for {@code ConnectToPeer}.
+     *   <li><b>PLAYING, on a joiner.</b> {@code handle_game_state}'s {@code Launching} branch is
+     *       host-only, so a joiner whose mock game auto-launches (the default {@code
+     *       --mock-game-launch-delay-seconds=5}) reaches PLAYING while the server's game is still
+     *       LOBBY and still sending departure notices.
+     * </ul>
+     *
+     * <p>Without these two the frame would find no transition and be dropped under {@link
+     * InvalidTransitionPolicy#IGNORE} with a generic "No matching transitions" WARN. The two differ
+     * in what they then do: STARTING_GAME relays to the adapter like HOSTING and JOINING, while
+     * PLAYING logs and drops under the play-on rule. See {@link #disconnectFromPeer} for why.
+     *
+     * <p>{@code ConnectToPeer}'s narrower registration is deliberately left alone here: closing
+     * that gap is WBS-4.3.3's, per its own breadcrumb.
+     */
+    private void registerPeerDepartureHandling() {
+        lobby.registerHandler(
+                "DisconnectFromPeer",
+                message -> machine.receiveEvent(new DisconnectFromPeer(message)));
+        List<ClientState> departureStates =
+                List.of(
+                        ClientState.STARTING_GAME,
+                        ClientState.HOSTING,
+                        ClientState.JOINING,
+                        ClientState.PLAYING);
+        for (var s : departureStates) {
+            states.get(s)
+                    .registerTransition(
+                            DisconnectFromPeer.class,
+                            states.get(s),
+                            this::disconnectFromPeer,
+                            null);
+        }
     }
 
     /**
@@ -1212,9 +1270,114 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * IDLE entry hook: sends this session's configured intent — {@code game_host}, {@code
-     * game_join}, and/or the {@code game_matchmaking} start — exactly once, on the first entry into
-     * IDLE (#224 review).
+     * <<<<<<< HEAD ======= Stay-in-state action for {@link DisconnectFromPeer} (WBS-4.3.4): issues
+     * the adapter's {@code disconnectFromPeer(remotePlayerId)} RPC (json-rpc-spec.md §4) for the
+     * player the lobby says has left, which destroys the local PeerRelay and makes the adapter emit
+     * a GPGNet {@code DisconnectFromPeer} to this side's game.
+     *
+     * <p>The generic {@link IceAdapterConnection#call} with an int id is the whole interface here:
+     * no typed method exists, and upstream's {@code RPCHandler.disconnectFromPeer(long)} takes a
+     * single numeric id, which a JSON int satisfies. Source-verified in java-ice-adapter 3.3.14,
+     * where {@code IceAdapter.onDisconnectFromPeer} closes the peer and forwards the frame with no
+     * game-state guard of its own.
+     *
+     * <p><b>In PLAYING the frame is logged and dropped, malformed or not.</b> That is the play-on
+     * rule, the same one that keeps PLAYING out of {@link
+     * #registerPostLaunchMatchCancelledTransitions()} and makes a lobby disconnect there a
+     * self-loop: once the peer links are established the match is peer-to-peer and ends
+     * deterministically through the game's own exit, so no lobby frame may cut it short. Issuing
+     * the RPC here would do exactly that, because the adapter forwards the frame with no state
+     * guard and this side's game ends on it from LIVE as readily as from the lobby. Worse, it would
+     * end without the closing frames, leaving the survivor to report a delivery failure that never
+     * happened. Nothing is lost by dropping it: the adapter's connectivity checker reaps the
+     * departed peer's relay about ten seconds later either way, which is precisely how a
+     * post-launch departure is meant to be noticed.
+     *
+     * <p>The registration is kept for PLAYING all the same, so this is a deliberate, logged no-op
+     * rather than a generic "No matching transitions" WARN. Same reason the IDLE/{@code
+     * SearchStopped} and TERMINATED/{@code Disconnected} self-loops exist.
+     *
+     * <p>Everywhere else this edge is registered the match has not started, and a malformed frame
+     * fails the transition into TERMINATED, the same treatment {@link #hostGame}, {@link #joinGame}
+     * and {@link #connectToPeer} give theirs. The frame is machine-generated with a fixed
+     * single-int shape, so one we cannot read means either our parsing is wrong or the server's has
+     * moved, and both are findings a harness should surface rather than swallow.
+     *
+     * <p><b>A failed RPC does not end the session, and that asymmetry with {@link #connectToPeer}
+     * is deliberate.</b> That method ends the session on failure because without its relay the peer
+     * is permanently unreachable and a session carrying on would look healthy while silently unable
+     * to connect. This one is the mirror image: the peer is leaving regardless, and the worst a
+     * failure leaves behind is a relay for someone who has gone, which the adapter's own
+     * connectivity checker tears down about ten seconds later anyway. Ending a live session over
+     * that would turn a self-correcting condition into a lost run.
+     *
+     * <p>{@code whenComplete} rather than {@code whenCompleteAsync} follows from the same decision:
+     * with no {@code ShutdownRequested} to post, this continuation only logs and never touches the
+     * FSM, so it cannot cause the monitor re-entry {@link #connectToPeer} has to guard against. See
+     * {@link #logIfSendFails} for the same reasoning on the outbound lobby sends.
+     *
+     * <p>Nothing else is updated, because nothing else exists to update: this client keeps no peer
+     * bookkeeping of its own. The adapter owns the peer set and the game keeps its own list, so the
+     * RPC is the entirety of the client's role in a departure.
+     *
+     * @param message the {@link DisconnectFromPeer} event; guaranteed by registration.
+     * @throws FailedTransitionException if the frame is malformed.
+     */
+    private void disconnectFromPeer(Event message) throws FailedTransitionException {
+        if (!(message instanceof DisconnectFromPeer)) {
+            throw new AssertionError(
+                    "disconnectFromPeer method called without a DisconnectFromPeer event, should be"
+                            + " impossible");
+        }
+        boolean playing = machine.getState() == states.get(ClientState.PLAYING);
+        JsonNode command = ((DisconnectFromPeer) message).command();
+        JsonNode remoteId = command.path("args").path(0);
+        if (!remoteId.isInt()) {
+            if (playing) {
+                LOG.warn("ignoring malformed DisconnectFromPeer during a live match");
+                return;
+            }
+            throw new FailedTransitionException(
+                    "int remote id argument not found in DisconnectFromPeer message",
+                    states.get(ClientState.TERMINATED));
+        }
+
+        int peerId = remoteId.asInt();
+        if (playing) {
+            LOG.info("peer disconnect ignored during a live match: id={}", peerId);
+            return;
+        }
+        LOG.info("peer disconnect: id={}", peerId);
+        iceConnection
+                .call("disconnectFromPeer", peerId)
+                .whenComplete(
+                        (result, error) -> {
+                            if (error == null) {
+                                return;
+                            }
+                            // Every clean shutdown fails an in-flight call: SessionTeardown
+                            // terminates the adapter process before closing the RPC socket. Same
+                            // reason connectToPeer and the lobby senders consult this flag.
+                            if (teardown.hasRun()) {
+                                LOG.debug(
+                                        "disconnectFromPeer for id={} failed during teardown ({})",
+                                        peerId,
+                                        error.getMessage());
+                                return;
+                            }
+                            LOG.warn(
+                                    "peer relay teardown failed for id={} ({}); the adapter's"
+                                            + " connectivity checker will drop it",
+                                    peerId,
+                                    error.getMessage());
+                        });
+    }
+
+    /**
+     * >>>>>>> 2744649 (feat(mock-client): relay a lobby DisconnectFromPeer to the adapter) IDLE
+     * entry hook: sends this session's configured intent — {@code game_host}, {@code game_join},
+     * and/or the {@code game_matchmaking} start — exactly once, on the first entry into IDLE (#224
+     * review).
      *
      * <p>Every subsequent IDLE entry sends nothing. Those come from SEARCHING, on a stop
      * confirmation or a {@code match_cancelled}, and re-sending there would mean a stopped search
