@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -82,7 +83,9 @@ import org.slf4j.LoggerFactory;
  * GameState.LOBBY} and leaves that state the moment the host reports {@code GameState Launching},
  * so a host on the default 5 s timer would make itself unjoinable while B is still booting two
  * JVMs. Nothing is lost here: the peer link is established during the lobby phase, and so is the
- * game traffic this test now also asserts.
+ * game traffic this test now also asserts. The one exception is WBS-4.3.4's post-launch run below,
+ * which has to leave that state on purpose and pays for it with a launch delay long enough to let
+ * the joiner in first.
  *
  * <p><b>Game traffic (WBS-4.3.2).</b> Each mock game binds its lobby port on {@code CreateLobby}
  * and starts sending to a peer as soon as the adapter names one, so datagrams cross the finished
@@ -99,8 +102,8 @@ import org.slf4j.LoggerFactory;
  * fresh counter per registration), while the receiving side only ever raises its highest-seen
  * sequence. The advancing check below then makes no progress until the restarted stream climbs past
  * the old high — bounded, about a second per ten datagrams already sent, but it can eat most of
- * {@link #TRAFFIC_TIMEOUT}. The same shape is what WBS-4.3.4 will hit deliberately when a peer
- * rejoins.
+ * {@link #TRAFFIC_TIMEOUT}. A rejoining peer would hit the same shape deliberately, which is why
+ * rejoin is explicitly out of WBS-4.3.4's scope and left to a later card.
  *
  * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
@@ -111,9 +114,32 @@ import org.slf4j.LoggerFactory;
  * and join its own game. Both files are rewritten in place on every run, because Hydra rotates the
  * refresh token on use. See {@code documentation/demos/README.md} for the bootstrap and run notes.
  *
+ * <p><b>Mid-session peer departure (WBS-4.3.4).</b> Two further runs take the session this class
+ * already builds and remove a peer from it, because the survivor learns about a departure two
+ * different ways depending on when it happens.
+ *
+ * <ul>
+ *   <li><b>In the lobby phase</b>, faf-server tells every remaining player: {@code
+ *       GameConnection.abort} runs {@code disconnect_all_peers()} under a {@code GameState.LOBBY}
+ *       guard, the client relays that to its adapter as {@code disconnectFromPeer}, and the frame
+ *       the adapter forwards ends the survivor's own game. Provoked with {@code kill -9} on the
+ *       joiner's game, which is the path that proves the client's crash-side {@code GameState
+ *       Ended} fallback reaches the server at all.
+ *   <li><b>After launch</b>, that guard closes and no targeted notice is sent. The survivor finds
+ *       out from its own adapter, whose connectivity checker declares a silent peer lost after ten
+ *       seconds and pushes {@code onConnected(local, remote, false)}. Nothing is built for this
+ *       path; it is asserted.
+ * </ul>
+ *
+ * <p>The second run is the only one that launches a match, and it launches exactly one side. The
+ * server's game state is what decides which of the two paths a departure takes, and {@code
+ * handle_game_state}'s {@code Launching} branch is host-only, so the host's {@link
+ * #HOST_LAUNCH_DELAY} is the whole mechanism. The joiner never auto-launches in any run here; see
+ * {@link #joinConfig(int)} for why giving it a delay would take the timing away from the test.
+ *
  * <p><b>Every wait is bounded and named</b>, in the 3.1.2.7 pattern: a missed checkpoint fails with
  * the budget that ran out and what had been seen by then, so a regression names itself. The
- * class-level {@link Timeout} is only a total-runtime backstop.
+ * class-level {@link Timeout} is only a total-runtime backstop, and it applies per test method.
  */
 @Tag("integration")
 @Timeout(value = 600, unit = TimeUnit.SECONDS)
@@ -214,6 +240,63 @@ final class TwoPeerSessionLiveTest {
     /** Poll slice for every bounded wait built on a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
 
+    /** Launch-delay value that disables a mock game's auto-launch entirely. */
+    private static final int NO_AUTO_LAUNCH = -1;
+
+    /** Environment override for the post-launch run's host launch delay, in seconds. */
+    private static final String LAUNCH_DELAY_ENV = "FAF_HOST_LAUNCH_DELAY_SECONDS";
+
+    /**
+     * Budget for the adapter's connectivity checker to declare a departed peer lost. Upstream
+     * declares loss after 10 s of silence and echoes every 1 s ({@code
+     * PeerConnectivityCheckerModule}), so this is that threshold with room for the departing side's
+     * own teardown to finish first.
+     *
+     * <p>Declared ahead of {@link #HOST_LAUNCH_DELAY} because that field's validation reads it.
+     */
+    private static final Duration PEER_LOST_TIMEOUT = Duration.ofSeconds(45);
+
+    /**
+     * Seconds the post-launch run's host sits in the lobby before launching (WBS-4.3.4).
+     *
+     * <p>This is the one number that whole run is timed against, and it is a trade. The host's
+     * timer starts when <em>its</em> game enters HOSTING, and the joiner's entire bring-up has to
+     * finish inside it: faf-server accepts a {@code game_join} only while the game is in {@code
+     * GameState.LOBBY}, so a host that launches first makes itself unjoinable. Too long and the run
+     * idles; too short and it fails. It fails loudly either way, at the named {@code B:
+     * game_launch} checkpoint with the server's own {@code game_join_failed} reason quoted, so a
+     * bad value diagnoses itself rather than producing a confusing timeout elsewhere.
+     *
+     * <p>Two minutes sits comfortably above the observed bring-up while leaving room under the 600
+     * s per-method {@link Timeout}, and it is overridable because a slow or distant network is
+     * exactly the case where the default stops being generous. Note that {@code MockGameLauncher}'s
+     * match duration is derived as twice this (mock-game's {@code Main.matchDuration}), and that
+     * derived window is what bounds the observation below, so lowering this shortens the window the
+     * adapter's ten-second detector has to fire in.
+     */
+    private static final Duration HOST_LAUNCH_DELAY = hostLaunchDelay();
+
+    /**
+     * Budget for the host to actually launch, derived from the delay it was given so the two cannot
+     * drift apart. The headroom is one role timeout, which is what the bring-up ahead of the timer
+     * is budgeted at elsewhere in this class.
+     */
+    private static final Duration LAUNCH_TIMEOUT = HOST_LAUNCH_DELAY.plus(ROLE_TIMEOUT);
+
+    /**
+     * Budget for the server to report the launched game as no longer joinable. One lobby round trip
+     * after the host's own adapter relayed the frame, so this is latency headroom, not a wait on
+     * anything slow.
+     */
+    private static final Duration SERVER_LIVE_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Budget for the surviving side to observe a lobby-phase departure end to end: the server's
+     * {@code DisconnectFromPeer}, the adapter RPC it produces, and the survivor's own game exiting
+     * on the frame the adapter forwards.
+     */
+    private static final Duration DEPARTURE_TIMEOUT = Duration.ofSeconds(60);
+
     /** Map the host advertises; any real map folder name works. */
     private static final String HOST_MAP = "scmp_007";
 
@@ -226,6 +309,14 @@ final class TwoPeerSessionLiveTest {
      * the session fails.
      */
     private Peer joiner;
+
+    /**
+     * The hosting peer, once a test has built it. A field for the same reason {@link #joiner} is,
+     * plus one of its own: the orphan check in {@link #stopCapturingAndAssertNoOrphans()} needs a
+     * config to read the binary names off, and must run even when a test failed before it could
+     * reach its own last line.
+     */
+    private Peer host;
 
     /** Root logger the mock-game capture appender is attached to. */
     private Logger root;
@@ -271,11 +362,29 @@ final class TwoPeerSessionLiveTest {
         root.addAppender(captured);
     }
 
+    /**
+     * Detaches the log capture and makes the pgrep-clean check, for every run including a failed
+     * one.
+     *
+     * <p>Both live here rather than at the end of each test because a run that failed a checkpoint
+     * is the one most likely to have leaked an adapter or a game, and a check written as the last
+     * line of the test body is precisely the line a failure skips. It is not in the tests' own
+     * {@code finally} blocks either: an exception thrown from {@code finally} replaces the original
+     * one, so a leak would mask the failure that caused it. JUnit aggregates instead, reporting the
+     * test's own failure and attaching this one as suppressed, so both survive.
+     *
+     * @throws InterruptedException if the wait for the processes to disappear is interrupted
+     */
     @AfterEach
-    void stopCapturingSubprocessLogs() {
+    void stopCapturingAndAssertNoOrphans() throws InterruptedException {
         if (captured != null) {
             captured.stop();
             root.detachAppender(captured);
+        }
+        // Null when the run self-skipped before building anything, which leaves nothing to leak.
+        // Either peer's config names the same two binaries, so one check covers all four processes.
+        if (host != null) {
+            assertNoSurvivingSubprocesses(host.config);
         }
     }
 
@@ -324,6 +433,17 @@ final class TwoPeerSessionLiveTest {
          */
         private final AtomicReference<String> joinRefusal = new AtomicReference<>();
 
+        /**
+         * Latest server-reported state per game uid, from {@code game_info} (WBS-4.3.4).
+         *
+         * <p>Test-only, and deliberately not a client feature: #237 puts handling {@code game_info}
+         * out of scope for the mock client, which still ignores it. What this observes is the
+         * server's own {@code Game.state}, which is the thing the departure behaviour actually
+         * turns on and which no client-side signal reports. Registered the same way the
+         * join-refusal recorder above is.
+         */
+        private final Map<Integer, String> serverGameStates = new ConcurrentHashMap<>();
+
         /** This peer's lobby-assigned identity, from its {@code welcome}. */
         private SessionState identity;
 
@@ -332,6 +452,7 @@ final class TwoPeerSessionLiveTest {
             this.config = config;
             LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
             lobby.registerHandler("game_join_failed", frame -> joinRefusal.set(frame.toString()));
+            lobby.registerHandler("game_info", this::recordGameInfo);
             IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
             adapter.registerNotification("onConnected", this::record);
             this.teardown = new SessionTeardown(lobby);
@@ -371,6 +492,39 @@ final class TwoPeerSessionLiveTest {
         }
 
         /**
+         * Records the server's view of every game a {@code game_info} frame describes.
+         *
+         * <p>Two shapes, both of which faf-server sends: a batch as {@code {"games": [...]}} on
+         * connect, and a single game dict for each subsequent update. The {@code state} field is
+         * the client-facing rendering of {@code Game.state}, which {@code Game.to_dict} maps as
+         * LOBBY to {@code "open"}, LIVE to {@code "playing"}, and everything else to {@code
+         * "closed"}.
+         *
+         * @param frame the full {@code game_info} frame
+         */
+        private void recordGameInfo(final JsonNode frame) {
+            JsonNode games = frame.path("games");
+            if (games.isArray()) {
+                games.forEach(this::recordOneGame);
+                return;
+            }
+            recordOneGame(frame);
+        }
+
+        /**
+         * Records one game dict, ignoring anything without both a uid and a textual state.
+         *
+         * @param game one game as the server describes it
+         */
+        private void recordOneGame(final JsonNode game) {
+            JsonNode uid = game.path("uid");
+            JsonNode state = game.path("state");
+            if (uid.isInt() && state.isTextual()) {
+                serverGameStates.put(uid.asInt(), state.asText());
+            }
+        }
+
+        /**
          * Appended to a failed checkpoint's message when the server refused this peer's join.
          *
          * @return the refusal frame in parentheses, or an empty string
@@ -384,18 +538,13 @@ final class TwoPeerSessionLiveTest {
     @Test
     @EnabledIf("liveEnvironmentAvailable")
     void twoPeersEstablishTheirLinkThroughTheLiveLobby() throws Exception {
-        assumeTrue(
-                lobbyReachable(),
-                "lobby "
-                        + lobbyUrl()
-                        + " unreachable from this network (TCP timeout on :443). Self-skips "
-                        + "off-net; runs on a FAF-allowlisted host/VPN.");
+        assumeTrue(lobbyReachable(), unreachableLobbyMessage());
 
         // Unique per run, so a stale game from an earlier run is never what this one observes —
         // though it is the uid, not the title, that B actually targets.
-        Peer host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
+        host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
         try {
-            runSession(host);
+            runSession();
         } finally {
             // Always runs, so a failed checkpoint still leaves no adapter and no game behind.
             // Joiner first: it is the side that may not exist yet.
@@ -413,18 +562,303 @@ final class TwoPeerSessionLiveTest {
                 shutdown(host);
             }
         }
+    }
 
-        assertNoSurvivingSubprocesses(host.config);
+    @Test
+    @EnabledIf("liveEnvironmentAvailable")
+    void lobbyPhaseDepartureTearsTheSurvivorDownCleanly() throws Exception {
+        assumeTrue(lobbyReachable(), unreachableLobbyMessage());
+
+        host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.4 " + UUID.randomUUID()));
+        try {
+            runSession();
+
+            // Taken before the kill, in the same spirit as runSession's own HOSTING future. This
+            // one is terminal and so would complete even if asked for late, but the habit is what
+            // keeps the next checkpoint added here honest.
+            CompletableFuture<Void> terminated =
+                    host.lifecycle.stateReached(ClientState.TERMINATED);
+            int mark = logMark();
+
+            // kill -9 on the joiner's game, leaving its client alive to notice. The client sends
+            // GameState Ended on a game it never saw end cleanly, faf-server routes that to
+            // on_connection_closed() then abort(), and abort() runs disconnect_all_peers() because
+            // the game is still in GameState.LOBBY. There is a second path to the same frame if
+            // that send loses its race with B's teardown closing the lobby: the socket closing
+            // reaches on_connection_lost() and so the same abort().
+            killGameOf(joiner);
+
+            // The frame arrived and was read. This is the client half of the card.
+            awaitLogLine(
+                    mark,
+                    "peer disconnect: id=" + joiner.identity.id(),
+                    DEPARTURE_TIMEOUT,
+                    "A never relayed the departure to its adapter" + adapterDisconnectHint(mark));
+
+            // And the adapter acted on it. The RPC destroys the peer relay and makes the adapter
+            // emit a GPGNet DisconnectFromPeer to A's own game, which is the only way that game can
+            // reach ENDED here. Asserting the game's own exit line rather than the adapter's log
+            // keeps this pinned to our contract instead of upstream's wording.
+            //
+            // The line carries no player id, so it is only unambiguous because B's game was killed
+            // and never logs it: both games' stdout funnels into this one JVM's root logger.
+            awaitLogLine(
+                    mark,
+                    "mock game finished: status=OK, exit code 0",
+                    DEPARTURE_TIMEOUT,
+                    "A's game did not end cleanly on the adapter's DisconnectFromPeer"
+                            + adapterDisconnectHint(mark));
+
+            await(terminated, DEPARTURE_TIMEOUT, "A: TERMINATED after its game ended");
+        } finally {
+            try {
+                shutdown(joiner);
+            } finally {
+                shutdown(host);
+            }
+        }
+    }
+
+    @Test
+    @EnabledIf("liveEnvironmentAvailable")
+    void postLaunchDepartureIsObservedFromTheAdapterAlone() throws Exception {
+        assumeTrue(lobbyReachable(), unreachableLobbyMessage());
+
+        host =
+                new Peer(
+                        "A(host)",
+                        hostConfig(
+                                "faf-test-harness 4.3.4 " + UUID.randomUUID(),
+                                (int) HOST_LAUNCH_DELAY.toSeconds()));
+        try {
+            runSession();
+            int hostedUid = host.lifecycle.gameLaunched().getNow(null).uid();
+
+            // The host's own adapter relaying GameState Launching is what moves this client to
+            // PLAYING, and it is not the same event as faf-server processing that frame: the
+            // forwarder's lobby send is fire-and-forget on the same notification fan-out. Waiting
+            // only for PLAYING would leave a window in which the server's game is still LOBBY, and
+            // a departure inside it would produce exactly the DisconnectFromPeer this run asserts
+            // the absence of. So the server's own view is what gates the departure.
+            await(
+                    host.lifecycle.stateReached(ClientState.PLAYING),
+                    LAUNCH_TIMEOUT,
+                    "A: PLAYING (launch delay " + HOST_LAUNCH_DELAY.toSeconds() + "s)");
+            awaitServerGameState(host, hostedUid, "playing");
+
+            // Everything from here is the departure. Marked so both assertions below read only the
+            // tail: the adapter emits onConnected(..., false) from several points during ICE
+            // negotiation, so a scan of the whole run would find a bring-up line and pass without
+            // the departure having produced anything at all.
+            int mark = logMark();
+            shutdown(joiner);
+
+            awaitLogLine(
+                    mark,
+                    "peer connected: local="
+                            + host.identity.id()
+                            + " remote="
+                            + joiner.identity.id()
+                            + " connected=false",
+                    PEER_LOST_TIMEOUT,
+                    "A's adapter never reported the departed peer unreachable");
+
+            // The card's central claim, and the reason the gate above is on the server's state
+            // rather than on PLAYING: after launch faf-server sends no targeted departure notice at
+            // all, because abort() guards disconnect_all_peers() on GameState.LOBBY. Checked only
+            // once the positive assertion has fired, so it is a statement about the same window
+            // rather than about a moment nothing had happened in yet.
+            assertNoLogLine(
+                    mark,
+                    "peer disconnect: id=" + joiner.identity.id(),
+                    "the server must send no DisconnectFromPeer once the game has launched");
+        } finally {
+            try {
+                shutdown(joiner);
+            } finally {
+                shutdown(host);
+            }
+        }
+    }
+
+    /** The skip message shared by every test in this class. */
+    private static String unreachableLobbyMessage() {
+        return "lobby "
+                + lobbyUrl()
+                + " unreachable from this network (TCP timeout on :443). Self-skips "
+                + "off-net; runs on a FAF-allowlisted host/VPN.";
+    }
+
+    /**
+     * A mark in the captured log, so a later assertion reads only what followed it.
+     *
+     * @return the current size of the capture
+     */
+    private int logMark() {
+        return captured.list.size();
+    }
+
+    /**
+     * SIGKILL one peer's mock game, leaving its client running to notice the death.
+     *
+     * <p>Located among this JVM's descendants by binary name and player id rather than through a
+     * process handle, because the lifecycle owns its subprocesses and hands out none. The id is
+     * matched with its trailing separator: {@code MockGameLauncher} emits {@code --player-id} and
+     * the value as two argv entries and always follows them with {@code --player-login}, so without
+     * it an id would match any longer one that starts with the same digits.
+     *
+     * @param peer the peer whose game to kill
+     * @throws InterruptedException if the wait for the process to die is interrupted
+     */
+    private void killGameOf(final Peer peer) throws InterruptedException {
+        String gameNeedle = peer.config.mockGameBinaryPath().getFileName().toString();
+        String idNeedle = "--player-id " + peer.identity.id() + " ";
+        ProcessHandle game =
+                ProcessHandle.current()
+                        .descendants()
+                        .filter(
+                                handle ->
+                                        handle.info()
+                                                .commandLine()
+                                                .filter(line -> line.contains(gameNeedle))
+                                                .filter(line -> line.contains(idNeedle))
+                                                .isPresent())
+                        .findFirst()
+                        .orElseGet(
+                                () ->
+                                        fail(
+                                                "could not find "
+                                                        + peer.name
+                                                        + "'s mock game to kill; descendants: "
+                                                        + descendantCommandLines()));
+        game.destroyForcibly();
+        try {
+            game.onExit().get(TEARDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | ExecutionException e) {
+            fail("killed " + peer.name + "'s mock game but it did not die: " + e);
+        }
+    }
+
+    /**
+     * Wait until the server reports {@code uid} in {@code expected}, as seen in {@code game_info}.
+     *
+     * @param peer the peer whose lobby connection observes the frames
+     * @param uid the game to watch
+     * @param expected the client-facing state name to wait for
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private void awaitServerGameState(final Peer peer, final int uid, final String expected)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + SERVER_LIVE_TIMEOUT.toNanos();
+        do {
+            if (expected.equals(peer.serverGameStates.get(uid))) {
+                return;
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        } while (System.nanoTime() < deadline);
+        fail(
+                "the server never reported game "
+                        + uid
+                        + " as "
+                        + expected
+                        + " within "
+                        + SERVER_LIVE_TIMEOUT
+                        + "; last seen: "
+                        + peer.serverGameStates.get(uid));
+    }
+
+    /**
+     * Bounded wait for a captured log line containing {@code needle}, ignoring everything logged
+     * before {@code mark}.
+     *
+     * @param mark the index returned by {@link #logMark()} before the event under test
+     * @param needle the text the line must contain
+     * @param timeout the budget
+     * @param what what the line would have proven, used verbatim in the failure message
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private void awaitLogLine(
+            final int mark, final String needle, final Duration timeout, final String what)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        do {
+            if (!linesSince(mark, needle).isEmpty()) {
+                return;
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        } while (System.nanoTime() < deadline);
+        fail(what + ": no log line containing '" + needle + "' within " + timeout);
+    }
+
+    /**
+     * Assert that nothing logged since {@code mark} contains {@code needle}.
+     *
+     * <p>What stops this being vacuous is the assertion that runs before it: {@code peer
+     * disconnect:} and {@code peer connected:} are both emitted at INFO, so a positive match on the
+     * second proves INFO capture was live across the same window the first is claimed absent from.
+     * Move either line to DEBUG and this quietly stops proving anything.
+     *
+     * @param mark the index returned by {@link #logMark()} before the event under test
+     * @param needle the text no line may contain
+     * @param why what its presence would mean, used verbatim in the failure message
+     */
+    private void assertNoLogLine(final int mark, final String needle, final String why) {
+        List<String> found = linesSince(mark, needle);
+        if (!found.isEmpty()) {
+            fail(why + "; found: " + found);
+        }
+    }
+
+    /**
+     * Captured messages logged at or after {@code mark} that contain {@code needle}.
+     *
+     * <p>Snapshotted into a plain list first: the backing capture is copy-on-write and written by
+     * several subprocess reader threads, so an index-based read of the live list can drift.
+     *
+     * @param mark the index to start reading from
+     * @param needle the text to match
+     * @return the matching messages, oldest first
+     */
+    private List<String> linesSince(final int mark, final String needle) {
+        List<ILoggingEvent> snapshot = new ArrayList<>(captured.list);
+        List<String> found = new ArrayList<>();
+        for (int i = Math.min(mark, snapshot.size()); i < snapshot.size(); i++) {
+            String message = snapshot.get(i).getFormattedMessage();
+            if (message.contains(needle)) {
+                found.add(message);
+            }
+        }
+        return found;
+    }
+
+    /**
+     * The adapter's own view of a departure, quoted into a failed checkpoint.
+     *
+     * <p>A hint rather than an assertion. {@code onDisconnectFromPeer} is upstream's log text,
+     * pinned to no contract of ours, so a reworded line upstream should not fail this test. It is
+     * still the fastest way to tell "the RPC never left the client" from "the RPC arrived and the
+     * adapter did nothing useful with it".
+     *
+     * @param mark the index to read from
+     * @return the matching adapter lines in parentheses, or an empty string
+     */
+    private String adapterDisconnectHint(final int mark) {
+        List<String> seen = linesSince(mark, "onDisconnectFromPeer");
+        return seen.isEmpty()
+                ? " (A's adapter logged no onDisconnectFromPeer at all)"
+                : " (A's adapter logged: " + seen + ")";
     }
 
     /**
      * The ordered checkpoints, from A's welcome to both adapters reporting the link. Split out of
      * the test method so the shutdown above wraps every one of them.
      *
-     * @param host the hosting peer, not yet started
+     * <p>Reads {@link #host} rather than taking it, so the field the orphan check needs is the same
+     * object these checkpoints run against.
+     *
      * @throws InterruptedException if any bounded wait is interrupted
      */
-    private void runSession(final Peer host) throws InterruptedException {
+    private void runSession() throws InterruptedException {
         // Taken before the events that can reach them. StateMachine.stateReached only
         // short-circuits while the state is still current, so a future asked for after the FSM has
         // been through and left that state can never complete — and HOSTING is left the moment a
@@ -727,7 +1161,19 @@ final class TwoPeerSessionLiveTest {
      * @return the validated config
      */
     private static MockClientConfig hostConfig(final String title) {
-        List<String> args = new ArrayList<>(commonArgs(tokenFileA()));
+        return hostConfig(title, NO_AUTO_LAUNCH);
+    }
+
+    /**
+     * The hosting client's config with an explicit auto-launch policy (WBS-4.3.4).
+     *
+     * @param title the advertised game title
+     * @param launchDelaySeconds seconds its mock game waits in the lobby before launching the
+     *     match, or {@link #NO_AUTO_LAUNCH} to disable auto-launch entirely
+     * @return the validated config
+     */
+    private static MockClientConfig hostConfig(final String title, final int launchDelaySeconds) {
+        List<String> args = new ArrayList<>(commonArgs(tokenFileA(), launchDelaySeconds));
         args.add("--host-title=" + title);
         args.add("--host-map=" + HOST_MAP);
         args.add("--host-mod=" + HOST_MOD);
@@ -742,7 +1188,11 @@ final class TwoPeerSessionLiveTest {
      * @return the validated config
      */
     private static MockClientConfig joinConfig(final int targetGameId) {
-        List<String> args = new ArrayList<>(commonArgs(tokenFileB()));
+        // Never auto-launches, in every run including WBS-4.3.4's. A joiner with a launch delay
+        // starts its own match timer on entering JOINING and ends its session when that fires, so
+        // the moment it leaves would stop being the test's to choose. The server's game state is
+        // decided by the host alone in any case: handle_game_state's Launching branch is host-only.
+        List<String> args = new ArrayList<>(commonArgs(tokenFileB(), NO_AUTO_LAUNCH));
         args.add("--target-game-id=" + targetGameId);
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
@@ -754,7 +1204,8 @@ final class TwoPeerSessionLiveTest {
      * @param refreshTokenFile this peer's account
      * @return the argv for {@link ConfigLoader}
      */
-    private static List<String> commonArgs(final Path refreshTokenFile) {
+    private static List<String> commonArgs(
+            final Path refreshTokenFile, final int launchDelaySeconds) {
         AdapterPorts ports = freeAdapterPorts();
         return List.of(
                 "--lobby-websocket-url=" + lobbyUrl(),
@@ -773,8 +1224,9 @@ final class TwoPeerSessionLiveTest {
                 "--ice-adapter-rpc-port=" + ports.rpc(),
                 "--ice-adapter-gpg-net-port=" + ports.gpgnet(),
                 "--ice-adapter-lobby-port=" + ports.lobby(),
-                // The reason this test can exist at all; see the class javadoc.
-                "--mock-game-launch-delay-seconds=-1");
+                // The reason the two-peer test can exist at all; see the class javadoc. WBS-4.3.4's
+                // post-launch run is the one caller that passes anything else.
+                "--mock-game-launch-delay-seconds=" + launchDelaySeconds);
     }
 
     /**
@@ -822,6 +1274,57 @@ final class TwoPeerSessionLiveTest {
     private static URI lobbyUrl() {
         String override = System.getenv(LOBBY_URL_ENV);
         return URI.create(override == null || override.isBlank() ? DEFAULT_LOBBY_URL : override);
+    }
+
+    /**
+     * The post-launch run's host launch delay: {@link #LAUNCH_DELAY_ENV} if it parses to a positive
+     * number of seconds, two minutes otherwise. A malformed or non-positive override is ignored
+     * rather than honoured, because a zero or negative one would disable the auto-launch this run
+     * exists to perform and the failure would surface much later as an unexplained timeout.
+     *
+     * @return the delay to launch the host's match after
+     */
+    private static Duration hostLaunchDelay() {
+        Duration fallback = Duration.ofMinutes(2);
+        String override = System.getenv(LAUNCH_DELAY_ENV);
+        if (override == null || override.isBlank()) {
+            return fallback;
+        }
+        long seconds;
+        try {
+            seconds = Long.parseLong(override.trim());
+        } catch (NumberFormatException e) {
+            System.out.println(
+                    "[4.3.4] ignoring unparseable "
+                            + LAUNCH_DELAY_ENV
+                            + "="
+                            + override
+                            + "; using "
+                            + fallback);
+            return fallback;
+        }
+        // Too small a value does not merely shorten the run, it breaks it, and it breaks it at a
+        // checkpoint that would blame the adapter. The mock game derives its match length as twice
+        // this (mock-game Main.matchDuration), and the observation below has to finish inside that
+        // match: once the host's own timer ends the match its client terminates and its adapter
+        // dies, so the connectivity checker never gets to report the departed peer.
+        Duration proposed = Duration.ofSeconds(seconds);
+        Duration matchWindow = proposed.multipliedBy(2);
+        if (seconds <= 0 || matchWindow.compareTo(PEER_LOST_TIMEOUT.plus(TEARDOWN_TIMEOUT)) <= 0) {
+            System.out.println(
+                    "[4.3.4] ignoring "
+                            + LAUNCH_DELAY_ENV
+                            + "="
+                            + override
+                            + ": it yields a "
+                            + matchWindow
+                            + " match, too short to observe a departure needing up to "
+                            + PEER_LOST_TIMEOUT
+                            + "; using "
+                            + fallback);
+            return fallback;
+        }
+        return proposed;
     }
 
     /**
