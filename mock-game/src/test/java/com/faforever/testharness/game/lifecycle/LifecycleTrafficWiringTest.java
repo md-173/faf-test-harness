@@ -126,7 +126,8 @@ final class LifecycleTrafficWiringTest {
                         Map.of(),
                         0,
                         -1,
-                        udpDropPercent);
+                        udpDropPercent,
+                        -1);
         return new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
     }
 
