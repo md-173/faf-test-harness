@@ -286,7 +286,8 @@ final class MultiPeerSessionTest {
                         "--queue-name=ladder1v1",
                         "--queue-faction=2",
                         "--ice-relay-delay-ms=30007",
-                        "--mock-game-udp-drop-percent=17");
+                        "--mock-game-udp-drop-percent=17",
+                        "--mock-game-crash-after-seconds=30009");
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 

@@ -60,7 +60,8 @@ final class LifecycleTest {
                     Optional.empty(),
                     Optional.empty(),
                     0,
-                    0);
+                    0,
+                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
@@ -354,7 +355,8 @@ final class LifecycleTest {
                 MINIMAL_CONFIG.joinConfig(),
                 MINIMAL_CONFIG.queueConfig(),
                 0,
-                0);
+                0,
+                -1);
     }
 
     /**

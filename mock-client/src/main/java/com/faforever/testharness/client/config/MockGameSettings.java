@@ -40,6 +40,8 @@ import java.util.OptionalInt;
  *     never auto-launches
  * @param mockGameUdpDropPercent percentage of outbound peer datagrams the launched game suppresses,
  *     emitted as {@code --udp-drop-percent} only when above zero (WBS-5.1)
+ * @param mockGameCrashAfterSeconds seconds after entering a session before the launched game halts
+ *     itself, emitted as {@code --crash-after-seconds} only when non-negative (WBS-5.2)
  * @param gameOptions game options a host forwards as {@code --game-option}; may be empty
  * @param logLevel log level handed to the mock-game child through {@code LOG_LEVEL}
  * @param logFile optional JSONL log file for the harness's own records
@@ -53,6 +55,7 @@ public record MockGameSettings(
         String playerLogin,
         int launchDelaySeconds,
         int mockGameUdpDropPercent,
+        int mockGameCrashAfterSeconds,
         Map<String, String> gameOptions,
         String logLevel,
         Optional<Path> logFile) {
@@ -103,6 +106,7 @@ public record MockGameSettings(
                 config.playerLogin(),
                 config.mockGameLaunchDelaySeconds(),
                 config.mockGameUdpDropPercent(),
+                config.mockGameCrashAfterSeconds(),
                 config.hostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
                 config.logLevel(),
                 config.logFile());

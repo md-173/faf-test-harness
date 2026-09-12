@@ -70,7 +70,8 @@ final class GameEndReportingTest {
                     Optional.empty(),
                     Optional.empty(),
                     0,
-                    0);
+                    0,
+                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
