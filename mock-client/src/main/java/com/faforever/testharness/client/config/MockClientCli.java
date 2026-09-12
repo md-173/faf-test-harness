@@ -333,6 +333,32 @@ public final class MockClientCli implements Callable<Integer> {
                             + "receiving peer sees them as gaps.")
     private int mockGameUdpDropPercent;
 
+    /**
+     * Seconds after entering a session before the launched mock-game halts itself, standing in for
+     * a game crash (WBS-5.2). Off by default, like the other fault-injection knobs.
+     *
+     * <p>Named {@code --mock-game-*} rather than {@code --game-*} because that is the prefix every
+     * flag targeting a subprocess already uses here — {@code --mock-game-binary-path}, {@code
+     * --mock-game-launch-delay-seconds}, {@code --mock-game-udp-drop-percent}, and {@code
+     * --ice-adapter-*} for the adapter. {@code --game-*} on this CLI already means the FAF lobby
+     * game rather than the child process, as in {@code --game-join-password}.
+     *
+     * <p>Without this the fault existed only on a hand-run mock-game: {@code
+     * MockGameLauncher.buildArgv} would never emit it and no client-side option would source a
+     * value, so an orchestrated run — the normal one, and the one where the client owns the child
+     * and its crash recovery is worth exercising — could not turn the fault on at all.
+     */
+    @Option(
+            names = "--mock-game-crash-after-seconds",
+            scope = ScopeType.INHERIT,
+            defaultValue = "-1",
+            description =
+                    "Seconds after the launched mock-game enters a session before it halts "
+                            + "without a shutdown, simulating a game crash (default: "
+                            + "${DEFAULT-VALUE}). Negative never crashes. The game's timer starts "
+                            + "when a peer connects or its match goes live, whichever is first.")
+    private int mockGameCrashAfterSeconds;
+
     /** Optional JSONL log file path. */
     @Option(
             names = "--log-file",
@@ -547,7 +573,8 @@ public final class MockClientCli implements Callable<Integer> {
                 buildJoinConfig(),
                 buildQueueConfig(),
                 iceRelayDelayMs,
-                mockGameUdpDropPercent);
+                mockGameUdpDropPercent,
+                mockGameCrashAfterSeconds);
     }
 
     /**
@@ -886,6 +913,7 @@ public final class MockClientCli implements Callable<Integer> {
                     playerLogin,
                     mockGameLaunchDelaySeconds,
                     mockGameUdpDropPercent,
+                    mockGameCrashAfterSeconds,
                     // Gated exactly as MockGameSettings.from(config) gates it. Forwarding the raw
                     // map here made launch-game send --game-option for a run with no host flags,
                     // while the lobby-driven path dropped it — contradicting MockGameSettings'
