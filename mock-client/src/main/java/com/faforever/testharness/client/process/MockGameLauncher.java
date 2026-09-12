@@ -229,7 +229,7 @@ public class MockGameLauncher {
         // one is always stated because its value decides whether the session's game stays joinable,
         // so inheriting mock-game's default would be a silent behaviour choice. This one is off by
         // default at both ends, and a run that asks for no fault must produce the argv it always
-        // produced — so a reader diffing two launches sees the flag only where a fault was asked
+        // produced, so a reader diffing two launches sees the flag only where a fault was asked
         // for.
         if (config.mockGameCrashAfterSeconds() >= 0) {
             argv.add("--crash-after-seconds");

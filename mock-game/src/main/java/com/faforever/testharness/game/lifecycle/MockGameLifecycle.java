@@ -798,16 +798,16 @@ public final class MockGameLifecycle {
      * said "measured from entry to LIVE, so the crash lands mid-match while peers are connected".
      * In this harness those two halves contradict each other. LIVE is reachable only through {@link
      * #launchFuture}, which {@link #beginHosting} and {@link #joinGame} arm only when {@code
-     * launchDelay} is non-null — and a multi-peer session must disable auto-launch, because
+     * launchDelay} is non-null, and a multi-peer session must disable auto-launch, because
      * faf-server refuses a {@code game_join} once the host reports {@code GameState Launching} (see
      * {@link MockGameConfig#launchDelay()}). So a multi-peer game never enters LIVE at all, and a
      * LIVE-anchored crash would have been silently inert in the one configuration the fault is most
      * worth injecting into.
      *
      * <p>Peers connect and exchange traffic in HOSTING and JOINING, not in LIVE. So the condition
-     * the card was reaching for — the game has a session to lose — is "a peer is registered, or the
-     * match went live", whichever happens first. That is reachable in both configurations, and it
-     * keeps the flag's meaning stable: {@code N} is always N seconds after this game first had
+     * the card was reaching for, the game having a session to lose, is "a peer is registered, or
+     * the match went live", whichever happens first. That is reachable in both configurations, and
+     * it keeps the flag's meaning stable: {@code N} is always N seconds after this game first had
      * something to lose, rather than N seconds after a milestone that may never arrive.
      *
      * <p>Anchoring on entry to LOBBY instead would have been simpler, and was rejected: the timer
@@ -830,7 +830,7 @@ public final class MockGameLifecycle {
      * The injected crash itself (WBS-5.2): ends the process where it stands.
      *
      * <p>{@link Runtime#halt(int)} and never {@link System#exit(int)}. Exit runs the JVM shutdown
-     * hooks, and {@code Main} registers one that runs {@link GameShutdown} — closing the GPGNet
+     * hooks, and {@code Main} registers one that runs {@link GameShutdown}: closing the GPGNet
      * socket in an orderly sequence, stopping the traffic session, cancelling the FSM. A consumer
      * watching the adapter would see a tidy disconnect, which is the opposite of the fault being
      * injected. Halt runs no hook, writes no closing frame, and leaves the socket to be torn down

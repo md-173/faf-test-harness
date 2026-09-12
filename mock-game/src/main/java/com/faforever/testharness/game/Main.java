@@ -243,13 +243,13 @@ public final class Main {
      * (WBS-5.2).
      *
      * <p>Both timers live on the lifecycle's one scheduler, and the ENDED entry hook runs {@code
-     * GameShutdown}, whose {@code stopSchedules()} calls {@code shutdownNow()} — so a crash still
+     * GameShutdown}, whose {@code stopSchedules()} calls {@code shutdownNow()}, so a crash still
      * queued when the match ends is cancelled and the run finishes normally. Silently: the operator
      * asked for a fault, saw a clean exit {@code 0}, and has nothing in the log to explain why.
      *
      * <p>Checked here rather than in {@link MockGameCli} because the parser cannot see the match
-     * duration. It is not a session fact on the config at all — it is this class's constant,
-     * stretched by {@link #matchDuration(Duration, Optional)} — so this is the first point where
+     * duration. It is not a session fact on the config at all; it is this class's constant,
+     * stretched by {@link #matchDuration(Duration, Optional)}, so this is the first point where
      * both halves are known.
      *
      * <p>A warning and not a usage error: the delay is only <em>usually</em> wasted. A crash armed

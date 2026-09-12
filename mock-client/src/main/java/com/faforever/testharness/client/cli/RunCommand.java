@@ -160,7 +160,7 @@ public final class RunCommand implements Callable<Integer> {
         // Checked after the lobby drop, not before: a connection that died under the session is a
         // different and more fundamental finding than a game that died inside one, and it was here
         // first. Read from the lifecycle rather than re-derived from the exit code, because the
-        // judgement needs the clean-end and teardown signals the classifier already weighed — and
+        // judgement needs the clean-end and teardown signals the classifier already weighed, and
         // because teardown has always run by this point (the TERMINATED entry hook performs it
         // before the stateReached future above completes), so testing it here would be useless.
         if (lifecycle.gameCrashed()) {

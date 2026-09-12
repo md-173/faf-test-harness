@@ -38,12 +38,12 @@ public final class ExitCodes {
      * <p><b>Wider than the word "crashed" suggests</b>, and intentionally. It covers a mock-game
      * that failed to start as well as one that died mid-match, because from the harness's side
      * those are the same finding: the game is gone and nothing accounted for it. Crash is this
-     * codebase's existing word for that condition — {@code CrashRecoveryTest}, R41 "client game
-     * crash recovery" — and the real client's {@code GameRunner.handleTermination} routes any
+     * codebase's existing word for that condition ({@code CrashRecoveryTest}, R41 "client game
+     * crash recovery"), and the real client's {@code GameRunner.handleTermination} routes any
      * non-zero exit to {@code alertOnBadExit} in the same way.
      *
-     * <p>Distinct from {@link #RUNTIME} because that code already means four other things here — a
-     * failed token exchange, a lobby handshake timeout, a setup failure, an abrupt lobby close — so
+     * <p>Distinct from {@link #RUNTIME} because that code already means four other things here: a
+     * failed token exchange, a lobby handshake timeout, a setup failure, an abrupt lobby close. So
      * reusing it would have told a pipeline nothing. {@code 71} sits next to it deliberately: this
      * is a runtime failure, and one with a known cause.
      *

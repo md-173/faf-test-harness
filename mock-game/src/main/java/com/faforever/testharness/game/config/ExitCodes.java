@@ -87,7 +87,7 @@ public final class ExitCodes {
      * is not a category of failure the game diagnosed, it is the absence of any orderly end.
      *
      * <p>What this code does and does not tell a consumer. It is distinct from every other code
-     * mock-game emits — {@link #OK}, {@link #USAGE}, {@link #ADAPTER_LOST}, {@link #RUNTIME} — and
+     * mock-game emits ({@link #OK}, {@link #USAGE}, {@link #ADAPTER_LOST}, {@link #RUNTIME}) and
      * from the JVM's own {@code 1} and {@code 143}, which is what the fault needs: an operator can
      * tell an injected crash from a genuine adapter loss. It is not globally unique, because a real
      * JVM {@code SIGABRT} produces the same status, and nothing can prevent that without giving up

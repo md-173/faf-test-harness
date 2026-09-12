@@ -299,15 +299,15 @@ public final class MockClientCli implements Callable<Integer> {
      * a game crash (WBS-5.2). Off by default, like the other fault-injection knobs.
      *
      * <p>Named {@code --mock-game-*} rather than {@code --game-*} because that is the prefix every
-     * flag targeting a subprocess already uses here — {@code --mock-game-binary-path}, {@code
+     * flag targeting a subprocess already uses here: {@code --mock-game-binary-path}, {@code
      * --mock-game-launch-delay-seconds}, and {@code --ice-adapter-*} for the adapter. {@code
      * --game-*} on this CLI already means the FAF lobby game rather than the child process, as in
      * {@code --game-join-password}.
      *
      * <p>Without this the fault existed only on a hand-run mock-game: {@code
      * MockGameLauncher.buildArgv} would never emit it and no client-side option would source a
-     * value, so an orchestrated run — the normal one, and the one where the client owns the child
-     * and its crash recovery is worth exercising — could not turn the fault on at all.
+     * value, so an orchestrated run, the normal one and the one where the client owns the child and
+     * its crash recovery is worth exercising, could not turn the fault on at all.
      */
     @Option(
             names = "--mock-game-crash-after-seconds",

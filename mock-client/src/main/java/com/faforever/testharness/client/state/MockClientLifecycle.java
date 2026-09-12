@@ -149,8 +149,8 @@ public final class MockClientLifecycle {
      * #gameExit} completion handler, and the read is on the main thread once the FSM reaches
      * TERMINATED. On the {@code GameExited} route the write is already program-ordered before the
      * synchronized {@code receiveEvent} that drives TERMINATED, so it would be visible without this
-     * — but the other routes into TERMINATED (a lobby disconnect, the adapter exiting) carry no
-     * such ordering, and that is where an unsynchronised read would be wrong.
+     * but the other routes into TERMINATED (a lobby disconnect, the adapter exiting) carry no such
+     * ordering, and that is where an unsynchronised read would be wrong.
      */
     private volatile boolean gameCrashed;
 

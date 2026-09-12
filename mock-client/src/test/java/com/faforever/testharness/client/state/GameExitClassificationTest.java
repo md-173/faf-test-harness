@@ -230,7 +230,7 @@ final class GameExitClassificationTest {
     }
 
     // The harness's own exit code (WBS-5.2). RunCommand returns ExitCodes.GAME_CRASHED when the
-    // flag below is set, and the flag is set by the same branch that emits "exited abnormally" —
+    // flag below is set, and the flag is set by the same branch that emits "exited abnormally",
     // so these cases pin that the log line and the exit code can never disagree. Before this, a
     // run whose game died reported success.
 

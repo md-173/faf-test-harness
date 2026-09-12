@@ -541,12 +541,16 @@ is out of scope for this document. It lands with R79b, immediately after the
 two-peer and N-peer cards, as sections appended here rather than a
 restructure of what exists above.
 
-## 10. Network fault injection (WBS 5.1)
+## 10. Fault injection (WBS 5.1, 5.2)
 
-Two flags degrade the harness from the inside, covering the delayed-ICE and
-dropped-UDP faults the project brief names. Both default to off, and with both
-unset nothing about a run changes. Validation is by log inspection, which is
-what the brief itself asks for.
+Three flags degrade the harness from the inside, covering all three faults the
+project brief names: delayed ICE negotiation, dropped UDP packets, and game
+crash. All three default to off, and with them unset nothing about a run
+changes. Validation is by log inspection, which is what the brief itself asks
+for.
+
+None of them needs elevated privileges, a specific operating system, or any
+network configuration, so all three run unchanged inside a container.
 
 Injection is in-harness rather than network-level on purpose. `tc`/`netem`
 would run on a hosted Linux runner, but it cannot express either fault:
@@ -560,6 +564,8 @@ and work wherever the mocks themselves run.
 |---|---|---|---|
 | `--ice-relay-delay-ms` | mock-client | `0` | Holds every relayed ICE candidate for that many milliseconds before forwarding it, in both directions. |
 | `--udp-drop-percent` | mock-game | `0` | Suppresses that percentage of outbound peer datagrams, drawn independently per peer per round. |
+| `--crash-after-seconds` | mock-game | `-1` | Halts the game's JVM with no shutdown that many seconds after it enters a session. Negative never crashes. |
+| `--mock-game-crash-after-seconds` | mock-client | `-1` | Passes the above through to an orchestrated mock-game. Emitted only when set. |
 
 ### `--ice-relay-delay-ms`
 
@@ -636,3 +642,70 @@ Separately, `MockGameLauncher.buildArgv` never emits `--udp-drop-percent` and no
 mock-client flag sources it, so even once the above is done only a hand-run
 `mock-game` can set the percentage; an orchestrated run cannot. That is its own
 card.
+
+### `--crash-after-seconds`
+
+The third fault the brief names, and the one with no network component at all.
+A crash, as the real client sees it, is a non-zero process exit and nothing
+else: `downlords-faf-client`'s `GameRunner.handleTermination` reads
+`finishedProcess.exitValue()` and routes any non-zero code to
+`alertOnBadExit`. There is no crash frame and no protocol message. So the
+injection only has to end the process convincingly.
+
+**It halts rather than exits, and that is the whole design.** `Main` ends a
+normal run with `System.exit`, which runs the JVM shutdown hook, which runs
+`GameShutdown`: the GPGNet socket is closed in an orderly sequence, the traffic
+session is stopped, the FSM is cancelled. A consumer watching the adapter would
+see a tidy disconnect, the opposite of a crash. The injected crash calls
+`Runtime.getRuntime().halt()` instead. No hook runs, no closing frame is
+written, and the socket is torn down by the operating system exactly as it
+would be if the process were killed.
+
+**When the timer starts.** On the first of two events: a peer connecting, or
+the match going live. Not on entry to LIVE alone, which is what it looks like it
+should be. In this harness a multi-peer session runs with auto-launch disabled
+(`--mock-game-launch-delay-seconds=-1`, see §9), nothing else posts
+`LaunchMatch`, and so the game never enters LIVE at all. Anchored there the
+fault would have been silently inert in the one configuration it is most worth
+injecting into. Peers connect and exchange traffic in the lobby phase, so "a
+peer is here" is what actually means the game has a session to lose.
+
+A single hand-run game with no peers still reaches LIVE on its own launch timer,
+so both configurations are covered and `N` always means the same thing: N
+seconds after this game first had something to lose.
+
+What to look for when it is on:
+
+- The game's startup line names the policy, next to the launch policy:
+  `crash=injected 3s into the session`. A run that did not ask for the fault
+  says `crash=none (fault injection disabled)`.
+- One `INFO` when the timer is armed and one `WARN` as it fires, naming the exit
+  code. The `WARN` is the last line the process writes; the appenders flush
+  synchronously, so it reaches both the console and the JSONL file even though
+  nothing orderly follows it.
+- **No `mock game shutdown complete`.** Its absence is the diagnostic marker
+  that the halt did what it was for. A clean exit always logs it.
+- The adapter sees its GPGNet connection drop with no `GameState Ended`
+  preceding it.
+- Exit code `134` (`128 + SIGABRT`), which is what a POSIX shell reports for an
+  aborted process. Distinct from every code mock-game itself emits (`0`, `2`,
+  `69`, `70`) and from the JVM's own `1` and `143`, so an injected crash is
+  never confused with a genuine adapter loss.
+
+In an orchestrated run, the surviving client then logs `mock-game exited
+abnormally with exit code 134`, sends the synthesised `GameState Ended` to the
+lobby on the game's behalf, reaches TERMINATED, and exits `71`
+(`GAME_CRASHED`) rather than `0`.
+
+**Two ways to get nothing.**
+
+The first is warned about at startup: a delay at or past the match duration. The
+crash and the match-end timer share one scheduler, and the end of the match
+tears that scheduler down, so the crash is cancelled and the run exits `0`.
+`Main` compares the two before the game starts and says so.
+
+The second cannot be warned about, because it is only knowable in hindsight: a
+game that never enters a session at all. With auto-launch off and no peer ever
+arriving, nothing starts the clock. The absence of the `injected crash armed`
+line is the way to tell: it is logged the moment the timer starts, so if you
+never see it, the game never had a session to lose.

@@ -25,12 +25,12 @@ import org.junit.jupiter.api.io.TempDir;
  *
  * <p>{@link com.faforever.testharness.game.lifecycle.CrashInjectionTest} covers the arming rule and
  * the scheduling against a recording stand-in, because the real halt would take the Gradle test
- * worker with it. That stand-in returns, so it can never show what a halted process leaves behind —
+ * worker with it. That stand-in returns, so it can never show what a halted process leaves behind,
  * which is the whole point of preferring halt over {@link System#exit(int)}. This test closes that
  * gap by spawning a child that really does die.
  *
  * <p><b>Why a child JVM rather than the built jar.</b> Launching {@code java -cp} with this test
- * worker's own classpath needs no shadow jar, no build ordering and nothing external — the child is
+ * worker's own classpath needs no shadow jar, no build ordering and nothing external; the child is
  * the same classes this module just compiled. There is no in-repo precedent for that shape ({@code
  * GpgNetConnectionLiveSmokeTest} runs an external adapter jar off {@code java.home}), so it is
  * spelled out here rather than left to be inferred.
@@ -52,7 +52,7 @@ final class CrashInjectionProcessTest {
      * Crash delay for the child, in seconds.
      *
      * <p>Deliberately not zero. A halt gives the kernel no chance to drain, and closing a socket
-     * with unread data in its receive queue sends RST rather than FIN — which can make the peer
+     * with unread data in its receive queue sends RST rather than FIN, which can make the peer
      * discard bytes it had already buffered. At zero the crash lands microseconds after {@code
      * GameState Launching} is written, so the frame this test reads back would be racing the reset.
      * One second is long enough that the scripted server has certainly drained the session's

@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
  * vanishing rather than as a failing test.
  *
  * <p><b>What the stand-in cannot reproduce.</b> A recording halt <em>returns</em>; the real one
- * does not. So after it fires the lifecycle here carries on — the match timer still runs, {@code
+ * does not. So after it fires the lifecycle here carries on: the match timer still runs, {@code
  * gameEnds} would still send its closing frames. Every assertion below is therefore either made
  * synchronously inside the halt action (the exit code, the state the game died in) or is about
  * something that must <em>not</em> have happened by then. Proving that a halted process emits no
@@ -169,9 +169,9 @@ final class CrashInjectionTest {
      *
      * <p>A multi-peer session runs with auto-launch disabled, because faf-server refuses a {@code
      * game_join} once the host reports {@code GameState Launching}. With no launch delay nothing
-     * ever posts {@code LaunchMatch} — {@code launchMatch()} is called from no production code — so
-     * the game never enters LIVE at all. Anchored there, the fault would have been silently inert
-     * in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
+     * ever posts {@code LaunchMatch}, since {@code launchMatch()} is called from no production
+     * code, so the game never enters LIVE at all. Anchored there, the fault would have been
+     * silently inert in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
      */
     @Test
     void armsOnFirstPeerWhenAutoLaunchIsDisabled() throws Exception {
