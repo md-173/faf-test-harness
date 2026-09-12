@@ -70,7 +70,8 @@ public final class RunCommand implements Callable<Integer> {
      * terminates — on a lobby disconnect or a shutdown signal.
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
-     *     could not be established or the connection dropped unexpectedly
+     *     could not be established or the connection dropped unexpectedly; {@link
+     *     ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted for
      */
     @Override
     public Integer call() {
@@ -155,6 +156,16 @@ public final class RunCommand implements Callable<Integer> {
         if (event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE) {
             log.warn("lobby connection dropped unexpectedly");
             return ExitCodes.RUNTIME;
+        }
+        // Checked after the lobby drop, not before: a connection that died under the session is a
+        // different and more fundamental finding than a game that died inside one, and it was here
+        // first. Read from the lifecycle rather than re-derived from the exit code, because the
+        // judgement needs the clean-end and teardown signals the classifier already weighed — and
+        // because teardown has always run by this point (the TERMINATED entry hook performs it
+        // before the stateReached future above completes), so testing it here would be useless.
+        if (lifecycle.gameCrashed()) {
+            log.warn("the game process died unexpectedly; reporting it in this run's exit code");
+            return ExitCodes.GAME_CRASHED;
         }
         return ExitCodes.OK;
     }

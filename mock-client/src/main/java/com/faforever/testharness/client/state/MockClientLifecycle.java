@@ -140,6 +140,20 @@ public final class MockClientLifecycle {
      */
     private final AtomicBoolean matchStarted = new AtomicBoolean(false);
 
+    /**
+     * Whether the game process died in a way nobody asked for (WBS-5.2), as decided by {@link
+     * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
+     * code; see {@link #gameCrashed()}.
+     *
+     * <p>Volatile because the two sides are different threads: the write happens on the {@link
+     * #gameExit} completion handler, and the read is on the main thread once the FSM reaches
+     * TERMINATED. On the {@code GameExited} route the write is already program-ordered before the
+     * synchronized {@code receiveEvent} that drives TERMINATED, so it would be visible without this
+     * — but the other routes into TERMINATED (a lobby disconnect, the adapter exiting) carry no
+     * such ordering, and that is where an unsynchronised read would be wrong.
+     */
+    private volatile boolean gameCrashed;
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -645,6 +659,26 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Whether this session's game process died in a way nobody asked for (WBS-5.2): a non-zero exit
+     * with no {@code GameEnded} observed and no harness-initiated teardown.
+     *
+     * <p>A boolean rather than the exit code, because {@link #gameExit()} already exposes the code
+     * and a second accessor for the same number would be duplicated state. What a caller cannot get
+     * from the code alone is the <em>judgement</em>: whether that code was a fault or an expected
+     * consequence of the harness's own SIGTERM. {@link #classifyGameExit} makes that call once, and
+     * this reports it.
+     *
+     * <p>Only meaningful once the game has actually exited. Reading it earlier returns {@code
+     * false}, which is the right answer for a game that is still running and the reason {@code
+     * RunCommand} reads it only after TERMINATED.
+     *
+     * @return {@code true} if the game exit was classified as abnormal
+     */
+    public boolean gameCrashed() {
+        return gameCrashed;
+    }
+
+    /**
      * The session's single adapter-exit signal: completes exactly once with the ICE adapter
      * process's exit code, whether it quit cleanly or was killed. Same copy-semantics contract as
      * {@link #gameExit()} — see there for the full details, which apply identically here.
@@ -836,6 +870,11 @@ public final class MockClientLifecycle {
                     exitCode);
         } else {
             LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
+            // The process exit code this run should produce (WBS-5.2). Set here, inside the branch
+            // that already decided this exit was unaccounted for, rather than re-derived by the
+            // caller: one predicate, so the warning above and the exit code cannot disagree about
+            // whether the game crashed.
+            gameCrashed = true;
         }
     }
 
