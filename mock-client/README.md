@@ -582,7 +582,8 @@ ones move during ICE negotiation:
 |---|---|
 | `gpgnet link: state=<state>` | The local mock game connected to or disconnected from this client's adapter over GPGNet. Not a peer signal. |
 | `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer. These are the transitions delayed-negotiation tests measure. |
-| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal. |
+| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal, in both directions: `connected=false` is also how a peer departure surfaces once the match has launched. |
+| `peer disconnect: id=<id>` | The lobby told this client that player has left, and its adapter has been asked to drop the peer. Lobby phase only; see the runbook's peer-departure section for why nothing like it appears after launch. |
 
 `<state>` is the adapter's own `IceState` vocabulary, not the WebRTC IDL set
 the upstream README implies. Verified against the shipped jar (3.3.14), the

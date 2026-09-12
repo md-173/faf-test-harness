@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
@@ -22,12 +26,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * The session wiring a two-peer run needs (#218), unit-tested the way the rest of the FSM is: a
@@ -127,6 +133,15 @@ final class PeerSessionWiringTest {
     private LobbyConnection lobby;
     private DummyIceAdapterConnection adapter;
 
+    /** Root logger the capture appender is attached to. */
+    private Logger root;
+
+    /**
+     * Captures log records for the assertions that pin a warning rather than a state change.
+     * Copy-on-write: an RPC continuation writes while the test thread reads.
+     */
+    private ListAppender<ILoggingEvent> captured;
+
     // The dummy launchers spawn a real placeholder subprocess; tests that stop short of TERMINATED
     // never reap them through SessionTeardown, so they are tracked and terminated here.
     private final List<DummyGameLauncher> gameLaunchers = new ArrayList<>();
@@ -140,10 +155,22 @@ final class PeerSessionWiringTest {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
+
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        root = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        captured = new ListAppender<>();
+        captured.list = new CopyOnWriteArrayList<>();
+        captured.setContext(context);
+        captured.start();
+        root.addAppender(captured);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        if (captured != null) {
+            captured.stop();
+            root.detachAppender(captured);
+        }
         for (DummyGameLauncher launcher : gameLaunchers) {
             if (launcher.getSubprocess() != null) {
                 launcher.getSubprocess().terminate(Duration.ofSeconds(1));
@@ -242,6 +269,134 @@ final class PeerSessionWiringTest {
     }
 
     @Test
+    void hostDropsTheDepartingPeerTheLobbyNames() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+
+        // Verbatim from faf-server: a game connection aborting while the game is still in
+        // GameState.LOBBY runs disconnect_all_peers(), which sends every other connection
+        // DisconnectFromPeer(departing_player_id).
+        server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
+
+        Object[] call = awaitCall("disconnectFromPeer");
+        assertEquals(PEER_ID, call[0], "the adapter must be told which peer left");
+        assertEquals(
+                1,
+                call.length,
+                "upstream's RPC takes the id alone; anything else is our invention");
+        assertEquals(
+                ClientState.HOSTING,
+                lifecycle.getState(),
+                "a peer leaving does not change the host's own phase");
+    }
+
+    @Test
+    void joinerAlsoDropsADepartingPeer() throws Exception {
+        MockClientLifecycle lifecycle = launchedLifecycle();
+        lifecycle.post(new JoinGame(joinGameCommand()));
+        assertEquals(ClientState.JOINING, lifecycle.getState());
+
+        server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
+
+        Object[] call = awaitCall("disconnectFromPeer");
+        assertEquals(PEER_ID, call[0]);
+        assertEquals(ClientState.JOINING, lifecycle.getState());
+    }
+
+    @Test
+    void departureDuringStartupReachesTheAdapter() throws Exception {
+        // STARTING_GAME is inside the server's LOBBY phase: faf-server marks the game joinable when
+        // the host's game reports GameState Idle, one adapter round trip before the HostGame frame
+        // that moves this client to HOSTING. Registering only HOSTING and JOINING would drop a
+        // departure arriving in that window with a generic "No matching transitions" WARN.
+        MockClientLifecycle lifecycle = launchedLifecycle();
+        assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
+
+        server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
+
+        Object[] call = awaitCall("disconnectFromPeer");
+        assertEquals(PEER_ID, call[0]);
+        assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
+    }
+
+    @Test
+    void malformedDisconnectFromPeerEndsTheSessionRatherThanGuessingWhoLeft() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+
+        // No id. Treated exactly as a malformed ConnectToPeer is: the frame is machine-generated
+        // with a fixed shape, so one we cannot read means our parsing or the server's has moved.
+        ObjectNode command = MAPPER.createObjectNode().put("command", "DisconnectFromPeer");
+        command.putArray("args");
+        server.broadcastText(command + "\n");
+
+        awaitState(lifecycle, ClientState.TERMINATED);
+        assertNull(
+                adapter.receivedMessage("disconnectFromPeer"),
+                "a frame we could not read must not produce an RPC for a guessed id");
+    }
+
+    @Test
+    void departureDuringAMatchIsDroppedRatherThanRelayed() throws Exception {
+        MockClientLifecycle lifecycle = playingLifecycle();
+
+        server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
+
+        // The play-on rule, and the whole reason this state is special. Relaying would end the
+        // match: the adapter forwards DisconnectFromPeer with no state guard, and the mock game
+        // ends on it from LIVE exactly as it does from the lobby, but without emitting its closing
+        // frames. The survivor would then report a delivery failure that never happened, which is
+        // the class of mis-diagnosis this card exists to remove. The departed peer's relay is
+        // reaped by the adapter's own connectivity checker about ten seconds later regardless.
+        awaitLogged("peer disconnect ignored during a live match: id=" + PEER_ID);
+        assertNull(
+                adapter.receivedMessage("disconnectFromPeer"),
+                "relaying here would end the live match through the adapter's forwarded frame");
+        assertEquals(
+                ClientState.PLAYING,
+                lifecycle.getState(),
+                "a lobby departure notice must not move a client out of a running match");
+    }
+
+    @Test
+    void malformedDisconnectFromPeerDuringAMatchDoesNotKillIt() throws Exception {
+        MockClientLifecycle lifecycle = playingLifecycle();
+
+        ObjectNode command = MAPPER.createObjectNode().put("command", "DisconnectFromPeer");
+        command.putArray("args");
+        server.broadcastText(command + "\n");
+
+        // Same rule, and the reason the malformed branch is checked after the state rather than
+        // before it: everywhere else an unreadable frame ends the session, and in PLAYING it must
+        // not.
+        awaitLogged("ignoring malformed DisconnectFromPeer during a live match");
+        assertEquals(
+                ClientState.PLAYING,
+                lifecycle.getState(),
+                "an unreadable lobby frame must not end a running match");
+        assertNull(
+                adapter.receivedMessage("disconnectFromPeer"),
+                "a frame we could not read must not produce an RPC for a guessed id");
+    }
+
+    @Test
+    void adapterRejectingDisconnectFromPeerLeavesTheSessionRunning() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        adapter.setupCallFail("disconnectFromPeer");
+
+        server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
+
+        // The deliberate asymmetry with connectToPeer, which ends the session on the same failure.
+        // A relay left behind for a peer that has gone is self-correcting: the adapter's own
+        // connectivity checker drops it about ten seconds later. Asserted on the warning rather
+        // than on the state alone, because "still HOSTING" would also pass on a build where the
+        // handler was never registered and nothing happened at all.
+        awaitLogged("peer relay teardown failed for id=" + PEER_ID);
+        assertEquals(
+                ClientState.HOSTING,
+                lifecycle.getState(),
+                "a failed teardown RPC must not end a live session");
+    }
+
+    @Test
     void launchedSessionRelaysIceCandidatesBothWays() throws Exception {
         launchedLifecycle();
 
@@ -334,6 +489,17 @@ final class PeerSessionWiringTest {
         return lifecycle;
     }
 
+    /**
+     * A lifecycle in PLAYING, which a joiner on the default auto-launch reaches while faf-server's
+     * game is still in its LOBBY phase and still sending departure notices.
+     */
+    private MockClientLifecycle playingLifecycle() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        lifecycle.post(new StartMatch());
+        assertEquals(ClientState.PLAYING, lifecycle.getState());
+        return lifecycle;
+    }
+
     /** A lifecycle in HOSTING, the state the host is in when a joiner arrives. */
     private MockClientLifecycle hostingLifecycle() throws Exception {
         MockClientLifecycle lifecycle = launchedLifecycle();
@@ -354,6 +520,39 @@ final class PeerSessionWiringTest {
                 gameLauncher,
                 iceLauncher,
                 new SessionTeardown(lobby));
+    }
+
+    /** The {@code DisconnectFromPeer} frame faf-server sends, in its wire shape. */
+    private static String disconnectFromPeer(final int id) {
+        ObjectNode command =
+                MAPPER.createObjectNode()
+                        .put("command", "DisconnectFromPeer")
+                        .put("target", "game");
+        command.putArray("args").add(id);
+        return command.toString();
+    }
+
+    /**
+     * Bounded wait for a log message starting with {@code prefix}. Bounded rather than sampled: the
+     * line is emitted from the RPC call's continuation, not from the test thread.
+     */
+    private void awaitLogged(final String prefix) throws InterruptedException {
+        long deadline = System.nanoTime() + FRAME_TIMEOUT.toNanos();
+        do {
+            for (ILoggingEvent event : captured.list) {
+                if (event.getFormattedMessage().startsWith(prefix)) {
+                    return;
+                }
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        } while (System.nanoTime() < deadline);
+        fail(
+                "no log message starting with '"
+                        + prefix
+                        + "' within "
+                        + FRAME_TIMEOUT
+                        + "; captured: "
+                        + captured.list.stream().map(ILoggingEvent::getFormattedMessage).toList());
     }
 
     /** The {@code ConnectToPeer} frame faf-server sends, in its wire shape. */
