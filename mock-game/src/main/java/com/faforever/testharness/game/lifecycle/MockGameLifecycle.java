@@ -394,7 +394,15 @@ public final class MockGameLifecycle {
             GameState.LIVE
         };
         for (var s : fromStates) {
-            states.get(s).registerTransition(PeerDisconnected.class, states.get(GameState.ENDED));
+            // WBS-4.3.4: the action is what makes this exit report success. Registered without one
+            // the transition left `status` on its initial FAILED, so an orderly peer departure
+            // exited 70 and the surviving client classified it as a crash.
+            states.get(s)
+                    .registerTransition(
+                            PeerDisconnected.class,
+                            states.get(GameState.ENDED),
+                            this::peerDisconnected,
+                            null);
             // Go to ENDED state when the server disconnects and it wasn't due to our shutdown
             // sequence.
             // Also set the correct status.
@@ -428,6 +436,8 @@ public final class MockGameLifecycle {
                 "JoinGame", frame -> machine.receiveEvent(new JoinGame(frame)));
         gpgnetDispatcher.registerHandler(
                 "ConnectToPeer", frame -> machine.receiveEvent(new ConnectToPeer(frame)));
+        gpgnetDispatcher.registerHandler(
+                "DisconnectFromPeer", frame -> machine.receiveEvent(new PeerDisconnected(frame)));
 
         // A local close is our own shutdown sequence closing the socket, never news to the FSM: the
         // transition guard below rejects it in every state, and in ENDED — where the shutdown
@@ -691,6 +701,63 @@ public final class MockGameLifecycle {
                 throw recordSendFailure(e);
             }
         }
+    }
+
+    /**
+     * Transition action for a peer departure, registered from every non-ENDED state into ENDED
+     * (WBS-4.3.4).
+     *
+     * <p>Reached from the {@code DisconnectFromPeer} GPGNet handler, which the adapter emits only
+     * because this side's mock client relayed faf-server's departure notice. That notice is sent
+     * only while the server's game is in its LOBBY phase ({@code GameConnection.abort} guards
+     * {@code disconnect_all_peers} on it), so after launch this action is unreachable and the
+     * survivor learns of a departure from its own adapter instead. See the runbook's multi-peer
+     * limitations for that second path.
+     *
+     * <p><b>Why this sets OK.</b> The transitions for this event predate any handler and carried no
+     * action, so {@code status} kept its initial {@link ExitStatus#FAILED} and the process exited
+     * {@link com.faforever.testharness.game.config.ExitCodes#RUNTIME}. A departure is a modelled,
+     * orderly end rather than a fault, and reporting it as one made the surviving client's {@code
+     * classifyGameExit} log "exited abnormally" for a session that did exactly what it was told.
+     *
+     * <p><b>Why a malformed frame does not.</b> A frame we could not read keeps FAILED and throws,
+     * matching {@link #joinGame} and {@link #peerConnectionRequest} and the convention {@link
+     * #recordSendFailure} states outright: a malformed inbound frame is a real generic failure. The
+     * throw targets ENDED, which is where this transition was going anyway, so it changes the exit
+     * status and nothing else.
+     *
+     * <p><b>Scope, and what WBS-4.3.3 inherits.</b> Any single peer loss ends the game, because the
+     * transitions are registered per state rather than per remaining peer. Correct at two players
+     * and wrong above them. The departing id is read and logged here so that the decision to play
+     * on until the last peer leaves can start from an event that already names who left. It is only
+     * a starting point, not the whole job: {@code peers} is never pruned and {@link
+     * GameTrafficSession} has no counterpart to {@code registerPeer}, so playing on means teaching
+     * both of those about departure as well.
+     *
+     * <p>Runs on the GPGNet reader thread, as every inbound handler does. ENDED's entry hook closes
+     * that same socket, which is safe because {@link GpgNetConnection#close()} does not join the
+     * reader, and the resulting local close is filtered before it reaches the FSM.
+     *
+     * @param event the {@link PeerDisconnected} event; guaranteed by registration.
+     * @throws FailedTransitionException if the frame carries no usable player id.
+     */
+    private void peerDisconnected(Event event) throws FailedTransitionException {
+        if (!(event instanceof PeerDisconnected)) {
+            throw new AssertionError(
+                    "peerDisconnected called without a PeerDisconnected event, "
+                            + "should be impossible");
+        }
+        GpgNetFrame frame = ((PeerDisconnected) event).frame();
+        int playerId;
+        try {
+            playerId = frame.intArg(0);
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.error("DisconnectFromPeer frame did not have a player id argument");
+            throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
+        }
+
+        LOG.info("Peer (ID: {}) disconnected, ending game", playerId);
+        status = ExitStatus.OK;
     }
 
     /* Transition action for LIVE -> ENDED. */
