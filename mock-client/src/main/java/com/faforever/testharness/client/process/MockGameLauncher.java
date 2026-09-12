@@ -225,6 +225,16 @@ public class MockGameLauncher {
         // than inheriting it. mock-game's default exists only for a hand-run binary.
         argv.add("--launch-delay-seconds");
         argv.add(Integer.toString(config.mockGameLaunchDelaySeconds()));
+        // Conditional, unlike the launch delay directly above, and deliberately so (WBS-5.2). That
+        // one is always stated because its value decides whether the session's game stays joinable,
+        // so inheriting mock-game's default would be a silent behaviour choice. This one is off by
+        // default at both ends, and a run that asks for no fault must produce the argv it always
+        // produced — so a reader diffing two launches sees the flag only where a fault was asked
+        // for.
+        if (config.mockGameCrashAfterSeconds() >= 0) {
+            argv.add("--crash-after-seconds");
+            argv.add(Integer.toString(config.mockGameCrashAfterSeconds()));
+        }
         return argv;
     }
 }
