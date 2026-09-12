@@ -165,7 +165,7 @@ final class GameShutdownTest {
     void stopsLifecycleScheduledDelay() throws Exception {
         Duration launchDelay = Duration.ofSeconds(1);
         MockGameConfig defaultConfig =
-                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, 0);
+                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, 0, -1);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
         try {
             MockGameLifecycle lifecycle =

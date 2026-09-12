@@ -133,9 +133,13 @@ public final class Main {
         // as the raw seconds, so a hand-run binary that took the default still says out loud
         // whether it intends to launch on its own — the one case where the default decides
         // anything (see MockGameCli's class javadoc).
+        // The crash policy joins the launch policy on this line for the same reason that one is
+        // spelled out in words (see MockGameCli's class javadoc): a hand-run binary should say out
+        // loud what it intends to do on its own. That matters more here than for the launch delay,
+        // since the whole point of an injected crash is to look unexplained afterwards.
         LOG.info(
                 "mock game started: playerId={} login={} gameUid={} "
-                        + "gpgNetPort={} lobbyPort={} gameOptions={} launch={}",
+                        + "gpgNetPort={} lobbyPort={} gameOptions={} launch={} crash={}",
                 config.playerId(),
                 config.playerLogin(),
                 config.gameUid(),
@@ -144,14 +148,20 @@ public final class Main {
                 config.gameOptions(),
                 config.launchDelay()
                         .map(delay -> "auto after " + delay.toSeconds() + "s")
-                        .orElse("manual only (auto-launch disabled)"));
+                        .orElse("manual only (auto-launch disabled)"),
+                config.crashDelay()
+                        .map(delay -> "injected " + delay.toSeconds() + "s into the session")
+                        .orElse("none (fault injection disabled)"));
+
+        Duration effectiveMatch = matchDuration(matchDuration, config.launchDelay());
+        warnIfCrashOutlivesMatch(config.crashDelay().orElse(null), effectiveMatch);
 
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         config,
                         new GpgNetConnection(config.gpgNetPort()),
                         config.launchDelay().orElse(null),
-                        matchDuration(matchDuration, config.launchDelay()));
+                        effectiveMatch);
         Thread hook =
                 new Thread(
                         shutdownHook(lifecycle.shutdown(), LoggingSetup::shutdown),
@@ -226,6 +236,39 @@ public final class Main {
                 launchDelay.orElse(Duration.ZERO).toSeconds(),
                 floor.toSeconds());
         return floor;
+    }
+
+    /**
+     * Warns when an injected crash is configured so late that the match will end before it fires
+     * (WBS-5.2).
+     *
+     * <p>Both timers live on the lifecycle's one scheduler, and the ENDED entry hook runs {@code
+     * GameShutdown}, whose {@code stopSchedules()} calls {@code shutdownNow()} — so a crash still
+     * queued when the match ends is cancelled and the run finishes normally. Silently: the operator
+     * asked for a fault, saw a clean exit {@code 0}, and has nothing in the log to explain why.
+     *
+     * <p>Checked here rather than in {@link MockGameCli} because the parser cannot see the match
+     * duration. It is not a session fact on the config at all — it is this class's constant,
+     * stretched by {@link #matchDuration(Duration, Optional)} — so this is the first point where
+     * both halves are known.
+     *
+     * <p>A warning and not a usage error: the delay is only <em>usually</em> wasted. A crash armed
+     * by a peer connecting starts its clock earlier than one armed at LIVE, so a long delay can
+     * still land inside a match that began late. Refusing to start would block a legitimate run to
+     * prevent a recoverable mistake.
+     *
+     * @param crashDelay the configured crash delay, or {@code null} when none is configured
+     * @param effectiveMatch the match length this run will actually use
+     */
+    static void warnIfCrashOutlivesMatch(final Duration crashDelay, final Duration effectiveMatch) {
+        if (crashDelay == null || crashDelay.compareTo(effectiveMatch) < 0) {
+            return;
+        }
+        LOG.warn(
+                "crash delay {}s is at or past the effective match duration {}s; the match will"
+                        + " normally end first and cancel the crash, so no fault will be injected",
+                crashDelay.toSeconds(),
+                effectiveMatch.toSeconds());
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.faforever.testharness.game.lifecycle;
 
+import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
@@ -26,6 +27,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.IntConsumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,6 +90,28 @@ public final class MockGameLifecycle {
 
     /** The total duration of the match, after which it is ended. */
     private final Duration matchDuration;
+
+    /**
+     * How long after the game enters a session it halts the JVM, or {@code null} to never crash
+     * (WBS-5.2). Derived once from {@link MockGameConfig#crashDelay()}.
+     */
+    private final Duration crashDelay;
+
+    /**
+     * What an injected crash calls to end the process. {@code Runtime.getRuntime()::halt} in
+     * production; a recorder in the crash-injection tests. See the constructor that takes it.
+     */
+    private final IntConsumer halt;
+
+    /**
+     * Guards {@link #armCrash()} so the crash timer is scheduled exactly once (WBS-5.2).
+     *
+     * <p>Needed because the two arming points are not mutually exclusive and neither is
+     * single-shot: a host registers a peer for every {@code ConnectToPeer} it receives, and can
+     * then also enter LIVE. Without this a four-player host would arm four separate crash timers,
+     * only the first of which would matter, and the surplus would fire into a dead JVM.
+     */
+    private final AtomicBoolean crashArmed = new AtomicBoolean(false);
 
     /**
      * A future that upon completion, drives the state machine to launch the match. Created by the
@@ -185,6 +209,47 @@ public final class MockGameLifecycle {
             Duration gpgnetConnectionTimeout,
             Duration launchDelay,
             Duration matchDuration) {
+        this(
+                config,
+                gpgnetServer,
+                gpgnetConnectionTimeout,
+                launchDelay,
+                matchDuration,
+                Runtime.getRuntime()::halt);
+    }
+
+    /**
+     * Internal constructor that also takes the halt action, for the crash-injection tests
+     * (WBS-5.2).
+     *
+     * <p>The halt is a parameter for one reason: {@link Runtime#halt(int)} ends the JVM, so a test
+     * that reached the real one would kill the Gradle test worker. That surfaces as a process
+     * vanishing with no report rather than as a failing test, which is far worse to diagnose than
+     * an ordinary assertion failure. A recording stand-in lets the scheduling, the arming rule and
+     * the exit code all be asserted in-process.
+     *
+     * <p>An {@link IntConsumer} rather than a {@link Runnable} because the exit code is half of
+     * what is under test; a seam that dropped it would not cover {@link ExitCodes#INJECTED_CRASH}.
+     *
+     * @param config the configuration options given to the mock game.
+     * @param gpgnetServer a not-yet-connected connection to the GpgNet Server.
+     * @param gpgnetConnectionTimeout the timeout to wait on a GpgNet connection for.
+     * @param launchDelay the delay before initiating a match after all configuration is done, or
+     *     {@code null} if it will be driven entirely manually.
+     * @param matchDuration the total duration of the match, after which it is ended, or {@code
+     *     null} if it will be driven entirely manually.
+     * @param halt what an injected crash calls to end the process; {@code
+     *     Runtime.getRuntime()::halt} in production.
+     */
+    MockGameLifecycle(
+            MockGameConfig config,
+            GpgNetConnection gpgnetServer,
+            Duration gpgnetConnectionTimeout,
+            Duration launchDelay,
+            Duration matchDuration,
+            IntConsumer halt) {
+        this.halt = halt;
+        this.crashDelay = config.crashDelay().orElse(null);
         this.config = config;
         this.gpgnet = gpgnetServer;
         this.gpgnetConnectionTimeout = gpgnetConnectionTimeout;
@@ -628,6 +693,9 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
+        // A peer is connected and traffic is flowing, so there is now a session to lose (WBS-5.2).
+        armCrash();
+
         // Set up the scheduler if configured. Keeping the handle is what lets a manual
         // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
         // in a state with no matching transition and log "No matching transitions for LaunchMatch".
@@ -649,6 +717,12 @@ public final class MockGameLifecycle {
         if (matchDuration != null) {
             matchEndFuture = schedule(() -> machine.receiveEvent(new GameEnded()), matchDuration);
         }
+
+        // The other arming point (WBS-5.2), for a single game with no peers: it reaches LIVE
+        // without anyone ever registering. Scheduled after the match-end timer above so that at
+        // equal delays on this one-thread scheduler the match ends first and the crash is
+        // cancelled with the rest of the schedule, rather than racing it.
+        armCrash();
     }
 
     /* Transition action for peer request messages. */
@@ -677,6 +751,10 @@ public final class MockGameLifecycle {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
+
+        // As in joinGame: the first peer to arrive starts the crash timer (WBS-5.2). Later peers
+        // are absorbed by armCrash's own guard rather than tested for here.
+        armCrash();
 
         if (getState() == GameState.HOSTING) {
             try {
@@ -711,6 +789,64 @@ public final class MockGameLifecycle {
         // Every closing frame was handed to the transport without error, which is as much as this
         // side can establish: see getExitStatus() for why that is not proof they were delivered.
         status = ExitStatus.OK;
+    }
+
+    /**
+     * Arms the injected crash (WBS-5.2), if one is configured and none is armed yet.
+     *
+     * <p><b>Why the timer starts here and not on entry to LIVE.</b> The card that asked for this
+     * said "measured from entry to LIVE, so the crash lands mid-match while peers are connected".
+     * In this harness those two halves contradict each other. LIVE is reachable only through {@link
+     * #launchFuture}, which {@link #beginHosting} and {@link #joinGame} arm only when {@code
+     * launchDelay} is non-null — and a multi-peer session must disable auto-launch, because
+     * faf-server refuses a {@code game_join} once the host reports {@code GameState Launching} (see
+     * {@link MockGameConfig#launchDelay()}). So a multi-peer game never enters LIVE at all, and a
+     * LIVE-anchored crash would have been silently inert in the one configuration the fault is most
+     * worth injecting into.
+     *
+     * <p>Peers connect and exchange traffic in HOSTING and JOINING, not in LIVE. So the condition
+     * the card was reaching for — the game has a session to lose — is "a peer is registered, or the
+     * match went live", whichever happens first. That is reachable in both configurations, and it
+     * keeps the flag's meaning stable: {@code N} is always N seconds after this game first had
+     * something to lose, rather than N seconds after a milestone that may never arrive.
+     *
+     * <p>Anchoring on entry to LOBBY instead would have been simpler, and was rejected: the timer
+     * would start before any peer connected, so the same command would crash a game with peers or
+     * without them depending on how quickly the lobby paired players. Non-determinism is the one
+     * property a fault-injection knob cannot afford.
+     */
+    private void armCrash() {
+        if (crashDelay == null || !crashArmed.compareAndSet(false, true)) {
+            return;
+        }
+        LOG.info(
+                "injected crash armed: halting with exit code {} in {}s",
+                ExitCodes.INJECTED_CRASH,
+                crashDelay.toSeconds());
+        schedule(this::injectCrash, crashDelay);
+    }
+
+    /**
+     * The injected crash itself (WBS-5.2): ends the process where it stands.
+     *
+     * <p>{@link Runtime#halt(int)} and never {@link System#exit(int)}. Exit runs the JVM shutdown
+     * hooks, and {@code Main} registers one that runs {@link GameShutdown} — closing the GPGNet
+     * socket in an orderly sequence, stopping the traffic session, cancelling the FSM. A consumer
+     * watching the adapter would see a tidy disconnect, which is the opposite of the fault being
+     * injected. Halt runs no hook, writes no closing frame, and leaves the socket to be torn down
+     * by the operating system exactly as it would be if the process had been killed.
+     *
+     * <p>The log line precedes the halt and does reach disk: the appenders in {@code logback.xml}
+     * are a {@code ConsoleAppender} and a {@code RollingFileAppender} with no {@code AsyncAppender}
+     * in front of either, so both flush on write. It is the only warning an operator gets that the
+     * silence that follows was deliberate.
+     */
+    private void injectCrash() {
+        LOG.warn(
+                "injected crash firing: halting the JVM with exit code {} and no shutdown "
+                        + "(--crash-after-seconds)",
+                ExitCodes.INJECTED_CRASH);
+        halt.accept(ExitCodes.INJECTED_CRASH);
     }
 
     /* Wrapper around ScheduledExecutorService.schedule that catches RejectedExecutionExceptions

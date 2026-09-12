@@ -55,7 +55,7 @@ public final class LifecycleSetupTest {
     void setup() throws IOException {
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, 0);
+                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, 0, -1);
         gpgnet = new ScriptedGpgNetServer();
         gpgnet.start();
         peer = new DatagramSocket(0);

@@ -107,7 +107,15 @@ final class TwoGameTrafficLoopbackTest {
             this.gpgnet = new ScriptedGpgNetServer();
             this.config =
                     new MockGameConfig(
-                            50000, TestPorts.freeUdpPort(), playerId, login, 9001, Map.of(), 0, 0);
+                            50000,
+                            TestPorts.freeUdpPort(),
+                            playerId,
+                            login,
+                            9001,
+                            Map.of(),
+                            0,
+                            0,
+                            -1);
             this.lifecycle =
                     new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
         }
