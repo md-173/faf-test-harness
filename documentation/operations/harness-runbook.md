@@ -541,6 +541,70 @@ is out of scope for this document. It lands with R79b, immediately after the
 two-peer and N-peer cards, as sections appended here rather than a
 restructure of what exists above.
 
+### Peer departure: what you will see, and when (WBS 4.3.4)
+
+When a peer leaves a live session, the survivors find out one of two ways, and
+which one depends entirely on whether the **host** has launched the match yet.
+The difference is not ours; it is a guard in faf-server.
+
+**Before launch**, the server tells everyone. `GameConnection.abort()` calls
+`disconnect_all_peers()` under an `if self.game.state is GameState.LOBBY`
+guard, which sends every remaining connection a `DisconnectFromPeer` naming
+the departing player. The Mock Client relays that to its adapter as
+`disconnectFromPeer(id)`; the adapter destroys the peer relay and forwards a
+GPGNet `DisconnectFromPeer` to the local Mock Game, which ends. In the logs:
+
+```text
+[MockClient] peer disconnect: id=<departing id>
+[ICEAdapter] onDisconnectFromPeer <departing id>
+[MockGame]   Peer (ID: <departing id>) disconnected, ending game
+[MockGame]   mock game finished: status=OK, exit code 0
+```
+
+That exit code is deliberate. A departure is a modelled end rather than a
+fault, so the surviving game exits `0` and the client reports it as a clean
+exit rather than a crash.
+
+**After launch**, that guard closes and **no targeted notification is sent at
+all**. The server broadcasts a `game_info` with the reduced player list and
+nothing else; the Mock Client does not consume `game_info`, so nothing in the
+harness reacts to it. The survivor learns from its own adapter instead:
+
+```text
+[MockClient] peer connected: local=<own id> remote=<departing id> connected=false
+```
+
+**Expect roughly ten seconds of silence before that line appears.** It comes
+from the adapter's own connectivity checker, not from us:
+`PeerConnectivityCheckerModule` echoes every 1000 ms and declares the peer
+lost after 10000 ms without a reply, which calls
+`PeerIceModule.onConnectionLost()` and pushes the `connected=false` verdict.
+A harness waiting on this needs a window comfortably wider than ten seconds.
+
+Three consequences worth knowing before you read a post-launch log:
+
+- **The harness adds no silence detection of its own**, by design. Upstream's
+  connectivity checker is the one that exists and we consume its verdict
+  rather than building a second, differently-timed one that could disagree
+  with it.
+- **The surviving game keeps running.** No GPGNet frame reaches it, so it
+  plays out its configured match duration and ends on its own timer. Only a
+  lobby-phase departure ends it early.
+- **The log will not go quiet after the verdict.** `onConnectionLost()` also
+  schedules an ICE re-offer for the lost peer when this side holds the offer,
+  immediately if the peer had connected and after 5 s otherwise, so the
+  adapter will keep trying to reach a player who has gone. Reconnection and
+  rejoin are out of scope for 4.3.4; this noise is upstream doing what it
+  always does.
+
+One current limitation, recorded here because it is invisible from the logs:
+**any single peer loss ends the game**, regardless of how many peers remain.
+The Mock Game's `PeerDisconnected` transitions run from every non-ended state
+straight to ENDED. That is correct at two players and wrong above them.
+WBS 4.3.3 owns deciding whether the game should instead play on until the last
+peer leaves; the departing player id is already carried on the event so that
+change needs no rework of the wiring.
+
 ## 10. Network fault injection (WBS 5.1)
 
 Two flags degrade the harness from the inside, covering the delayed-ICE and
