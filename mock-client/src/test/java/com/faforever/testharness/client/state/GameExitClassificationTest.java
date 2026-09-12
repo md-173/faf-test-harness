@@ -71,7 +71,8 @@ final class GameExitClassificationTest {
                     Optional.empty(),
                     Optional.empty(),
                     0,
-                    0);
+                    0,
+                    -1);
 
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
