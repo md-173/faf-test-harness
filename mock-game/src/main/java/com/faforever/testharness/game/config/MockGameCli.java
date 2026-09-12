@@ -17,20 +17,24 @@ import picocli.CommandLine.ParameterException;
  * produces a session that looks alive and is wrong.
  *
  * <p><b>The behavioural knobs are the defaulted arguments</b>; every session fact is required.
- * There are three: {@code --launch-delay-seconds} (WBS-4.3.1), {@code --udp-drop-percent} (WBS-5.1)
- * and {@code --lobby-timeout-seconds} (WBS-3.2.1.3). Each defaults to the behaviour mock-game had
- * before the flag existed, so a run that passes none of them behaves exactly as it always did. Only
- * {@code --launch-delay-seconds} is emitted unconditionally by {@code MockGameLauncher}; the other
- * two are emitted only when the client was asked for them, so in an orchestrated run their defaults
- * are what a session gets unless a test opts in. {@code Main} logs the effective launch policy at
- * startup, so even a hand-run says which one it took.
+ * There are four: {@code --launch-delay-seconds} (WBS-4.3.1), {@code --udp-drop-percent} (WBS-5.1),
+ * {@code --lobby-timeout-seconds} (WBS-3.2.1.3) and {@code --crash-after-seconds} (WBS-5.2). Each
+ * defaults to the behaviour mock-game had before the flag existed, so a run that passes none of
+ * them behaves exactly as it always did. {@code MockGameLauncher} emits {@code
+ * --launch-delay-seconds} unconditionally, emits the two fault-injection flags only when the client
+ * was asked for them, and never emits {@code --lobby-timeout-seconds}, which therefore applies only
+ * to a hand-run binary. In an orchestrated run the defaults are what a session gets unless a test
+ * opts in. {@code Main} logs the effective launch and crash policies at startup, so even a hand-run
+ * says which it took.
  *
  * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8). Extend both ends together if
  * orchestration ever adds the remaining {@code game_launch}-derived flags.
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
- * --game-uid <uid> [--launch-delay-seconds <seconds>] [--udp-drop-percent <0-100>]
+ * --game-uid <uid> [--game-option <k=v>]... [--launch-delay-seconds <seconds>]
+ * [--lobby-timeout-seconds <seconds>] [--udp-drop-percent <0-100>]
+ * [--crash-after-seconds <seconds>]
  * }</pre>
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
@@ -59,6 +63,12 @@ public final class MockGameCli {
      * #323).
      */
     private static final String DEFAULT_LOBBY_TIMEOUT_SECONDS = "-1";
+
+    /**
+     * Default for {@code --crash-after-seconds}: negative, meaning never. Fault injection is
+     * opt-in, so the default has to be the behaviour mock-game had before the flag existed.
+     */
+    private static final String DEFAULT_CRASH_AFTER_SECONDS = "-1";
 
     /** TCP port of the adapter's GPGNet server; validated to a real port range. */
     @Option(names = "--gpgnet-port", required = true, description = "adapter GPGNet TCP port")
@@ -136,6 +146,22 @@ public final class MockGameCli {
                             + "peer's per-sender counters.")
     private int udpDropPercent;
 
+    /**
+     * How long after entering a real session the game halts the JVM without an orderly shutdown,
+     * standing in for a game crash (WBS-5.2). Off by default, for the same reason {@code
+     * --udp-drop-percent} is: fault injection is something a test asks for explicitly.
+     */
+    @Option(
+            names = "--crash-after-seconds",
+            defaultValue = DEFAULT_CRASH_AFTER_SECONDS,
+            description =
+                    "Seconds after the game enters a session before it halts the JVM without a "
+                            + "shutdown, simulating a game crash (default: ${DEFAULT-VALUE}). "
+                            + "Negative never crashes. The timer starts when a peer connects or "
+                            + "the match goes live, whichever comes first, so the crash lands "
+                            + "while there is a session to lose.")
+    private int crashAfterSeconds;
+
     /** Instantiated only by {@link #parse(String[])}. */
     private MockGameCli() {}
 
@@ -160,7 +186,8 @@ public final class MockGameCli {
                 cli.gameOptions,
                 cli.launchDelaySeconds,
                 cli.lobbyTimeoutSeconds,
-                cli.udpDropPercent);
+                cli.udpDropPercent,
+                cli.crashAfterSeconds);
     }
 
     /**

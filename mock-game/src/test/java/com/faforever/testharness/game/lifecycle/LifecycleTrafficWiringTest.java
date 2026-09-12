@@ -99,7 +99,8 @@ final class LifecycleTrafficWiringTest {
                         Map.of(),
                         0,
                         -1,
-                        0);
+                        0,
+                        -1);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
