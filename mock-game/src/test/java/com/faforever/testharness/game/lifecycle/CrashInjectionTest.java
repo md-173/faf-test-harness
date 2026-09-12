@@ -51,6 +51,9 @@ final class CrashInjectionTest {
     /** A crash delay long enough that a test can cancel it before it fires. */
     private static final int CANCELLABLE_CRASH_SECONDS = 2;
 
+    /** PlayerOption frames the host emits per player it configures: Army through Color. */
+    private static final int PLAYER_OPTION_FRAMES = 5;
+
     /** Scripted stand-in for the adapter's GPGNet server. */
     private ScriptedGpgNetServer gpgnet;
 
@@ -207,19 +210,29 @@ final class CrashInjectionTest {
         assertEquals(0, haltCalls.get());
     }
 
-    /** The default, and the criterion that an unset flag leaves a run exactly as it was. */
+    /**
+     * The default, and the criterion that an unset flag leaves a run exactly as it was.
+     *
+     * <p>Both arming points are exercised, in the order they are reachable. An earlier version sent
+     * the {@code ConnectToPeer} after LIVE, where no such transition is registered, so the frame
+     * was dropped with "No matching transitions" and only the LIVE half of the claim in the
+     * assertion message was ever true.
+     */
     @Test
     void negativeNeverArms() throws Exception {
-        MockGameLifecycle lifecycle = lifecycleWith(-1, Duration.ZERO, null);
+        MockGameLifecycle lifecycle = lifecycleWith(-1, null, null);
         driveToLobby(lifecycle);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
+        awaitPeerCount(lifecycle, 1);
+        lifecycle.launchMatch();
+        lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         assertFalse(
                 halted.await(QUIET_WINDOW_SECONDS, TimeUnit.SECONDS),
-                "a negative delay must never crash, through LIVE or a peer");
+                "a negative delay must never crash, through a peer or LIVE");
         assertEquals(0, haltCalls.get());
     }
 
@@ -230,21 +243,49 @@ final class CrashInjectionTest {
      */
     @Test
     void armsOnlyOnceAcrossManyPeersAndLive() throws Exception {
-        MockGameLifecycle lifecycle = lifecycleWith(1, Duration.ZERO, null);
+        // Auto-launch is off so the game stays in HOSTING while the peers arrive. With a launch
+        // delay the FSM would reach LIVE first, the ConnectToPeer transitions (registered only on
+        // HOSTING and JOINING) would find no match, and peerConnectionRequest would never run, so
+        // the test would reach exactly one arming point and pass with the guard deleted.
+        MockGameLifecycle lifecycle = lifecycleWith(1, null, null);
         driveToLobby(lifecycle);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
         lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        // Two peers, then LIVE: three arming points, one timer.
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
+        awaitPeerCount(lifecycle, 1);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Jones", 3)));
+        awaitPeerCount(lifecycle, 2);
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         assertTrue(halted.await(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS), "the crash must fire");
-        // Well past the 1s delay, so any surplus timer armed by the later peers or by LIVE would
+        // Well past the 1s delay, so any surplus timer armed by the later peer or by LIVE would
         // have fired inside this window too.
         Thread.sleep(Duration.ofSeconds(QUIET_WINDOW_SECONDS).toMillis());
         assertEquals(1, haltCalls.get(), "the crash must be armed exactly once");
+    }
+
+    /**
+     * Waits until the host has configured {@code expected} peers, by counting the {@code
+     * PlayerOption} frames it emits per peer.
+     *
+     * <p>Needed so each {@code ConnectToPeer} is known to have been handled before the next frame
+     * is sent. Without it the test would race its own setup and could reach fewer arming points
+     * than it means to, which is precisely the defect that made an earlier version of this test
+     * pass with the guard under test deleted.
+     */
+    private void awaitPeerCount(final MockGameLifecycle lifecycle, final int expected)
+            throws Exception {
+        for (int i = 0; i < PLAYER_OPTION_FRAMES; i++) {
+            gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        }
+        assertEquals(
+                GameState.HOSTING,
+                lifecycle.getState(),
+                "the host must still be in HOSTING after configuring peer " + expected);
     }
 
     /**

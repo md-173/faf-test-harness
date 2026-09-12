@@ -664,7 +664,7 @@ would be if the process were killed.
 **When the timer starts.** On the first of two events: a peer connecting, or
 the match going live. Not on entry to LIVE alone, which is what it looks like it
 should be. In this harness a multi-peer session runs with auto-launch disabled
-(`--mock-game-launch-delay-seconds=-1`, see §9), nothing else posts
+(`--mock-game-launch-delay-seconds=-1`), nothing else posts
 `LaunchMatch`, and so the game never enters LIVE at all. Anchored there the
 fault would have been silently inert in the one configuration it is most worth
 injecting into. Peers connect and exchange traffic in the lobby phase, so "a
@@ -680,7 +680,7 @@ What to look for when it is on:
   `crash=injected 3s into the session`. A run that did not ask for the fault
   says `crash=none (fault injection disabled)`.
 - One `INFO` when the timer is armed and one `WARN` as it fires, naming the exit
-  code. The `WARN` is the last line the process writes; the appenders flush
+  code. The `WARN` is the last line the game itself intends to write; the appenders flush
   synchronously, so it reaches both the console and the JSONL file even though
   nothing orderly follows it.
 - **No `mock game shutdown complete`.** Its absence is the diagnostic marker
@@ -699,10 +699,15 @@ lobby on the game's behalf, reaches TERMINATED, and exits `71`
 
 **Two ways to get nothing.**
 
-The first is warned about at startup: a delay at or past the match duration. The
-crash and the match-end timer share one scheduler, and the end of the match
-tears that scheduler down, so the crash is cancelled and the run exits `0`.
-`Main` compares the two before the game starts and says so.
+The first applies only when auto-launch is on: a delay at or past the match
+duration. The crash and the match-end timer share one scheduler, and the end of
+the match tears that scheduler down, so the crash is cancelled and the run exits
+`0`. `Main` compares the two before the game starts and warns.
+
+It is deliberately not warned about when auto-launch is off, because there the
+match-end timer is never armed at all. Nothing ends the match, so nothing
+cancels the crash, and a delay well past the nominal match duration fires
+exactly as asked.
 
 The second cannot be warned about, because it is only knowable in hindsight: a
 game that never enters a session at all. With auto-launch off and no peer ever

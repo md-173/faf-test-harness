@@ -102,6 +102,30 @@ final class MainTest {
     /** The appender attached by {@link #captureRootLog()}, detached by {@link #detachCapture()}. */
     private ListAppender<ILoggingEvent> capture;
 
+    /**
+     * With auto-launch off there is no match-end timer, so a long crash delay is not wasted and
+     * must not be warned about.
+     *
+     * <p>This is the configuration a multi-peer session runs in, and the one the crash process test
+     * uses. The match-end timer is armed only on entry to LIVE, which a game with no launch delay
+     * never reaches, so the warning would have claimed no fault would be injected in precisely the
+     * case where a long delay is guaranteed to fire.
+     */
+    @Test
+    void aLongCrashDelayIsNotWarnedAboutWhenAutoLaunchIsOff() {
+        List<ILoggingEvent> events = captureRootLog();
+        try {
+            Main.warnIfCrashOutlivesMatch(
+                    Duration.ofSeconds(30), Duration.ofSeconds(10), Optional.empty());
+
+            assertTrue(
+                    events.stream().noneMatch(e -> e.getLevel() == Level.WARN),
+                    "nothing ends the match, so nothing cancels the crash. captured: " + events);
+        } finally {
+            detachCapture();
+        }
+    }
+
     @BeforeEach
     void setUp() throws IOException {
         adapter = new ScriptedGpgNetServer();
@@ -413,7 +437,10 @@ final class MainTest {
     void aCrashDelayPastTheMatchDurationIsWarnedAbout() {
         List<ILoggingEvent> events = captureRootLog();
         try {
-            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(30), Duration.ofSeconds(10));
+            Main.warnIfCrashOutlivesMatch(
+                    Duration.ofSeconds(30),
+                    Duration.ofSeconds(10),
+                    Optional.of(Duration.ofSeconds(5)));
 
             assertTrue(
                     events.stream()
@@ -433,7 +460,10 @@ final class MainTest {
     void aCrashDelayEqualToTheMatchDurationIsWarnedAbout() {
         List<ILoggingEvent> events = captureRootLog();
         try {
-            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(10), Duration.ofSeconds(10));
+            Main.warnIfCrashOutlivesMatch(
+                    Duration.ofSeconds(10),
+                    Duration.ofSeconds(10),
+                    Optional.of(Duration.ofSeconds(5)));
 
             assertTrue(
                     events.stream().anyMatch(e -> e.getLevel() == Level.WARN),
@@ -448,8 +478,12 @@ final class MainTest {
     void aUsableOrAbsentCrashDelayIsNotWarnedAbout() {
         List<ILoggingEvent> events = captureRootLog();
         try {
-            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(3), Duration.ofSeconds(10));
-            Main.warnIfCrashOutlivesMatch(null, Duration.ofSeconds(10));
+            Main.warnIfCrashOutlivesMatch(
+                    Duration.ofSeconds(3),
+                    Duration.ofSeconds(10),
+                    Optional.of(Duration.ofSeconds(5)));
+            Main.warnIfCrashOutlivesMatch(
+                    null, Duration.ofSeconds(10), Optional.of(Duration.ofSeconds(5)));
 
             assertTrue(
                     events.stream().noneMatch(e -> e.getLevel() == Level.WARN),

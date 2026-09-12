@@ -819,11 +819,16 @@ public final class MockGameLifecycle {
         if (crashDelay == null || !crashArmed.compareAndSet(false, true)) {
             return;
         }
-        LOG.info(
-                "injected crash armed: halting with exit code {} in {}s",
-                ExitCodes.INJECTED_CRASH,
-                crashDelay.toSeconds());
-        schedule(this::injectCrash, crashDelay);
+        // Logged only once the task is actually queued. The runbook makes this line the operator's
+        // proof that the timer started, and schedule() returns null rather than throwing when the
+        // scheduler is already shut down, so announcing first would let a torn-down lifecycle claim
+        // an armed crash it never armed.
+        if (schedule(this::injectCrash, crashDelay) != null) {
+            LOG.info(
+                    "injected crash armed: halting with exit code {} in {}s",
+                    ExitCodes.INJECTED_CRASH,
+                    crashDelay.toSeconds());
+        }
     }
 
     /**

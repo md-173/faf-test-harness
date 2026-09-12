@@ -154,7 +154,8 @@ public final class Main {
                         .orElse("none (fault injection disabled)"));
 
         Duration effectiveMatch = matchDuration(matchDuration, config.launchDelay());
-        warnIfCrashOutlivesMatch(config.crashDelay().orElse(null), effectiveMatch);
+        warnIfCrashOutlivesMatch(
+                config.crashDelay().orElse(null), effectiveMatch, config.launchDelay());
 
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
@@ -252,16 +253,30 @@ public final class Main {
      * stretched by {@link #matchDuration(Duration, Optional)}, so this is the first point where
      * both halves are known.
      *
-     * <p>A warning and not a usage error: the delay is only <em>usually</em> wasted. A crash armed
-     * by a peer connecting starts its clock earlier than one armed at LIVE, so a long delay can
-     * still land inside a match that began late. Refusing to start would block a legitimate run to
-     * prevent a recoverable mistake.
+     * <p><b>Only when auto-launch is on.</b> The match-end timer is armed in {@code matchBegins},
+     * on entry to LIVE, and with a negative {@code --launch-delay-seconds} nothing posts {@code
+     * LaunchMatch} at all, so no such timer is ever created and there is nothing to cancel the
+     * crash. Warning there would be exactly backwards: it would tell an operator no fault will be
+     * injected in the one configuration where a long delay is guaranteed to fire. That is also the
+     * configuration a multi-peer session and the crash process test both use.
+     *
+     * <p>A warning and not a usage error: even with auto-launch on the delay is only
+     * <em>usually</em> wasted. A crash armed by a peer connecting starts its clock earlier than one
+     * armed at LIVE, so a long delay can still land inside a match that began late. Refusing to
+     * start would block a legitimate run to prevent a recoverable mistake.
      *
      * @param crashDelay the configured crash delay, or {@code null} when none is configured
      * @param effectiveMatch the match length this run will actually use
+     * @param launchDelay the configured auto-launch delay, empty when auto-launch is off
      */
-    static void warnIfCrashOutlivesMatch(final Duration crashDelay, final Duration effectiveMatch) {
-        if (crashDelay == null || crashDelay.compareTo(effectiveMatch) < 0) {
+    static void warnIfCrashOutlivesMatch(
+            final Duration crashDelay,
+            final Duration effectiveMatch,
+            final Optional<Duration> launchDelay) {
+        if (crashDelay == null || launchDelay.isEmpty()) {
+            return;
+        }
+        if (crashDelay.compareTo(effectiveMatch) < 0) {
             return;
         }
         LOG.warn(

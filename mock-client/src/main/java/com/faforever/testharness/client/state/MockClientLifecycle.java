@@ -145,12 +145,22 @@ public final class MockClientLifecycle {
      * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
      * code; see {@link #gameCrashed()}.
      *
-     * <p>Volatile because the two sides are different threads: the write happens on the {@link
-     * #gameExit} completion handler, and the read is on the main thread once the FSM reaches
-     * TERMINATED. On the {@code GameExited} route the write is already program-ordered before the
-     * synchronized {@code receiveEvent} that drives TERMINATED, so it would be visible without this
-     * but the other routes into TERMINATED (a lobby disconnect, the adapter exiting) carry no such
-     * ordering, and that is where an unsynchronised read would be wrong.
+     * <p>Written on the {@link #gameExit} completion handler and read on the main thread, so the
+     * two sides need an ordering. On the {@code GameExited} route they have one independently of
+     * this field: the write precedes {@code machine.receiveEvent}, which completes the {@code
+     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
+     * {@code get} that releases {@code RunCommand}. The FSM's own monitor is not what publishes it,
+     * since the reading thread never acquires that monitor.
+     *
+     * <p>{@code volatile} is for the other routes into TERMINATED, a lobby disconnect or the
+     * adapter exiting, which carry no such edge. It is worth being precise about what that buys: on
+     * those routes the classification may simply not have run yet, so the honest answer is {@code
+     * false}, and volatile makes that a defined stale read rather than an undefined one. The
+     * residual window is narrow and benign. A lobby drop returns {@code RUNTIME} from the check
+     * above this one anyway, and source-verified against java-ice-adapter's {@code
+     * GPGNetServer.onGpgnetConnectionLost}, the adapter does not exit when the game dies: it closes
+     * the client, reports {@code Disconnected} over RPC and keeps accepting. So a crashed game
+     * reaches TERMINATED through {@code GameExited} and nothing else.
      */
     private volatile boolean gameCrashed;
 
