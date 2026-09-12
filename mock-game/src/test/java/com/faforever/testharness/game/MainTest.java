@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
@@ -34,6 +39,7 @@ import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * Integration-lite tests for the bootstrap (WBS-3.2.5.1): {@link Main#run} is driven in-JVM against
@@ -92,6 +98,9 @@ final class MainTest {
 
     /** Lifecycles built directly by a test, torn down after it so no lobby socket leaks. */
     private final List<MockGameLifecycle> lifecycles = new ArrayList<>();
+
+    /** The appender attached by {@link #captureRootLog()}, detached by {@link #detachCapture()}. */
+    private ListAppender<ILoggingEvent> capture;
 
     @BeforeEach
     void setUp() throws IOException {
@@ -390,6 +399,88 @@ final class MainTest {
                 TEST_MATCH_DURATION,
                 Main.matchDuration(TEST_MATCH_DURATION, Optional.empty()),
                 "with no auto-launch there is no spread to cover");
+    }
+
+    /**
+     * A crash delay that outlives the match is a silent no-op, so the bootstrap says so (WBS-5.2).
+     *
+     * <p>Both timers sit on the lifecycle's one scheduler, and the ENDED entry hook runs {@code
+     * GameShutdown}, whose {@code stopSchedules()} shuts that scheduler down. A crash still queued
+     * when the match ends is therefore cancelled, the run exits {@code 0}, and without this warning
+     * nothing in the log would explain why the fault the operator asked for never arrived.
+     */
+    @Test
+    void aCrashDelayPastTheMatchDurationIsWarnedAbout() {
+        List<ILoggingEvent> events = captureRootLog();
+        try {
+            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(30), Duration.ofSeconds(10));
+
+            assertTrue(
+                    events.stream()
+                            .anyMatch(
+                                    e ->
+                                            e.getLevel() == Level.WARN
+                                                    && e.getFormattedMessage()
+                                                            .contains("no fault will be injected")),
+                    "a crash delay past the match duration must warn. captured: " + events);
+        } finally {
+            detachCapture();
+        }
+    }
+
+    /** The boundary: equal delays let the match end first, so that must warn too. */
+    @Test
+    void aCrashDelayEqualToTheMatchDurationIsWarnedAbout() {
+        List<ILoggingEvent> events = captureRootLog();
+        try {
+            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(10), Duration.ofSeconds(10));
+
+            assertTrue(
+                    events.stream().anyMatch(e -> e.getLevel() == Level.WARN),
+                    "an equal delay is cancelled by the match ending first. captured: " + events);
+        } finally {
+            detachCapture();
+        }
+    }
+
+    /** A usable crash delay, and no configured crash at all, must both stay silent. */
+    @Test
+    void aUsableOrAbsentCrashDelayIsNotWarnedAbout() {
+        List<ILoggingEvent> events = captureRootLog();
+        try {
+            Main.warnIfCrashOutlivesMatch(Duration.ofSeconds(3), Duration.ofSeconds(10));
+            Main.warnIfCrashOutlivesMatch(null, Duration.ofSeconds(10));
+
+            assertTrue(
+                    events.stream().noneMatch(e -> e.getLevel() == Level.WARN),
+                    "neither case is a mistake. captured: " + events);
+        } finally {
+            detachCapture();
+        }
+    }
+
+    /**
+     * Attaches a capturing appender to the root logger.
+     *
+     * @return the live list the appender writes into
+     */
+    private List<ILoggingEvent> captureRootLog() {
+        LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+        capture = new ListAppender<>();
+        // The scheduler and reader threads log while this is attached, so the default ArrayList
+        // would be read and written concurrently.
+        capture.list = new CopyOnWriteArrayList<>();
+        capture.setContext(ctx);
+        capture.start();
+        ctx.getLogger(Logger.ROOT_LOGGER_NAME).addAppender(capture);
+        return capture.list;
+    }
+
+    /** Detaches the capturing appender, so it does not outlive the test that attached it. */
+    private void detachCapture() {
+        LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
+        ctx.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(capture);
+        capture.stop();
     }
 
     /** A lifecycle wired to {@code gpgNetPort}, using the test durations. */
