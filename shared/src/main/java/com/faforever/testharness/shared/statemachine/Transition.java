@@ -53,6 +53,24 @@ public class Transition {
      * real transition and callers will treat it as one, cancelling pending timeouts included. Use a
      * null failure state, not {@code from}, to mean "stay put and change nothing".
      *
+     * <p><b>An unchecked throw out of the action is contained here too</b> (WBS-2.3.7-fix, #326).
+     * It used to escape into {@link StateMachine#receiveEvent(Event)}, which has no {@code
+     * try}/{@code catch}, so the caller — a WebSocket handler or a {@code CompletableFuture}
+     * continuation in production — received it, and in the second case it vanished into a dead
+     * future with no trace. Containing it here rather than in {@code receiveEvent} keeps every
+     * disposition of a failed action in one place and covers the timeout path with the same code.
+     *
+     * <p>A contained throw stays put: the machine is left in {@code from} and {@code null} is
+     * returned, which is the same disposition as a {@link FailedTransitionException} carrying no
+     * failure state. That is the only coherent reading — an action that crashes knows strictly less
+     * than one that declared failure, so it cannot be allowed to drive a state change the declared
+     * failure would not. Nothing is half-done either way: the action runs <em>before</em> {@code
+     * exit()} and {@code entry()}, so a throw means no hook has fired yet.
+     *
+     * <p>The level is ERROR rather than the checked path's WARN. A declared failure is a modelled
+     * outcome; an unchecked one is a bug in the action, and the stack trace is the only record of
+     * it.
+     *
      * @param event the event that triggers this transition.
      * @return the new state, or {@code null} if no hooks fired and the state did not change.
      */
@@ -75,6 +93,17 @@ public class Transition {
                             e);
                     return null;
                 }
+            } catch (RuntimeException e) {
+                // Same disposition as a FailedTransitionException with no failure state, because an
+                // unchecked throw cannot name one. Reported at ERROR: this is a defect in the
+                // action, not a modelled failure, and it must not vanish.
+                LOG.error(
+                        "Transition action from {} to {} threw; staying in {}",
+                        from.getName(),
+                        to.getName(),
+                        from.getName(),
+                        e);
+                return null;
             }
         }
         // A self-loop (from == to) is a stay-in-state action: the event is handled but no actual
