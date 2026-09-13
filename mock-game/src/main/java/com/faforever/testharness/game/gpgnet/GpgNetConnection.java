@@ -4,6 +4,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -16,11 +17,11 @@ import org.slf4j.LoggerFactory;
  * GPGNet transport over the loopback TCP socket to the faf-ice-adapter's GPGNet server (the adapter
  * listens, the mock game connects as client — json-rpc-spec §8). The GPGNet counterpart of the mock
  * client's {@code IceAdapterConnection}: it opens the socket with bounded retry (the adapter
- * subprocess may still be binding), runs a blocking read loop that decodes frames via {@link
- * GpgNetCodec} and hands each to a registered consumer, exposes a {@link #send(GpgNetFrame)}
- * primitive, and surfaces disconnects. It carries <em>no</em> message semantics — which frames to
- * send and how to react to inbound ones live in the dispatcher (3.2.2.2), sender (3.2.2.3), and
- * lifecycle controller.
+ * subprocess may still be binding) and a per-attempt connect timeout, runs a blocking read loop
+ * that decodes frames via {@link GpgNetCodec} and hands each to a registered consumer, exposes a
+ * {@link #send(GpgNetFrame)} primitive, and surfaces disconnects. It carries <em>no</em> message
+ * semantics: which frames to send and how to react to inbound ones live in the dispatcher
+ * (3.2.2.2), sender (3.2.2.3), and lifecycle controller.
  *
  * <p>Threading: one reader thread (started by {@link #connect()}) does connect-with-retry then runs
  * the blocking read loop; its lifetime is the connection's. Outbound {@link #send} writes happen on
@@ -44,6 +45,22 @@ public final class GpgNetConnection implements GpgNetFrameSink {
 
     /** Default delay between connect attempts. */
     private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(100);
+
+    /**
+     * Upper bound on a single connect attempt, in milliseconds.
+     *
+     * <p>Without it an attempt is bounded only by the OS: a closed loopback port that refuses fails
+     * at once, but one that drops the SYN (a hardened container, an endpoint agent, a full accept
+     * queue) blocks for about 127 s at Linux's default {@code tcp_syn_retries=6}, and {@link
+     * #close()} has no socket to close in the meantime. At the defaults the worst case is 20 x (1 s
+     * + 100 ms), about 22 s, which stays below {@code MockGameLifecycle}'s default 30 s
+     * INITIALIZING timeout. A close that lands during an attempt waits for at most this long.
+     *
+     * <p>A loopback handshake takes well under a millisecond, so this is margin, not a wait. There
+     * is no upstream value to copy: downlords-faf-client's {@code IceAdapterImpl} connects with no
+     * timeout and relies on the refusal being fast.
+     */
+    private static final int CONNECT_TIMEOUT_MILLIS = 1000;
 
     /** No-op consumer installed before {@link #onFrame(Consumer)} replaces it. */
     private static final Consumer<GpgNetFrame> NOOP_CONSUMER = ignored -> {};
@@ -285,9 +302,17 @@ public final class GpgNetConnection implements GpgNetFrameSink {
             if (closeRequested.get()) {
                 throw new ConnectAbandonedException();
             }
+            Socket candidate = new Socket();
             try {
-                return new Socket(LOOPBACK, port);
+                candidate.connect(new InetSocketAddress(LOOPBACK, port), CONNECT_TIMEOUT_MILLIS);
+                return candidate;
             } catch (IOException e) {
+                // A failed connect leaves the socket open; close it or every attempt leaks a fd.
+                try {
+                    candidate.close();
+                } catch (IOException ignored) {
+                    // best effort
+                }
                 last = e;
                 if (attempt < connectAttempts) {
                     try {
