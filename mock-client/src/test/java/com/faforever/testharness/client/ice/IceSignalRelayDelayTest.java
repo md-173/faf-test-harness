@@ -3,20 +3,31 @@ package com.faforever.testharness.client.ice;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tests {@link IceSignalRelay}'s WBS-5.1 forward delay: the delayed-ICE half of the harness's
@@ -36,10 +47,14 @@ final class IceSignalRelayDelayTest {
     private static final String ICE_MSG_JSON = "{\"type\":\"offer\",\"sdp\":\"v=0 o=- 46117 2\"}";
 
     /**
-     * The injected delay. Long enough that the "not yet" probe below cannot pass by accident on a
-     * loaded runner, short enough that six forwards still finish well inside the class timeout.
+     * The injected delay in milliseconds. Long enough that the "not yet" probe below cannot pass by
+     * accident on a loaded runner, short enough that every forward still finishes well inside the
+     * class timeout. A compile-time constant so a parameterised test can run with it.
      */
-    private static final Duration DELAY = Duration.ofMillis(600);
+    private static final long DELAY_MILLIS = 600;
+
+    /** {@link #DELAY_MILLIS} as the {@code Duration} the relay is built with. */
+    private static final Duration DELAY = Duration.ofMillis(DELAY_MILLIS);
 
     /** Generous ceiling for a forward that should arrive; scheduling jitter is not the subject. */
     private static final int ARRIVES_SECONDS = 5;
@@ -183,6 +198,57 @@ final class IceSignalRelayDelayTest {
                 9,
                 MAPPER.readTree(frame.strip()).get("args").get(0).asInt(),
                 "the malformed notification produced a forward instead of being dropped inline");
+    }
+
+    /**
+     * A forward that throws is logged by the relay, with the delay off and on. Scheduled, the
+     * exception would otherwise be captured in a discarded future and the candidate would vanish
+     * without a line. Inline, the connection's shield would log it without saying which peer.
+     *
+     * <p>The throw is real rather than mocked: a lobby connection that never connected refuses
+     * {@code send()} with {@code IllegalStateException}. The capture is scoped to the relay's
+     * logger, so the delay-0 case cannot pass on the shield's line instead.
+     */
+    @ParameterizedTest
+    @ValueSource(longs = {0, DELAY_MILLIS})
+    void aThrowingForwardIsLoggedRatherThanLost(final long delayMillis) throws Exception {
+        LobbyConnection unconnected = new LobbyConnection(URI.create("ws://127.0.0.1:1"));
+        IceSignalRelay failing =
+                new IceSignalRelay(unconnected, adapter, Duration.ofMillis(delayMillis));
+
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger relayLogger = context.getLogger(IceSignalRelay.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        // Appended from the adapter reader thread or the delay thread, read from the test thread.
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.setContext(context);
+        appender.start();
+        relayLogger.addAppender(appender);
+        try {
+            failing.start();
+            adapterServer.send(onIceMsgNotification(2, ICE_MSG_JSON));
+
+            String expected = "ICE forward to lobby for remoteId=2 threw IllegalStateException:";
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(ARRIVES_SECONDS);
+            while (System.nanoTime() < deadline) {
+                for (ILoggingEvent event : appender.list) {
+                    if (event.getLevel() == Level.WARN
+                            && event.getFormattedMessage().startsWith(expected)) {
+                        return;
+                    }
+                }
+                Thread.sleep(10);
+            }
+            List<String> seen = new ArrayList<>();
+            for (ILoggingEvent event : appender.list) {
+                seen.add(event.getFormattedMessage());
+            }
+            fail("no WARN starting '" + expected + "' within " + ARRIVES_SECONDS + "s: " + seen);
+        } finally {
+            failing.stop();
+            relayLogger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     /** A negative delay is a typo, not a mode; it is rejected at construction. */
