@@ -617,20 +617,25 @@ What to look for when it is on:
   Treat the measured baseline as a lower bound. A real FAF client also passes
   TURN servers via `setIceServers`, which the adapter harvests, and real
   networks add latency to both lobby crossings, so the ceiling between two real
-  machines is tighter. If the joiner's gathering hits the adapter's 5000 ms
-  gathering cap, it sends no answer at all and ICE restarts whatever the flag
-  is set to.
+  machines is tighter, and so is the ceiling on a CI runner, which sits further
+  from the lobby and shares its CPU. If the joiner's gathering hits the
+  adapter's 5000 ms gathering cap, it sends no answer at all and ICE restarts
+  whatever the flag is set to.
 
   To find your own baseline, run once with the flag at `0` and take the gap
   between `peer ice: ... state=awaitingCandidates` and `state=checking` in the
   host's log (the host is the side that logs `peer connect: ... offer=true`),
-  then apply the formula.
+  then apply the formula. Do this on the machine that will run the delay,
+  including a CI runner, or stay at a few hundred milliseconds there.
 
   Past the ceiling you get an ICE restart loop rather than slow negotiation: on
   the host, `awaitingCandidates` turns to `disconnected` almost exactly 6000 ms
   later, and `gathering` follows about 5 s after that, so each failed attempt
   takes about 11 s. That is a different phenomenon, and not the one the flag is
-  for. Start a two-peer manual run at a few hundred milliseconds.
+  for. Just past the ceiling a session can still connect on a retry, because
+  the retry skips the one-time ice4j setup, so one pass near the ceiling does
+  not prove a value is safe. Start a two-peer manual run at a few hundred
+  milliseconds.
 
 ### `--udp-drop-percent`
 
