@@ -229,9 +229,10 @@ public class GpgNetConnection implements GpgNetFrameSink {
 
     /**
      * Close the socket from this side. The disconnect listener fires once with {@link
-     * DisconnectReason#LOCAL_CLOSE}: from this method when no socket has been published yet,
-     * otherwise from the reader thread, either in the read loop or, when the close lands before the
-     * read loop starts, as the connect abandons the socket.
+     * DisconnectReason#LOCAL_CLOSE}. With no socket published yet it fires from this method, or
+     * from the reader thread if that thread publishes the socket and reads the close flag first.
+     * With a published socket it always fires from the reader thread: in the read loop, or, when
+     * the close lands before the connect reads the close flag, as the connect abandons the socket.
      */
     public void close() {
         closeRequested.set(true);
@@ -275,11 +276,8 @@ public class GpgNetConnection implements GpgNetFrameSink {
         this.socket = opened;
         socketPublished();
         if (closeRequested.get()) {
-            // close() was requested after the last in-loop check. Whether the disconnect has
-            // already fired depends on which side of the publish above it read the socket on: it
-            // fires LOCAL_CLOSE itself when it saw null, and otherwise defers to a read loop this
-            // return means we never enter, so nothing fires at all. That gap is #330, not this
-            // card; returning here is unchanged by it.
+            // close() was requested after the last in-loop check but before this flag read, on
+            // either side of the publish above; honour it.
             try {
                 opened.close();
             } catch (IOException ignored) {
@@ -288,8 +286,9 @@ public class GpgNetConnection implements GpgNetFrameSink {
             connected.completeExceptionally(new IOException("connection closed during connect"));
             // close() fires LOCAL_CLOSE itself only when it finds no socket. If it read the socket
             // published above, it left the event to this thread, and the read loop that would
-            // have fired it never starts, so fire here (WBS-3.2.2.1-fix, #330). When close() did
-            // find no socket and already fired, the one-shot CAS in fireDisconnect drops this.
+            // have fired it never starts, so fire here (WBS-3.2.2.1-fix, #330). If close() found no
+            // socket instead, it fires too: whichever of the two fires first wins, and the one-shot
+            // CAS in fireDisconnect drops the other.
             fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
             return;
         }
