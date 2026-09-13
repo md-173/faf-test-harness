@@ -4,6 +4,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -16,11 +17,11 @@ import org.slf4j.LoggerFactory;
  * GPGNet transport over the loopback TCP socket to the faf-ice-adapter's GPGNet server (the adapter
  * listens, the mock game connects as client — json-rpc-spec §8). The GPGNet counterpart of the mock
  * client's {@code IceAdapterConnection}: it opens the socket with bounded retry (the adapter
- * subprocess may still be binding), runs a blocking read loop that decodes frames via {@link
- * GpgNetCodec} and hands each to a registered consumer, exposes a {@link #send(GpgNetFrame)}
- * primitive, and surfaces disconnects. It carries <em>no</em> message semantics — which frames to
- * send and how to react to inbound ones live in the dispatcher (3.2.2.2), sender (3.2.2.3), and
- * lifecycle controller.
+ * subprocess may still be binding) and a per-attempt connect timeout, runs a blocking read loop
+ * that decodes frames via {@link GpgNetCodec} and hands each to a registered consumer, exposes a
+ * {@link #send(GpgNetFrame)} primitive, and surfaces disconnects. It carries <em>no</em> message
+ * semantics: which frames to send and how to react to inbound ones live in the dispatcher
+ * (3.2.2.2), sender (3.2.2.3), and lifecycle controller.
  *
  * <p>Threading: one reader thread (started by {@link #connect()}) does connect-with-retry then runs
  * the blocking read loop; its lifetime is the connection's. Outbound {@link #send} writes happen on
@@ -45,6 +46,23 @@ public final class GpgNetConnection implements GpgNetFrameSink {
     /** Default delay between connect attempts. */
     private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(100);
 
+    /**
+     * Upper bound on a single connect attempt, in milliseconds.
+     *
+     * <p>Without it an attempt is bounded only by the OS: a closed loopback port that refuses fails
+     * at once, but one that drops the SYN (a hardened container, an endpoint agent, a full accept
+     * queue) blocks for about 127 s at Linux's default {@code tcp_syn_retries=6}, and {@link
+     * #close()} has no socket to close in the meantime. At the defaults the worst case is 20 x (1 s
+     * + 100 ms), about 22 s, which stays below {@code MockGameLifecycle}'s default 30 s
+     * INITIALIZING timeout. {@code close()} itself returns at once; the connect thread notices a
+     * close that lands during an attempt within about this timeout plus one retry delay.
+     *
+     * <p>A loopback handshake takes well under a millisecond, so this is margin, not a wait. There
+     * is no upstream value to copy: downlords-faf-client's {@code IceAdapterImpl} connects with no
+     * timeout and relies on the refusal being fast.
+     */
+    private static final int CONNECT_TIMEOUT_MILLIS = 1000;
+
     /** No-op consumer installed before {@link #onFrame(Consumer)} replaces it. */
     private static final Consumer<GpgNetFrame> NOOP_CONSUMER = ignored -> {};
 
@@ -68,6 +86,25 @@ public final class GpgNetConnection implements GpgNetFrameSink {
      * @param error the throwable that ended the connection, or {@code null} for a clean local close
      */
     public record DisconnectEvent(DisconnectReason reason, Throwable error) {}
+
+    /**
+     * Thrown by {@link #connectWithRetry()} when {@link #close()} cut the retry window short, as
+     * distinct from the window genuinely running out.
+     *
+     * <p>Exists so {@link #runConnection} can tell the two apart. Both exits from the retry loop
+     * are {@code IOException}s, and re-reading {@code closeRequested} in the catch would not
+     * discriminate them: a {@code close()} arriving while a genuinely exhausted budget was
+     * unwinding would then be reported as a local close, mislabelling a real never-bound adapter.
+     * Mirrors the mock client's {@code IceAdapterConnection}.
+     */
+    private static final class ConnectAbandonedException extends IOException {
+
+        private static final long serialVersionUID = 1L;
+
+        ConnectAbandonedException() {
+            super("connect abandoned: close requested while retrying");
+        }
+    }
 
     /** Adapter GPGNet port on {@link #LOOPBACK}. */
     private final int port;
@@ -214,6 +251,15 @@ public final class GpgNetConnection implements GpgNetFrameSink {
         try {
             opened = connectWithRetry();
             this.out = opened.getOutputStream();
+        } catch (ConnectAbandonedException e) {
+            // Our own close(), not an unreachable adapter, so report it as such. Usually
+            // redundant: close() with no socket yet fires LOCAL_CLOSE itself, and fireDisconnect is
+            // one-shot, so this loses the race and is suppressed. It earns its place in the
+            // interleaving where the connect thread gets here first.
+            LOG.debug("GPGNet connect abandoned: close requested while retrying");
+            connected.completeExceptionally(e);
+            fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
+            return;
         } catch (IOException e) {
             LOG.warn(
                     "could not connect to GPGNet server at {}:{}: {}",
@@ -226,7 +272,7 @@ public final class GpgNetConnection implements GpgNetFrameSink {
         }
         this.socket = opened;
         if (closeRequested.get()) {
-            // close() raced the connect while we were still retrying — honour it.
+            // close() landed after the last in-loop check but before the socket was published.
             try {
                 opened.close();
             } catch (IOException ignored) {
@@ -240,12 +286,35 @@ public final class GpgNetConnection implements GpgNetFrameSink {
         readLoop(opened);
     }
 
+    /**
+     * Open the socket, retrying while the adapter subprocess is still binding.
+     *
+     * <p>Aborts as soon as {@link #close()} has been requested, so a teardown during adapter
+     * start-up (the INITIALIZING timeout, or a SIGTERM through the shutdown hook) stops the
+     * retrying at once instead of waiting out the whole budget.
+     *
+     * @return the connected socket
+     * @throws ConnectAbandonedException if close was requested while retrying
+     * @throws IOException if every attempt failed
+     */
     private Socket connectWithRetry() throws IOException {
         IOException last = null;
         for (int attempt = 1; attempt <= connectAttempts; attempt++) {
+            if (closeRequested.get()) {
+                throw new ConnectAbandonedException();
+            }
+            Socket candidate = new Socket();
             try {
-                return new Socket(LOOPBACK, port);
+                candidate.connect(new InetSocketAddress(LOOPBACK, port), CONNECT_TIMEOUT_MILLIS);
+                return candidate;
             } catch (IOException e) {
+                // On JDK 21 a failed connect leaves the socket open, so close it or every attempt
+                // leaks a fd. Close is idempotent, so this is safe wherever the JDK already did.
+                try {
+                    candidate.close();
+                } catch (IOException ignored) {
+                    // best effort
+                }
                 last = e;
                 if (attempt < connectAttempts) {
                     try {
