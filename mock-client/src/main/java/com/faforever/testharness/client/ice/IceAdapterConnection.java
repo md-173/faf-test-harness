@@ -377,7 +377,7 @@ public class IceAdapterConnection {
      * {@code close()} unable to cut the window short at all.
      *
      * <p>A {@code close()} that lands during an attempt still waits for that attempt to finish,
-     * which {@link #CONNECT_TIMEOUT_MILLIS} bounds.
+     * which {@link #CONNECT_TIMEOUT_MILLIS} bounds, plus the retry delay that follows it.
      *
      * @return the connected socket
      * @throws ConnectAbandonedException if close was requested while retrying
