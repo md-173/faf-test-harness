@@ -215,11 +215,11 @@ final class PlayingTransitionTest {
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
 
-        params.set(1, "Lobby");
+        ((ArrayNode) params.get(1)).set(0, "Lobby");
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
 
-        params.set(1, "Ended");
+        ((ArrayNode) params.get(1)).set(0, "Ended");
         iceConn.fireNotification("onGpgNetMessageReceived", node);
         assertEquals(ClientState.HOSTING, lifecycle.getState());
     }
