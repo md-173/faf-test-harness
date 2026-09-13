@@ -209,7 +209,7 @@ final class LifecycleTrafficWiringTest {
      */
     @Test
     void configuredDropPercentReachesTheSenderTheLifecycleBuilds() throws Exception {
-        // Replaces setUp's lifecycle, which was never started, so shutting it down is inert.
+        // Replaces setUp's lifecycle. It was never started, so shutting it down is harmless.
         lifecycle.shutdown().run();
         lifecycle = newLifecycle(100);
 

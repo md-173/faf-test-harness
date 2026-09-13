@@ -255,7 +255,11 @@ public final class GameTrafficSession implements AutoCloseable {
         if (!sending) {
             sending = true;
             sender.start();
-            LOG.info("peer traffic started: one datagram per peer every {} ms", cadence.toMillis());
+            // The drop percentage is stated at INFO so a run at the default level shows whether the
+            // fault is on; its per-datagram evidence is DEBUG only (#353).
+            LOG.info(
+                    "peer traffic started: one datagram per peer every {} ms, dropping {}%",
+                    cadence.toMillis(), dropPercent);
         }
         LOG.info("sending peer traffic to player {} at {}", peerId, netAddress);
     }
