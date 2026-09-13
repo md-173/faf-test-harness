@@ -38,10 +38,11 @@ import org.slf4j.LoggerFactory;
  * datagrams at the same point a send failure is swallowed, so a degraded link can be exercised
  * without {@code tc}, elevated privileges, or a specific operating system. It defaults to zero, and
  * at zero this class behaves exactly as it did before the flag existed. The sequence number is
- * stamped and advanced <em>before</em> the drop decision: {@link GameUdpReceiver} counts forward
- * gaps against that sequence, so a drop that skipped the increment would produce an unbroken stream
- * at the receiver and the injected fault would be invisible. The drop is decided per peer per
- * round, which is what keeps a loss attributable to one sender in the receiver's counters.
+ * stamped and advanced <em>before</em> the drop decision: loss is measured at {@link
+ * GameUdpReceiver} as the received count against the highest sequence seen, so a drop that skipped
+ * the increment would produce an unbroken stream at the receiver and the injected fault would be
+ * invisible. The drop is decided per peer per round, which is what keeps a loss attributable to one
+ * sender in the receiver's counters.
  */
 public final class GameUdpSender {
 
@@ -175,8 +176,8 @@ public final class GameUdpSender {
             if (shouldDrop()) {
                 // DEBUG, not WARN: an injected fault is the operator's own doing, and at a high
                 // percentage a per-datagram WARN would bury everything else in the run. The
-                // receiver's gap counters are the intended measurement; this line is for
-                // attributing a specific gap when reading one run's log.
+                // receiver's received count against its highest sequence is the intended
+                // measurement; this line is for attributing a specific gap in one run's log.
                 LOG.debug(
                         "dropping datagram seq={} to peer {} at {} ({}% fault injection)",
                         datagram.sequence(), entry.getKey(), peer.address(), dropPercent);
