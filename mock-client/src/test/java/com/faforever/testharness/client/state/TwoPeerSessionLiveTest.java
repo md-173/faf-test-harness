@@ -685,8 +685,9 @@ final class TwoPeerSessionLiveTest {
     private static String unreachableLobbyMessage() {
         return "lobby "
                 + lobbyUrl()
-                + " unreachable from this network (TCP timeout on :443). Self-skips "
-                + "off-net; runs on a FAF-allowlisted host/VPN.";
+                + " unreachable from this network (TCP timeout on :443). "
+                + "Self-skips; the test lobby is Cloudflare-fronted and "
+                + "publicly reachable, so check local DNS, proxy or firewall.";
     }
 
     /**
