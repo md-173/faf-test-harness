@@ -289,6 +289,9 @@ public final class IceReachabilityCheck {
      * @return an unconnected transport aimed at the adapter's JSON-RPC port
      */
     private IceAdapterConnection newConnection(final long deadline) {
+        // Not divided by the per-attempt connect timeout as well: that would cut the real retry
+        // window on a refusing port to a fraction of the budget. connectRpc's get(window) is what
+        // bounds the verdict on a port that drops.
         long attempts = connectWindow(deadline).toMillis() / RPC_RETRY_DELAY.toMillis();
         // Clamp in long arithmetic before narrowing: a large enough budget overflows int, and a
         // negative attempt count makes the retry loop run zero times and report a healthy adapter
