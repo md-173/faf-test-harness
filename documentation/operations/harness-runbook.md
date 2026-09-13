@@ -615,8 +615,11 @@ What to look for when it is on:
   `first datagram from sender <id> (seq S)`, and the received count `N` and
   highest sequence `H` from
   `game UDP receiver stopped; sender <id> totals: received N, highest sequence H`,
-  logged when the game shuts down in an orderly way. Mid-run, or after a kill
-  that skipped shutdown, use the last
+  logged when the game shuts down in an orderly way. In an orchestrated run
+  that line reaches only the game's own `logs/mockgame.jsonl` (§6), not the
+  client's output: the client stops relaying the game's stream during
+  teardown, just before it is written. Mid-run, or after a kill that skipped
+  shutdown, use the last
   `player <receiver> peer traffic from player <sender>` progress line instead,
   which can read one datagram behind. The loss ratio is
   `(H - S + 1 - N) / (H - S + 1)`. Counting from `S` rather than from zero
