@@ -716,17 +716,33 @@ What to look for when it is on:
 
 Suppresses the datagram at the same point a send failure is swallowed, after
 the sequence number has been stamped and advanced. That ordering is
-load-bearing: `GameUdpReceiver` counts forward gaps against the sequence, so a
-drop that skipped the increment would leave the receiving peer with an unbroken
+load-bearing: `GameUdpReceiver` measures loss against the sequence, so a drop
+that skipped the increment would leave the receiving peer with an unbroken
 stream and the injected fault would be invisible.
 
 What to look for when it is on:
 
-- The receiving peer's per-sender discontinuity count rises in proportion to
-  the percentage. `GameUdpReceiver` exposes datagrams received, highest
-  sequence seen, and discontinuities per sender, and logs its totals.
-- The gap is attributable to the sender that dropped it, because the count is
-  kept per sender id — which is the whole reason injection sits here rather
+- The receiving peer's loss ratio for that sender tracks the percentage. Read
+  three numbers from the receiving game's log: `S` from
+  `first datagram from sender <id> (seq S)`, and the datagram count `N` and
+  highest sequence `H` from the last
+  `player <receiver> peer traffic from player <sender>` progress line (a final
+  one is always logged at teardown). The loss ratio is
+  `(H - S + 1 - N) / (H - S + 1)`. Counting from `S` rather than from zero
+  leaves out datagrams sent before the ICE link was up, which would otherwise
+  read as loss at every percentage, `0` included.
+- Do not use the `gaps` count. It rises once per gap, not once per lost
+  datagram, so five consecutive drops count as one. For independent drops at
+  probability `p` its expectation is `n·p·(1 - p)`: it peaks at 50% and falls
+  back to zero at 100%, where nothing arrives at all.
+- Caveats on the ratio. At `100` the receiver never sees that sender, so it
+  logs no line for it; the evidence is the other direction still flowing plus
+  the sender's `DEBUG` drop records below. Drops after the last received
+  datagram are not counted, which biases the ratio slightly low. A peer
+  re-registered at a changed address restarts its sequence at zero, so the
+  ratio only holds within one registration.
+- The loss is attributable to the sender that dropped it, because the counts
+  are kept per sender id. That is the whole reason injection sits here rather
   than on the interface, where loss is traceable to nobody.
 - At `DEBUG`, the sender emits one `dropping datagram seq=…` record per
   suppressed datagram, naming the peer and the sequence. Use it to tie a
@@ -734,21 +750,22 @@ What to look for when it is on:
   rather than `WARN` because an injected fault is the operator's own doing, and
   at a high percentage a per-datagram `WARN` would bury the rest of the run.
 
-**Note — the percentage does not reach the sender yet.** WBS 4.3.2 (#321) landed
-the lifecycle wiring this section used to describe as future work: the game now
-does construct a sender, via `GameTrafficSession` on `CreateLobby`. It builds it
-with the three-argument `GameUdpSender` constructor, which hardcodes a zero drop
-percentage, and `MockGameLifecycle` builds the session from the player id alone.
-So `--udp-drop-percent` is parsed, validated and carried on `MockGameConfig`,
-and every datagram is still sent.
+**Fidelity limits.** Two things this fault does not model, both checked against
+upstream source:
 
-**Until [#360](https://github.com/md-173/faf-test-harness/pull/360) merges, this
-fault does nothing in a real run at any percentage.** That PR threads
-`config.udpDropPercent()` through `GameTrafficSession` to the four-argument
-constructor, and rewrites this section's guidance once it does. Do not use the
-`gaps` count to measure the result when it lands: it rises once per gap rather
-than once per lost datagram, so its expectation is `n·p·(1 - p)` — peaking at
-50% and falling back to zero at 100%, where nothing arrives at all.
+- The adapter will not notice. In the pinned 3.3.14 `java-ice-adapter`, link
+  liveness comes from `PeerConnectivityCheckerModule`: the offering side sends
+  its own echo every 1000 ms over ICE and declares the connection lost after
+  10000 ms without one coming back. Echoes and game data are separate packet
+  types, and only echoes reset that clock, so none of it passes through the
+  game's socket. Even at `100` the adapter reports a healthy link. Expect
+  silence at the receiving game, not an ICE disconnect.
+- Real loss is not permanent. Forged Alliance's peer protocol, as modelled by
+  `faf-pioneer` (`moho/packet.go`), carries a sequence number, an expected
+  sequence number, a selective acknowledgement mask and a resend count, so a
+  real lost packet is retransmitted and shows up as delay and eventually a
+  stall. The mock drops for good and never retransmits. That is enough to
+  exercise per-peer loss detection, not to reproduce how a real game degrades.
 
 An orchestrated run reaches the same fault through the mock client:
 `--mock-game-udp-drop-percent` on `mock-client` is passed straight through to the
