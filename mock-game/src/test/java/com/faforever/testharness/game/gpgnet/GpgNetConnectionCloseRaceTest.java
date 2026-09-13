@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Timeout;
  *
  * <p>{@code runConnection} publishes the socket and only then reads the close flag, while {@code
  * close()} sets the flag and fires {@code LOCAL_CLOSE} itself only when it finds no socket. A close
- * between those two reads therefore saw a socket, left the event to the connect thread, and that
+ * between those two steps therefore saw a socket, left the event to the connect thread, and that
  * thread returned before the read loop without firing anything: the listener never ran.
  *
  * <p>The window is two instructions wide with no observable edge, so the test drives it through the
@@ -35,7 +35,7 @@ import org.junit.jupiter.api.Timeout;
  * test the one-shot guard, since nothing else can fire here. The halves either side of the window
  * are not repeated: a close on a live connection is {@code GpgNetConnectionTest}'s {@code
  * closeFiresLocalCloseDisconnectExactlyOnce}, and a close while no socket exists takes {@code
- * close()}'s own null-socket path, which this fix does not change.
+ * close()}'s own null-socket path, whose outcome this fix does not change.
  */
 @Timeout(30)
 final class GpgNetConnectionCloseRaceTest {
