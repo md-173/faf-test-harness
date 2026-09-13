@@ -103,6 +103,7 @@ final class GpgNetConnectionTest {
     @Test
     void closeDuringRetryAbandonsTheConnectWindowAsLocalClose() throws Exception {
         GpgNetConnection c = new GpgNetConnection(UNBOUND_PORT, 200, Duration.ofMillis(100));
+        conn = c;
         CountDownLatch disconnected = new CountDownLatch(1);
         AtomicReference<DisconnectEvent> event = new AtomicReference<>();
         c.onDisconnect(

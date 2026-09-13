@@ -54,7 +54,8 @@ public final class GpgNetConnection implements GpgNetFrameSink {
      * queue) blocks for about 127 s at Linux's default {@code tcp_syn_retries=6}, and {@link
      * #close()} has no socket to close in the meantime. At the defaults the worst case is 20 x (1 s
      * + 100 ms), about 22 s, which stays below {@code MockGameLifecycle}'s default 30 s
-     * INITIALIZING timeout. A close that lands during an attempt waits for at most this long.
+     * INITIALIZING timeout. {@code close()} itself returns at once; the connect thread notices a
+     * close that lands during an attempt within about this timeout plus one retry delay.
      *
      * <p>A loopback handshake takes well under a millisecond, so this is margin, not a wait. There
      * is no upstream value to copy: downlords-faf-client's {@code IceAdapterImpl} connects with no
@@ -307,7 +308,8 @@ public final class GpgNetConnection implements GpgNetFrameSink {
                 candidate.connect(new InetSocketAddress(LOOPBACK, port), CONNECT_TIMEOUT_MILLIS);
                 return candidate;
             } catch (IOException e) {
-                // A failed connect leaves the socket open; close it or every attempt leaks a fd.
+                // On JDK 21 a failed connect leaves the socket open, so close it or every attempt
+                // leaks a fd. Close is idempotent, so this is safe wherever the JDK already did.
                 try {
                     candidate.close();
                 } catch (IOException ignored) {
