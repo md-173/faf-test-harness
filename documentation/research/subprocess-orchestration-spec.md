@@ -201,8 +201,10 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
    ← starts the process, drains both streams via ProcessOutputLogger,
      registers in SubprocessRegistry (installs JVM shutdown hook once).
-4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 200 ms backoff,
-   max 100 attempts, total ≤ 20 s. See the correction note below.
+4. Connect-retry loop: TCP connect 127.0.0.1:rpcPort, 1 s connect timeout
+   per attempt, 200 ms backoff, max 100 attempts, total ≤ 20 s where the
+   port refuses, about 120 s where it drops the connect. See the correction
+   note below.
 6. Once connected: setLobbyInitMode(...) → setIceServers(...).
 7. Spawn mock-game with the same gpgnetPort and lobbyUdpPort.
 ```
