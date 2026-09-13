@@ -181,9 +181,10 @@ final class IceAdapterConnectionTest {
      * <p>A loopback listener that never accepts and whose accept queue is full drops further SYNs,
      * which is the one dropping target a test can build without firewall rules. Whether the OS
      * drops or refuses there is kernel behaviour, so the test probes for it: it runs wherever the
-     * queue drops, is skipped where the kernel refuses instead (Windows), and fails on Linux, which
-     * always drops, so CI can never quietly turn it into a skip. Takes about 2.5 s. Mirrors
-     * mock-game's {@code GpgNetConnectionTest}, whose test tree this module cannot import.
+     * queue drops, is skipped where the kernel refuses fast instead, and fails on Linux, which
+     * always drops, so CI can never quietly turn it into a skip. Takes about 2.5 s. Mirrors the
+     * fixture #369 adds to mock-game's {@code GpgNetConnectionTest}, whose test tree this module
+     * cannot import.
      */
     @Test
     void connectAttemptTimesOutWhenTheListenerDropsTheConnect() throws Exception {
