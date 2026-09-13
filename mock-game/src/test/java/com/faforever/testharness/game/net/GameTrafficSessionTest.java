@@ -87,7 +87,7 @@ final class GameTrafficSessionTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        session = new GameTrafficSession(OWN_PLAYER_ID, TEST_CADENCE, TEST_PROGRESS_INTERVAL);
+        session = new GameTrafficSession(OWN_PLAYER_ID, 0, TEST_CADENCE, TEST_PROGRESS_INTERVAL);
         peer = new DatagramSocket(0);
         peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
 
@@ -227,6 +227,20 @@ final class GameTrafficSessionTest {
                                 .contains("announced before the lobby socket was bound"),
                 "the dropped peer must be logged");
         assertNothingArrives("and nothing is sent");
+    }
+
+    @Test
+    void outOfRangeDropPercentIsRejectedAtConstruction() {
+        // At construction, not at bind: the sender is built on CreateLobby, and a bad value
+        // surfacing there would escape into a state machine transition.
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new GameTrafficSession(OWN_PLAYER_ID, -1),
+                "a negative drop percentage must be rejected");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new GameTrafficSession(OWN_PLAYER_ID, 101),
+                "a drop percentage above 100 must be rejected");
     }
 
     @Test

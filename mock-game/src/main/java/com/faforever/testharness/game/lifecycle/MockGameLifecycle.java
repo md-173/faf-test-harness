@@ -222,7 +222,7 @@ public final class MockGameLifecycle {
         // Assigned here rather than at the field, which would read a still-null config. Registered
         // with the shutdown sequence immediately: that sequence is the only thing that stops the
         // cadence and closes the socket, on every exit path including a SIGTERM before CreateLobby.
-        this.traffic = new GameTrafficSession(config.playerId());
+        this.traffic = new GameTrafficSession(config.playerId(), config.udpDropPercent());
         this.shutdown.registerTrafficSession(traffic);
 
         setupStateMachine();
