@@ -1247,6 +1247,12 @@ public final class MockClientLifecycle {
             // clean-end signal and records it. Sends nothing and tears down nothing directly; R72's
             // frame forwarding (above) is the reporting, R59b's TERMINATED action is the teardown.
             iceConnection.registerNotification("onGpgNetMessageReceived", this::onGpgNetMessage);
+            // Load-bearing order: the game must start only after connect() above, so the adapter
+            // has a JSON-RPC peer before the game's first GPGNet frame.
+            // Without one, the pinned 3.3.14 adapter fails on that frame
+            // (IllegalStateException: gameState must not change to null, from its telemetry
+            // debugger) and the game loses its connection, exiting 69 in under a second. Unit fakes
+            // do not reproduce this; see the 3.2.2.4 live test and gpgnet-format-spec §8.1.
             SubprocessManager gameBinary = gameLauncher.start(identity);
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
