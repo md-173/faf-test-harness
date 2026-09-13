@@ -1103,6 +1103,11 @@ public final class MockClientLifecycle {
      * rationale — the harness plays on without reconnect (R40 deferred) instead of tearing down,
      * because peer connections are already established and the lobby is only the signalling relay.
      *
+     * <p>Accepted consequence: anything the game reports after the drop ({@code GameResult}, {@code
+     * JsonStats}, {@code GameEnded} and the synthesised {@code GameState Ended}) is lost, and
+     * surfaces only as a send-failure WARN, never as a distinct exit code: {@code RunCommand} exits
+     * 70 for any abrupt drop and 0 for a clean server close, whether or not anything was lost.
+     *
      * @param message the {@link Disconnected} event; guaranteed by registration, never anything
      *     else.
      */
