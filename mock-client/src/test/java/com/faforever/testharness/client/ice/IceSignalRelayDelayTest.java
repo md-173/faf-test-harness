@@ -228,7 +228,7 @@ final class IceSignalRelayDelayTest {
             failing.start();
             adapterServer.send(onIceMsgNotification(2, ICE_MSG_JSON));
 
-            String expected = "ICE forward to lobby for remoteId=2 threw IllegalStateException";
+            String expected = "ICE forward to lobby for remoteId=2 threw IllegalStateException:";
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(ARRIVES_SECONDS);
             while (System.nanoTime() < deadline) {
                 for (ILoggingEvent event : appender.list) {
