@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
  * read loop and closes the connection with no attempt to resync (§5.3), and a clean socket close
  * likewise surfaces as a disconnect.
  */
-public final class GpgNetConnection implements GpgNetFrameSink {
+public class GpgNetConnection implements GpgNetFrameSink {
 
     /** SLF4J logger — see logback.xml for the {@code component=MockGame} MDC. */
     private static final Logger LOG = LoggerFactory.getLogger(GpgNetConnection.class);
@@ -228,8 +228,10 @@ public final class GpgNetConnection implements GpgNetFrameSink {
     }
 
     /**
-     * Close the socket from this side. The reader thread observes the close and fires the
-     * disconnect listener with {@link DisconnectReason#LOCAL_CLOSE}.
+     * Close the socket from this side. The disconnect listener fires once with {@link
+     * DisconnectReason#LOCAL_CLOSE}: from this method when no socket has been published yet,
+     * otherwise from the reader thread, either in the read loop or, when the close lands before the
+     * read loop starts, as the connect abandons the socket.
      */
     public void close() {
         closeRequested.set(true);
@@ -271,6 +273,7 @@ public final class GpgNetConnection implements GpgNetFrameSink {
             return;
         }
         this.socket = opened;
+        socketPublished();
         if (closeRequested.get()) {
             // close() was requested after the last in-loop check. Whether the disconnect has
             // already fired depends on which side of the publish above it read the socket on: it
@@ -283,6 +286,11 @@ public final class GpgNetConnection implements GpgNetFrameSink {
                 // best effort
             }
             connected.completeExceptionally(new IOException("connection closed during connect"));
+            // close() fires LOCAL_CLOSE itself only when it finds no socket. If it read the socket
+            // published above, it left the event to this thread, and the read loop that would
+            // have fired it never starts, so fire here (WBS-3.2.2.1-fix, #330). When close() did
+            // find no socket and already fired, the one-shot CAS in fireDisconnect drops this.
+            fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
             return;
         }
         LOG.info("connected to GPGNet server at {}:{}", LOOPBACK, port);
@@ -380,6 +388,21 @@ public final class GpgNetConnection implements GpgNetFrameSink {
                     e.getClass().getSimpleName(),
                     e.getMessage());
         }
+    }
+
+    /**
+     * Called on the reader thread once {@link #socket} is visible but before the close flag is
+     * read. A no-op in production.
+     *
+     * <p>This exists as a test seam, and is the only reason the class is not final. The window it
+     * marks is two instructions wide, and a {@link #close()} landing inside it used to fire no
+     * disconnect at all; nothing outside the class can schedule a close into that gap. A test in
+     * this package overrides it to call {@code close()} exactly here, which is the interleaving
+     * itself rather than an approximation of it (WBS-3.2.2.1-fix, #330). Being package-private, it
+     * cannot be overridden from outside this package.
+     */
+    void socketPublished() {
+        // Production does nothing here; see the javadoc for why the method exists at all.
     }
 
     private void fireDisconnect(final DisconnectEvent event) {
