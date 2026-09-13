@@ -76,6 +76,46 @@ final class GpgNetConnectionTest {
         assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
     }
 
+    /**
+     * A {@code close()} during the retry window abandons it at once and reports {@link
+     * DisconnectReason#LOCAL_CLOSE}, never {@link DisconnectReason#CONNECT_FAILED}.
+     *
+     * <p>The budget (200 x 100 ms = 20 s) is far longer than the assertion window, so a regression
+     * that only reads the flag after the loop fails by timing out. The sleep lets a couple of
+     * attempts fail first so the check is exercised mid-loop, not just before attempt one; nothing
+     * asserts on its length, so a slow scheduler weakens the test rather than failing it.
+     *
+     * <p>The reason assertion pins intent without reproducing the race it guards: with no socket
+     * yet, {@code close()} fires {@code LOCAL_CLOSE} itself and usually wins. The interleaving
+     * where the connect thread reports first is a few instructions wide and not reachable from a
+     * test.
+     */
+    @Test
+    void closeDuringRetryAbandonsTheConnectWindowAsLocalClose() throws Exception {
+        GpgNetConnection c = new GpgNetConnection(UNBOUND_PORT, 200, Duration.ofMillis(100));
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        c.onDisconnect(
+                e -> {
+                    event.set(e);
+                    disconnected.countDown();
+                });
+        CompletableFuture<Void> connectFuture = c.connect();
+
+        Thread.sleep(250);
+        c.close();
+
+        assertThrows(
+                ExecutionException.class,
+                () -> connectFuture.get(3, TimeUnit.SECONDS),
+                "close() should abandon the retry window well inside its 20s budget");
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+        assertEquals(
+                DisconnectReason.LOCAL_CLOSE,
+                event.get().reason(),
+                "a deliberate close must not be reported as an unreachable adapter");
+    }
+
     @Test
     void connectTwiceThrows() throws Exception {
         conn = connect();
