@@ -582,19 +582,60 @@ What to look for when it is on:
   (`gathering` → `awaitingCandidates` → `checking` → `connected`) take
   correspondingly longer to reach `connected`.
 - A two-peer session should still complete, **up to a ceiling**. In the pinned
-  3.3.14 adapter the offerer arms a 6000 ms timer when it sends its candidates
-  and restarts ICE if the answer has not arrived. That answer crosses four
-  relay hops out and back, each way passing through the sender's client and the
-  receiver's client, so the usable range is:
+  3.3.14 adapter the offerer (the host) arms a 6000 ms timer when it sends its
+  candidates, and restarts ICE if the answer has not arrived by then. Two things
+  have to fit inside that window:
 
-  | | arithmetic | keep the delay under |
-  |---|---|---|
-  | both clients set the flag | 4 × delay < 6000 ms | ~1500 ms |
-  | one client sets it | 2 × delay < 6000 ms | ~3000 ms |
+  - **The baseline**, the time a healthy session takes with no delay injected.
+    The offer crosses the lobby to the joiner, the joiner's adapter gathers its
+    own candidates, and the answer crosses the lobby back. On a first attempt,
+    about 0.85 s of that is the joiner adapter's ice4j setup, paid once per
+    adapter process, so retries start faster. STUN against the adapter's three
+    built-in public servers adds a few hundred ms, even though the mock client
+    sends an empty `setIceServers` list, and the two lobby crossings take about
+    0.85 s together. Injected delay adds to the baseline; it does not absorb
+    any of it.
+  - **The injected delay, once per relay pass.** The offer passes through the
+    host's client and the joiner's client, and the answer passes back through
+    both: four passes when both clients set the flag, two when one does.
 
-  minus real WSS latency, so leave margin. Past that you get an ICE restart
-  loop rather than slow negotiation — a different phenomenon, and not the one
-  the flag is for. Start a two-peer manual run at a few hundred milliseconds.
+  So the usable delay is `(6000 ms - baseline) / passes`.
+
+  Measured on 2026-09-13 (adapter 3.3.14, live lobby, both peers on one host in
+  one session, STUN only, n=5), the host spent 1982 to 2023 ms in
+  `awaitingCandidates` at zero delay, and #343 reports a 2148 ms sample. Taking
+  ~2150 ms as the baseline:
+
+  | | passes | arithmetic ceiling | keep the delay under |
+  |---|---|---|---|
+  | both clients set the flag | 4 | ~960 ms | ~500 ms |
+  | one client sets it | 2 | ~1900 ms | ~1000 ms |
+
+  "Keep under" is about half the arithmetic ceiling, and both rows were
+  verified live at that value.
+
+  Treat the measured baseline as a lower bound. A real FAF client also passes
+  TURN servers via `setIceServers`, which the adapter harvests, and real
+  networks add latency to both lobby crossings, so the ceiling between two real
+  machines is tighter, and so is the ceiling on a CI runner, which sits further
+  from the lobby and shares its CPU. If the joiner's gathering hits the
+  adapter's 5000 ms gathering cap, it sends no answer at all and ICE restarts
+  whatever the flag is set to.
+
+  To find your own baseline, run once with the flag at `0` and take the gap
+  between `peer ice: ... state=awaitingCandidates` and `state=checking` in the
+  host's log (the host is the side that logs `peer connect: ... offer=true`),
+  then apply the formula. Do this on the machine that will run the delay,
+  including a CI runner, or stay at a few hundred milliseconds there.
+
+  Past the ceiling you get an ICE restart loop rather than slow negotiation: on
+  the host, `awaitingCandidates` turns to `disconnected` almost exactly 6000 ms
+  later, and `gathering` follows about 5 s after that, so each failed attempt
+  takes about 11 s. That is a different phenomenon, and not the one the flag is
+  for. Just past the ceiling a session can still connect on a retry, because
+  the retry skips the one-time ice4j setup, so one pass near the ceiling does
+  not prove a value is safe. Start a two-peer manual run at a few hundred
+  milliseconds.
 
 ### `--udp-drop-percent`
 
