@@ -606,12 +606,19 @@ stream and the injected fault would be invisible.
 
 What to look for when it is on:
 
+- The sending game states the percentage at `INFO` when its traffic starts:
+  `peer traffic started: one datagram per peer every 100 ms, dropping 25%`.
+  That line is the check that the flag took effect; the per-datagram evidence
+  below is `DEBUG` only.
 - The receiving peer's loss ratio for that sender tracks the percentage. Read
   three numbers from the receiving game's log: `S` from
-  `first datagram from sender <id> (seq S)`, and the datagram count `N` and
-  highest sequence `H` from the last
-  `player <receiver> peer traffic from player <sender>` progress line (a final
-  one is always logged at teardown). The loss ratio is
+  `first datagram from sender <id> (seq S)`, and the received count `N` and
+  highest sequence `H` from
+  `game UDP receiver stopped; sender <id> totals: received N, highest sequence H`,
+  logged when the game shuts down in an orderly way. Mid-run, or after a kill
+  that skipped shutdown, use the last
+  `player <receiver> peer traffic from player <sender>` progress line instead,
+  which can read one datagram behind. The loss ratio is
   `(H - S + 1 - N) / (H - S + 1)`. Counting from `S` rather than from zero
   leaves out datagrams sent before the ICE link was up, which would otherwise
   read as loss at every percentage, `0` included.
@@ -644,12 +651,14 @@ upstream source:
   types, and only echoes reset that clock, so none of it passes through the
   game's socket. Even at `100` the adapter reports a healthy link. Expect
   silence at the receiving game, not an ICE disconnect.
-- Real loss is not permanent. Forged Alliance's peer protocol, as modelled by
-  `faf-pioneer` (`moho/packet.go`), carries a sequence number, an expected
-  sequence number, a selective acknowledgement mask and a resend count, so a
-  real lost packet is retransmitted and shows up as delay and eventually a
-  stall. The mock drops for good and never retransmits. That is enough to
-  exercise per-peer loss detection, not to reproduce how a real game degrades.
+- Real loss is probably not permanent. Forged Alliance's 15-byte engine packet
+  header, as mirrored by `faf-pioneer` (`moho/packet.go` at `64dcc34`), carries
+  a sequence number, an expected sequence number, an in-response-to field and
+  an early-arrival mask, and faf-pioneer tracks a resend count per packet
+  alongside it. That is the shape of a reliability layer, so real loss more
+  likely shows up as delay and resends than as a permanent hole. The mock drops
+  for good and never resends. That is enough to exercise per-peer loss
+  detection, not to reproduce how a real game degrades.
 
 An orchestrated run cannot set this flag yet: `MockGameLauncher.buildArgv`
 never emits `--udp-drop-percent` and no mock-client flag sources it, so only a
