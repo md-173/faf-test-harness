@@ -1,13 +1,22 @@
 package com.faforever.testharness.game.gpgnet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
@@ -17,6 +26,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * Transport tests for {@link GpgNetConnection} against the in-process {@link ScriptedGpgNetServer}.
@@ -114,6 +124,83 @@ final class GpgNetConnectionTest {
                 DisconnectReason.LOCAL_CLOSE,
                 event.get().reason(),
                 "a deliberate close must not be reported as an unreachable adapter");
+    }
+
+    /**
+     * An attempt against a listener that drops the connect, rather than refusing it, is bounded by
+     * the connect timeout instead of the OS SYN-retry period (about 127 s on Linux).
+     *
+     * <p>A loopback listener that never accepts and whose accept queue is full drops further SYNs,
+     * which is the one dropping target a test can build without firewall rules. Whether the OS
+     * drops or refuses there is kernel behaviour, so the test probes for it: it runs wherever the
+     * queue drops, is skipped where the kernel refuses instead (Windows), and fails on Linux, which
+     * always drops, so CI can never quietly turn it into a skip. Takes about 2.5 s.
+     */
+    @Test
+    void connectAttemptTimesOutWhenTheListenerDropsTheConnect() throws Exception {
+        List<Socket> queued = new ArrayList<>();
+        try (ServerSocket listener = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            if (!fillAcceptQueue(listener, queued)) {
+                assertFalse(
+                        OS.LINUX.isCurrentOs(),
+                        "Linux should drop connects to a full accept queue; without that this test"
+                                + " has nothing to measure");
+                assumeTrue(false, "this OS refuses connects to a full accept queue");
+            }
+            GpgNetConnection c =
+                    new GpgNetConnection(listener.getLocalPort(), 2, Duration.ofMillis(20));
+            conn = c;
+            CountDownLatch disconnected = new CountDownLatch(1);
+            AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+            c.onDisconnect(
+                    e -> {
+                        event.set(e);
+                        disconnected.countDown();
+                    });
+
+            CompletableFuture<Void> connectFuture = c.connect();
+
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> connectFuture.get(10, TimeUnit.SECONDS),
+                            "2 attempts x (1 s timeout + 20 ms) should fail well inside 10 s");
+            assertInstanceOf(
+                    SocketTimeoutException.class,
+                    failure.getCause().getCause(),
+                    "the last attempt should have failed on the connect timeout");
+            assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+            assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
+        } finally {
+            for (Socket socket : queued) {
+                socket.close();
+            }
+        }
+    }
+
+    /**
+     * Connect probes to {@code listener} until one times out, keeping the ones that connected so
+     * the queue stays full.
+     *
+     * @return {@code true} if the queue now drops connects: a probe timed out after at least one
+     *     connected, so the timeout is the queue filling rather than a slow first handshake
+     */
+    private static boolean fillAcceptQueue(final ServerSocket listener, final List<Socket> queued)
+            throws IOException {
+        for (int i = 0; i < 8; i++) {
+            Socket probe = new Socket();
+            try {
+                probe.connect(listener.getLocalSocketAddress(), 500);
+                queued.add(probe);
+            } catch (SocketTimeoutException e) {
+                probe.close();
+                return !queued.isEmpty();
+            } catch (IOException e) {
+                probe.close();
+                return false;
+            }
+        }
+        return false;
     }
 
     @Test
