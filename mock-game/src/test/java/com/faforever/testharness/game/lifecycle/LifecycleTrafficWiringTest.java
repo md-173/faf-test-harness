@@ -66,6 +66,9 @@ final class LifecycleTrafficWiringTest {
     /** How long "nothing more arrives" is observed for, after teardown. */
     private static final Duration QUIET_WINDOW = Duration.ofMillis(500);
 
+    /** Drop records awaited before silence at the stub counts as evidence of dropping. */
+    private static final int MIN_DROPS = 3;
+
     /** Receive buffer for the stub peer, comfortably above one {@link GameDatagram}. */
     private static final int RECEIVE_BUFFER_BYTES = 256;
 
@@ -89,16 +92,6 @@ final class LifecycleTrafficWiringTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        config =
-                new MockGameConfig(
-                        50000,
-                        TestPorts.freeUdpPort(),
-                        OWN_PLAYER_ID,
-                        "Rhiza",
-                        9001,
-                        Map.of(),
-                        0,
-                        0);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
@@ -112,7 +105,28 @@ final class LifecycleTrafficWiringTest {
         appender.start();
         root.addAppender(appender);
 
-        lifecycle = new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
+        lifecycle = newLifecycle(0);
+    }
+
+    /**
+     * Builds the lifecycle under test, and the config it reads, with its own free lobby port.
+     *
+     * @param udpDropPercent the config's drop percentage; {@code 0} everywhere except the test that
+     *     proves the value reaches the sender
+     * @return a lifecycle that is constructed but not started
+     */
+    private MockGameLifecycle newLifecycle(final int udpDropPercent) throws IOException {
+        config =
+                new MockGameConfig(
+                        50000,
+                        TestPorts.freeUdpPort(),
+                        OWN_PLAYER_ID,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        udpDropPercent);
+        return new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
     }
 
     @AfterEach
@@ -179,6 +193,50 @@ final class LifecycleTrafficWiringTest {
         assertTrue(
                 second.sequence() > first.sequence(),
                 "sequences advance: " + first.sequence() + " then " + second.sequence());
+    }
+
+    /**
+     * The drop percentage on {@link MockGameConfig} must reach the sender the lifecycle builds
+     * (#353). It once stopped at the config record, so the flag parsed, validated and did nothing.
+     *
+     * <p>100 rather than a partial value because it is deterministic: every round is dropped, so
+     * there is no statistics to tolerate and nothing still in flight. The positive control, the
+     * same path at the default of 0, is {@link #connectToPeerStartsTrafficToThatPeerOnTheHostPath}.
+     *
+     * <p>Silence at the stub alone could also mean the cadence never started. So the sender's own
+     * drop records are awaited first: they prove rounds ran and were suppressed, and only then is
+     * the silence evidence.
+     */
+    @Test
+    void configuredDropPercentReachesTheSenderTheLifecycleBuilds() throws Exception {
+        // Replaces setUp's lifecycle, which was never started, so shutting it down is inert.
+        lifecycle.shutdown().run();
+        lifecycle = newLifecycle(100);
+
+        // The drop record is DEBUG and the harness defaults to INFO. Restores the logger's own
+        // level, normally null (inherited), not its effective one, which would pin INFO on it.
+        Logger senderLogger =
+                ((LoggerContext) LoggerFactory.getILoggerFactory()).getLogger(GameUdpSender.class);
+        Level previous = senderLogger.getLevel();
+        senderLogger.setLevel(Level.DEBUG);
+        try {
+            reachLobby();
+            gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scmp_007")));
+            awaitState(GameState.HOSTING);
+            gpgnet.sendFrame(
+                    new GpgNetFrame(
+                            "ConnectToPeer", List.of(peerAddress(), "Smith", PEER_PLAYER_ID)));
+
+            awaitDropsToPeer(MIN_DROPS);
+        } finally {
+            senderLogger.setLevel(previous);
+        }
+
+        peer.setSoTimeout((int) QUIET_WINDOW.toMillis());
+        assertThrows(
+                SocketTimeoutException.class,
+                this::receiveFromGame,
+                "at a drop percentage of 100 no datagram may reach the peer");
     }
 
     @Test
@@ -341,6 +399,44 @@ final class LifecycleTrafficWiringTest {
                 .filter(event -> event.getLevel() == Level.WARN)
                 .filter(event -> GameUdpSender.class.getName().equals(event.getLoggerName()))
                 .count();
+    }
+
+    /**
+     * Waits for at least {@code count} captured drop records addressed to the stub peer.
+     *
+     * <p>Matched on the logger, the level and the peer id argument rather than the message text,
+     * for the same reason as {@link #sendFailures()}. The drop record is {@code GameUdpSender}'s
+     * only DEBUG line, and its second argument is the peer id; a substring match on the id could
+     * also hit a sequence number or a port.
+     */
+    private void awaitDropsToPeer(final int count) throws InterruptedException {
+        Predicate<ILoggingEvent> dropToPeer =
+                event ->
+                        event.getLevel() == Level.DEBUG
+                                && GameUdpSender.class.getName().equals(event.getLoggerName())
+                                && event.getArgumentArray() != null
+                                && event.getArgumentArray().length > 1
+                                && Integer.valueOf(PEER_PLAYER_ID)
+                                        .equals(event.getArgumentArray()[1]);
+        long deadline = System.nanoTime() + LOG_TIMEOUT.toNanos();
+        long seen = 0;
+        while (System.nanoTime() < deadline) {
+            seen = appender.list.stream().filter(dropToPeer).count();
+            if (seen >= count) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        fail(
+                "expected at least "
+                        + count
+                        + " drop records to peer "
+                        + PEER_PLAYER_ID
+                        + " within "
+                        + LOG_TIMEOUT
+                        + ", saw "
+                        + seen
+                        + "; the configured drop percentage did not reach the sender");
     }
 
     /**
