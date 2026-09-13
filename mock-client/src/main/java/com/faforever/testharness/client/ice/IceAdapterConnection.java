@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -111,6 +112,24 @@ public class IceAdapterConnection {
 
     /** Default delay between connect attempts; see {@link #DEFAULT_CONNECT_ATTEMPTS}. */
     private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(200);
+
+    /**
+     * Upper bound on a single connect attempt, in milliseconds.
+     *
+     * <p>Without it an attempt is bounded only by the OS: a closed loopback port that refuses fails
+     * at once, but one that drops the SYN (a hardened container, an endpoint agent, a full accept
+     * queue) blocks for about 127 s at Linux's default {@code tcp_syn_retries=6}, and {@link
+     * #close()} has no socket to close in the meantime. At the defaults the worst case is about 20
+     * s where the port refuses and 100 x (1 s + 200 ms), about 120 s, where it drops. {@code
+     * close()} itself returns at once; the connect thread notices a close that lands during an
+     * attempt within about this timeout plus one retry delay.
+     *
+     * <p>A loopback handshake takes well under a millisecond, so this is margin, not a wait. There
+     * is no upstream value to copy: downlords-faf-client's {@code IceAdapterImpl} connects through
+     * jjsonrpc's {@code TcpClient}, which opens its socket with no timeout and relies on the
+     * refusal being fast.
+     */
+    private static final int CONNECT_TIMEOUT_MILLIS = 1000;
 
     /** Default time a {@link #call} waits for its response before failing. */
     private static final Duration DEFAULT_CALL_TIMEOUT = Duration.ofSeconds(5);
@@ -357,6 +376,9 @@ public class IceAdapterConnection {
      * budget. Previously the flag was read only after this loop had already finished, which left
      * {@code close()} unable to cut the window short at all.
      *
+     * <p>A {@code close()} that lands during an attempt still waits for that attempt to finish,
+     * which {@link #CONNECT_TIMEOUT_MILLIS} bounds.
+     *
      * @return the connected socket
      * @throws ConnectAbandonedException if close was requested while retrying
      * @throws IOException if every attempt failed
@@ -367,9 +389,18 @@ public class IceAdapterConnection {
             if (closeRequested.get()) {
                 throw new ConnectAbandonedException();
             }
+            Socket candidate = new Socket();
             try {
-                return new Socket(LOOPBACK, port);
+                candidate.connect(new InetSocketAddress(LOOPBACK, port), CONNECT_TIMEOUT_MILLIS);
+                return candidate;
             } catch (IOException e) {
+                // Defensive: the JDK releases the descriptor of a failed connect itself, but the
+                // Socket still reports isClosed() false, so close it rather than rely on that.
+                try {
+                    candidate.close();
+                } catch (IOException ignored) {
+                    // best effort
+                }
                 last = e;
                 if (attempt < connectAttempts) {
                     try {
