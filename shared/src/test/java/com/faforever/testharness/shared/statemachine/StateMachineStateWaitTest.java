@@ -35,7 +35,9 @@ final class StateMachineStateWaitTest {
         // Taken before the transition is scheduled. stateReached returns an already-completed
         // future for the current state and registers one otherwise, both under the machine's own
         // monitor, so a future taken up front is released whenever the commit happens — however
-        // early the timer fires. Taken afterwards it would race the transition it is waiting for.
+        // early the timer fires. Taken afterwards it would still be correct here, since green is
+        // terminal, but the habit matters for any state the machine can pass through and leave: a
+        // future registered after that has happened is never completed.
         CompletableFuture<Void> reachedGreen = machine.stateReached(green);
 
         Timer timer = new Timer();

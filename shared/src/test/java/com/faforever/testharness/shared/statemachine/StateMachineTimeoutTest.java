@@ -4,8 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -19,9 +22,11 @@ import org.junit.jupiter.api.Test;
  * keeps the same guarantee — determinism comes from the budget being an upper bound rather than an
  * expectation.
  *
- * <p>{@link #timeoutGetsCancelled()} still sleeps, deliberately. It asserts a timeout did
- * <em>not</em> fire, so load makes it more reliable rather than less, and there is nothing to await
- * for an event that must never arrive.
+ * <p>{@link #timeoutGetsCancelled()} still sleeps, deliberately: there is nothing to await for an
+ * event that must never arrive. That is not the same as being load-proof. Its first sleep is an
+ * upper bound rather than a lower one, because the event has to beat the timeout armed before it,
+ * and if that sleep overshoots, the machine is already in C and the IGNORE policy drops the event.
+ * Fixing that needs a different technique, tracked separately.
  */
 final class StateMachineTimeoutTest {
 
@@ -34,7 +39,36 @@ final class StateMachineTimeoutTest {
     /** The earlier of the two timeouts in {@link #timeoutCancelsOtherTimeouts()}. */
     private static final long EARLIER_TIMEOUT_MS = 100;
 
+    /** Armed only to be cancelled, so long enough that it can never win the race. */
+    private static final long CANCELLED_TIMEOUT_MS = 10_000;
+
     private final class AToB implements Event {}
+
+    /** Every machine a test built, so {@link #stopTimers()} can shut its timer thread down. */
+    private final List<StateMachine> machines = new ArrayList<>();
+
+    /**
+     * Stops each machine's scheduling. Without this every test leaves a live daemon timer thread
+     * behind, and one of them leaves an armed task that logs into a later test's captured output —
+     * the same leak {@code StateMachineStateWaitTest} cancels its own {@link java.util.Timer} for.
+     */
+    @AfterEach
+    void stopTimers() {
+        machines.forEach(StateMachine::cancel);
+        machines.clear();
+    }
+
+    /**
+     * Builds a machine and registers it for {@link #stopTimers()}.
+     *
+     * @param initial the machine's starting state
+     * @return the tracked machine
+     */
+    private StateMachine machineFrom(State initial) {
+        StateMachine machine = new StateMachine(initial);
+        machines.add(machine);
+        return machine;
+    }
 
     @Test
     void timeoutWorks() throws Exception {
@@ -43,7 +77,7 @@ final class StateMachineTimeoutTest {
         State c = new State("C");
 
         a.registerTransition(AToB.class, b);
-        StateMachine machine = new StateMachine(a);
+        StateMachine machine = machineFrom(a);
         assertSame(a, machine.getState());
 
         machine.setTimeout(TIMEOUT_MS, c);
@@ -60,7 +94,7 @@ final class StateMachineTimeoutTest {
         Event aToB = new AToB();
 
         a.registerTransition(AToB.class, b);
-        StateMachine machine = new StateMachine(a);
+        StateMachine machine = machineFrom(a);
         assertTrue(machine.getState() == a);
 
         machine.setTimeout(200, c);
@@ -94,10 +128,13 @@ final class StateMachineTimeoutTest {
         Event aToB = new AToB();
 
         a.registerTransition(AToB.class, b);
-        StateMachine machine = new StateMachine(a);
+        StateMachine machine = machineFrom(a);
         assertSame(a, machine.getState());
 
-        machine.setTimeout(TIMEOUT_MS, c);
+        // Long enough that it cannot fire before the event below cancels it: if it did, the
+        // machine would be in C, which has no transition for AToB, and the IGNORE policy would
+        // drop the event. The machine's Timer is a daemon, so nothing ever waits this out.
+        machine.setTimeout(CANCELLED_TIMEOUT_MS, c);
 
         // Timeout gets cancelled here, as shown by the previous test.
         machine.receiveEvent(aToB);
@@ -116,14 +153,19 @@ final class StateMachineTimeoutTest {
         State b = new State("B");
         State c = new State("C");
 
-        StateMachine machine = new StateMachine(a);
+        StateMachine machine = machineFrom(a);
         assertSame(a, machine.getState());
 
-        // Two timeouts, the one to b should execute first and cancel the one to c.
-        machine.setTimeout(EARLIER_TIMEOUT_MS, b);
-        // Registered before the later timeout is armed, so it cannot miss a commit into c.
-        CompletableFuture<Void> reachedC = machine.stateReached(c);
-        machine.setTimeout(TIMEOUT_MS, c);
+        // Two timeouts, the one to b should execute first and cancel the one to c. Armed under
+        // the machine's own monitor so the timer thread cannot commit into b partway through: if
+        // it did, the timeout into c would be armed against an already-cleared list, nothing would
+        // cancel it, and both assertions below would still hold while meaning nothing.
+        CompletableFuture<Void> reachedC;
+        synchronized (machine) {
+            machine.setTimeout(EARLIER_TIMEOUT_MS, b);
+            reachedC = machine.stateReached(c);
+            machine.setTimeout(TIMEOUT_MS, c);
+        }
 
         machine.stateReached(b).get(AWAIT_SECONDS, TimeUnit.SECONDS);
 
