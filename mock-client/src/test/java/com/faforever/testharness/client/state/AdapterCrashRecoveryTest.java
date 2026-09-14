@@ -155,6 +155,18 @@ final class AdapterCrashRecoveryTest {
         server.stop(1000);
     }
 
+    /**
+     * The captured records worth printing in a failure message. The appender is on the root logger
+     * and the test task now runs at DEBUG, so interpolating the whole list buries the assertion.
+     *
+     * @return only the WARN and ERROR records
+     */
+    private java.util.List<ILoggingEvent> significantEvents() {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN || e.getLevel() == Level.ERROR)
+                .toList();
+    }
+
     @Test
     void adapterKilledDuringHostingReachesTerminatedAndWarns() throws Exception {
         MockClientLifecycle lifecycle = hostedLifecycle();
@@ -227,6 +239,18 @@ final class AdapterCrashRecoveryTest {
         lifecycle.post(new AdapterExited(1));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        // #252: the state was already right before the TERMINATED self-loop existed — the IGNORE
+        // policy saw to that. What was wrong was the WARN it left behind on every clean run.
+        assertFalse(
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("No matching transitions")),
+                "a post-teardown adapter exit must be a deliberate no-op, not an "
+                        + "unregistered-event warning. captured: "
+                        + significantEvents());
     }
 
     /** Kills the running adapter subprocess and returns the exit code it actually produced. */
@@ -273,7 +297,7 @@ final class AdapterCrashRecoveryTest {
                 return e;
             }
         }
-        fail("no log event matched. captured: " + appender.list);
+        fail("no log event matched. captured: " + significantEvents());
         throw new AssertionError("unreachable");
     }
 

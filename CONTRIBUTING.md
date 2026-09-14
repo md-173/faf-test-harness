@@ -99,11 +99,13 @@ What this does:
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
+Note that the `mock-client` `test` and `integrationTest` tasks run at `LOG_LEVEL=DEBUG` (set in `mock-client/build.gradle`), so a local run is noisier than the `INFO` default suggests. That is deliberate — see the `build` bullet below — and it applies to local runs as much as to CI.
+
 ### What CI runs on every PR
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
-- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
+- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
 Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
@@ -288,7 +290,7 @@ single-instance output is unchanged.
 
 | Variable | Default                  | Description |
 | :--- |:-------------------------| :--- |
-| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `LOG_LEVEL` | `INFO` (the `mock-client` test tasks override to `DEBUG`, see § 3) | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`), for components that do not configure one themselves |
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 | `INSTANCE_NAME` | unset                    | Labels one of several concurrent instances of a component. Pairs with `LOG_FILE`; see `mock-client/README.md` § "Harness log contract". Set it as an environment variable so subprocesses inherit it. |
 

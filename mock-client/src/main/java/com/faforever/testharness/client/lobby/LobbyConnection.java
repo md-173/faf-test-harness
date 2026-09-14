@@ -7,7 +7,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -58,6 +60,14 @@ public final class LobbyConnection {
      * SLF4J logger for the transport — see logback.xml for the {@code component=MockClient} MDC.
      */
     private static final Logger LOG = LoggerFactory.getLogger(LobbyConnection.class);
+
+    /**
+     * Field names whose values must never reach a log. {@code token} is the live one: the {@code
+     * auth} frame carries a real access token, and the harness writes its logs into CI artifacts.
+     * The rest are here so a future frame cannot reintroduce the leak by using a different name.
+     */
+    private static final Set<String> SENSITIVE_FIELDS =
+            Set.of("token", "jwt", "access_token", "refresh_token", "password", "secret");
 
     /** Reason buckets reported to the disconnect callback. */
     public enum DisconnectReason {
@@ -247,15 +257,70 @@ public final class LobbyConnection {
             return failed;
         }
 
+        // The outbound half of the exchange (#268). Two lines, not one: send() only hands the
+        // frame to sendChain, and the write completes later on the HttpClient executor, so
+        // "handed over" and "written" are separate facts. Without both, a timeout waiting for a
+        // frame the client believed it sent cannot distinguish "never reached send()" from
+        // "queued and the write never completed". Mirrors the inbound line in dispatch().
+        String forLog = redactedForLog(message);
+        LOG.debug("lobby sending frame: {}", forLog);
+
         synchronized (sendLock) {
             CompletableFuture<WebSocket> next =
                     sendChain
                             .thenCompose(ignored -> socket.sendText(payload, true))
                             .toCompletableFuture();
+            next.whenComplete(
+                    (ignored, error) -> {
+                        if (error == null) {
+                            LOG.debug("lobby sent frame: {}", forLog);
+                        } else {
+                            LOG.debug("lobby failed to send frame {}: {}", forLog, error);
+                        }
+                    });
             // Reset the chain to a non-failed stage so one failed send doesn't poison every
             // subsequent send; callers see failures on their own returned future.
             sendChain = next.exceptionally(e -> null);
             return next;
+        }
+    }
+
+    /**
+     * Renders a frame for logging with every credential replaced. Operates on a deep copy, so the
+     * frame actually sent is untouched.
+     *
+     * <p>Only the send side needs this: in this protocol the credential travels client to server
+     * ({@code auth}), and no server frame carries one back.
+     *
+     * @param message the frame about to be sent
+     * @return its JSON text, with sensitive values replaced by a placeholder
+     */
+    private static String redactedForLog(final JsonNode message) {
+        JsonNode copy = message.deepCopy();
+        redactInPlace(copy);
+        return copy.toString();
+    }
+
+    /**
+     * Replaces every sensitive value in {@code node}, recursively and in place.
+     *
+     * @param node the node to scrub
+     */
+    private static void redactInPlace(final JsonNode node) {
+        if (node instanceof ObjectNode object) {
+            List<String> names = new ArrayList<>();
+            object.fieldNames().forEachRemaining(names::add);
+            for (String name : names) {
+                if (SENSITIVE_FIELDS.contains(name.toLowerCase(Locale.ROOT))) {
+                    object.put(name, "<redacted>");
+                } else {
+                    redactInPlace(object.get(name));
+                }
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                redactInPlace(child);
+            }
         }
     }
 
