@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +12,8 @@ import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import picocli.CommandLine;
 
 /**
@@ -38,6 +41,53 @@ final class ConfigLoaderInvalidValuesTest {
                 lower.contains("ice-adapter-rpc-port") || lower.contains("not-a-number"),
                 "Error message should reference the bad field or its value. Got: "
                         + ex.getMessage());
+    }
+
+    /**
+     * The WBS-5.1 drop percentage, rejected at load time on the path an operator actually takes.
+     * Its sibling {@code --ice-relay-delay-ms} got this test in the same branch, for the same
+     * reason: the range check lives in {@link MockClientConfig}'s compact constructor, and without
+     * a test here nothing covers the CLI route into it.
+     *
+     * @param value an out-of-range percentage
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"-1", "101"})
+    void outOfRangeGameUdpDropPercentThrowsParameterException(final String value) {
+        String[] args =
+                concat(
+                        TestFixtures.minimalRequiredCli(),
+                        new String[] {"--game-udp-drop-percent=" + value});
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        String lower = ex.getMessage().toLowerCase(Locale.ROOT);
+        assertTrue(
+                lower.contains("gameudpdroppercent") || lower.contains("game-udp-drop-percent"),
+                "the rejection must name the option the operator typed, got: " + ex.getMessage());
+    }
+
+    /**
+     * Both ends of the accepted range load. Without this the test above would pass just as well
+     * against a check that rejected everything.
+     *
+     * @param value a percentage at the edge of the accepted range
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "100"})
+    void boundaryGameUdpDropPercentLoads(final String value) {
+        String[] args =
+                concat(
+                        TestFixtures.minimalRequiredCli(),
+                        new String[] {"--game-udp-drop-percent=" + value});
+
+        MockClientConfig config =
+                ConfigLoader.load(args, Map.of())
+                        .orElseThrow(() -> new AssertionError("config did not load for " + value));
+        assertEquals(Integer.parseInt(value), config.gameUdpDropPercent());
     }
 
     /**

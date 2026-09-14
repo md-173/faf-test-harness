@@ -618,19 +618,21 @@ What to look for when it is on:
   rather than `WARN` because an injected fault is the operator's own doing, and
   at a high percentage a per-datagram `WARN` would bury the rest of the run.
 
-**Note.** `mock-game`'s UDP sender is not yet started by the game's lifecycle —
-WBS 3.2.2.5 built it and no FSM phase constructs one. `--udp-drop-percent` is
-parsed, validated, and carried on `MockGameConfig` today; it takes effect for
-any caller that constructs a `GameUdpSender`, and will apply to the game's own
-peer traffic as soon as the FSM wires the sender in.
+**Note — the percentage does not reach the sender yet.** WBS 4.3.2 (#321) landed
+the lifecycle wiring this section used to describe as future work: the game now
+does construct a sender, via `GameTrafficSession` on `CreateLobby`. It builds it
+with the three-argument `GameUdpSender` constructor, which hardcodes a zero drop
+percentage, and `MockGameLifecycle` builds the session from the player id alone.
+So `--udp-drop-percent` is parsed, validated and carried on `MockGameConfig`,
+and every datagram is still sent.
 
-WBS 4.3.2 (#219) is the change that wires it in, and the two collide:
-`GameTrafficSession` calls the three-argument `GameUdpSender` constructor, which
-hardcodes a zero drop percentage, and `MockGameLifecycle` builds the session
-from the player id alone — so `udpDropPercent` would never reach the sender and
-this flag would parse, validate, document and do nothing. **Whichever of the two
-merges second must thread `config.udpDropPercent()` through `GameTrafficSession`
-to the four-argument constructor**, and this note should go with it.
+**Until [#360](https://github.com/md-173/faf-test-harness/pull/360) merges, this
+fault does nothing in a real run at any percentage.** That PR threads
+`config.udpDropPercent()` through `GameTrafficSession` to the four-argument
+constructor, and rewrites this section's guidance once it does. Do not use the
+`gaps` count to measure the result when it lands: it rises once per gap rather
+than once per lost datagram, so its expectation is `n·p·(1 - p)` — peaking at
+50% and falling back to zero at 100%, where nothing arrives at all.
 
 An orchestrated run reaches the same fault through the mock client:
 `--game-udp-drop-percent` on `mock-client` is passed straight through to the
