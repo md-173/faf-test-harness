@@ -16,12 +16,14 @@ import picocli.CommandLine.ParameterException;
  * the identity, the game uid) is required and never defaulted, because a guessed port or player id
  * produces a session that looks alive and is wrong.
  *
- * <p><b>{@code --launch-delay-seconds} is the one defaulted argument</b> (WBS-4.3.1), and
- * deliberately so: it is a behavioural knob, not a session fact, and its default is the behaviour
- * mock-game had before the flag existed. Nothing silently depends on that default in an
- * orchestrated run — {@code MockGameLauncher} always emits the flag explicitly, from the client's
- * own config — so it only applies to a hand-run binary, and {@code Main} logs the effective policy
- * at startup so even a hand-run says which one it took.
+ * <p><b>The behavioural knobs are the defaulted arguments</b>; every session fact is required.
+ * There are three: {@code --launch-delay-seconds} (WBS-4.3.1), {@code --udp-drop-percent} (WBS-5.1)
+ * and {@code --lobby-timeout-seconds} (WBS-3.2.1.3). Each defaults to the behaviour mock-game had
+ * before the flag existed, so a run that passes none of them behaves exactly as it always did. Only
+ * {@code --launch-delay-seconds} is emitted unconditionally by {@code MockGameLauncher}; the other
+ * two are emitted only when the client was asked for them, so in an orchestrated run their defaults
+ * are what a session gets unless a test opts in. {@code Main} logs the effective launch policy at
+ * startup, so even a hand-run says which one it took.
  *
  * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8). Extend both ends together if
  * orchestration ever adds the remaining {@code game_launch}-derived flags.

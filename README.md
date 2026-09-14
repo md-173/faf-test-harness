@@ -51,12 +51,16 @@ blocks. Note the login in `CreateLobby` comes from the adapter's own `--login`, 
 **The game then waits in the lobby and does not exit on its own.** It is modelling a
 game sitting in a lobby, so it advances only when told to: send `hostGame` or
 `joinGame` over the adapter's RPC to drive it into a match, or stop the process once
-you have asserted what you came for. In CI, give it your own timeout; a run you
-terminate exits on the signal, `143` for `SIGTERM` and `130` for Ctrl-C, rather than
-through the harness's own codes. Those apply to runs that finish on their own: `0`
-means the game played a match through to `GameEnded`; `69` (`ADAPTER_LOST`) means the
-adapter went away mid-session; `70` (`RUNTIME`) means it never reached the adapter, or
-the run failed some other way; `2` is a bad invocation.
+you have asserted what you came for. In CI you can either give it your own timeout, or
+hand the job to the game with `--lobby-timeout-seconds <n>`, which gives up after `n`
+seconds in the lobby and exits `75` rather than waiting forever. A run you terminate
+yourself exits on the signal instead, `143` for `SIGTERM` and `130` for Ctrl-C, rather
+than through the harness's own codes. The harness codes apply to runs that finish on
+their own: `0` means the game played a match through to `GameEnded`; `69`
+(`ADAPTER_LOST`) means the adapter went away mid-session; `70` (`RUNTIME`) means it
+never reached the adapter, or the run failed some other way; `75` (`LOBBY_TIMEOUT`)
+means it gave up waiting in the lobby, which is an outcome rather than a failure; `2`
+is a bad invocation.
 
 Those two commands are the whole no-clone path. The full client to adapter to game
 path, and a session against the live lobby, are in the runbook.

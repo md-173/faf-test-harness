@@ -34,7 +34,11 @@ import org.junit.jupiter.api.Timeout;
 final class LobbyTimeoutTest {
 
     /** Short enough to keep the suite quick, long enough that arrival always wins the race. */
-    private static final int LOBBY_TIMEOUT_SECONDS = 1;
+    // Three seconds, not one. aHostedGameNeverTripsTheTimer has to get HostGame delivered and
+    // committed before the timer fires, and the assertion only needs the timer to be shorter than
+    // the sleep that follows, not short in absolute terms. At 1s a loaded box can lose that race
+    // and fail on correct code; at 3s (with the same x2 sleep) the test costs 6s and cannot.
+    private static final int LOBBY_TIMEOUT_SECONDS = 3;
 
     /** Comfortably longer than the timer, so a failure to fire fails rather than flakes. */
     private static final int AWAIT_SECONDS = 5;

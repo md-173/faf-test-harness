@@ -31,6 +31,7 @@ parse.
 | `--game-option <k=v>` | no | none | Extra game options for a host to send. Repeatable. Ignored by a joiner. |
 | `--launch-delay-seconds <n>` | no | `5` | How long to sit in the lobby before launching the match unprompted. **Negative never auto-launches** — see below. |
 | `--lobby-timeout-seconds <n>` | no | wait forever | How long to wait in the lobby for a `HostGame` or `JoinGame` before giving up and exiting `75`. A game driven into a role never trips it. |
+| `--udp-drop-percent <n>` | no | `0` | Percentage of outbound peer datagrams the UDP sender suppresses, simulating a lossy link (WBS-5.1). The sequence number is still advanced, so the loss is visible to the receiving peer. |
 
 ### `--launch-delay-seconds` is the flag a multi-peer host needs
 
@@ -88,9 +89,14 @@ A pipeline needs one line to confirm the run started with the configuration it m
 and one to confirm how it ended. These two are stable:
 
 ```text
-mock game started: playerId=42 login=Rhiza gameUid=0 gpgNetPort=21000 lobbyPort=6112 gameOptions={} launch=manual only (auto-launch disabled)
+mock game started: playerId=42 login=Rhiza gameUid=0 gpgNetPort=21000 lobbyPort=6112 gameOptions={} launch=auto after 5s
 mock game finished: status=SERVER_NOT_CONNECTED, exit code 70
 ```
+
+The `launch=` clause states the resolved policy, so it changes with the flag. The form
+above is what the quickstart produces, because `--launch-delay-seconds` defaults to `5`.
+Passing a negative value gives `launch=manual only (auto-launch disabled)` instead. A
+pipeline matching this line verbatim must match the form its own invocation produces.
 
 The startup line echoes the **resolved** configuration, including the launch policy in
 words rather than as raw seconds, so a hand-run binary that took the default still says
@@ -126,8 +132,13 @@ harness sets it per child when it spawns one; see
    `GameState Lobby`.
 4. Waits for a role. `HostGame` makes it a host and it sends its `PlayerOption` set;
    `JoinGame` makes it a joiner.
-5. Launches the match — on the launch-delay timer, or when told to.
-6. Plays out the match for its duration, then reports one `GameResult` per army,
+5. Launches the match — on the launch-delay timer, or when told to. If nothing ever
+   drives it into a role and `--lobby-timeout-seconds` was set, it gives up here and
+   exits `75` instead.
+6. Exchanges peer traffic for the duration of the match: one datagram per peer every
+   100 ms on the lobby port, with per-sender sequence numbers so the receiving side can
+   see loss (WBS-4.3.2). `--udp-drop-percent` suppresses a share of the outbound ones.
+7. Plays out the match for its duration, then reports one `GameResult` per army,
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
 The end-of-match result is fixed by design: army 1 wins and every other army loses, on
