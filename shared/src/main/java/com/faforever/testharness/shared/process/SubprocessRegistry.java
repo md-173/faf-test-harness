@@ -10,10 +10,9 @@ import org.slf4j.LoggerFactory;
 /**
  * Tracks active {@link SubprocessManager} instances and terminates them on JVM shutdown.
  *
- * <p>This is layer 1 of spec §6.3 — it handles polite JVM exits ({@code System.exit}, SIGTERM,
- * SIGINT, last-non-daemon-thread). SIGKILL / OOM-kill / {@code Runtime.halt} do not run shutdown
- * hooks and are covered by the orphan-prevention layers (setpriv / setsid / tini) owned by the
- * launcher tickets.
+ * <p>This is layer 1 of spec §7.3, and the only orphan-prevention layer built. It handles polite
+ * JVM exits ({@code System.exit}, SIGTERM, SIGINT, last non-daemon thread). SIGKILL, an OOM kill
+ * and {@code Runtime.halt} run no shutdown hook, so children can outlive the JVM in those cases.
  */
 final class SubprocessRegistry {
 
