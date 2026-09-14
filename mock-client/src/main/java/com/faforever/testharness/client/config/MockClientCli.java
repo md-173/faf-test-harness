@@ -62,7 +62,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "mock-client",
         mixinStandardHelpOptions = true,
-        version = "mock-client 1.0-SNAPSHOT",
+        version = "mock-client 0.3.0-SNAPSHOT",
         description = "Headless FAF lobby client used by the integration test harness.",
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         subcommands = {
