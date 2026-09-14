@@ -318,7 +318,7 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | `--log-directory <path>` | env `LOG_DIR` | Deprecated; use the `LOG_DIR` env var instead. |
 | `--force-relay` | off | Forces TURN-only candidates; useful for fault-injection later (WBS 3.x). |
-| `--debug-window` | off | Requires JavaFX; never set in headless Docker. |
+| `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
 | `--info-window` | off | Same. |
 | `--delay-ui <ms>` | 0 | Same. |
 | `--telemetry-server <url>` | FAF telemetry | On launch the adapter opens a websocket to `ice-telemetry.faforever.com`. **No clean disable in 3.3.14** — an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. |
