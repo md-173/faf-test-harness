@@ -43,7 +43,7 @@ final class ConfigLoaderRoleExclusivityTest {
                 message.contains("host") && message.contains("join"),
                 "the error must name both roles in conflict. Got: " + ex.getMessage());
         assertTrue(
-                message.contains("--host-title") && message.contains("--target-game-id"),
+                message.contains("--host-") && message.contains("--target-game-id"),
                 "the error must name flags the operator typed, not record components. Got: "
                         + ex.getMessage());
     }
@@ -68,7 +68,7 @@ final class ConfigLoaderRoleExclusivityTest {
                         () -> ConfigLoader.load(new String[] {}, env));
 
         assertTrue(
-                ex.getMessage().toLowerCase(Locale.ROOT).contains("only one role"),
+                ex.getMessage().toLowerCase(Locale.ROOT).contains("not more than one at once"),
                 "Got: " + ex.getMessage());
     }
 

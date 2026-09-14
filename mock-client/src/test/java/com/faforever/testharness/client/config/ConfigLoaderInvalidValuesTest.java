@@ -191,6 +191,21 @@ final class ConfigLoaderInvalidValuesTest {
                 tempDir, "{\"lobbyWebSocketUrl\":\"wss://a\",\"lobbyWebSocketUrl\":\"wss://b\"}");
     }
 
+    /**
+     * A duplicate key whose name carries a newline must not forge a usage boundary.
+     *
+     * <p>This is a strictly easier vector than the one {@code parseFailureDiagnosticStaysOnOneLine}
+     * covers. That test deliberately uses NEL, because on the unrecognised-token path Jackson
+     * truncates the token at an LF and the newline never reaches the message. The duplicate-field
+     * path added here behaves differently: {@code STRICT_DUPLICATE_DETECTION} interpolates the
+     * offending field name into its message verbatim, so a plain {@code \n} passes straight
+     * through. {@code oneLine} in the parse-failure diagnostic is what closes it.
+     */
+    @Test
+    void aDuplicateKeyCannotForgeAUsageBoundary(@TempDir final Path tempDir) throws Exception {
+        assertConfigRejected(tempDir, "{\"a\\nUsage: forged\":1,\"a\\nUsage: forged\":2}");
+    }
+
     /** A comment is not JSON either, and was silently truncating the file at the same point. */
     @Test
     void trailingCommentFailsTheLoad(@TempDir final Path tempDir) throws Exception {
