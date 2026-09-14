@@ -92,10 +92,10 @@ public class IceAdapterConnection {
      * {@code ShutdownRequested} queued behind it. Two things bound that: {@link
      * #connectWithRetry()} aborts the moment {@link #close()} is requested (the CLI's signal hook
      * reaches teardown without going through the FSM), and {@code SubprocessManager}'s own JVM
-     * shutdown hook kills both children regardless of FSM state, so nothing is orphaned. What
-     * remains is that a broken adapter is noticed late. Moving the bring-up off the transition
-     * action is tracked separately as a 3.1.3.3 fix; this constant is deliberately not the place to
-     * work around it.
+     * shutdown hook kills both children regardless of FSM state on any exit that runs shutdown
+     * hooks (a SIGKILL skips it and leaves them running; see spec §7.3). What remains is that a
+     * broken adapter is noticed late. Moving the bring-up off the transition action is tracked
+     * separately as a 3.1.3.3 fix; this constant is deliberately not the place to work around it.
      */
     private static final int DEFAULT_CONNECT_ATTEMPTS = 100;
 

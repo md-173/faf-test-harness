@@ -48,8 +48,9 @@ workspace no longer hold:
 2. **Orphan prevention does not rely on an init process.** The harness JVM is
    not PID 1, and `SubprocessRegistry`'s shutdown hook is the safety net. §7.3
    records what that hook does not cover.
-3. **Multi-peer runs on one host.** Several Mock Clients share a host, each on
-   its own adapter ports. §9 records the decision.
+3. **Multi-peer runs on one host.** Several Mock Clients share a host, each
+   configured with its own `--ice-adapter-*-port` values. §9 records the
+   decision.
 
 Implementation note: the Subprocess Execution Controller must not bake
 container-specific paths or network assumptions into the Java code. Anyone who
@@ -242,8 +243,9 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > machine (`RunCommand` installs it as a JVM shutdown hook), so a Ctrl-C during
 > the connect window takes effect immediately rather than waiting the budget
 > out. Separately, `SubprocessManager` registers its own JVM shutdown hook, so
-> both children die with the parent whatever the FSM is doing — nothing is
-> orphaned. What remains is that a broken adapter is noticed late and
+> on any exit that runs shutdown hooks both children die with the parent
+> whatever the FSM is doing. A `SIGKILL` skips the hook and leaves them running
+> (§7.3). What remains is that a broken adapter is noticed late and
 > `AdapterExited` sits queued for that window. Moving the bring-up off the
 > transition action is tracked as a 3.1.3.3 fix.
 
@@ -528,8 +530,8 @@ as orphans (they are reparented to PID 1).
 
 The design has four layers, and **only layer 1 is built**. Layers 2 and 4 are
 primitives that were designed but never added to the launch argv. Layer 3
-applies only when the JVM is PID 1, as in a container, and the harness runs as
-plain processes.
+applies only when the JVM is PID 1, as in a container; the harness runs as
+plain processes, so it does not apply.
 
 | Layer | Mechanism | Covers | Provided by | Status |
 |---|---|---|---|---|
@@ -558,15 +560,20 @@ SIGTERM to every descendant in one syscall.
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
 `System.exit`) terminates both children through layer 1. A `SIGKILL` or OOM
 kill of that JVM runs no hook, and nothing else in the harness terminates the
-children, so they outlive it. The adapter does not close that gap on its own.
-faf-ice-adapter 3.3.14 deliberately stays up when its JSON-RPC client
-disconnects while the game is `LAUNCHING` (`RPCService.init`), and in any other
-state its stop path throws on a headless host before reaching `System.exit`
-(the unguarded `TrayIcon.close()` that `SessionTeardown` already works around).
-Either way, a Mock Client killed with `SIGKILL` leaves its adapter running.
-Both cases were observed against 3.3.14, with the client killed in `HOSTING`
-and in `PLAYING`. mock-game keeps running too, until its own match timer ends
-the match, or indefinitely if it never launches one.
+children, so they are left running. The adapter does not close that gap on its
+own. faf-ice-adapter 3.3.14 deliberately stays up when its JSON-RPC client
+disconnects while the game is `LAUNCHING` (`RPCService.init`). In any other
+state its stop path throws before reaching `System.exit`: a
+`NullPointerException` if no game has connected yet, otherwise the unguarded
+`TrayIcon.close()` on a headless host, which `SessionTeardown` already works
+around. Either way, on a headless host a Mock Client killed with `SIGKILL`
+leaves its adapter running. Both cases were observed against 3.3.14 on a
+headless host, with the client killed in `HOSTING` and in `PLAYING`.
+
+mock-game ends on its own when its launch and match timers finish, or after
+30 s if its GPGNet connection never comes up. It stays up indefinitely only
+while connected with auto-launch disabled (a negative
+`--mock-game-launch-delay-seconds`).
 
 ### 7.4 Process tracking
 
@@ -586,7 +593,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None: a killed JVM runs no hook | Children outlive it (§7.3) |
+| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None: a killed JVM runs no hook | Children are left running (§7.3) |
 
 ## 9. Open questions
 
@@ -662,5 +669,5 @@ sequenceDiagram
     MC->>MG: terminate(), in parallel
     IA-->>MC: exit
     MG-->>MC: exit
-    Note over MC,MG: SIGKILL or OOM kill runs no hook, so IA and MG outlive MC (§7.3)
+    Note over MC,MG: SIGKILL or OOM kill runs no hook, so IA and MG are left running (§7.3)
 ```
