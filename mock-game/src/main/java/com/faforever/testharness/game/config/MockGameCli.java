@@ -28,7 +28,7 @@ import picocli.CommandLine.ParameterException;
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
- * --game-uid <uid> [--launch-delay-seconds <seconds>]
+ * --game-uid <uid> [--launch-delay-seconds <seconds>] [--udp-drop-percent <0-100>]
  * }</pre>
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],

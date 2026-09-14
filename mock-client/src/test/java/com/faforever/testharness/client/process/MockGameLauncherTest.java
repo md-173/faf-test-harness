@@ -135,6 +135,40 @@ final class MockGameLauncherTest {
                         + "the config → argv hop intact");
     }
 
+    /**
+     * The WBS-5.1 drop percentage reaches the game it is meant to degrade (#322). Without this the
+     * flag was reachable only by a hand-run mock-game: nothing emitted it here and no client-side
+     * option sourced a value, so the orchestrated path — the normal one — could not turn the fault
+     * on at all.
+     */
+    @Test
+    void argvCarriesTheConfiguredUdpDropPercent() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config = configWithUdpDropPercent(binary, 40);
+
+        List<String> argv = new MockGameLauncher(config).buildArgv(binary);
+
+        assertEquals("40", valueAfter(argv, "--udp-drop-percent"));
+    }
+
+    /**
+     * At the default the argv is byte-for-byte what it was before the flag existed. mock-game
+     * defaults the value to 0 itself, so emitting it would add noise to every orchestrated launch
+     * to say "no fault", and a reader diffing two launches should see the flag only where a fault
+     * was actually asked for.
+     */
+    @Test
+    void argvOmitsTheDropPercentWhenItIsZero() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv =
+                new MockGameLauncher(configWithUdpDropPercent(binary, 0)).buildArgv(binary);
+
+        assertFalse(
+                argv.contains("--udp-drop-percent"),
+                "the default must produce the argv it always produced: " + argv);
+    }
+
     @Test
     void argvCarriesEveryGameOption() throws Exception {
         Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
@@ -295,8 +329,21 @@ final class MockGameLauncherTest {
         return configWithBinaryAndPlayerId(binary, playerId, null);
     }
 
+    /** A config whose launched mock-game drops {@code percent}% of its outbound datagrams. */
+    private static MockClientConfig configWithUdpDropPercent(final Path binary, final int percent) {
+        return configWithBinaryAndPlayerId(binary, null, null, percent);
+    }
+
     private static MockClientConfig configWithBinaryAndPlayerId(
             final Path binary, final Integer playerId, final Integer launchDelaySeconds) {
+        return configWithBinaryAndPlayerId(binary, playerId, launchDelaySeconds, null);
+    }
+
+    private static MockClientConfig configWithBinaryAndPlayerId(
+            final Path binary,
+            final Integer playerId,
+            final Integer launchDelaySeconds,
+            final Integer udpDropPercent) {
         List<String> args =
                 new ArrayList<>(
                         List.of(
@@ -314,6 +361,9 @@ final class MockGameLauncherTest {
         }
         if (launchDelaySeconds != null) {
             args.add("--mock-game-launch-delay-seconds=" + launchDelaySeconds);
+        }
+        if (udpDropPercent != null) {
+            args.add("--game-udp-drop-percent=" + udpDropPercent);
         }
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
