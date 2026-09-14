@@ -3,6 +3,7 @@ package com.faforever.testharness.client.state;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -27,6 +28,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
@@ -142,10 +144,15 @@ final class CrashRecoveryTest {
     @AfterEach
     void tearDown() throws Exception {
         // Release any child still waiting on the cue before terminating it, so a test that failed
-        // before reaching its release cannot leave one spinning.
-        releaseGameChild();
-        appender.stop();
-        root.detachAppender(appender);
+        // before reaching its release cannot leave one spinning. In a finally: this appender is on
+        // the ROOT logger, so failing to detach it leaks into every later test in the same fork,
+        // and at LOG_LEVEL=DEBUG it collects a great deal more than it used to.
+        try {
+            releaseGameChild();
+        } finally {
+            appender.stop();
+            root.detachAppender(appender);
+        }
         if (gameLauncher != null && gameLauncher.manager != null) {
             gameLauncher.manager.terminate(Duration.ofSeconds(1));
         }
@@ -198,7 +205,11 @@ final class CrashRecoveryTest {
                 ? new ProcessBuilder(
                         "cmd",
                         "/c",
-                        "for /l %i in (0,0,1) do @if exist \"" + path + "\" exit " + code)
+                        "for /l %i in (0,0,1) do @(if exist \""
+                                + path
+                                + "\" exit "
+                                + code
+                                + " & timeout /t 1 /nobreak >nul)")
                 : new ProcessBuilder(
                         "sh",
                         "-c",
@@ -369,7 +380,20 @@ final class CrashRecoveryTest {
                                                         .contains("No matching transitions")),
                 "a post-teardown subprocess exit must be a deliberate no-op, not an "
                         + "unregistered-event warning. captured: "
-                        + appender.list);
+                        + significantEvents());
+    }
+
+    /**
+     * The captured records worth printing in a failure message. The appender is on the root logger
+     * and the test task now runs at DEBUG, so interpolating the whole list turns a readable failure
+     * into hundreds of lines.
+     *
+     * @return only the WARN and ERROR records
+     */
+    private List<ILoggingEvent> significantEvents() {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN || e.getLevel() == Level.ERROR)
+                .toList();
     }
 
     /**
@@ -389,6 +413,13 @@ final class CrashRecoveryTest {
      * while the state is still current, so one taken afterwards would never complete once the
      * machine had moved on — whereas one registered up front is completed the moment HOSTING is
      * committed and stays completed however fast the child dies.
+     *
+     * <p><b>Callers must pass a child that will not exit unprompted</b> — {@link
+     * #exitingOnCue(int)} or {@code HANGING_PROCESS}. Nothing here enforces it, and {@link
+     * #exitingWith(int)} is still the natural thing to reach for: a child that exits on its own
+     * schedule can be reaped before the {@code HostGame} post below, in which case the machine goes
+     * STARTING_GAME straight to TERMINATED, HOSTING is never entered, and this fixture fails
+     * fifteen seconds later from inside a shared helper.
      *
      * @param launcher the game launcher whose child this fixture starts
      * @param teardown the teardown to run on TERMINATED
@@ -412,7 +443,14 @@ final class CrashRecoveryTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         lifecycle.post(new HostGame(hostGameMessage()));
-        hosting.get(15, TimeUnit.SECONDS);
+        try {
+            hosting.get(15, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            // A bare TimeoutException names nothing. The assertEquals this replaced reported
+            // "expected: <HOSTING> but was: <TERMINATED>", which is the whole diagnosis; run
+            // 34503947174 failed here and said only "TimeoutException".
+            fail("fixture never reached HOSTING; state is " + lifecycle.getState());
+        }
         return lifecycle;
     }
 

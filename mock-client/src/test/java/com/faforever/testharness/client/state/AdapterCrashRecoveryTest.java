@@ -155,6 +155,18 @@ final class AdapterCrashRecoveryTest {
         server.stop(1000);
     }
 
+    /**
+     * The captured records worth printing in a failure message. The appender is on the root logger
+     * and the test task now runs at DEBUG, so interpolating the whole list buries the assertion.
+     *
+     * @return only the WARN and ERROR records
+     */
+    private java.util.List<ILoggingEvent> significantEvents() {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN || e.getLevel() == Level.ERROR)
+                .toList();
+    }
+
     @Test
     void adapterKilledDuringHostingReachesTerminatedAndWarns() throws Exception {
         MockClientLifecycle lifecycle = hostedLifecycle();
@@ -238,7 +250,7 @@ final class AdapterCrashRecoveryTest {
                                                         .contains("No matching transitions")),
                 "a post-teardown adapter exit must be a deliberate no-op, not an "
                         + "unregistered-event warning. captured: "
-                        + appender.list);
+                        + significantEvents());
     }
 
     /** Kills the running adapter subprocess and returns the exit code it actually produced. */
@@ -285,7 +297,7 @@ final class AdapterCrashRecoveryTest {
                 return e;
             }
         }
-        fail("no log event matched. captured: " + appender.list);
+        fail("no log event matched. captured: " + significantEvents());
         throw new AssertionError("unreachable");
     }
 

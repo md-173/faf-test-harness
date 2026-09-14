@@ -80,18 +80,27 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     public void broadcastText(final String text) {
         // The connection count is the first line, before any send: #261 lost a `welcome` the
         // server believed it had broadcast, and a broadcast to zero connections is silent today.
-        // The per-connection line after the send then says the write itself returned, so a frame
-        // that was written but never arrived is distinguishable from one that was never written.
+        //
+        // "queued", not "sent": WebSocketImpl.send(String) appends to its outQueue and returns,
+        // and the socket write happens later on the selector thread. Claiming the write returned
+        // would be the wrong first hypothesis baked into the instrumentation — someone reading it
+        // would rule out the send side while the frame was still sitting behind a stalled writer.
         LOG.debug("scripted server broadcasting to {} connection(s): {}", connections.size(), text);
         for (WebSocket c : connections) {
             c.send(text);
-            LOG.debug("scripted server sent to {}: {}", c.getRemoteSocketAddress(), text);
+            LOG.debug(
+                    "scripted server queued for write to {}: {}", c.getRemoteSocketAddress(), text);
         }
     }
 
     /** Send a clean WebSocket close to every connected client. */
     public void closeAllClean(final int code, final String reason) {
         for (WebSocket c : connections) {
+            LOG.debug(
+                    "scripted server closing {} cleanly (code={}, reason={})",
+                    c.getRemoteSocketAddress(),
+                    code,
+                    reason);
             c.close(code, reason);
         }
     }
@@ -99,6 +108,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     /** Slam the underlying TCP socket without a close frame — simulates a network drop. */
     public void abruptlyTerminate() {
         for (WebSocket c : connections) {
+            LOG.debug("scripted server abruptly terminating {}", c.getRemoteSocketAddress());
             c.closeConnection(1006, "abrupt"); // 1006 = CLOSE_ABNORMAL, no close frame sent
         }
     }
@@ -111,6 +121,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     @Override
     public void onOpen(final WebSocket conn, final ClientHandshake handshake) {
         connections.add(conn);
+        LOG.debug("scripted server accepted {}", conn.getRemoteSocketAddress());
         firstClientConnected.countDown();
     }
 
@@ -118,18 +129,37 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     public void onClose(
             final WebSocket conn, final int code, final String reason, final boolean remote) {
         connections.remove(conn);
+        // Dates the departure, so a later "broadcasting to 0 connection(s)" can be read against
+        // the disconnect that caused it — #261 lost a welcome to an empty connection list.
+        LOG.debug(
+                "scripted server lost {} (code={}, reason={}, remote={})",
+                conn.getRemoteSocketAddress(),
+                code,
+                reason,
+                remote);
     }
 
     @Override
     public void onMessage(final WebSocket conn, final String message) {
         // The receive side of the same question: #268 timed out in pollReceived waiting for the
         // client's `auth`, and only a line here says whether that frame ever reached the server.
-        LOG.debug("scripted server received from {}: {}", conn.getRemoteSocketAddress(), message);
+        //
+        // Queued before logged, deliberately. Logback is synchronous here and writes both a
+        // console line and a JSON file record, so logging first would put that I/O in front of
+        // the message becoming visible to pollReceived — widening the very window this line was
+        // added to measure, under the same contention all three flakes occurred under.
         received.add(message);
+        LOG.debug("scripted server received from {}: {}", conn.getRemoteSocketAddress(), message);
     }
 
     @Override
     public void onError(final WebSocket conn, final Exception ex) {
-        // Tests that need to assert on errors do so via the client side; nothing to do here.
+        // Tests assert on errors via the client side, but a server-side throw was swallowed
+        // entirely before this — and "the server threw while sending" is a live explanation for
+        // both #261 and #268, so it must not be the one thing the report cannot show.
+        LOG.warn(
+                "scripted server error on {}: {}",
+                conn == null ? "<no connection>" : conn.getRemoteSocketAddress(),
+                ex.toString());
     }
 }

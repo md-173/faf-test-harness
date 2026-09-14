@@ -1113,6 +1113,13 @@ public final class MockClientLifecycle {
      * @param message the {@link GameExited} event; guaranteed by registration, never anything else.
      */
     private void logGameExitAfterTeardown(Event message) {
+        // Cancels the safety net first. This was the only GameExited handler that did not, and
+        // the other four edges all run onGameExited. Reachable: GameEnded arms the net in
+        // PLAYING, the adapter then dies and takes AdapterExited to TERMINATED, teardown kills
+        // the game, and its exit lands here — leaving the task armed to log "Game did not exit
+        // within ... of GameEnded" on a session that ended cleanly a safetyNetWindow earlier.
+        // That is the same post-teardown noise the TERMINATED self-loops remove, just deferred.
+        onGameExited(message);
         GameExited exited = (GameExited) message;
         LOG.debug("mock-game exited after session teardown (code={})", exited.exitCode());
     }

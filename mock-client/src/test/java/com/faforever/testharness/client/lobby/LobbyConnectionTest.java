@@ -90,6 +90,77 @@ final class LobbyConnectionTest {
     }
 
     @Test
+    void sendIsLoggedOnBothSidesWithCredentialsRedacted() throws Exception {
+        // The outbound half of the exchange (#268). Two lines, because send() only hands the frame
+        // to the send chain and the write completes later on the HttpClient executor — without
+        // both, a timeout waiting for a frame the client believed it sent cannot separate "never
+        // reached send()" from "queued and the write never completed".
+        //
+        // The redaction is the part that must not regress: the real auth frame carries a live
+        // access token, and these logs are uploaded as CI artifacts on failure.
+        Logger connectionLogger = (Logger) LoggerFactory.getLogger(LobbyConnection.class);
+        Level original = connectionLogger.getLevel();
+        connectionLogger.setLevel(Level.DEBUG);
+        try {
+            lobby = new LobbyConnection(server.uri());
+            lobby.connect().get(5, TimeUnit.SECONDS);
+            server.awaitFirstClient();
+
+            ObjectNode msg = MAPPER.createObjectNode();
+            msg.put("command", "auth");
+            msg.put("token", "super-secret-access-token");
+            msg.put("unique_id", "uid-1");
+            lobby.send(msg).get(2, TimeUnit.SECONDS);
+            server.pollReceived(2, TimeUnit.SECONDS);
+
+            List<String> sendLines =
+                    logAppender.list.stream()
+                            .map(ILoggingEvent::getFormattedMessage)
+                            .filter(
+                                    m ->
+                                            m.startsWith("lobby sending frame")
+                                                    || m.startsWith("lobby sent frame"))
+                            .toList();
+
+            assertTrue(
+                    sendLines.stream().anyMatch(m -> m.startsWith("lobby sending frame")),
+                    "the hand-off to the send chain must be logged: " + sendLines);
+            assertTrue(
+                    sendLines.stream().anyMatch(m -> m.startsWith("lobby sent frame")),
+                    "the completed write must be logged: " + sendLines);
+            assertTrue(
+                    sendLines.stream().noneMatch(m -> m.contains("super-secret-access-token")),
+                    "a credential reached the log: " + sendLines);
+            assertTrue(
+                    sendLines.stream().allMatch(m -> m.contains("<redacted>")),
+                    "the token field must be replaced, not dropped: " + sendLines);
+            // Redaction must not damage the rest of the frame, nor the frame actually sent.
+            assertTrue(
+                    sendLines.stream().allMatch(m -> m.contains("uid-1")),
+                    "non-sensitive fields must survive redaction: " + sendLines);
+        } finally {
+            connectionLogger.setLevel(original);
+        }
+    }
+
+    @Test
+    void sendKeepsTheRealTokenOnTheWire() throws Exception {
+        // The other half: redaction is for the log only. If it ever mutated the outgoing frame,
+        // every authentication would break, so this pins the wire format against that.
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        ObjectNode msg = MAPPER.createObjectNode();
+        msg.put("command", "auth");
+        msg.put("token", "super-secret-access-token");
+        lobby.send(msg).get(2, TimeUnit.SECONDS);
+
+        JsonNode onTheWire = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertEquals("super-secret-access-token", onTheWire.get("token").asText());
+    }
+
+    @Test
     void dispatchesIncomingMessageToRegisteredHandler() throws Exception {
         lobby = new LobbyConnection(server.uri());
         AtomicReference<JsonNode> captured = new AtomicReference<>();

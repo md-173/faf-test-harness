@@ -143,9 +143,24 @@ final class MatchmakingQueueTest {
         return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
-    /** The {@link StateMachine} framework's own log records, for the unregistered-event WARN. */
+    /**
+     * The {@link StateMachine} framework's own WARN records — the unregistered-event warning these
+     * assertions are about.
+     *
+     * <p>Filtered by level, not just captured. Every caller asserts {@code noneMatch(contains(…))}
+     * as a proxy for "nothing warned", which silently stops meaning that the moment the framework's
+     * DEBUG lines are emitted: {@code StateMachine} logs "Received event SearchStarted[…]" at DEBUG
+     * on the ordinary path, so an unfiltered list matches the event name whether or not anything
+     * warned. That is not hypothetical — the {@code mock-client} test task now runs at {@code
+     * LOG_LEVEL=DEBUG} (#261/#268), which is exactly when these tests started failing.
+     *
+     * @return the formatted message of every WARN or ERROR the framework logged
+     */
     private List<String> machineMessages() {
-        return machineAppender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
+        return machineAppender.list.stream()
+                .filter(e -> e.getLevel().isGreaterOrEqual(Level.WARN))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 
     /**

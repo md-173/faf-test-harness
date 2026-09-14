@@ -99,6 +99,8 @@ What this does:
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
+Note that the `mock-client` `test` and `integrationTest` tasks run at `LOG_LEVEL=DEBUG` (set in `mock-client/build.gradle`), so a local run is noisier than the `INFO` default suggests. That is deliberate — see the `build` bullet below — and it applies to local runs as much as to CI.
+
 ### What CI runs on every PR
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
@@ -288,7 +290,7 @@ single-instance output is unchanged.
 
 | Variable | Default                  | Description |
 | :--- |:-------------------------| :--- |
-| `LOG_LEVEL` | `INFO`                   | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`) |
+| `LOG_LEVEL` | `INFO` (the `mock-client` test tasks override to `DEBUG`, see § 3) | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`), for components that do not configure one themselves |
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 | `INSTANCE_NAME` | unset                    | Labels one of several concurrent instances of a component. Pairs with `LOG_FILE`; see `mock-client/README.md` § "Harness log contract". Set it as an environment variable so subprocesses inherit it. |
 

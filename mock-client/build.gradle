@@ -58,6 +58,12 @@ tasks.register('integrationTest', Test) {
     testLogging {
         showStandardStreams = true
     }
+    // Same reasoning as the `test` task above, and for the same cards: ClientGameLifecycleLiveTest
+    // drives ScriptedWebSocketServer over the live lobby path, so it is exactly where a lost frame
+    // would be hardest to reconstruct afterwards. Leaving this at INFO would have the integration
+    // task showing subprocess output on the grounds that evidence is the deliverable, while
+    // discarding the lobby evidence next to it.
+    environment 'LOG_LEVEL', 'DEBUG'
 }
 
 tasks.withType(Checkstyle).configureEach {
