@@ -110,7 +110,7 @@ final class LogLevelFlagEndToEndTest {
         // because options resolved from the environment or the config file are never "matched"
         // options. Without this case, switching to parseResult.matchedOptionValue would still pass
         // every other test here while silently stranding anyone who configures the harness by
-        // environment — which is how the Docker workspace and the N-client spawner do it.
+        // environment.
         Path requested = tempDir.resolve("child.jsonl");
         List<JsonNode> records =
                 runChild(
