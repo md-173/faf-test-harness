@@ -598,7 +598,12 @@ public final class MockClientCli implements Callable<Integer> {
                             : OptionalInt.of(playerIdOverride),
                     playerLogin,
                     mockGameLaunchDelaySeconds,
-                    hostGameOption,
+                    // Gated exactly as MockGameSettings.from(config) gates it. Forwarding the raw
+                    // map here made launch-game send --game-option for a run with no host flags,
+                    // while the lobby-driven path dropped it — contradicting MockGameSettings'
+                    // own javadoc that both routes launch mock-game identically, and #308's
+                    // "neither command's behaviour changes".
+                    buildHostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
                     logLevel,
                     Optional.ofNullable(logFile));
         } catch (IllegalArgumentException | NullPointerException e) {

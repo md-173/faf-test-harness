@@ -59,7 +59,7 @@ a `--timeout-seconds` flag.
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window, or `ice-smoke` returned any verdict other than reachable. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, or `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), or `ice-smoke` returned any verdict other than reachable. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
@@ -336,8 +336,10 @@ exits `70` (`RUNTIME`) — no stack trace.
 
 ### `ice-smoke` — is a local adapter reachable?
 
-The one command that exercises the harness without a FAF account: no lobby, no
-OAuth, and nothing this harness sends leaves loopback. Run it as a precondition
+The fullest of the three no-account diagnostics: no lobby, no OAuth, and nothing
+this harness sends leaves loopback. `launch-ice` and `launch-game` need no
+credentials either (WBS-3.1.6.3), but this is the one that reports a verdict
+rather than just running a subprocess. Run it as a precondition
 before paying for a full session test, and to tell "the adapter never came up"
 apart from "the session logic is wrong".
 
