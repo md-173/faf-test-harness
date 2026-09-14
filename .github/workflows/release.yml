@@ -1,5 +1,5 @@
 # Workflow used for releases.
-# Must be manually triggered, given a version number as input, and genrates a set of shadow jar files.
+# Must be manually triggered, given a version number as input, and generates a set of shadow jar files.
 
 name: Release
 
@@ -50,7 +50,7 @@ jobs:
       # Written beside each jar so the release-action glob picks them up.
       - name: Write checksums beside each jar
         run: |
-          for jar in mock-client/build/libs/mock-client-*.jar mock-game/build/libs/mock-game-*.jar; do
+          for jar in mock-client/build/libs/mock-client-*-all.jar mock-game/build/libs/mock-game-*-all.jar; do
             # Run in the jar's own directory so the file records a bare name: that is what
             # `sha256sum -c mock-game-<version>-all.jar.sha256` expects beside a downloaded jar.
             ( cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256" )
@@ -66,9 +66,16 @@ jobs:
           # Kept: a draft is a useful safety net for checking the jar names and testing the
           # artifacts before anything is public. Unlike prerelease, it does not hide a *published*
           # release from the API.
+          #
+          # Note the consequence, because it is the whole point of this card: `GET /releases/latest`
+          # skips drafts as well as prereleases, so a release is invisible to a consumer following
+          # that route until a human opens the draft and clicks Publish. That publish is the last
+          # step of every release, not an optional one — between this workflow finishing and that
+          # click, `releases/latest` still returns the previous release, which is exactly the
+          # failure this card exists to kill, moved one step later.
           draft: true
           prerelease: ${{ github.event.inputs.prerelease }}
           generateReleaseNotes: true
           bodyFile: ".github/RELEASE_BODY.md"
-          artifacts: "mock-game/build/libs/mock-game-*.jar,mock-game/build/libs/mock-game-*.jar.sha256,mock-client/build/libs/mock-client-*.jar,mock-client/build/libs/mock-client-*.jar.sha256"
+          artifacts: "mock-game/build/libs/mock-game-*-all.jar,mock-game/build/libs/mock-game-*-all.jar.sha256,mock-client/build/libs/mock-client-*-all.jar,mock-client/build/libs/mock-client-*-all.jar.sha256"
 
