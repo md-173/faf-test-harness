@@ -81,6 +81,28 @@ final class MockGameCliTest {
         assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }
 
+    /** Unset is the default and means "wait forever", which is what the game has always done. */
+    @Test
+    void lobbyTimeoutDefaultsToUnset() {
+        assertEquals(Optional.empty(), MockGameCli.parse(VALID_ARGS).lobbyTimeout());
+    }
+
+    /** Set, it is the wait the game arms on entering LOBBY (WBS-3.2.1.3). */
+    @Test
+    void explicitLobbyTimeoutIsHonoured() {
+        String[] args = withExtra(VALID_ARGS, "--lobby-timeout-seconds", "30");
+
+        assertEquals(Optional.of(Duration.ofSeconds(30)), MockGameCli.parse(args).lobbyTimeout());
+    }
+
+    /** Negative is the documented way to say "wait forever", not an error. */
+    @Test
+    void negativeLobbyTimeoutWaitsForever() {
+        String[] args = withExtra(VALID_ARGS, "--lobby-timeout-seconds", "-1");
+
+        assertEquals(Optional.empty(), MockGameCli.parse(args).lobbyTimeout());
+    }
+
     @Test
     void zeroGameUidIsAcceptedAsNoSession() {
         String[] args = VALID_ARGS.clone();

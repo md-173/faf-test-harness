@@ -32,6 +32,9 @@ package com.faforever.testharness.game.config;
  *       <td>{@code ExitStatus.SERVER_CONNECTION_LOST}</td></tr>
  *   <tr><td>{@link #RUNTIME}</td><td>never reached the adapter, or any other failed run</td>
  *       <td>{@code ExitStatus.SERVER_NOT_CONNECTED}, {@code ExitStatus.FAILED}</td></tr>
+ *   <tr><td>{@link #LOBBY_TIMEOUT}</td><td>waited in the lobby for {@code
+ *       --lobby-timeout-seconds} and nothing drove the game into a role</td>
+ *       <td>{@code ExitStatus.LOBBY_TIMEOUT}</td></tr>
  *   <tr><td>{@code 1}</td><td>an unchecked throw escaped the bootstrap; the JVM's
  *       uncaught-exception default, not set here</td>
  *       <td>{@code Error} or an unforeseen bug — no modelled failure produces it</td></tr>
@@ -70,6 +73,21 @@ public final class ExitCodes {
      * sysexits' {@code EX_SOFTWARE}, and matches the mock client's {@code ExitCodes.RUNTIME}.
      */
     public static final int RUNTIME = 70;
+
+    /**
+     * The game sat in the lobby for {@code --lobby-timeout-seconds} and nothing ever drove it into
+     * a role, so it gave up (WBS-3.2.1.3, #323). Only reachable when that flag is set; unset, the
+     * game waits indefinitely, which is what it has always done.
+     *
+     * <p>Distinct from {@link #OK} on purpose. A clean give-up is not a failure and {@code 0} is
+     * defensible, but it would be indistinguishable from a match that played out — and telling
+     * those apart is the entire reason the flag exists, since a consumer's own {@code timeout}
+     * wrapper already ends the run otherwise. Distinct from {@link #RUNTIME} because nothing went
+     * wrong: the game booted, connected, announced its lobby and was simply never used. {@code 75}
+     * is sysexits' {@code EX_TEMPFAIL} ("temporary failure; user is invited to retry"), the closest
+     * standard fit for "nothing arrived in time".
+     */
+    public static final int LOBBY_TIMEOUT = 75;
 
     private ExitCodes() {}
 }

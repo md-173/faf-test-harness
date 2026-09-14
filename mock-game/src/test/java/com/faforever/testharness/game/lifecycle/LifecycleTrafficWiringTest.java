@@ -98,6 +98,7 @@ final class LifecycleTrafficWiringTest {
                         9001,
                         Map.of(),
                         0,
+                        -1,
                         0);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
