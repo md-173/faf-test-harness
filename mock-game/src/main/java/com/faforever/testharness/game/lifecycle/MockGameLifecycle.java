@@ -764,11 +764,11 @@ public final class MockGameLifecycle {
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
             // TODO(#281): Configurable values.
-            // Two teams are configured, we hardcode team 2 to win and team 3 to lose.
-            gpgnetSender.gameResult(TEAMS[0], "victory", SCORES.get("victory"));
-            // Handling the 1-player case where no second team was ever created.
-            if (!peers.isEmpty()) {
-                gpgnetSender.gameResult(TEAMS[1], "defeat", SCORES.get("defeat"));
+            // GameResult is keyed by army, not team (faf-server handle_game_result(army, result)),
+            // so every army reports, with the result of its team: TEAMS[0] wins, TEAMS[1] loses.
+            for (int army = 1; army <= peers.size() + 1; army++) {
+                String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
+                gpgnetSender.gameResult(army, result, SCORES.get(result));
             }
             gpgnetSender.jsonStats("{\"stats\": []}");
             gpgnetSender.gameEnded();
@@ -800,12 +800,17 @@ public final class MockGameLifecycle {
     private void sendPlayerOptions(int playerId) throws IOException {
         // Players assigned army number (and start spot, faction, and color) in arrival order, with
         // the host being first.
-        // Configured for a two-team game so half the players are assigned to team 2 and half to
-        // team 3 (alternating).
-        gpgnetSender.playerOption(playerId, "Army", peers.size() + 1);
-        gpgnetSender.playerOption(playerId, "Team", TEAMS[(peers.size() % 2)]);
-        gpgnetSender.playerOption(playerId, "StartSpot", peers.size() + 1);
-        gpgnetSender.playerOption(playerId, "Faction", peers.size() + 1);
-        gpgnetSender.playerOption(playerId, "Color", peers.size() + 1);
+        int army = peers.size() + 1;
+        gpgnetSender.playerOption(playerId, "Army", army);
+        gpgnetSender.playerOption(playerId, "Team", teamForArmy(army));
+        gpgnetSender.playerOption(playerId, "StartSpot", army);
+        gpgnetSender.playerOption(playerId, "Faction", army);
+        gpgnetSender.playerOption(playerId, "Color", army);
+    }
+
+    /* The team an army plays on. Configured for a two-team game, so armies alternate between
+     * TEAMS[0] and TEAMS[1]; more than two teams would make faf-server mark the game MULTI_TEAM. */
+    private static int teamForArmy(int army) {
+        return TEAMS[(army - 1) % 2];
     }
 }

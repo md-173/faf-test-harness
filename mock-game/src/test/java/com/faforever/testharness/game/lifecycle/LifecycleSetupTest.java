@@ -163,7 +163,7 @@ public final class LifecycleSetupTest {
 
         lifecycle.endMatch();
 
-        assertMessage("GameResult", 2, "victory 10");
+        assertMessage("GameResult", 1, "victory 10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -193,8 +193,8 @@ public final class LifecycleSetupTest {
         lifecycle.endMatch();
 
         // Two GameResult messages as a joiner always has the host as a peer.
-        assertMessage("GameResult", 2, "victory 10");
-        assertMessage("GameResult", 3, "defeat -10");
+        assertMessage("GameResult", 1, "victory 10");
+        assertMessage("GameResult", 2, "defeat -10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -257,21 +257,16 @@ public final class LifecycleSetupTest {
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        // Drop PlayerOption frames
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        assertPlayerOptions(config.playerId(), 1, 2);
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
-        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
-        // Drop PlayerOption frames for new player
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
-        gpgnet.pollReceived(1, TimeUnit.SECONDS);
+        // Three more players. Teams alternate 2 and 3, so a four-player game still has exactly
+        // two teams and faf-server does not mark it MULTI_TEAM.
+        for (int playerId = 2; playerId <= 4; playerId++) {
+            gpgnet.sendFrame(
+                    new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", playerId)));
+            assertPlayerOptions(playerId, playerId, playerId % 2 == 0 ? 3 : 2);
+        }
         lifecycle.launchMatch();
         // Drop frame
         gpgnet.pollReceived(1, TimeUnit.SECONDS);
@@ -279,9 +274,11 @@ public final class LifecycleSetupTest {
 
         lifecycle.endMatch();
 
-        // Two GameResults
-        assertMessage("GameResult", 2, "victory 10");
-        assertMessage("GameResult", 3, "defeat -10");
+        // One GameResult per army, not per team, each carrying its team's result.
+        assertMessage("GameResult", 1, "victory 10");
+        assertMessage("GameResult", 2, "defeat -10");
+        assertMessage("GameResult", 3, "victory 10");
+        assertMessage("GameResult", 4, "defeat -10");
         assertMessageCommand("JsonStats");
         assertMessage("GameEnded");
         assertMessage("GameState", "Ended");
@@ -304,6 +301,14 @@ public final class LifecycleSetupTest {
         for (int i = 0; i < expectedArgs.length; i++) {
             assertEquals(expectedArgs[i], received.args().get(i));
         }
+    }
+
+    private void assertPlayerOptions(int playerId, int army, int team) {
+        assertMessage("PlayerOption", playerId, "Army", army);
+        assertMessage("PlayerOption", playerId, "Team", team);
+        assertMessage("PlayerOption", playerId, "StartSpot", army);
+        assertMessage("PlayerOption", playerId, "Faction", army);
+        assertMessage("PlayerOption", playerId, "Color", army);
     }
 
     private void assertMessageCommand(String expectedCommand) {
