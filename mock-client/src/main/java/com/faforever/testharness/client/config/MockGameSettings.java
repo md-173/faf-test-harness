@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.config;
 
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -69,7 +70,13 @@ public record MockGameSettings(
         Objects.requireNonNull(logFile, "logFile");
         Objects.requireNonNull(logLevel, "logLevel");
         Objects.requireNonNull(gameOptions, "gameOptions");
-        gameOptions = Map.copyOf(new LinkedHashMap<>(gameOptions));
+        // unmodifiableMap over a LinkedHashMap, not Map.copyOf: copyOf returns a MapN whose
+        // iteration order depends on a per-JVM randomised salt, so wrapping the input in a
+        // LinkedHashMap first preserved nothing. buildArgv iterates this to emit --game-option, so
+        // with copyOf the argv order varied run to run — which the transcripts in the runbook and
+        // component-isolation.md record as fixed, and which makes any future argv assertion flaky
+        // by construction. This is equally immutable and actually delivers the ordering.
+        gameOptions = Collections.unmodifiableMap(new LinkedHashMap<>(gameOptions));
         if (playerLogin == null || playerLogin.isBlank()) {
             throw new IllegalArgumentException(
                     "playerLogin must not be blank: it is passed to mock-game as --player-login");

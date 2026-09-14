@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -60,6 +61,12 @@ final class LaunchIceCommandTest {
 
     private Thread rpcAcceptor;
 
+    /**
+     * Completes with the wall-clock millisecond at which the command's JSON-RPC peer went away,
+     * observed as EOF on the accepted socket. Used to pin the close-before-terminate ordering.
+     */
+    private final CompletableFuture<Long> peerClosedAt = new CompletableFuture<>();
+
     @BeforeEach
     void attachAppender() {
         LoggerContext ctx = (LoggerContext) LoggerFactory.getILoggerFactory();
@@ -73,7 +80,7 @@ final class LaunchIceCommandTest {
     }
 
     @AfterEach
-    void detachAppender() {
+    void detachAppender() throws InterruptedException {
         if (appender != null) {
             appender.stop();
             root.detachAppender(appender);
@@ -84,6 +91,10 @@ final class LaunchIceCommandTest {
             } catch (IOException ignored) {
                 // Best effort; the accept thread is a daemon and ends with it.
             }
+        }
+        if (rpcAcceptor != null) {
+            rpcAcceptor.interrupt();
+            rpcAcceptor.join(2000);
         }
     }
 
@@ -96,16 +107,19 @@ final class LaunchIceCommandTest {
         rpcAcceptor =
                 new Thread(
                         () -> {
-                            try {
-                                Socket held = rpcListener.accept();
-                                // Held open until the test ends; closing here would make the
-                                // command's peer see an immediate remote close.
-                                synchronized (this) {
-                                    while (!rpcListener.isClosed() && held.isConnected()) {
-                                        wait(50);
-                                    }
+                            // try-with-resources: teardown closes only the listener, so without
+                            // this each happy-path test leaked the accepted descriptor until the
+                            // socket's Cleaner ran.
+                            try (Socket held = rpcListener.accept()) {
+                                // Read rather than poll. Socket.isConnected() reports whether the
+                                // socket was *ever* connected and stays true after a remote close,
+                                // so the old loop condition was dead and the wait/notify only ever
+                                // ended via the listener. A blocking read ends exactly when the
+                                // command closes its peer, which is the event worth observing.
+                                if (held.getInputStream().read() == -1) {
+                                    peerClosedAt.complete(System.currentTimeMillis());
                                 }
-                            } catch (IOException | InterruptedException ignored) {
+                            } catch (IOException ignored) {
                                 // The listener was closed in teardown, or the test ended.
                             }
                         },
@@ -191,10 +205,90 @@ final class LaunchIceCommandTest {
                 ExitCodes.RUNTIME,
                 exit,
                 "an adapter no peer can attach to is not a usable adapter");
-        ILoggingEvent error = findEvent(e -> e.getLevel() == Level.ERROR);
+        // Matched on the message, not merely on "the first ERROR": another error path preceding
+        // this one would otherwise satisfy the assertion without the command having said anything
+        // about the peer.
+        ILoggingEvent error =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage()
+                                                .contains("could not attach a JSON-RPC peer"));
         assertTrue(
                 error.getFormattedMessage().contains("could not attach a JSON-RPC peer"),
                 "the failure must name what went wrong; got: " + error.getFormattedMessage());
+    }
+
+    /**
+     * #279's deliverable is "test coverage for the connect <em>and the teardown</em>". The connect
+     * half was covered; this is the other half.
+     *
+     * <p>The ordering is a real property, not a detail: the command closes the peer before
+     * terminating the adapter so the adapter sees an ordinary client disconnect rather than dying
+     * with one attached. Nothing caught a reordering before this.
+     *
+     * <p>Observed rather than timed — the stub reads its accepted socket to EOF, which happens
+     * exactly when the command closes its peer. Resolution is a millisecond, so a same-millisecond
+     * tie passes; a reordering moves the close after process teardown and is caught.
+     */
+    @Test
+    void thePeerIsClosedBeforeTheAdapterIsTerminated() throws Exception {
+        Path stub = createSleepingStub();
+
+        int exit =
+                execute(
+                        launchIceArgs(
+                                stub,
+                                "--duration-seconds=1",
+                                rpcPortFlagForAListenerThatAccepts()));
+
+        assertEquals(ExitCodes.OK, exit, "a healthy run must still exit OK");
+        Long closedAt = peerClosedAt.get(5, TimeUnit.SECONDS);
+        ILoggingEvent terminated =
+                findEvent(
+                        e ->
+                                e.getFormattedMessage()
+                                        .startsWith("ICE adapter terminated; exit code"));
+        assertTrue(
+                closedAt <= terminated.getTimeStamp(),
+                "the JSON-RPC peer must go away before the adapter is terminated, so the adapter"
+                        + " sees a client disconnect rather than dying with a peer attached; peer"
+                        + " closed at "
+                        + closedAt
+                        + ", terminate logged at "
+                        + terminated.getTimeStamp());
+    }
+
+    /**
+     * An adapter that starts and then dies must be reported as having exited, with its code — not
+     * as an RPC-port problem.
+     *
+     * <p>Before this, the connect retry budget expired first and the operator was told "could not
+     * attach a JSON-RPC peer on port N", pointing at the wrong subsystem and discarding the exit
+     * code that would have explained it. subprocess-orchestration-spec §2.6 records that
+     * faf-ice-adapter exits 0 on a usage error, so timing out is a legitimate detector — losing the
+     * exit code is the defect.
+     */
+    @Test
+    void anAdapterThatDiesBeforeThePeerAttachesReportsItsExitCode() throws Exception {
+        Path stub = createStub("#!/bin/sh\necho ICE-ADAPTER-STUB-UP\nexit 3\n");
+
+        // Port 1: nothing can attach, so the command is forced down the connect-failure path.
+        // One second, because the connect budget is derived from it: the liveness check runs after
+        // the retry budget is spent, so the report is correct but not yet early. Racing the connect
+        // against the adapter's own exit is #341.
+        int exit = execute(launchIceArgs(stub, "--duration-seconds=1", "--ice-adapter-rpc-port=1"));
+
+        assertEquals(ExitCodes.RUNTIME, exit, "an adapter that died is still a failed run");
+        ILoggingEvent error =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage().contains("exited on its own"));
+        assertTrue(
+                error.getFormattedMessage().contains("3"),
+                "the adapter's exit code is the diagnosis and must be reported; got: "
+                        + error.getFormattedMessage());
     }
 
     /** A stub adapter that starts, says so, and stays up until it is terminated. */

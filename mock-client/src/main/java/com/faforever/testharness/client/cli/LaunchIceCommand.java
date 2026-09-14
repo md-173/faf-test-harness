@@ -60,17 +60,31 @@ import picocli.CommandLine.Spec;
 public final class LaunchIceCommand implements Callable<Integer> {
 
     /**
-     * Retry budget for attaching the JSON-RPC peer: 20 attempts at 250 ms is the 5 s window
-     * downlords-faf-client allows the adapter to bind its port (subprocess-orchestration-spec
-     * §2.7).
+     * Delay between JSON-RPC connect attempts, matching {@link IceAdapterConnection}'s own default.
      */
-    private static final int RPC_CONNECT_ATTEMPTS = 20;
+    private static final Duration RPC_RETRY_DELAY = Duration.ofMillis(200);
 
-    /** Delay between JSON-RPC connect attempts. */
-    private static final Duration RPC_RETRY_DELAY = Duration.ofMillis(250);
+    /**
+     * Ceiling on the connect window, matching {@link IceAdapterConnection}'s default cold-start
+     * budget.
+     *
+     * <p>The window itself is derived from {@code --duration-seconds} rather than fixed, the way
+     * {@code ice-smoke} derives its own from {@code --timeout-seconds}. A fixed 20 attempts at 250
+     * ms gave 4.75 s, which this PR makes fatal: an ordinary cold {@code java -jar} on a loaded
+     * runner can take longer than that to bind, so the command would terminate an adapter that was
+     * about to be fine — while {@code ice-smoke} against the same adapter passed. Deriving it also
+     * means a caller that wants a short run gets a proportionally short connect budget, instead of
+     * a negative case costing five seconds it cannot influence.
+     *
+     * <p>The old javadoc here cited subprocess-orchestration-spec §2.7 for "the 5 s window
+     * downlords-faf-client allows". That file says 200 ms × 100 attempts ≤ 20 s, and carries an
+     * explicit correction retracting the 2.5 s figure as verified false; upstream is 50 × 250 ms ≈
+     * 12.5 s. The citation is dropped rather than repaired.
+     */
+    private static final Duration MAX_RPC_CONNECT_WINDOW = Duration.ofSeconds(20);
 
-    /** Overall bound on attaching the peer, comfortably past the retry budget above. */
-    private static final Duration RPC_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    /** Headroom added to the connect window for the bounding {@code get}; see {@link #call()}. */
+    private static final Duration RPC_CONNECT_GRACE = Duration.ofSeconds(5);
 
     /** Call timeout for the peer. Nothing is called on it here; it holds the socket open. */
     private static final Duration RPC_CALL_TIMEOUT = Duration.ofSeconds(5);
@@ -123,27 +137,58 @@ public final class LaunchIceCommand implements Callable<Integer> {
             return ExitCodes.RUNTIME;
         }
 
+        // Bounded by the run window: attaching cannot sensibly take longer than the adapter is
+        // being asked to live for, and a 20 s ceiling keeps a long run from waiting indefinitely.
+        Duration connectWindow =
+                Duration.ofSeconds(Math.min(durationSeconds, MAX_RPC_CONNECT_WINDOW.toSeconds()));
+        int connectAttempts =
+                (int) Math.max(1, connectWindow.toMillis() / RPC_RETRY_DELAY.toMillis());
+        // Must sit above the retry budget, not below it, or raising the budget is inert.
+        Duration connectBound = connectWindow.plus(RPC_CONNECT_GRACE);
+
         IceAdapterConnection rpc =
                 new IceAdapterConnection(
-                        settings.rpcPort(),
-                        RPC_CONNECT_ATTEMPTS,
-                        RPC_RETRY_DELAY,
-                        RPC_CALL_TIMEOUT);
+                        settings.rpcPort(), connectAttempts, RPC_RETRY_DELAY, RPC_CALL_TIMEOUT);
+        // Registered before the socket opens: the adapter sends both of these to its peer during
+        // the very handshake this command exists to enable, and an unregistered notification is
+        // logged at WARN once per name — so a *successful* run would emit two warnings.
+        // onConnectionStateChanged is the in-process proof that the pair composed, so it is worth
+        // more than a no-op.
+        rpc.registerNotification(
+                "onConnectionStateChanged",
+                node -> log.info("ICE adapter reports connection state: {}", node));
+        rpc.registerNotification(
+                "onGpgNetMessageReceived",
+                node -> log.debug("ICE adapter relayed a GPGNet message: {}", node));
         try {
             // The adapter is not usable by a game until this exists (see the class javadoc), so a
             // failure to establish it is a failed run rather than a warning: the command would
             // otherwise report OK while sitting next to an adapter that drops the first game that
             // connects to it.
-            rpc.connect().get(RPC_CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            rpc.connect().get(connectBound.toMillis(), TimeUnit.MILLISECONDS);
             log.info(
                     "JSON-RPC peer attached on port {}; the adapter can now serve a game",
                     settings.rpcPort());
         } catch (TimeoutException | ExecutionException e) {
-            log.error(
-                    "could not attach a JSON-RPC peer on port {}: {}",
-                    settings.rpcPort(),
-                    e.getMessage());
             rpc.close();
+            // Ask whether the adapter is still alive before blaming its RPC port. An adapter that
+            // started and then died — a usage error, a failed bind — otherwise gets reported as
+            // "could not attach a JSON-RPC peer", pointing the operator at the wrong subsystem and
+            // discarding the exit code that would have told them what happened.
+            // IceReachabilityCheck
+            // makes the same check for the same reason.
+            if (!adapter.isAlive()) {
+                OptionalInt code = adapter.exitCode();
+                log.error(
+                        "ICE adapter exited on its own before a JSON-RPC peer could attach;"
+                                + " exit code {}",
+                        code.isPresent() ? code.getAsInt() : "unknown");
+                adapter.terminate();
+                return ExitCodes.RUNTIME;
+            }
+            // TimeoutException carries no message, so render the type when there is nothing else.
+            String cause = e.getMessage() == null ? e.toString() : e.getMessage();
+            log.error("could not attach a JSON-RPC peer on port {}: {}", settings.rpcPort(), cause);
             adapter.terminate();
             return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {
