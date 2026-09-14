@@ -31,6 +31,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -107,11 +108,13 @@ import org.slf4j.LoggerFactory;
  * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
  * installed mock-game binary ({@code ./gradlew :mock-game:installDist}), the {@code faf-uid} binary
- * (the lobby's policy server rejects a placeholder {@code unique_id}), and <b>four</b> seeded
- * accounts' refresh tokens — {@code .secrets/refresh_token.txt} and {@code
- * .secrets/refresh_token_b.txt}, each overridable by environment variable. One account cannot host
- * and join its own game. Both files are rewritten in place on every run, because Hydra rotates the
- * refresh token on use. See {@code documentation/demos/README.md} for the bootstrap and run notes.
+ * (the lobby's policy server rejects a placeholder {@code unique_id}), and one seeded account's
+ * refresh token per peer: {@code .secrets/refresh_token.txt}, {@code _b.txt}, {@code _c.txt} and
+ * {@code _d.txt}, overridable by {@code FAF_REFRESH_TOKEN_A} to {@code _D}. A case with fewer
+ * joiners needs only the files it uses. One account cannot host and join its own game, and one
+ * account in two peers signs the first out. Every file used is rewritten in place on every run,
+ * because Hydra rotates the refresh token on use. See {@code documentation/demos/README.md} for the
+ * bootstrap and run notes.
  *
  * <p><b>Every wait is bounded and named</b>, in the 3.1.2.7 pattern: a missed checkpoint fails with
  * the budget that ran out and what had been seen by then, so a regression names itself. The
@@ -171,9 +174,9 @@ final class MultiPeerSessionLiveTest {
     private static final Duration ROLE_TIMEOUT = Duration.ofSeconds(90);
 
     /**
-     * Budget for ICE to complete once both peers know about each other. Two processes on one host
-     * negotiate over host candidates, which is fast; this is headroom for the lobby relay hop, not
-     * a measurement of the negotiation.
+     * Budget for ICE to complete on every link once the last joiner is in, shared by the whole
+     * mesh. Processes on one host negotiate over host candidates, which is fast; this is headroom
+     * for the lobby relay hop, not a measurement of the negotiation.
      */
     private static final Duration PEER_CONNECTED_TIMEOUT = Duration.ofSeconds(90);
 
@@ -318,6 +321,12 @@ final class MultiPeerSessionLiveTest {
         private final List<PeerVerdict> observed = new ArrayList<>();
 
         /**
+         * The latest verdict per remote player id. Latest rather than first: a link reported up and
+         * then down is not part of a mesh.
+         */
+        private final Map<Long, Boolean> latestByRemote = new HashMap<>();
+
+        /**
          * A {@code game_join_failed} frame, if the server sent one. Recorded purely for the failure
          * message: the alternative is a bare 90 s timeout waiting for {@code game_launch} that
          * never says the server refused the join, and {@code game_not_ready} versus {@code
@@ -426,7 +435,7 @@ final class MultiPeerSessionLiveTest {
                 try {
                     shutdown(joiner);
                 } catch (Exception e) {
-                    continue;
+                    System.out.println("[4.3.3] " + joiner.name + " shutdown threw: " + e);
                 }
             }
             shutdown(host);
@@ -490,15 +499,8 @@ final class MultiPeerSessionLiveTest {
         List<Peer> allPeers = new ArrayList<>(joiners);
         allPeers.add(host);
 
-        // Establish that each peer has connected with each other peer, in both directions.
-        for (var p1 : allPeers) {
-            for (var p2 : allPeers) {
-                if (p1 != p2) {
-                    // The card's definitive signal, on both sides, for the ids the lobby assigned.
-                    awaitPeerConnected(p1, p2);
-                }
-            }
-        }
+        // The card's definitive signal: every adapter reports every other peer connected.
+        awaitFullMesh(allPeers);
 
         // Done differently as awaitPeerTraffic should be called once per pair rather than for each
         // direction.
@@ -620,42 +622,80 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * Wait for {@code peer}'s adapter to report the link to {@code other} established.
+     * Wait until every peer's adapter reports every other peer connected: two directed links per
+     * pair, so three connections at three players and six at four.
      *
-     * <p>Consumes verdicts in arrival order and fails with everything seen, so a {@code
-     * connected=false} — the adapter's way of saying "this peer is unreachable" — is reported as
-     * what it is rather than as a bare timeout.
+     * <p>Verdicts arrive in no fixed order once there are more than two peers (a joiner hears about
+     * the host and about other joiners concurrently), so this keeps the latest verdict per remote
+     * id and polls all peers under one deadline. A verdict about an id outside the session is kept
+     * in the failure report but neither satisfies nor fails the wait.
      *
-     * @param peer the side whose adapter must report
-     * @param other the peer it must report about
+     * @param peers every peer in the session, host included
      * @throws InterruptedException if the wait is interrupted
      */
-    private void awaitPeerConnected(final Peer peer, final Peer other) throws InterruptedException {
+    private void awaitFullMesh(final List<Peer> peers) throws InterruptedException {
         long deadline = System.nanoTime() + PEER_CONNECTED_TIMEOUT.toNanos();
-        do {
-            PeerVerdict verdict = peer.verdicts.poll(POLL_SLICE.toMillis(), TimeUnit.MILLISECONDS);
-            if (verdict == null) {
-                continue;
+        while (true) {
+            boolean complete = true;
+            for (Peer peer : peers) {
+                drainVerdicts(peer);
+                complete &= missingLinks(peer, peers).isEmpty();
             }
-            peer.observed.add(verdict);
-            if (verdict.connected()) {
-                assertEquals(
-                        peer.identity.id(),
-                        verdict.localId(),
-                        peer.name + ": the adapter must report its own lobby-assigned id");
-                assertEquals(
-                        other.identity.id(),
-                        verdict.remoteId(),
-                        peer.name + ": the peer id must be the other client's lobby-assigned id");
+            if (complete) {
                 return;
             }
-        } while (System.nanoTime() < deadline);
-        fail(
-                peer.name
-                        + ": no onConnected(..., true) within "
-                        + PEER_CONNECTED_TIMEOUT
-                        + "; verdicts seen: "
-                        + peer.observed);
+            if (System.nanoTime() >= deadline) {
+                break;
+            }
+            Thread.sleep(POLL_SLICE.toMillis());
+        }
+        StringBuilder report = new StringBuilder();
+        for (Peer peer : peers) {
+            report.append(' ')
+                    .append(peer.name)
+                    .append(" missing ")
+                    .append(missingLinks(peer, peers))
+                    .append(", seen ")
+                    .append(peer.observed)
+                    .append(';');
+        }
+        fail("no full mesh within " + PEER_CONNECTED_TIMEOUT + ":" + report);
+    }
+
+    /**
+     * Moves every queued verdict into {@code peer}'s record, checking each is about this adapter.
+     *
+     * @param peer the peer whose queue to drain
+     */
+    private static void drainVerdicts(final Peer peer) {
+        PeerVerdict verdict;
+        while ((verdict = peer.verdicts.poll()) != null) {
+            peer.observed.add(verdict);
+            assertEquals(
+                    peer.identity.id(),
+                    verdict.localId(),
+                    peer.name + ": the adapter must report its own lobby-assigned id");
+            peer.latestByRemote.put(verdict.remoteId(), verdict.connected());
+        }
+    }
+
+    /**
+     * The ids of the session's other peers that {@code peer}'s adapter does not currently report
+     * connected.
+     *
+     * @param peer the reporting peer
+     * @param peers every peer in the session
+     * @return the missing remote ids, empty when this peer's links are all up
+     */
+    private static List<Long> missingLinks(final Peer peer, final List<Peer> peers) {
+        List<Long> missing = new ArrayList<>();
+        for (Peer other : peers) {
+            long otherId = other.identity.id();
+            if (other != peer && !peer.latestByRemote.getOrDefault(otherId, false)) {
+                missing.add(otherId);
+            }
+        }
+        return missing;
     }
 
     /**
@@ -976,7 +1016,7 @@ final class MultiPeerSessionLiveTest {
                             "joining account's refresh token",
                             findTokenD(),
                             TOKEN_D_ENV,
-                            "bootstrap .secrets/refresh_token_b.txt for a FOURTH seeded account");
+                            "bootstrap .secrets/refresh_token_d.txt for a FOURTH seeded account");
         }
         return tokenB && tokenC && tokenD;
     }
@@ -1074,12 +1114,12 @@ final class MultiPeerSessionLiveTest {
 
     private static Path findTokenC() {
         return resolve(
-                TOKEN_B_ENV, ".secrets/refresh_token_c.txt", "../.secrets/refresh_token_c.txt");
+                TOKEN_C_ENV, ".secrets/refresh_token_c.txt", "../.secrets/refresh_token_c.txt");
     }
 
     private static Path findTokenD() {
         return resolve(
-                TOKEN_B_ENV, ".secrets/refresh_token_d.txt", "../.secrets/refresh_token_d.txt");
+                TOKEN_D_ENV, ".secrets/refresh_token_d.txt", "../.secrets/refresh_token_d.txt");
     }
 
     /**
