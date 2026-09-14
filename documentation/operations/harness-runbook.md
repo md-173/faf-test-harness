@@ -488,6 +488,23 @@ entirely if you only need §2.
      §2 (this is the spec these steps are transcribed from; it is not
      restated further here).
 
+3. **Obtain `faf-uid`.** Download the release binary for your platform from
+   [FAForever/uid releases](https://github.com/FAForever/uid/releases) and
+   make it executable (`chmod +x faf-uid` on Linux/macOS). It embeds the
+   public key the lobby's policy server expects; a placeholder UID is
+   rejected outright.
+
+**Not run from this network/session.** The browser step above needs an
+interactive user with FAF credentials and could not be executed headlessly
+here — it is transcribed from `lobby-protocol-spec.md` §2, whose procedure
+was verified end-to-end on 2026-05-05, and the resulting full session was
+independently captured live on 2026-07-14
+([`demos/lobby-connect-idle.log`](../demos/lobby-connect-idle.log)). Reachability
+of the lobby host itself **was** verified from this session's network
+(2026-08-21): `wss://ws.faforever.xyz:443` accepts a TCP connection;
+`wss://lobby.faforever.xyz:443` times out (see §8 for why that second
+hostname appears at all).
+
 ### The other credential channel: a pre-signed access token
 
 `--oauth-access-token-file` takes a token someone else signed and sends it as-is
@@ -543,23 +560,6 @@ adapter's telemetry websocket does — start from a copy of `$JAVA_HOME/lib/secu
 (default password `changeit`) and import your CA into that. And these are JVM
 flags, not harness flags: they go before `-jar`, and `./gradlew run` needs them
 passed through rather than appended to `--args`.
-3. **Obtain `faf-uid`.** Download the release binary for your platform from
-   [FAForever/uid releases](https://github.com/FAForever/uid/releases) and
-   make it executable (`chmod +x faf-uid` on Linux/macOS). It embeds the
-   public key the lobby's policy server expects; a placeholder UID is
-   rejected outright.
-
-**Not run from this network/session.** The browser step above needs an
-interactive user with FAF credentials and could not be executed headlessly
-here — it is transcribed from `lobby-protocol-spec.md` §2, whose procedure
-was verified end-to-end on 2026-05-05, and the resulting full session was
-independently captured live on 2026-07-14
-([`demos/lobby-connect-idle.log`](../demos/lobby-connect-idle.log)). Reachability
-of the lobby host itself **was** verified from this session's network
-(2026-08-21): `wss://ws.faforever.xyz:443` accepts a TCP connection;
-`wss://lobby.faforever.xyz:443` times out (see §8 for why that second
-hostname appears at all).
-
 ## 4. Configuration
 
 Every Mock Client field is resolved from four layered sources, lowest to

@@ -147,11 +147,11 @@ none of the lobby or OAuth rows apply to it.
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
 | `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
-| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes | OAuth2 token endpoint (Hydra `/oauth2/token`). |
+| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes² | OAuth2 token endpoint (Hydra `/oauth2/token`). |
 | `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | yes | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
-| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 public client identifier. |
+| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes² | OAuth2 public client identifier. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
 | `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
@@ -170,12 +170,19 @@ none of the lobby or OAuth rows apply to it.
 | `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions — network fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Network fault injection](../documentation/operations/harness-runbook.md#10-network-fault-injection-wbs-51). |
 | `mockGameUdpDropPercent` | `FAF_MOCK_CLIENT_MOCK_GAME_UDP_DROP_PERCENT` | `--mock-game-udp-drop-percent` | `0` | no | Percentage of outbound peer datagrams the launched mock-game suppresses — the lossy-link half of the same fault injection (WBS 5.1). Passed through as mock-game's `--udp-drop-percent`, and emitted only when non-zero. Drawn independently per peer per round; dropped datagrams still consume their sequence number, so the receiver sees gaps. |
 
-¹ **Exactly one of the two credential channels is required**, and configuring
-both is a config error naming them rather than a precedence rule — they fail
-differently, so silently picking one would hand the operator a failure mode they
-did not choose. Omitting both produces a picocli `ParameterException` pointing at
-the bootstrap procedure in `documentation/research/lobby-protocol-spec.md` §2
-(WBS-2.2.10).
+¹ **Exactly one of the two credential channels is required.** Configuring both
+*at different layers* is resolved by the ordinary precedence — CLI flag beats
+`FAF_MOCK_CLIENT_*` beats the config file — so an access token on the command
+line overrides an `oauthRefreshTokenFile` the shipped example config carries.
+Configuring both at the *same* layer is a config error naming them, not a
+precedence rule: there is nothing to rank, and the two fail differently, so
+silently picking one would hand the operator a failure mode they did not choose.
+Omitting both produces a picocli `ParameterException` pointing at the bootstrap
+procedure in `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
+
+² Required on the refresh-token channel only. Nothing is exchanged for a
+pre-signed access token, so with `oauthAccessTokenFile` set these two are not
+read and need not be supplied.
 
 Neither channel accepts a literal token value on the command line. For the
 refresh token that is a correctness requirement — Hydra rotates it on every use

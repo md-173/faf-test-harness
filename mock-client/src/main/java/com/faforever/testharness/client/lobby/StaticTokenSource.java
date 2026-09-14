@@ -9,6 +9,11 @@ import java.util.concurrent.CompletableFuture;
 /**
  * A {@link TokenSource} that hands out a token someone else signed (WBS-3.1.6.4, #325).
  *
+ * <p>Not any JWT. The lobby decodes it in {@code oauth_service.py} as RS256 against Hydra's JWKS,
+ * so the token must be Hydra-issued, must carry {@code lobby} in its {@code scp} claim, and must
+ * have a numeric {@code sub} — that claim is the player id. An arbitrary JWT is rejected by the
+ * server with no indication of which of the three it failed, so check them here first.
+ *
  * <p>No network exchange, no rotation, no file rewriting. It reads the token once at construction
  * and returns it for the life of the process.
  *
