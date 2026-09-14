@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -115,6 +116,13 @@ public final class LobbyConnection {
     private final Duration connectTimeout;
 
     /**
+     * The constructing thread's instance label (WBS-4.3.3), re-applied on the JDK threads that run
+     * the listener callbacks and the handshake continuation, so the frame handling they drive is
+     * attributable when several clients share a JVM.
+     */
+    private final InstanceLabel label;
+
+    /**
      * Command-to-handlers registry; lookups are concurrent-safe and each command's list iterates
      * lock-free on the listener thread.
      */
@@ -165,6 +173,7 @@ public final class LobbyConnection {
         this.httpClient = httpClient;
         this.mapper = mapper;
         this.connectTimeout = connectTimeout;
+        this.label = InstanceLabel.capture();
     }
 
     /**
@@ -220,6 +229,12 @@ public final class LobbyConnection {
     }
 
     private Void onHandshakeComplete(final WebSocket socket, final Throwable error) {
+        try (InstanceLabel.Scope ignored = label.apply()) {
+            return completeHandshake(socket, error);
+        }
+    }
+
+    private Void completeHandshake(final WebSocket socket, final Throwable error) {
         if (error != null) {
             Throwable cause = error instanceof CompletionException ? error.getCause() : error;
             LOG.warn(
@@ -440,7 +455,7 @@ public final class LobbyConnection {
             if (last) {
                 String full = partial.toString();
                 partial.setLength(0);
-                try {
+                try (InstanceLabel.Scope ignored = label.apply()) {
                     dispatch(full);
                 } catch (RuntimeException e) {
                     LOG.warn("lobby dispatch threw: {}", e.toString());
@@ -453,6 +468,12 @@ public final class LobbyConnection {
         @Override
         public CompletionStage<?> onClose(
                 final WebSocket socket, final int statusCode, final String reasonText) {
+            try (InstanceLabel.Scope ignored = label.apply()) {
+                return closed(statusCode, reasonText);
+            }
+        }
+
+        private CompletionStage<?> closed(final int statusCode, final String reasonText) {
             DisconnectReason bucket =
                     closeRequested.get()
                             ? DisconnectReason.LOCAL_CLOSE
@@ -468,11 +489,13 @@ public final class LobbyConnection {
 
         @Override
         public void onError(final WebSocket socket, final Throwable error) {
-            LOG.warn(
-                    "lobby WebSocket error: {}: {}",
-                    error.getClass().getSimpleName(),
-                    error.getMessage());
-            fireDisconnect(new DisconnectEvent(DisconnectReason.ABRUPT_CLOSE, 0, null, error));
+            try (InstanceLabel.Scope ignored = label.apply()) {
+                LOG.warn(
+                        "lobby WebSocket error: {}: {}",
+                        error.getClass().getSimpleName(),
+                        error.getMessage());
+                fireDisconnect(new DisconnectEvent(DisconnectReason.ABRUPT_CLOSE, 0, null, error));
+            }
         }
     }
 }

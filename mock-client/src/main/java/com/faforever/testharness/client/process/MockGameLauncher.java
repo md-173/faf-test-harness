@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
@@ -84,12 +85,19 @@ public class MockGameLauncher {
     private final MockClientConfig config;
 
     /**
+     * The constructing thread's instance label (WBS-4.3.3), captured here rather than at launch
+     * because the launch runs on whichever lobby thread delivered {@code game_launch}.
+     */
+    private final InstanceLabel label;
+
+    /**
      * Creates a launcher bound to {@code config}.
      *
      * @param config the validated Mock Client configuration; must not be {@code null}
      */
     public MockGameLauncher(final MockClientConfig config) {
         this.config = Objects.requireNonNull(config, "config");
+        this.label = InstanceLabel.capture();
     }
 
     /**
@@ -128,6 +136,12 @@ public class MockGameLauncher {
         ProcessBuilder pb = new ProcessBuilder(argv);
         // Forward LOG_LEVEL so mock-game's LoggingSetup observes the same level as the harness.
         pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, config.logLevel());
+        // A labelled client passes its label on, so the game self-labels its lines and writes
+        // logs/mockgame-<label>.jsonl instead of every game sharing logs/mockgame.jsonl. The
+        // adapter gets no such variable: it is third-party and ignores it.
+        if (label.value() != null) {
+            pb.environment().put(LoggingSetup.INSTANCE_NAME_ENV, label.value());
+        }
         // Note: redirectErrorStream is intentionally NOT set — SubprocessManager keeps stdout and
         // stderr separate so stderr can be routed to WARN (spec §4 / §5.3).
 

@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Unit tests for {@link MockGameLauncher}. The real {@code mock-game} binary is not built in CI, so
@@ -61,6 +62,7 @@ final class MockGameLauncherTest {
 
     @AfterEach
     void detachAppender() {
+        MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
         if (appender != null) {
             appender.stop();
             root.detachAppender(appender);
@@ -264,6 +266,54 @@ final class MockGameLauncherTest {
         int code = game.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertFalse(game.isAlive(), "mock-game should be dead after terminate()");
         assertEquals(128 + 15, code, "a SIGTERM-ed process exits with 143");
+    }
+
+    @Test
+    void labelledLauncherPassesItsInstanceToTheGameAndItsCapturedOutput() throws Exception {
+        Path binary =
+                createStub(
+                        "mock-game",
+                        "#!/bin/sh\n"
+                                + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
+                                + "while true; do echo heartbeat; sleep 1; done\n");
+
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "B");
+        SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
+        // Off the test thread before polling, so only a label carried onto the reader thread can
+        // satisfy the predicate below.
+        MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        try {
+            awaitLog(
+                    e ->
+                            "instance=B".equals(e.getMessage())
+                                    && "B"
+                                            .equals(
+                                                    e.getMDCPropertyMap()
+                                                            .get(LoggingSetup.INSTANCE_MDC_KEY)));
+        } finally {
+            game.terminate();
+        }
+    }
+
+    @Test
+    void unlabelledLauncherLeavesTheGameUnlabelled() throws Exception {
+        Path binary =
+                createStub(
+                        "mock-game",
+                        "#!/bin/sh\n"
+                                + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
+                                + "while true; do echo heartbeat; sleep 1; done\n");
+
+        SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
+        try {
+            awaitLog(
+                    e ->
+                            "instance=none".equals(e.getMessage())
+                                    && !e.getMDCPropertyMap()
+                                            .containsKey(LoggingSetup.INSTANCE_MDC_KEY));
+        } finally {
+            game.terminate();
+        }
     }
 
     @Test

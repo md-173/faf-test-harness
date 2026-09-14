@@ -20,6 +20,7 @@ import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.DatagramSocket;
@@ -53,6 +54,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * The two-peer (WBS-4.3.1) and three/four-peer (WBS-4.3.3) milestones: two to four Mock Clients on
@@ -212,6 +214,14 @@ final class MultiPeerSessionLiveTest {
     /** A game that could not bind its lobby port, quoted into a failed traffic wait. */
     private static final String BIND_FAILURE = "failed to bind lobby port";
 
+    /**
+     * Client log lines every peer must have emitted under its own label by the time the mesh and
+     * traffic checkpoints pass (WBS-4.3.3). Each comes from a different thread source: the test
+     * thread, the lobby listener and the adapter reader.
+     */
+    private static final List<String> LABELLED_CLIENT_LINES =
+            List.of("state entry: CONNECTING", "session ready: ", "peer connected: ");
+
     /** Budget for a requested shutdown to drive a session to TERMINATED and run its teardown. */
     private static final Duration TEARDOWN_TIMEOUT = Duration.ofSeconds(30);
 
@@ -275,7 +285,17 @@ final class MultiPeerSessionLiveTest {
     void captureSubprocessLogs() {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = context.getLogger(Logger.ROOT_LOGGER_NAME);
-        captured = new ListAppender<>();
+        captured =
+                new ListAppender<>() {
+                    @Override
+                    protected void append(final ILoggingEvent event) {
+                        // Logback fills an event's MDC map lazily, from whichever thread reads it
+                        // first. Read it here, on the logging thread, so the label checkpoint sees
+                        // the label that thread carried rather than the test thread's.
+                        event.prepareForDeferredProcessing();
+                        super.append(event);
+                    }
+                };
         captured.list = new CopyOnWriteArrayList<>();
         captured.setContext(context);
         captured.start();
@@ -309,6 +329,13 @@ final class MultiPeerSessionLiveTest {
 
         /** Name used in failure messages, so a red run says which side failed. */
         private final String name;
+
+        /**
+         * This peer's instance label (WBS-4.3.3), put on the test thread while the peer is built,
+         * started and shut down. Its components capture it at construction and carry it onto their
+         * own threads, and its adapter and game output inherit it through capture.
+         */
+        private final String label;
 
         private final MockClientConfig config;
         private final MockClientLifecycle lifecycle;
@@ -344,27 +371,31 @@ final class MultiPeerSessionLiveTest {
         /** This peer's lobby-assigned identity, from its {@code welcome}. */
         private SessionState identity;
 
-        private Peer(final String name, final MockClientConfig config) {
-            this.name = name;
+        private Peer(final String label, final String role, final MockClientConfig config) {
+            this.label = label;
+            this.name = label + "(" + role + ")";
             this.config = config;
-            LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
-            lobby.registerHandler("game_join_failed", frame -> joinRefusal.set(frame.toString()));
-            IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
-            adapter.registerNotification("onConnected", this::record);
-            this.teardown = new SessionTeardown(lobby);
-            this.lifecycle =
-                    new MockClientLifecycle(
-                            config,
-                            new LobbySession(
-                                    lobby,
-                                    config.uniqueId(),
-                                    config.clientVersion(),
-                                    config.userAgent(),
-                                    config.uidBinaryPath()),
-                            adapter,
-                            new MockGameLauncher(config),
-                            new IceAdapterLauncher(config),
-                            teardown);
+            try (MDC.MDCCloseable ignored = labelled(this)) {
+                LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
+                lobby.registerHandler(
+                        "game_join_failed", frame -> joinRefusal.set(frame.toString()));
+                IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
+                adapter.registerNotification("onConnected", this::record);
+                this.teardown = new SessionTeardown(lobby);
+                this.lifecycle =
+                        new MockClientLifecycle(
+                                config,
+                                new LobbySession(
+                                        lobby,
+                                        config.uniqueId(),
+                                        config.clientVersion(),
+                                        config.userAgent(),
+                                        config.uidBinaryPath()),
+                                adapter,
+                                new MockGameLauncher(config),
+                                new IceAdapterLauncher(config),
+                                teardown);
+            }
         }
 
         /**
@@ -416,7 +447,8 @@ final class MultiPeerSessionLiveTest {
 
         // Unique per run, so a stale game from an earlier run is never what this one observes —
         // though it is the uid, not the title, that B actually targets.
-        Peer host = new Peer("A(host)", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
+        Peer host =
+                new Peer("A", "host", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
         try {
             runSession(host, joinerAmount);
         } finally {
@@ -469,10 +501,13 @@ final class MultiPeerSessionLiveTest {
 
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what
         // spawns A's adapter and game and completes gameLaunched with the uid.
-        host.identity = await(host.lifecycle.start(tokensFor(host)), SESSION_TIMEOUT, "A: welcome");
-        GameConfig hosted =
-                await(host.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "A: game_launch");
-        await(hosting, ROLE_TIMEOUT, "A: HOSTING");
+        GameConfig hosted;
+        try (MDC.MDCCloseable ignored = labelled(host)) {
+            host.identity =
+                    await(host.lifecycle.start(tokensFor(host)), SESSION_TIMEOUT, "A: welcome");
+            hosted = await(host.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "A: game_launch");
+            await(hosting, ROLE_TIMEOUT, "A: HOSTING");
+        }
 
         // Only now is the game joinable: the server marks it hosted when A's game reports Lobby,
         // which reaches the server only because R72 forwards it. B is started with A's uid as its
@@ -480,20 +515,22 @@ final class MultiPeerSessionLiveTest {
         // the field before anything can fail, so the teardown in the caller can always reach it.
         for (int i = 0; i < joinerAmount; i++) {
             String joinerName = joinerNames.get(i);
-            Peer joiner = new Peer(joinerName + "(joiner)", joinConfig(hosted.uid(), i));
+            Peer joiner = new Peer(joinerName, "joiner", joinConfig(hosted.uid(), i));
             joiners.add(joiner);
             CompletableFuture<Void> joining = joiner.lifecycle.stateReached(ClientState.JOINING);
-            joiner.identity =
-                    await(
-                            joiner.lifecycle.start(tokensFor(joiner)),
-                            SESSION_TIMEOUT,
-                            joinerName + ": welcome");
-            await(
-                    joiner.lifecycle.gameLaunched(),
-                    GAME_LAUNCH_TIMEOUT,
-                    joinerName + ": game_launch",
-                    joiner);
-            await(joining, ROLE_TIMEOUT, joinerName + ": JOINING");
+            try (MDC.MDCCloseable ignored = labelled(joiner)) {
+                joiner.identity =
+                        await(
+                                joiner.lifecycle.start(tokensFor(joiner)),
+                                SESSION_TIMEOUT,
+                                joinerName + ": welcome");
+                await(
+                        joiner.lifecycle.gameLaunched(),
+                        GAME_LAUNCH_TIMEOUT,
+                        joinerName + ": game_launch",
+                        joiner);
+                await(joining, ROLE_TIMEOUT, joinerName + ": JOINING");
+            }
         }
 
         List<Peer> allPeers = new ArrayList<>(joiners);
@@ -512,6 +549,68 @@ final class MultiPeerSessionLiveTest {
                 awaitPeerTraffic(p1, p2);
             }
         }
+
+        // WBS-4.3.3: every instance's lines, its adapter and game output included, carry its label.
+        assertInstanceLabels(allPeers);
+    }
+
+    /**
+     * The attribution checkpoint (WBS-4.3.3). Fails when a peer's key client lines, adapter output
+     * or game output are missing under its label, or when any adapter or game line is unlabelled.
+     * Other unlabelled lines are printed rather than failed: they come from rare paths such as
+     * send-failure continuations on JDK threads, and failing on them would make the live run flaky
+     * without making attribution of the checked lines any less proven.
+     *
+     * @param peers every peer in the session
+     */
+    private void assertInstanceLabels(final List<Peer> peers) {
+        List<String> problems = new ArrayList<>();
+        List<String> unlabelledOther = new ArrayList<>();
+        for (ILoggingEvent event : captured.list) {
+            String instance = event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY);
+            String component = event.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY);
+            if (instance == null) {
+                if (component != null) {
+                    problems.add("unlabelled " + component + " line: " + event.getMessage());
+                } else {
+                    unlabelledOther.add(event.getFormattedMessage());
+                }
+            }
+        }
+        for (Peer peer : peers) {
+            List<String> wanted = new ArrayList<>(LABELLED_CLIENT_LINES);
+            wanted.add("component " + IceAdapterLauncher.COMPONENT_TAG);
+            wanted.add("component " + MockGameLauncher.COMPONENT_TAG);
+            for (ILoggingEvent event : captured.list) {
+                if (!peer.label.equals(
+                        event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY))) {
+                    continue;
+                }
+                String component = event.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY);
+                wanted.remove("component " + component);
+                wanted.removeIf(prefix -> event.getFormattedMessage().startsWith(prefix));
+            }
+            if (!wanted.isEmpty()) {
+                problems.add(peer.name + " has no line labelled " + peer.label + " for " + wanted);
+            }
+        }
+        if (!unlabelledOther.isEmpty()) {
+            System.out.println(
+                    "[4.3.3] unlabelled client lines (reported, not failed): " + unlabelledOther);
+        }
+        if (!problems.isEmpty()) {
+            fail("instance attribution incomplete: " + problems);
+        }
+    }
+
+    /**
+     * Puts {@code peer}'s label on the test thread until the returned scope is closed.
+     *
+     * @param peer the peer whose components are about to be built, started or shut down
+     * @return the scope that removes the label again
+     */
+    private static MDC.MDCCloseable labelled(final Peer peer) {
+        return MDC.putCloseable(LoggingSetup.INSTANCE_MDC_KEY, peer.label);
     }
 
     /**
@@ -707,6 +806,18 @@ final class MultiPeerSessionLiveTest {
         if (peer == null) {
             return;
         }
+        try (MDC.MDCCloseable ignored = labelled(peer)) {
+            shutdownLabelled(peer);
+        }
+    }
+
+    /**
+     * {@link #shutdown(Peer)}'s body, run under the peer's label so its teardown lines, which are
+     * logged on the test thread, stay attributable.
+     *
+     * @param peer the peer to shut down
+     */
+    private void shutdownLabelled(final Peer peer) {
         peer.lifecycle.shutdown();
         try {
             peer.lifecycle
