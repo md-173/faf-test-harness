@@ -25,13 +25,16 @@ import java.util.OptionalInt;
  * @param oauthScopes Space-separated OAuth2 scopes (e.g. {@code openid offline lobby})
  * @param oauthClientId OAuth2 public client identifier
  * @param oauthRefreshTokenFile path to a file holding the long-lived refresh token (sensitive —
- *     rotated by Hydra on every use); rewritten atomically on each rotation. The file is the only
- *     credential channel: a literal token value cannot receive the rotated token back, so it would
- *     silently break on the next run.
- * @param oauthAccessTokenFile path to a file holding a pre-signed access token, used verbatim with
- *     no exchange and no rotation (WBS-3.1.6.4, #325). The alternative credential channel to {@code
- *     oauthRefreshTokenFile}, and mutually exclusive with it. A file rather than a bare flag so the
- *     token stays out of the process table and out of CI logs
+ *     rotated by Hydra on every use); rewritten atomically on each rotation. A file rather than a
+ *     literal token value, because a literal cannot receive the rotated token back and would
+ *     silently break on the next run. One of the two credential channels; see {@code
+ *     oauthAccessTokenFile} for the other.
+ * @param oauthAccessTokenFile path to a file holding a pre-signed access token (sensitive — a live
+ *     bearer credential), used verbatim with no exchange and no rotation (WBS-3.1.6.4, #325). The
+ *     alternative credential channel to {@code oauthRefreshTokenFile}: exactly one applies, and
+ *     where both are configured the higher layer wins (see {@code
+ *     MockClientCli#toValidatedConfig}), with a same-layer tie rejected here. A file rather than a
+ *     bare flag so the token stays out of the process table and out of CI logs
  * @param uniqueId stable hardware identifier sent in the lobby auth message
  * @param clientVersion client version string sent in the {@code ask_session} message (a required
  *     field of that command; lobby-protocol-spec.md §3)
@@ -101,9 +104,21 @@ public record MockClientConfig(
         Optional<GameJoinConfig> joinConfig) {
 
     /**
-     * Validates that an OAuth credential channel is present. The mock client supports one channel:
-     * a refresh-token file ({@code oauthRefreshTokenFile}) — the steady-state, headless path,
-     * exchanged at {@code oauthTokenUrl} for short-lived JWTs and rewritten on each rotation.
+     * Validates that exactly one OAuth credential channel is present. There are two: a
+     * refresh-token file ({@code oauthRefreshTokenFile}) — the steady-state, headless path,
+     * exchanged at {@code oauthTokenUrl} for short-lived JWTs and rewritten on each rotation — and
+     * a pre-signed access-token file ({@code oauthAccessTokenFile}), used verbatim with no exchange
+     * and no renewal (WBS-3.1.6.4).
+     *
+     * <p>Only the refresh channel exchanges anything, so only it requires {@code oauthTokenUrl} and
+     * {@code oauthClientId}; demanding them of a pre-signed token would be values invented to pass
+     * validation and then never read.
+     *
+     * <p>Both channels configured is rejected rather than resolved here, because by this point the
+     * layer each came from is gone. Precedence is applied before construction, in {@code
+     * MockClientCli#toValidatedConfig}, so what reaches this constructor with both set is a genuine
+     * same-layer tie — and the two renew differently, so picking either would silently choose a
+     * failure mode the operator did not.
      *
      * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
      * oauthClientSecret}) are not accepted on this record — the de-risking work in WBS-2.2.10
@@ -112,8 +127,9 @@ public record MockClientConfig(
      * the spec rather than a generic missing-creds error.
      *
      * @throws IllegalArgumentException if any mandatory endpoint/identity field is missing, if
-     *     neither credential channel is satisfied, if {@code clientVersion} or {@code userAgent} is
-     *     {@code null} or blank, or if {@code playerLogin} is {@code null} or blank
+     *     neither credential channel is satisfied, if both are satisfied at the same layer, if
+     *     {@code clientVersion} or {@code userAgent} is {@code null} or blank, or if {@code
+     *     playerLogin} is {@code null} or blank
      */
     public MockClientConfig {
         // Mandatory endpoint/identity fields. These are intentionally NOT marked required = true on
@@ -141,8 +157,13 @@ public record MockClientConfig(
         if (uniqueId == null || uniqueId.isBlank()) {
             missing.add("--unique-id");
         }
-        boolean hasAccessTokenFile =
-                oauthAccessTokenFile != null && oauthAccessTokenFile.isPresent();
+        // Normalised, not merely tolerated. TokenSources.fromConfig dereferences this
+        // unguarded, so leaving a null Optional on the record means the two files disagree about
+        // whether null is legal — latent today, because every caller passes Optional.ofNullable,
+        // and exactly the kind of mismatch that bites after a refactor.
+        oauthAccessTokenFile =
+                oauthAccessTokenFile == null ? Optional.empty() : oauthAccessTokenFile;
+        boolean hasAccessTokenFile = oauthAccessTokenFile.isPresent();
         // Only the refresh-token channel exchanges anything, so only it needs the endpoint and the
         // client id (WBS-3.1.6.4, #325). Demanding them of a pre-signed token would be the same
         // wall the placeholder OAuth flags used to be for the no-lobby diagnostics: values invented

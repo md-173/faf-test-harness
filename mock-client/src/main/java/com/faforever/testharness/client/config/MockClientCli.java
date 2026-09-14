@@ -507,10 +507,74 @@ public final class MockClientCli implements Callable<Integer> {
      */
     public MockClientConfig toValidatedConfig(final CommandSpec callerSpec) {
         try {
+            dropShadowedCredentialChannel(callerSpec);
             return toConfig();
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
+    }
+
+    /**
+     * Applies the documented precedence to the two OAuth credential channels before validation, so
+     * that a higher layer <em>overrides</em> a lower one instead of colliding with it.
+     *
+     * <p>Without this, {@link MockClientConfig}'s conflict check sees only that both fields are
+     * populated and rejects the run. That is wrong for every shape the repo actually ships: {@code
+     * mock-client.example.json} carries {@code oauthRefreshTokenFile} and the runbook tells
+     * operators to copy it, so supplying an access token by flag — or by {@code
+     * FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE}, which is the CI shape this card exists for — failed
+     * with "two OAuth credential channels configured" rather than doing what the precedence
+     * contract promises. Both were reproduced against a build of this branch.
+     *
+     * <p>Only a genuine tie still throws. Two channels at the same layer is an operator writing
+     * both into one config file or exporting both variables, where there is no precedence to apply
+     * and picking either would silently choose a failure mode they did not: the channels renew
+     * differently, which is the whole reason the rejection exists.
+     *
+     * @param callerSpec the spec whose command line carries the layered provider
+     */
+    private void dropShadowedCredentialChannel(final CommandSpec callerSpec) {
+        if (oauthRefreshTokenFile == null || oauthAccessTokenFile == null) {
+            return;
+        }
+        Optional<LayeredDefaultProvider> provider = layeredProvider(callerSpec);
+        if (provider.isEmpty()) {
+            return;
+        }
+        LayeredDefaultProvider.Layer refresh =
+                provider.get()
+                        .layerFor("--oauth-refresh-token-file")
+                        .orElse(LayeredDefaultProvider.Layer.CLI);
+        LayeredDefaultProvider.Layer access =
+                provider.get()
+                        .layerFor("--oauth-access-token-file")
+                        .orElse(LayeredDefaultProvider.Layer.CLI);
+        if (access.ordinal() > refresh.ordinal()) {
+            oauthRefreshTokenFile = null;
+        } else if (refresh.ordinal() > access.ordinal()) {
+            oauthAccessTokenFile = null;
+        }
+    }
+
+    /**
+     * Finds the layered provider for {@code callerSpec}, walking up to the root because a
+     * subcommand's own spec does not carry it — {@code ConfigLoader} sets it on the root command
+     * line, and both entry points reach this method through a subcommand on the {@code execute()}
+     * path.
+     *
+     * @param callerSpec the spec of the command requesting validation
+     * @return the provider, or empty when one is not attached (a hand-built {@code CommandLine})
+     */
+    private static Optional<LayeredDefaultProvider> layeredProvider(final CommandSpec callerSpec) {
+        for (CommandLine current = callerSpec.commandLine();
+                current != null;
+                current = current.getParent()) {
+            if (current.getCommandSpec().defaultValueProvider()
+                    instanceof LayeredDefaultProvider layered) {
+                return Optional.of(layered);
+            }
+        }
+        return Optional.empty();
     }
 
     /**

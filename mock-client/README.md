@@ -120,11 +120,11 @@ none of the lobby or OAuth rows apply to it.
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
 | `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
-| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes | OAuth2 token endpoint (Hydra `/oauth2/token`). |
+| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes² | OAuth2 token endpoint (Hydra `/oauth2/token`). |
 | `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | yes | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
-| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes | OAuth2 public client identifier. |
+| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes² | OAuth2 public client identifier. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
 | `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
@@ -141,12 +141,19 @@ none of the lobby or OAuth rows apply to it.
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 
-¹ **Exactly one of the two credential channels is required**, and configuring
-both is a config error naming them rather than a precedence rule — they fail
-differently, so silently picking one would hand the operator a failure mode they
-did not choose. Omitting both produces a picocli `ParameterException` pointing at
-the bootstrap procedure in `documentation/research/lobby-protocol-spec.md` §2
-(WBS-2.2.10).
+¹ **Exactly one of the two credential channels is required.** Configuring both
+*at different layers* is resolved by the ordinary precedence — CLI flag beats
+`FAF_MOCK_CLIENT_*` beats the config file — so an access token on the command
+line overrides an `oauthRefreshTokenFile` the shipped example config carries.
+Configuring both at the *same* layer is a config error naming them, not a
+precedence rule: there is nothing to rank, and the two fail differently, so
+silently picking one would hand the operator a failure mode they did not choose.
+Omitting both produces a picocli `ParameterException` pointing at the bootstrap
+procedure in `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
+
+² Required on the refresh-token channel only. Nothing is exchanged for a
+pre-signed access token, so with `oauthAccessTokenFile` set these two are not
+read and need not be supplied.
 
 Neither channel accepts a literal token value on the command line. For the
 refresh token that is a correctness requirement — Hydra rotates it on every use

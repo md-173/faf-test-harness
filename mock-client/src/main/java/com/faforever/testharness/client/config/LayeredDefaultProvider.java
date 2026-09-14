@@ -10,6 +10,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
@@ -72,6 +73,26 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
     /** Values loaded from the optional JSON config file. */
     private final Map<String, String> fileValues;
 
+    /**
+     * Which layer answered for each option this provider supplied, keyed by long option name.
+     * Populated as picocli asks, so it is complete only once parsing has finished.
+     */
+    private final Map<String, Layer> resolvedFrom = new LinkedHashMap<>();
+
+    /**
+     * A configuration layer, ordered by the precedence {@code harness-runbook.md} documents:
+     * built-in defaults, then the JSON config file, then {@code FAF_MOCK_CLIENT_*}, then CLI flags.
+     * Only the three that can carry a credential are modelled.
+     */
+    enum Layer {
+        /** Supplied by the JSON config file. */
+        FILE,
+        /** Supplied by a {@code FAF_MOCK_CLIENT_*} environment variable. */
+        ENV,
+        /** Matched on the command line, so this provider was never consulted for it. */
+        CLI
+    }
+
     LayeredDefaultProvider(final Map<String, String> environment, final Path configFile) {
         this.env = environment == null ? Map.of() : environment;
         this.fileValues = configFile == null ? Map.of() : readJsonFile(configFile);
@@ -92,6 +113,7 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
         String envName = ENV_PREFIX + stem.replace('-', '_').toUpperCase(Locale.ROOT);
         String fromEnv = env.get(envName);
         if (fromEnv != null && !fromEnv.isBlank()) {
+            resolvedFrom.put(cliFlag, Layer.ENV);
             return fromEnv;
         }
         String jsonKey =
@@ -100,9 +122,26 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                         : camelCaseFromKebab(stem);
         String fromFile = fileValues.get(jsonKey);
         if (fromFile != null && !fromFile.isBlank()) {
+            resolvedFrom.put(cliFlag, Layer.FILE);
             return fromFile;
         }
         return null;
+    }
+
+    /**
+     * Which layer supplied an option's value, for the callers that have to compare two options
+     * against the documented precedence rather than merely read them.
+     *
+     * <p>Picocli consults this provider only for options it did <em>not</em> match on the command
+     * line, so "no record here, yet the field is populated" is a precise signal that the value came
+     * from a CLI flag. That is what {@link Layer#CLI} means at the call site; this map only ever
+     * holds {@link Layer#ENV} and {@link Layer#FILE}.
+     *
+     * @param cliFlag the option's longest name, including the leading {@code --}
+     * @return the layer that answered for it, or empty if this provider did not supply it
+     */
+    Optional<Layer> layerFor(final String cliFlag) {
+        return Optional.ofNullable(resolvedFrom.get(cliFlag));
     }
 
     private static Map<String, String> readJsonFile(final Path path) {

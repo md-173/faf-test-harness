@@ -1,6 +1,8 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,8 +20,13 @@ import picocli.CommandLine;
  * Verifies the cross-field auth-choice rule after the WBS-2.2.10 / spec §2 migration:
  *
  * <ul>
- *   <li>A refresh-token file must be supplied — it is the only credential channel, since the
- *       rotated token must be persisted back on every use.
+ *   <li>A credential channel must be supplied. There are two: a refresh-token file, whose rotated
+ *       token is persisted back on every use, and a pre-signed access-token file used verbatim
+ *       (WBS-3.1.6.4). Supplying neither is an error; supplying both at the <em>same</em> layer is
+ *       too, because they renew differently and there is no precedence to separate them.
+ *   <li>Across layers the documented precedence applies — config file, then {@code
+ *       FAF_MOCK_CLIENT_*}, then CLI flags — so a higher layer overrides the other channel rather
+ *       than colliding with it.
  *   <li>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
  *       oauthClientSecret}) are rejected with a deprecation error pointing at the spec.
  * </ul>
@@ -39,6 +46,134 @@ final class ConfigLoaderAuthChoiceTest {
                 "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
                 "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN,
             };
+
+    /** Writes a throwaway credential file and returns its path. */
+    private Path credentialFile(final Path dir, final String name) throws Exception {
+        return Files.writeString(dir.resolve(name), "not-a-real-credential");
+    }
+
+    /** A config file supplying only {@code oauthRefreshTokenFile}, as the shipped example does. */
+    private Path configWithRefreshToken(final Path dir, final Path refreshToken) throws Exception {
+        return Files.writeString(
+                dir.resolve("cfg.json"),
+                "{\"oauthRefreshTokenFile\": \""
+                        + refreshToken.toString().replace("\\", "\\\\")
+                        + "\"}");
+    }
+
+    @Test
+    void accessTokenOnTheCliOverridesARefreshTokenFromTheConfigFile(@TempDir Path dir)
+            throws Exception {
+        // The shape the repo ships: mock-client.example.json carries oauthRefreshTokenFile and the
+        // runbook says to copy it, so supplying an access token by flag has to override it rather
+        // than collide. This failed with "two OAuth credential channels configured" before the
+        // precedence fix.
+        Path refresh = credentialFile(dir, "refresh.txt");
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                concat(
+                        REQUIRED_NO_CREDS,
+                        new String[] {
+                            "--config=" + configWithRefreshToken(dir, refresh),
+                            "--oauth-access-token-file=" + access
+                        });
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
+        assertNull(config.oauthRefreshTokenFile(), "the CLI flag must win over the config file");
+    }
+
+    @Test
+    void accessTokenFromTheEnvironmentOverridesARefreshTokenFromTheConfigFile(@TempDir Path dir)
+            throws Exception {
+        // The CI shape, and this card's stated motivation.
+        Path refresh = credentialFile(dir, "refresh.txt");
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                concat(
+                        REQUIRED_NO_CREDS,
+                        new String[] {"--config=" + configWithRefreshToken(dir, refresh)});
+
+        MockClientConfig config =
+                ConfigLoader.load(
+                                args,
+                                Map.of(
+                                        "FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE",
+                                        access.toString()))
+                        .orElseThrow();
+
+        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
+        assertNull(config.oauthRefreshTokenFile(), "the env var must win over the config file");
+    }
+
+    @Test
+    void refreshTokenOnTheCliOverridesAnAccessTokenFromTheEnvironment(@TempDir Path dir)
+            throws Exception {
+        // Precedence runs both ways, or it is not precedence.
+        Path refresh = credentialFile(dir, "refresh.txt");
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                concat(REQUIRED_NO_CREDS, new String[] {"--oauth-refresh-token-file=" + refresh});
+
+        MockClientConfig config =
+                ConfigLoader.load(
+                                args,
+                                Map.of(
+                                        "FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE",
+                                        access.toString()))
+                        .orElseThrow();
+
+        assertEquals(refresh, config.oauthRefreshTokenFile());
+        assertTrue(
+                config.oauthAccessTokenFile().isEmpty(), "the CLI flag must win over the env var");
+    }
+
+    @Test
+    void bothChannelsAtTheSameLayerStillThrows(@TempDir Path dir) throws Exception {
+        // The case the rejection exists for: no precedence to apply, and the two channels renew
+        // differently, so picking either would choose a failure mode the operator did not.
+        Path refresh = credentialFile(dir, "refresh.txt");
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                concat(
+                        REQUIRED_NO_CREDS,
+                        new String[] {
+                            "--oauth-refresh-token-file=" + refresh,
+                            "--oauth-access-token-file=" + access
+                        });
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(
+                ex.getMessage().contains("two OAuth credential channels configured"),
+                "the tie must still be rejected, and say so. Got: " + ex.getMessage());
+    }
+
+    @Test
+    void theAccessTokenChannelNeedsNoTokenUrlOrClientId(@TempDir Path dir) throws Exception {
+        // The headline relaxation of this card, exercised through the config layer rather than by
+        // building the record directly — which is the only path that proves an operator can use it.
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                new String[] {
+                    "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                    "--oauth-auth-endpoint=" + TestFixtures.OAUTH_AUTH_ENDPOINT,
+                    "--oauth-redirect-uri=" + TestFixtures.OAUTH_REDIRECT_URI,
+                    "--oauth-scopes=" + TestFixtures.OAUTH_SCOPES,
+                    "--unique-id=" + TestFixtures.UNIQUE_ID,
+                    "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
+                    "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN,
+                    "--oauth-access-token-file=" + access
+                };
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
+    }
 
     @Test
     void noCredentialsThrowsParameterException() {
