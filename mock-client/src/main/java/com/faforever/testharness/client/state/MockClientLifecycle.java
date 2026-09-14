@@ -1152,6 +1152,14 @@ public final class MockClientLifecycle {
      *     else.
      */
     private void logAdapterExitAfterTeardown(Event message) {
+        // Classify first, exactly as logGameExitAfterTeardown runs onGameExited. This PR makes
+        // TERMINATED the normal state for AdapterExited to arrive in rather than a rare one — the
+        // race drives the failed transition there before the queued event is delivered — so
+        // whatever this handler skips is skipped on the common failure path, not an edge case.
+        // onAdapterExited is what distinguishes a clean exit from an abnormal one and is the only
+        // place a non-zero code reaches WARN; without it every post-race adapter exit reads the
+        // same at DEBUG, whatever the adapter actually did.
+        onAdapterExited(message);
         AdapterExited exited = (AdapterExited) message;
         LOG.debug("ICE adapter exited after session teardown (code={})", exited.exitCode());
     }
