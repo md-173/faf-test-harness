@@ -30,33 +30,30 @@ spawns subprocesses. The Mock Client is the sole supervisor of both.
 
 ### 1.1 Target environment
 
-This spec **targets Linux** as the runtime substrate. The Java code itself
-is OS-portable, but the orphan-prevention layer (§7.3) relies on Linux
-primitives (`prctl(PR_SET_PDEATHSIG)` via `util-linux`'s `setpriv`, plus
-`setsid` for process-group cleanup) that have no Windows or macOS
-equivalent.
+This spec **targets Linux**, the platform CI runs on (`ubuntu-latest`). The
+Java code itself is OS-portable. The unbuilt orphan-prevention layers in §7.3
+are designed around `util-linux`: `prctl(PR_SET_PDEATHSIG)` via `setpriv`, and
+`setsid` for process-group cleanup.
 
-The **Docker workspace is the supported delivery mechanism** for that Linux
-substrate. It is the canonical run target for three reasons:
+The harness needs **no container**. Both mocks ship as runnable jars on the
+releases page (WBS-7.6) and run as plain processes on a Java 21 or newer
+runtime, the way the real client runs `faf-ice-adapter` as a bare
+`ProcessBuilder` child. The reasons this section once gave for a Docker
+workspace no longer hold:
 
-1. **Fault-injection parity.** WBS 3.x (Network Fault Injection) needs
-   `tc`/`netem`/`iptables`, which only exist on Linux. Docker gives every
-   contributor — including macOS and Windows developers — the same kernel
-   tooling without requiring WSL2 or per-developer VMs.
-2. **PID 1 + zombie reaping.** The orphan-prevention plan in §7.3 depends
-   on tini at PID 1 (`docker run --init` / compose `init: true`). The
-   container is the cleanest way to guarantee a known PID 1.
-3. **Reproducible topology.** Multi-peer simulation (2–4 players) needs
-   deterministic NAT/routing across nodes; a `docker-compose` user-defined
-   bridge supplies it identically to every developer.
+1. **Fault injection lives in the harness.** WBS-5.1 puts its faults in the
+   Mock Client's ICE relay and mock-game's UDP sender, so it needs no `tc`,
+   `netem` or `iptables`. harness-runbook §10 explains why network-level tools
+   cannot express those faults.
+2. **Orphan prevention does not rely on an init process.** The harness JVM is
+   not PID 1, and `SubprocessRegistry`'s shutdown hook is the safety net. §7.3
+   records what that hook does not cover.
+3. **Multi-peer runs on one host.** Several Mock Clients share a host, each on
+   its own adapter ports. §9 records the decision.
 
 Implementation note: the Subprocess Execution Controller must not bake
-Docker-specific paths into the Java code. It depends on Linux primitives
-(`setpriv`, `setsid`, tini-style PID 1) that the Docker workspace provides
-by construction, but a Linux developer running bare-metal with the same
-tools installed should also be able to exercise it. Container-specific
-concerns (volume mounts, network bridges) belong in the Docker workspace
-configuration, not in the controller.
+container-specific paths or network assumptions into the Java code. Anyone who
+wraps the jars in a container keeps that configuration outside the controller.
 
 ## 2. Launch strategy
 
@@ -86,13 +83,15 @@ Mirroring `IceAdapterImpl`:
   Never rely on `PATH` — this guarantees the child runs on the same JRE as
   the parent (matching what the upstream library set chooses; see
   `libraries.md`).
-- **Adapter JAR**: configurable via env var `ICE_ADAPTER_JAR` (preferred for
-  Docker), falling back to `./faf-ice-adapter.jar` relative to the Mock
-  Client's working directory. Path is canonicalised and existence-checked
-  before launch; missing JAR is a fatal startup error, not a runtime fault.
+- **Adapter JAR**: `iceAdapterBinaryPath` (`--ice-adapter-binary-path`, env
+  `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH`), defaulting to
+  `faf-ice-adapter.jar` relative to the Mock Client's working directory. The
+  launcher checks that the path is a regular file before launch, so a missing
+  JAR fails the launch rather than starting a child.
 - **`mock-game`**: launched via the Gradle-installed launcher script (or its
-  fat JAR) at a path discovered the same way (env var `MOCK_GAME_BIN`
-  with a sensible default for the Docker image).
+  fat JAR) at a path configured the same way: `mockGameBinaryPath`
+  (`--mock-game-binary-path`, env `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH`),
+  defaulting to `mock-game/build/install/mock-game/bin/mock-game`.
 
 ### 2.3 Environment
 
@@ -103,8 +102,8 @@ Mirroring `IceAdapterImpl`:
   its file output (the `--log-directory` flag is deprecated upstream).
 - pass `LOG_LEVEL` through unchanged so children inherit the harness log
   level (see `LoggingSetup`).
-- do **not** scrub other env vars; the Docker image is the security
-  boundary.
+- do **not** scrub other env vars. The children run as the same OS user as
+  the Mock Client, so they gain nothing it does not already have.
 
 ### 2.4 Working directory
 
@@ -140,7 +139,7 @@ Bold flags are passed by the Mock Client on every launch.
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
 | `--log-directory <path>` | unset | no | Deprecated upstream — use `LOG_DIR` env var instead (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
-| `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags. **Never set in headless Docker.** |
+| `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
 | `--help` | — | no | Diagnostic only. |
 
 The Mock Client emits `--id` and `--login` first, with `--game-id`
@@ -326,7 +325,7 @@ two ports it shares with the adapter.
 
 ## 3. Port allocation
 
-To avoid cross-instance collisions inside the Docker network:
+To avoid collisions between harness instances sharing one host:
 
 - Open a `ServerSocket(0)` (TCP) or `DatagramSocket(0)` (UDP), read
   `getLocalPort()`, close, pass the integer to the child.
