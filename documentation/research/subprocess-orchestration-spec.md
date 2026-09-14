@@ -526,25 +526,24 @@ this — when the JVM is killed by `SIGKILL`, the OOM-killer, or
 `Runtime.halt()`, **shutdown hooks do not run** and child processes survive
 as orphans (they are reparented to PID 1).
 
-The strategy combines four mechanisms. Layers 1–2 are **Linux primitives
-the controller relies on directly**; layers 3–4 are **environmental
-guarantees the Docker workspace supplies** (and that any non-Docker Linux
-host would need to replicate).
+The design has four layers, and **only layer 1 is built**. Layers 2 and 4 are
+primitives that were designed but never added to the launch argv. Layer 3
+applies only when the JVM is PID 1, as in a container, and the harness runs as
+plain processes.
 
-| Layer | Mechanism | Covers | Provided by |
-|---|---|---|---|
-| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §7.1 → §7.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) |
-| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) |
-| 3. Init / PID 1 | tini as PID 1 (`docker run --init` / compose `init: true`) — reaps zombies, forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | Docker workspace |
-| 4. Process-group cleanup | Children launched via `setsid` so they are in their own session/process group; the init broadcasts SIGTERM to the group on container stop | Container `docker stop` after grace period | `util-linux` (`setsid`) + Docker workspace |
+| Layer | Mechanism | Covers | Provided by | Status |
+|---|---|---|---|---|
+| 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` adds a separate hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
+| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) | Designed, not built |
+| 3. Init / PID 1 | An init (e.g. tini) at PID 1 that reaps zombies and forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | A container runtime | Not applicable: the harness runs as plain processes, so its JVM is not PID 1 |
+| 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built |
 
 For layer 2, the JDK does not expose `prctl`. Acceptable
 implementations (in order of preference):
 
 - **`setsid`/`setpriv` shim**: launch the child via
   `["setpriv", "--pdeathsig", "TERM", "--", javaBin, "-jar", ...]`. `setpriv`
-  is part of `util-linux`, present in the Debian-based image we're targeting.
-  Zero JNI, zero native code in our codebase.
+  is part of `util-linux`. Zero JNI, zero native code in our codebase.
 - **Fallback (no `setpriv` available)**: a small Bash launcher script that
   writes its PID to a file and `exec`s the child; a parent-side watchdog
   thread polls `/proc/<parent>/stat` and signals the group on parent death.
@@ -553,12 +552,21 @@ implementations (in order of preference):
   for one syscall.
 
 For layer 4, prefix the argv with `setsid -w` (also `util-linux`). The
-resulting child is the leader of a new session; `kill -- -<pgid>` from tini
-delivers SIGTERM to every descendant in one syscall.
+resulting child is the leader of a new session, so `kill -- -<pgid>` delivers
+SIGTERM to every descendant in one syscall.
 
-Net effect: regardless of how the harness JVM dies, the children receive
-SIGTERM within milliseconds and have at least the container's grace period
-(default 10 s, configurable) to exit cleanly before SIGKILL.
+Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
+`System.exit`) terminates both children through layer 1. A `SIGKILL` or OOM
+kill of that JVM runs no hook, and nothing else in the harness terminates the
+children, so they outlive it. The adapter does not close that gap on its own.
+faf-ice-adapter 3.3.14 deliberately stays up when its JSON-RPC client
+disconnects while the game is `LAUNCHING` (`RPCService.init`), and in any other
+state its stop path throws on a headless host before reaching `System.exit`
+(the unguarded `TrayIcon.close()` that `SessionTeardown` already works around).
+Either way, a Mock Client killed with `SIGKILL` leaves its adapter running.
+Both cases were observed against 3.3.14, with the client killed in `HOSTING`
+and in `PLAYING`. mock-game keeps running too, until its own match timer ends
+the match, or indefinitely if it never launches one.
 
 ### 7.4 Process tracking
 
@@ -578,7 +586,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM, container kill | Out-of-process — handled by §7.3 | Children TERM'd by `setpriv` / tini |
+| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None: a killed JVM runs no hook | Children outlive it (§7.3) |
 
 ## 9. Open questions
 
@@ -605,7 +613,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 - `documentation/research/lobby-protocol-spec.md` §4.4, §5 — orchestration trigger and `game_launch` fields
 - [`shared/.../logging/ProcessOutputLogger.java`](../../shared/src/main/java/com/faforever/testharness/shared/logging/ProcessOutputLogger.java) — output capture implementation
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
-- [tini](https://github.com/krallin/tini) — container PID 1 / zombie reaping
+- [java-ice-adapter 3.3.14 `RPCService.java`](https://github.com/FAForever/java-ice-adapter/blob/3.3.14/ice-adapter/src/main/java/com/faforever/iceadapter/rpc/RPCService.java): adapter behaviour on losing its JSON-RPC client
 
 ## 11. Sequence diagram — one-session lifecycle
 
@@ -616,20 +624,19 @@ sequenceDiagram
     participant MC as Mock Client (parent JVM)
     participant IA as faf-ice-adapter (child)
     participant MG as mock-game (child)
-    participant TINI as tini (PID 1)
 
     Note over MC: idle in IDLE state
     LS->>MC: game_launch
     MC->>MC: validate fields, allocate rpc/gpgnet/lobby ports
-    MC->>IA: ProcessBuilder.start() via setpriv --pdeathsig TERM
+    MC->>IA: ProcessBuilder.start()
     activate IA
     MC->>IA: capture stdout+stderr (2 daemon threads)
-    loop ≤ 10× @ 250 ms
+    loop ≤ 100× @ 200 ms
         MC->>IA: TCP connect 127.0.0.1:rpcPort
     end
     IA-->>MC: TCP accepted
     MC->>IA: setLobbyInitMode + setIceServers
-    MC->>MG: ProcessBuilder.start() via setpriv --pdeathsig TERM
+    MC->>MG: ProcessBuilder.start()
     activate MG
     MG->>IA: GPGNet TCP connect
     IA-->>MC: onConnectionStateChanged("Connected")
@@ -650,12 +657,10 @@ sequenceDiagram
     MG-->>MC: process exit
     deactivate MG
 
-    Note over MC,TINI: catastrophic path (parent killed)
-    TINI--xMC: SIGKILL (e.g. OOM)
-    Note right of IA: kernel sends SIGTERM via PR_SET_PDEATHSIG
-    Note right of MG: kernel sends SIGTERM via PR_SET_PDEATHSIG
-    TINI->>IA: SIGTERM (process group, belt-and-braces)
-    TINI->>MG: SIGTERM (process group)
-    IA-->>TINI: exit
-    MG-->>TINI: exit
+    Note over MC,MG: signal path (SIGTERM or SIGINT to the parent)
+    MC->>IA: terminate() from the SubprocessRegistry shutdown hook
+    MC->>MG: terminate(), in parallel
+    IA-->>MC: exit
+    MG-->>MC: exit
+    Note over MC,MG: SIGKILL or OOM kill runs no hook, so IA and MG outlive MC (§7.3)
 ```
