@@ -208,20 +208,30 @@ public record MockClientConfig(
         // still queued, and being matched from there is exactly what earns a matchmaker violation
         // (#224 operational risk). Checked here rather than with a picocli @ArgGroup so that the
         // JSON config-file path is covered too, not just the CLI flags (#304 review).
+        // No null guards: buildHostConfig/buildJoinConfig/buildQueueConfig never return null and
+        // nothing else constructs this record with one. Guarding anyway was inconsistent with the
+        // rest of this constructor, which does not null-check uidBinaryPath or logFile — and
+        // actively harmful, because it classified a null as "role not configured" and let the
+        // record construct, turning a constructor-time NPE into a deferred one inside
+        // MockClientLifecycle.
         List<String> intents = new ArrayList<>();
-        if (hostConfig != null && hostConfig.isPresent()) {
+        if (hostConfig.isPresent()) {
             intents.add("--host-* (host a custom game)");
         }
-        if (joinConfig != null && joinConfig.isPresent()) {
+        if (joinConfig.isPresent()) {
             intents.add("--target-game-id (join a custom game)");
         }
-        if (queueConfig != null && queueConfig.isPresent()) {
+        if (queueConfig.isPresent()) {
             intents.add("--queue-name (queue for a matchmaker game)");
         }
         if (intents.size() > 1) {
             throw new IllegalArgumentException(
                     "a session can host, join, or queue, but not more than one at once; got "
-                            + String.join(" and ", intents));
+                            + String.join(" and ", intents)
+                            + ". Each is an IDLE entry hook, so configuring several sends"
+                            + " conflicting requests on the same entry to IDLE. Keep one and"
+                            + " remove the others' flags, environment variables or config-file"
+                            + " keys.");
         }
 
         // Same reasoning, and the same range mock-game enforces on the flag this becomes: a value
