@@ -8,6 +8,7 @@ import com.faforever.testharness.client.config.ConfigLoader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.Map;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
@@ -33,7 +34,7 @@ final class MockClientCliSubcommandHelpTest {
     }
 
     @Test
-    void rootHelpListsAllFourSubcommands() {
+    void rootHelpListsAllFiveSubcommands() {
         StringWriter out = new StringWriter();
         StringWriter err = new StringWriter();
         int exit = execute(new String[] {"--help"}, out, err);
@@ -49,6 +50,11 @@ final class MockClientCliSubcommandHelpTest {
         // documented while silently missing from MockClientCli's `subcommands` list — which is
         // exactly what a merge dropped once. This assertion is what catches that.
         assertTrue(text.contains("ice-smoke"), "Help should mention 'ice-smoke'. Got: " + text);
+        // Anchored to a line of the Commands list: "session" alone already appears in the root
+        // options' descriptions, so a bare contains() could not catch the command going missing.
+        assertTrue(
+                Pattern.compile("(?m)^\\s+session\\s").matcher(text).find(),
+                "Help should list 'session' as a command. Got: " + text);
     }
 
     @Test
@@ -69,6 +75,11 @@ final class MockClientCliSubcommandHelpTest {
     @Test
     void iceSmokeSubcommandHelpShortCircuitsRequiredCheck() {
         assertSubcommandHelpWorks("ice-smoke");
+    }
+
+    @Test
+    void sessionSubcommandHelpShortCircuitsRequiredCheck() {
+        assertSubcommandHelpWorks("session");
     }
 
     private static void assertSubcommandHelpWorks(final String subcommand) {

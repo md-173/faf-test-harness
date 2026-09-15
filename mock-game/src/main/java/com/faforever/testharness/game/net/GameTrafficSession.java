@@ -306,14 +306,44 @@ public final class GameTrafficSession implements AutoCloseable {
             }
             lastReported.put(senderId, received);
             LOG.info(
-                    "player {} peer traffic from player {}: {} datagrams, highest sequence {}, "
-                            + "gaps {}",
-                    playerId,
-                    senderId,
-                    received,
-                    receiver.highestSequence(senderId),
-                    receiver.discontinuities(senderId));
+                    "{}",
+                    progressLine(
+                            playerId,
+                            senderId,
+                            received,
+                            receiver.highestSequence(senderId),
+                            receiver.discontinuities(senderId)));
         }
+    }
+
+    /**
+     * The progress line this session logs once a second per sender (WBS-4.3.2). Public because it
+     * is a contract: mock-client's {@code session} verdict parses it ({@code TrafficEvidence}), and
+     * its test formats a line here so a rewording cannot silently break that parser.
+     *
+     * @param playerId this game's player id
+     * @param senderId the player whose datagrams were counted
+     * @param datagrams how many have been received from that player
+     * @param highestSequence the highest sequence number received from that player
+     * @param gaps the sequence discontinuities seen from that player
+     * @return the line, without any log prefix
+     */
+    public static String progressLine(
+            final long playerId,
+            final long senderId,
+            final long datagrams,
+            final long highestSequence,
+            final long gaps) {
+        return "player "
+                + playerId
+                + " peer traffic from player "
+                + senderId
+                + ": "
+                + datagrams
+                + " datagrams, highest sequence "
+                + highestSequence
+                + ", gaps "
+                + gaps;
     }
 
     /**

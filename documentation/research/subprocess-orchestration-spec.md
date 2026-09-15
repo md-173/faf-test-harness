@@ -600,6 +600,22 @@ wall-clock time is bounded by the longest single grace rather than their sum.
   `shared/`). Port allocation in §3 applies per-instance; no shared registry is
   needed as long as each Mock Client binds its own ports independently.
 
+  **Amended by WBS-4.2.1 (#87): the clients run in-process.** The orchestrator
+  that shipped, `MultiPeerSession` behind `mock-client session`, runs N
+  `MockClientLifecycle`s in one JVM. Each peer's adapter and game are still
+  launched through `SubprocessManager`, so every client, adapter and game is a
+  separate process from the other kinds, which is how this project reads the
+  brief's "run all components in separate processes". Only the clients share a
+  process with each other. Chosen because it reuses 4.3.3's orchestration and
+  instance labels, passes the host's game uid and the mesh verdict in-process
+  instead of needing a new handoff and a peer-link exit code on `run`, and at
+  16 peers keeps 16 client JVMs out of the scale ceiling it is meant to find.
+  The cost is fate sharing (an OOM or stuck lock ends every peer) and that
+  interference between clients through shared JVM state is not exercised.
+  Running each client as its own `run` process with `INSTANCE_NAME` stays
+  available by hand (`mock-client/README.md`, "Multiple clients on one box").
+  Port allocation is per peer, inside the orchestrator, as above.
+
 ## 10. Sources
 
 - [java-ice-adapter README — Commandline invocation, Example usage sequence](https://github.com/FAForever/java-ice-adapter)
