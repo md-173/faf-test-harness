@@ -46,8 +46,9 @@ public final class MockGameLifecycle {
      * A mapping of result strings to numerical scores.
      *
      * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
-     * end-of-match result is fixed at army 1 victory, every other army defeat (WBS-3.2.4.3-fix,
-     * #281). See {@code gameEnds} for why that is the design rather than a gap.
+     * end-of-match result is fixed: army 1's team wins and the other team loses (WBS-3.2.4.3-fix,
+     * #281; teams since WBS-4.3.3). See {@code gameEnds} for why that is the design rather than a
+     * gap.
      */
     private static final Map<String, Integer> SCORES =
             Map.of("victory", 10, "defeat", -10, "draw", 10);
@@ -763,9 +764,18 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            // TODO(#281): Configurable values.
+            // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1's team
+            // wins
+            // and the other team loses, on every run: the harness asserts on the shape and ordering
+            // of the closing frames, and a result that varied would make those assertions depend
+            // on configuration that no consumer has asked to vary. A mock whose output is the same
+            // every time is the point of it. If a card ever needs a specific outcome, the values
+            // belong on MockGameConfig alongside gameOptions rather than here.
+            //
             // GameResult is keyed by army, not team (faf-server handle_game_result(army, result)),
-            // so every army reports, with the result of its team: TEAMS[0] wins, TEAMS[1] loses.
+            // so every army reports its team's result (WBS-4.3.3). Army 1 is always on TEAMS[0].
+            // Before teams existed this rule read "army 1 wins, every other army loses"; with two
+            // teams that would have army 3 report defeat while its team wins.
             for (int army = 1; army <= peers.size() + 1; army++) {
                 String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
                 gpgnetSender.gameResult(army, result, SCORES.get(result));
