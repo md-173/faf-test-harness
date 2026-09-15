@@ -19,8 +19,10 @@ import org.slf4j.MDC;
  *
  * <p>The label source is implicit: components capture whatever label is on the thread that builds
  * them, so anything built outside a labelled scope is silently unlabelled. That keeps the change
- * out of the configuration classes while other work is open on them. A caller that runs several
- * clients as a product feature (R59a's session command) should pass the label explicitly instead.
+ * out of the configuration classes. The one caller that runs several clients as a product feature,
+ * {@code MultiPeerSession} behind the {@code session} command (WBS-4.2.1), keeps it implicit too:
+ * it builds, starts and shuts down every peer inside that peer's labelled scope, and {@code
+ * MultiPeerSessionLiveTest}'s attribution check fails any adapter or game line that escapes one.
  */
 public final class InstanceLabel {
 
