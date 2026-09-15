@@ -75,7 +75,7 @@ import java.util.OptionalInt;
  * @param iceRelayDelayMs how long the ICE signal relay holds each relayed candidate before
  *     forwarding it, in milliseconds; {@code 0} (the default) forwards inline. The delayed-ICE half
  *     of WBS-5.1's fault injection. Read through {@link #iceRelayDelay()} rather than directly
- * @param gameUdpDropPercent percentage of outbound peer datagrams the launched mock-game
+ * @param mockGameUdpDropPercent percentage of outbound peer datagrams the launched mock-game
  *     suppresses, passed straight through as its {@code --udp-drop-percent} (WBS-5.1-fix, #322).
  *     {@code 0} (the default) drops nothing. The lossy-link half of WBS-5.1's fault injection, and
  *     the only way to reach it in an orchestrated run — mock-game's own flag is otherwise settable
@@ -108,9 +108,9 @@ public record MockClientConfig(
         Optional<GameJoinConfig> joinConfig,
         Optional<GameQueueConfig> queueConfig,
         int iceRelayDelayMs,
-        int gameUdpDropPercent) {
+        int mockGameUdpDropPercent) {
 
-    /** Upper bound for {@code gameUdpDropPercent}; mirrors mock-game's own range check. */
+    /** Upper bound for {@code mockGameUdpDropPercent}; mirrors mock-game's own range check. */
     private static final int MAX_PERCENT = 100;
 
     /**
@@ -237,9 +237,9 @@ public record MockClientConfig(
         // Same reasoning, and the same range mock-game enforces on the flag this becomes: a value
         // outside 0-100 is always a typo, and catching it here makes it a usage error rather than
         // a mock-game usage error surfacing as an opaque subprocess exit mid-session.
-        if (gameUdpDropPercent < 0 || gameUdpDropPercent > MAX_PERCENT) {
+        if (mockGameUdpDropPercent < 0 || mockGameUdpDropPercent > MAX_PERCENT) {
             throw new IllegalArgumentException(
-                    "gameUdpDropPercent must be between 0 and 100: " + gameUdpDropPercent);
+                    "mockGameUdpDropPercent must be between 0 and 100: " + mockGameUdpDropPercent);
         }
     }
 

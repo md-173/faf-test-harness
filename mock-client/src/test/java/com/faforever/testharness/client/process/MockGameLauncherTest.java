@@ -363,7 +363,7 @@ final class MockGameLauncherTest {
             args.add("--mock-game-launch-delay-seconds=" + launchDelaySeconds);
         }
         if (udpDropPercent != null) {
-            args.add("--game-udp-drop-percent=" + udpDropPercent);
+            args.add("--mock-game-udp-drop-percent=" + udpDropPercent);
         }
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }

@@ -57,7 +57,7 @@ final class ConfigLoaderInvalidValuesTest {
         String[] args =
                 concat(
                         TestFixtures.minimalRequiredCli(),
-                        new String[] {"--game-udp-drop-percent=" + value});
+                        new String[] {"--mock-game-udp-drop-percent=" + value});
 
         CommandLine.ParameterException ex =
                 assertThrows(
@@ -66,8 +66,36 @@ final class ConfigLoaderInvalidValuesTest {
 
         String lower = ex.getMessage().toLowerCase(Locale.ROOT);
         assertTrue(
-                lower.contains("gameudpdroppercent") || lower.contains("game-udp-drop-percent"),
+                lower.contains("mockgameudpdroppercent")
+                        || lower.contains("mock-game-udp-drop-percent"),
                 "the rejection must name the option the operator typed, got: " + ex.getMessage());
+    }
+
+    /**
+     * The env var and the JSON key move with the flag. Both are derived from the option's long name
+     * rather than declared anywhere, so a rename changes them silently and nothing else would catch
+     * a mismatch. The env var is what CI sets and the JSON key is what a config file carries, so
+     * neither is covered by the CLI cases above.
+     */
+    @Test
+    void theEnvVarAndJsonKeyFollowTheRenamedFlag(@TempDir final Path tempDir) throws Exception {
+        MockClientConfig fromEnv =
+                ConfigLoader.load(
+                                TestFixtures.minimalRequiredCli(),
+                                Map.of("FAF_MOCK_CLIENT_MOCK_GAME_UDP_DROP_PERCENT", "37"))
+                        .orElseThrow();
+        assertEquals(37, fromEnv.mockGameUdpDropPercent(), "the env var must reach the field");
+
+        Path cfg =
+                Files.writeString(tempDir.resolve("cfg.json"), "{\"mockGameUdpDropPercent\": 23}");
+        MockClientConfig fromFile =
+                ConfigLoader.load(
+                                concat(
+                                        TestFixtures.minimalRequiredCli(),
+                                        new String[] {"--config=" + cfg}),
+                                Map.of())
+                        .orElseThrow();
+        assertEquals(23, fromFile.mockGameUdpDropPercent(), "the JSON key must reach the field");
     }
 
     /**
@@ -82,12 +110,12 @@ final class ConfigLoaderInvalidValuesTest {
         String[] args =
                 concat(
                         TestFixtures.minimalRequiredCli(),
-                        new String[] {"--game-udp-drop-percent=" + value});
+                        new String[] {"--mock-game-udp-drop-percent=" + value});
 
         MockClientConfig config =
                 ConfigLoader.load(args, Map.of())
                         .orElseThrow(() -> new AssertionError("config did not load for " + value));
-        assertEquals(Integer.parseInt(value), config.gameUdpDropPercent());
+        assertEquals(Integer.parseInt(value), config.mockGameUdpDropPercent());
     }
 
     /**

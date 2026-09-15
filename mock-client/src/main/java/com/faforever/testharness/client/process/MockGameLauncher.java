@@ -228,9 +228,9 @@ public class MockGameLauncher {
         // Only emitted when set (WBS-5.1-fix, #322). mock-game defaults it to 0 and an orchestrated
         // run that wants no fault should produce the argv it always produced, so a reader diffing
         // two launches sees the flag only where a fault was actually asked for.
-        if (config.gameUdpDropPercent() > 0) {
+        if (config.mockGameUdpDropPercent() > 0) {
             argv.add("--udp-drop-percent");
-            argv.add(Integer.toString(config.gameUdpDropPercent()));
+            argv.add(Integer.toString(config.mockGameUdpDropPercent()));
         }
         return argv;
     }
