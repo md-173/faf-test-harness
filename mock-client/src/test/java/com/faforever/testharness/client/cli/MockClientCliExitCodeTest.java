@@ -45,6 +45,12 @@ final class MockClientCliExitCodeTest {
     /** Message {@link ThrowingCommand} throws, asserted on so the diagnostic is traced to it. */
     private static final String THROWN_MESSAGE = "simulated subcommand failure";
 
+    /**
+     * A JSON nesting depth comfortably past Jackson's {@code StreamReadConstraints} default maximum
+     * of 1000, so the document is rejected by the constraint rather than parsed.
+     */
+    private static final int NESTING_OVER_JACKSON_LIMIT = 1200;
+
     @TempDir private Path tempDir;
 
     private static int execute(final String[] args) {
@@ -457,11 +463,189 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
+    void mainRunReturnsTheExitCodeFromItsSuccessPath() {
+        // Every other runMain row stops inside Main.run's catch branch. Nothing drove the method
+        // past construction to `return commandLine.execute(args)`, so a regression that swallowed
+        // picocli's code — or wrote to the injected stream on the way out — would not have been
+        // caught here. --version is the cheapest invocation that reaches an execute outcome
+        // without touching the filesystem or the network.
+        PrintStream originalOut = System.out;
+        MainOutcome outcome;
+        try {
+            System.setOut(
+                    new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+            outcome = runMain(new String[] {"--version"});
+        } finally {
+            System.setOut(originalOut);
+        }
+
+        assertEquals(ExitCodes.OK, outcome.exitCode());
+        assertEquals(
+                "",
+                outcome.err(),
+                "the construction guard's stream must stay untouched once execute is entered");
+    }
+
+    @Test
+    void configFlagInItsEqualsFormIsPreParsed() {
+        // preParseConfigFlag accepts both `--config <path>` and `--config=<path>`, and only the
+        // space-separated form was covered. The equals branch failing open is invisible rather
+        // than loud: the file is silently not consulted and the run proceeds on defaults.
+        Path absent = tempDir.resolve("no-such-config.json");
+        MainOutcome outcome = runMain(new String[] {"run", "--config=" + absent});
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        assertEquals(List.of("config file is not readable: " + absent), errorLines(outcome.err()));
+        assertNoStackTrace(outcome.err());
+    }
+
+    @Test
+    void configFileThatIsADirectoryExitsUsage() throws IOException {
+        // A directory passes the isReadable guard and fails in readString, so it lands in
+        // LayeredDefaultProvider's IOException branch rather than the parse branch above. That
+        // branch carries the path now; this is the row that says so.
+        Path directory = Files.createDirectory(tempDir.resolve("config-dir"));
+        MainOutcome outcome = runMain(new String[] {"run", "--config", directory.toString()});
+
+        assertSingleLineUsageError(outcome, "failed to parse config file " + directory + ": ");
+    }
+
+    @Test
+    void configFileWithNonUtf8ContentsExitsUsage() throws IOException {
+        // The other half of that IOException branch. readString decodes as UTF-8, and the
+        // MalformedInputException it raises is an IOException rather than a JsonProcessingException
+        // — so a file that is not text at all is reported as a read failure, not a parse failure.
+        // 0x80 is a continuation byte with no lead byte before it.
+        Path binary =
+                Files.write(
+                        tempDir.resolve("not-utf8.json"), new byte[] {(byte) 0x80, (byte) 0x81});
+        MainOutcome outcome = runMain(new String[] {"run", "--config", binary.toString()});
+
+        assertSingleLineUsageError(outcome, "failed to parse config file " + binary + ": ");
+    }
+
+    @Test
+    void configFileWithANonObjectRootExitsUsage() throws IOException {
+        // Covered at the exception level by ConfigLoaderInvalidValuesTest, but never at the exit
+        // code — and this failure is raised while the CommandLine is being built, which is exactly
+        // the seam where an unmapped throw becomes exit 1 plus a stack trace.
+        Path array = Files.writeString(tempDir.resolve("array.json"), "[1, 2, 3]");
+        MainOutcome outcome = runMain(new String[] {"run", "--config", array.toString()});
+
+        assertSingleLineUsageError(outcome, "config file root must be a JSON object: " + array);
+    }
+
+    @Test
+    void aParseFailureWithNoLocationOmitsTheLineAndColumnClause() throws IOException {
+        // describeLocation's no-location branch. Jackson enforces a maximum nesting depth of 1000
+        // and reports a breach as StreamConstraintsException — a JsonProcessingException that
+        // carries no JsonLocation, because nothing about the document's shape localises the
+        // failure. Interpolated unguarded that would read "(line -1, column -1)"; the branch exists
+        // to leave the clause out, and this is the only input that reaches it.
+        String deep =
+                "[".repeat(NESTING_OVER_JACKSON_LIMIT) + "]".repeat(NESTING_OVER_JACKSON_LIMIT);
+        Path nested = Files.writeString(tempDir.resolve("deeply-nested.json"), deep);
+        MainOutcome outcome = runMain(new String[] {"run", "--config", nested.toString()});
+
+        String line =
+                assertSingleLineUsageError(outcome, "failed to parse config file " + nested + ": ");
+        assertFalse(
+                line.contains("(line "), "a failure with no location must not claim one: " + line);
+    }
+
+    @Test
+    void everyConfigDiagnosticEscapesANewlineInThePath() throws IOException {
+        // configPathContainingNewlineStaysOnOneLine covers the "not readable" site. oneLine has
+        // four others, every one of them interpolating a path the caller chose, and a path
+        // containing "\nUsage:" forges the boundary between the error and picocli's usage block
+        // for anything reading stderr. One site left raw reopens the hole for all of them, so each
+        // is pinned here rather than trusted to review.
+        String forgery = "x\nUsage: mock-client FORGED\n";
+
+        // 1. The root-must-be-an-object branch.
+        Path array = Files.writeString(tempDir.resolve(forgery + "array.json"), "[]");
+        assertEscapedPath(
+                runMain(new String[] {"run", "--config", array.toString()}),
+                "config file root must be a JSON object: ",
+                array);
+
+        // 2. The parse branch.
+        Path malformed =
+                Files.writeString(tempDir.resolve(forgery + "malformed.json"), "{ not json");
+        assertEscapedPath(
+                runMain(new String[] {"run", "--config", malformed.toString()}),
+                "failed to parse config file ",
+                malformed);
+
+        // 3. The IOException branch.
+        Path directory = Files.createDirectory(tempDir.resolve(forgery + "dir"));
+        assertEscapedPath(
+                runMain(new String[] {"run", "--config", directory.toString()}),
+                "failed to parse config file ",
+                directory);
+
+        // 4. ConfigLoader.toPath, which never gets a Path to escape — the value is rejected before
+        //    one exists, so it is the raw argument that has to be folded onto a single line.
+        String invalid = forgery + ((char) 0) + "b.json";
+        MainOutcome outcome = runMain(new String[] {"run", "--config", invalid});
+        String line = assertSingleLineUsageError(outcome, "invalid --config path: ");
+        assertTrue(
+                line.contains(invalid.replace("\n", "\\n")),
+                "the rejected --config value was not escaped onto one line: " + line);
+    }
+
+    @Test
     void everyCommandDeclaresRuntimeAsItsExecutionExceptionExitCode() {
         // The backstop for the two routes that reach picocli's handleUnhandled without consulting
         // the handler. Picocli reads this off the *leaf* command's spec, so asserting it on the
         // root alone would not prove exit 1 unreachable — hence the walk over the subcommands.
         assertDeclaresRuntime(ConfigLoader.newCommandLine(new String[0], Map.of()));
+    }
+
+    /**
+     * Asserts the run failed as a usage error whose whole diagnostic is one line beginning with
+     * {@code prefix}, and that nothing leaked a stack trace.
+     *
+     * @param outcome the exit code and captured stderr
+     * @param prefix the text the diagnostic must open with
+     * @return that diagnostic line, for any further assertion the caller needs
+     */
+    private static String assertSingleLineUsageError(
+            final MainOutcome outcome, final String prefix) {
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        List<String> lines = errorLines(outcome.err());
+        assertEquals(1, lines.size(), "expected a single-line error, got: " + lines);
+        assertTrue(
+                lines.get(0).startsWith(prefix),
+                "unexpected error line: "
+                        + lines.get(0)
+                        + " (expected to start with "
+                        + prefix
+                        + ")");
+        assertTrue(outcome.err().contains("Usage: mock-client"), "usage text was not printed");
+        assertNoStackTrace(outcome.err());
+        return lines.get(0);
+    }
+
+    /**
+     * Asserts the diagnostic named {@code path} with every line break escaped, so a path carrying a
+     * forged {@code Usage:} line cannot masquerade as the start of picocli's usage block.
+     *
+     * <p>The line count alone would not prove it: read unescaped, the forged line would be taken
+     * for the usage block and {@link #errorLines(String)} would still report one line. Requiring
+     * the whole escaped path on that line is what separates "escaped" from "truncated at the
+     * newline".
+     *
+     * @param outcome the exit code and captured stderr
+     * @param prefix the fixed text the diagnostic opens with, before the path
+     * @param path the path the diagnostic should name
+     */
+    private static void assertEscapedPath(
+            final MainOutcome outcome, final String prefix, final Path path) {
+        String line = assertSingleLineUsageError(outcome, prefix);
+        assertTrue(
+                line.contains(path.toString().replace("\n", "\\n")),
+                "path was not escaped onto one line: " + line);
     }
 
     /**
