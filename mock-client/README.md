@@ -148,9 +148,9 @@ none of the lobby or OAuth rows apply to it.
 |---|---|---|---|---|---|
 | `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
 | `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes² | OAuth2 token endpoint (Hydra `/oauth2/token`). |
-| `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | yes | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
-| `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes | Redirect URI registered on the OAuth client. |
-| `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
+| `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | yes² | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
+| `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | yes² | Redirect URI registered on the OAuth client. |
+| `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | yes² | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes² | OAuth2 public client identifier. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
 | `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. |
@@ -180,9 +180,13 @@ silently picking one would hand the operator a failure mode they did not choose.
 Omitting both produces a picocli `ParameterException` pointing at the bootstrap
 procedure in `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
 
-² Required on the refresh-token channel only. Nothing is exchanged for a
-pre-signed access token, so with `oauthAccessTokenFile` set these two are not
-read and need not be supplied.
+² Required on the refresh-token channel only. With `oauthAccessTokenFile` set
+nothing is exchanged and no browser bootstrap runs, so none of these five is
+read — `oauthTokenUrl` and `oauthClientId` because there is no exchange, and
+`oauthAuthEndpoint`, `oauthRedirectUri` and `oauthScopes` because they describe
+the one-time flow that mints a refresh token. Verified end to end against the
+test lobby: a config carrying only the token file authenticates, hosts, and
+reaches `HOSTING`.
 
 Neither channel accepts a literal token value on the command line. For the
 refresh token that is a correctness requirement — Hydra rotates it on every use
