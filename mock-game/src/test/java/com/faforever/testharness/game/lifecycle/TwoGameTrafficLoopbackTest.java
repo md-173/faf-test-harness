@@ -32,8 +32,8 @@ import org.slf4j.LoggerFactory;
  * an adapter relay would forward to. Everything either game does is real — the GPGNet frames, the
  * socket, the cadence, the receiver, and the log line.
  *
- * <p><b>Why this exists next to the live test.</b> {@code TwoPeerSessionLiveTest} is the real
- * article, but it needs two seeded lobby accounts, the {@code faf-uid} binary and a reachable
+ * <p><b>Why this exists next to the live test.</b> {@code MultiPeerSessionLiveTest} is the real
+ * article, but it needs 2-4 seeded lobby accounts, the {@code faf-uid} binary and a reachable
  * lobby, so it self-skips on an unequipped machine and never runs in CI. Its verdict rests on a
  * chain — progress line, log capture, regex, thresholds, "still advancing" — that is otherwise
  * unexercised until someone runs it by hand. This test pins that chain with <em>the same pattern
@@ -58,7 +58,7 @@ final class TwoGameTrafficLoopbackTest {
     private static final int JOINER_ID = 202;
 
     /**
-     * The progress line, copied verbatim from {@code TwoPeerSessionLiveTest} (mock-client). The two
+     * The progress line, verbatim from {@code MultiPeerSessionLiveTest} (mock-client). The two
      * copies are deliberate — an independent restatement is what gives this test its value — but
      * they are in different modules and nothing links them, so <b>a change to either the format
      * string in {@code GameTrafficSession} or to one copy of this pattern must be made to both</b>.

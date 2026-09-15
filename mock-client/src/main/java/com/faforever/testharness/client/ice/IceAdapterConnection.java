@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.ice;
 
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MappingIterator;
@@ -154,6 +155,12 @@ public class IceAdapterConnection {
     /** How long a {@link #call} waits for its response before completing exceptionally. */
     private final Duration callTimeout;
 
+    /**
+     * The constructing thread's instance label (WBS-4.3.3), applied on the reader thread, which
+     * runs every notification handler.
+     */
+    private final InstanceLabel label;
+
     /** Jackson mapper for encoding outbound and decoding inbound frames. */
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -233,6 +240,7 @@ public class IceAdapterConnection {
         this.connectAttempts = connectAttempts;
         this.retryDelay = retryDelay;
         this.callTimeout = callTimeout;
+        this.label = InstanceLabel.capture();
     }
 
     /**
@@ -249,7 +257,7 @@ public class IceAdapterConnection {
             throw new IllegalStateException("connect() may only be called once");
         }
         CompletableFuture<Void> connected = new CompletableFuture<>();
-        Thread reader = new Thread(() -> runConnection(connected), "ice-adapter-conn");
+        Thread reader = new Thread(label.wrap(() -> runConnection(connected)), "ice-adapter-conn");
         reader.setDaemon(true);
         reader.start();
         return connected;

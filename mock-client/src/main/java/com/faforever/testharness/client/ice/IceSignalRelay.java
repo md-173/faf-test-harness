@@ -2,6 +2,7 @@ package com.faforever.testharness.client.ice;
 
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.message.IceMsgMessage;
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -285,7 +286,9 @@ public final class IceSignalRelay {
             return;
         }
         try {
-            scheduler.schedule(action, delayMillis, TimeUnit.MILLISECONDS);
+            // Carries the forwarding thread's instance label onto the delay thread (WBS-4.3.3).
+            scheduler.schedule(
+                    InstanceLabel.capture().wrap(action), delayMillis, TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException e) {
             // Only reachable after stop(), which today only tests call. Saying so out loud matters
             // because the alternative is a silently dropped candidate against this class's "delay,

@@ -11,6 +11,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.lobby.LobbyConnection.DisconnectEvent;
 import com.faforever.testharness.client.lobby.LobbyConnection.DisconnectReason;
+import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Unit tests for {@link LobbyConnection} run against the in-process {@link
@@ -48,7 +50,15 @@ final class LobbyConnectionTest {
 
         // Attach a list appender so we can assert on the unhandled-command WARN path.
         Logger lobbyLogger = (Logger) LoggerFactory.getLogger(LobbyConnection.class);
-        logAppender = new ListAppender<>();
+        logAppender =
+                new ListAppender<>() {
+                    @Override
+                    protected void append(final ILoggingEvent event) {
+                        // Fixes the event's MDC on the logging thread; Logback reads it lazily.
+                        event.prepareForDeferredProcessing();
+                        super.append(event);
+                    }
+                };
         // WebSocket callbacks can append while the test thread reads captured events.
         logAppender.list = new CopyOnWriteArrayList<>();
         logAppender.start();
@@ -179,6 +189,37 @@ final class LobbyConnectionTest {
         assertTrue(dispatched.await(2, TimeUnit.SECONDS), "handler was never invoked");
         assertEquals("session", captured.get().get("command").asText());
         assertEquals(42, captured.get().get("session").asInt());
+    }
+
+    @Test
+    void handlersAndHandshakeRunUnderTheLabelCapturedAtConstruction() throws Exception {
+        // WBS-4.3.3: several clients share one JVM, so the JDK threads that run this connection's
+        // callbacks carry its own label. The handshake continuation is checked through its log
+        // line, which is the only thing it emits.
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "B");
+        try {
+            lobby = new LobbyConnection(server.uri());
+        } finally {
+            MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        }
+        CompletableFuture<String> seen = new CompletableFuture<>();
+        lobby.registerHandler(
+                "session", node -> seen.complete(MDC.get(LoggingSetup.INSTANCE_MDC_KEY)));
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        server.broadcastText("{\"command\":\"session\",\"session\":42}");
+
+        assertEquals("B", seen.get(2, TimeUnit.SECONDS));
+        ILoggingEvent connected =
+                logAppender.list.stream()
+                        .filter(
+                                e ->
+                                        e.getFormattedMessage()
+                                                .startsWith("lobby WebSocket connected"))
+                        .findFirst()
+                        .orElseThrow();
+        assertEquals("B", connected.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY));
     }
 
     @Test

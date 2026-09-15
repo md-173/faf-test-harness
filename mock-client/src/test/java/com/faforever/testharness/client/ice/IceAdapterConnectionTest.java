@@ -12,6 +12,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
+import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Unit tests for {@link IceAdapterConnection} against the in-process {@link ScriptedJsonRpcServer}.
@@ -81,6 +83,28 @@ final class IceAdapterConnectionTest {
         c.connect().get(5, TimeUnit.SECONDS);
         server.awaitClient();
         return c;
+    }
+
+    @Test
+    void notificationHandlersRunUnderTheLabelCapturedAtConstruction() throws Exception {
+        // WBS-4.3.3: several clients share one JVM, so the reader thread carries its own label.
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "C");
+        try {
+            conn =
+                    new IceAdapterConnection(
+                            server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(2));
+        } finally {
+            MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        }
+        CompletableFuture<String> seen = new CompletableFuture<>();
+        conn.registerNotification(
+                "onConnected", msg -> seen.complete(MDC.get(LoggingSetup.INSTANCE_MDC_KEY)));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+
+        server.send("{\"jsonrpc\":\"2.0\",\"method\":\"onConnected\",\"params\":[1,2,true]}");
+
+        assertEquals("C", seen.get(2, TimeUnit.SECONDS));
     }
 
     @Test

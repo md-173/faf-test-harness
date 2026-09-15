@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -115,6 +116,13 @@ public final class LobbyConnection {
     private final Duration connectTimeout;
 
     /**
+     * The constructing thread's instance label (WBS-4.3.3), re-applied on the JDK threads that run
+     * the listener callbacks and the handshake continuation, so the frame handling they drive is
+     * attributable when several clients share a JVM.
+     */
+    private final InstanceLabel label;
+
+    /**
      * Command-to-handlers registry; lookups are concurrent-safe and each command's list iterates
      * lock-free on the listener thread.
      */
@@ -165,6 +173,7 @@ public final class LobbyConnection {
         this.httpClient = httpClient;
         this.mapper = mapper;
         this.connectTimeout = connectTimeout;
+        this.label = InstanceLabel.capture();
     }
 
     /**
@@ -220,6 +229,12 @@ public final class LobbyConnection {
     }
 
     private Void onHandshakeComplete(final WebSocket socket, final Throwable error) {
+        try (InstanceLabel.Scope ignored = label.apply()) {
+            return completeHandshake(socket, error);
+        }
+    }
+
+    private Void completeHandshake(final WebSocket socket, final Throwable error) {
         if (error != null) {
             Throwable cause = error instanceof CompletionException ? error.getCause() : error;
             LOG.warn(
@@ -262,8 +277,13 @@ public final class LobbyConnection {
         // "handed over" and "written" are separate facts. Without both, a timeout waiting for a
         // frame the client believed it sent cannot distinguish "never reached send()" from
         // "queued and the write never completed". Mirrors the inbound line in dispatch().
+        // Both lines under this connection's label (WBS-4.3.3): send() is called from whichever
+        // thread the caller is on (the handshake's ask_session runs on the common pool), and the
+        // write completes on a JDK thread.
         String forLog = redactedForLog(message);
-        LOG.debug("lobby sending frame: {}", forLog);
+        try (InstanceLabel.Scope ignored = label.apply()) {
+            LOG.debug("lobby sending frame: {}", forLog);
+        }
 
         synchronized (sendLock) {
             CompletableFuture<WebSocket> next =
@@ -272,10 +292,12 @@ public final class LobbyConnection {
                             .toCompletableFuture();
             next.whenComplete(
                     (ignored, error) -> {
-                        if (error == null) {
-                            LOG.debug("lobby sent frame: {}", forLog);
-                        } else {
-                            LOG.debug("lobby failed to send frame {}: {}", forLog, error);
+                        try (InstanceLabel.Scope scope = label.apply()) {
+                            if (error == null) {
+                                LOG.debug("lobby sent frame: {}", forLog);
+                            } else {
+                                LOG.debug("lobby failed to send frame {}: {}", forLog, error);
+                            }
                         }
                     });
             // Reset the chain to a non-failed stage so one failed send doesn't poison every
@@ -440,10 +462,12 @@ public final class LobbyConnection {
             if (last) {
                 String full = partial.toString();
                 partial.setLength(0);
-                try {
-                    dispatch(full);
-                } catch (RuntimeException e) {
-                    LOG.warn("lobby dispatch threw: {}", e.toString());
+                try (InstanceLabel.Scope ignored = label.apply()) {
+                    try {
+                        dispatch(full);
+                    } catch (RuntimeException e) {
+                        LOG.warn("lobby dispatch threw: {}", e.toString());
+                    }
                 }
             }
             socket.request(1);
@@ -453,6 +477,12 @@ public final class LobbyConnection {
         @Override
         public CompletionStage<?> onClose(
                 final WebSocket socket, final int statusCode, final String reasonText) {
+            try (InstanceLabel.Scope ignored = label.apply()) {
+                return closed(statusCode, reasonText);
+            }
+        }
+
+        private CompletionStage<?> closed(final int statusCode, final String reasonText) {
             DisconnectReason bucket =
                     closeRequested.get()
                             ? DisconnectReason.LOCAL_CLOSE
@@ -468,11 +498,13 @@ public final class LobbyConnection {
 
         @Override
         public void onError(final WebSocket socket, final Throwable error) {
-            LOG.warn(
-                    "lobby WebSocket error: {}: {}",
-                    error.getClass().getSimpleName(),
-                    error.getMessage());
-            fireDisconnect(new DisconnectEvent(DisconnectReason.ABRUPT_CLOSE, 0, null, error));
+            try (InstanceLabel.Scope ignored = label.apply()) {
+                LOG.warn(
+                        "lobby WebSocket error: {}: {}",
+                        error.getClass().getSimpleName(),
+                        error.getMessage());
+                fireDisconnect(new DisconnectEvent(DisconnectReason.ABRUPT_CLOSE, 0, null, error));
+            }
         }
     }
 }

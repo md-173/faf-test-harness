@@ -46,11 +46,18 @@ public final class MockGameLifecycle {
      * A mapping of result strings to numerical scores.
      *
      * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
-     * end-of-match result is fixed at army 1 victory, every other army defeat (WBS-3.2.4.3-fix,
-     * #281). See {@code gameEnds} for why that is the design rather than a gap.
+     * end-of-match result is fixed: army 1's team wins and the other team loses (WBS-3.2.4.3-fix,
+     * #281; teams since WBS-4.3.3). See {@code gameEnds} for why that is the design rather than a
+     * gap.
      */
     private static final Map<String, Integer> SCORES =
             Map.of("victory", 10, "defeat", -10, "draw", 10);
+
+    /**
+     * The numerical values for the teams in the match. We are not using team 1 since that is the
+     * special free-for-all value.
+     */
+    private static final int[] TEAMS = {2, 3};
 
     /**
      * A delay to wait before sending messages to the GpgNet server on first connection, in
@@ -651,13 +658,7 @@ public final class MockGameLifecycle {
         LOG.info("Setting up game as host");
 
         try {
-            // Values for these will be 1 (peers list will be empty), but written like this for
-            // consistency and avoiding magic numbers.
-            gpgnetSender.playerOption(config.playerId(), "Army", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Team", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "StartSpot", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Faction", peers.size() + 1);
-            gpgnetSender.playerOption(config.playerId(), "Color", peers.size() + 1);
+            sendPlayerOptions(config.playerId());
 
             // No game options are required, but any could be passed to test different properties.
             for (var entry : config.gameOptions().entrySet()) {
@@ -753,13 +754,7 @@ public final class MockGameLifecycle {
 
         if (getState() == GameState.HOSTING) {
             try {
-                // First peer assigned number 2, then 3, and so on.
-                // Each player is in a team of 1, i.e. free-for-all.
-                gpgnetSender.playerOption(peer.playerId(), "Army", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Team", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "StartSpot", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Faction", peers.size() + 1);
-                gpgnetSender.playerOption(peer.playerId(), "Color", peers.size() + 1);
+                sendPlayerOptions(peer.playerId());
             } catch (IOException e) {
                 throw recordSendFailure(e);
             }
@@ -769,15 +764,20 @@ public final class MockGameLifecycle {
     /* Transition action for LIVE -> ENDED. */
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
-            // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1 wins and
-            // every other army loses, on every run: the harness asserts on the shape and ordering
-            // of the closing frames, and a result that varied would make those assertions depend
-            // on configuration that no consumer has asked to vary. A mock whose output is the same
-            // every time is the point of it. If a card ever needs a specific outcome, the values
-            // belong on MockGameConfig alongside gameOptions rather than here.
-            gpgnetSender.gameResult(1, "victory", SCORES.get("victory"));
-            for (int i = 2; i <= peers.size() + 1; i++) {
-                gpgnetSender.gameResult(i, "defeat", SCORES.get("defeat"));
+            // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1's team
+            // wins and the other team loses, on every run: the harness asserts on the shape and
+            // ordering of the closing frames, and a result that varied would make those assertions
+            // depend on configuration that no consumer has asked to vary. A mock whose output is
+            // the same every time is the point of it. If a card ever needs a specific outcome, the
+            // values belong on MockGameConfig alongside gameOptions rather than here.
+            //
+            // GameResult is keyed by army, not team (faf-server handle_game_result(army, result)),
+            // so every army reports its team's result (WBS-4.3.3). Army 1 is always on TEAMS[0].
+            // Before teams existed this rule read "army 1 wins, every other army loses"; with two
+            // teams that would have army 3 report defeat while its team wins.
+            for (int army = 1; army <= peers.size() + 1; army++) {
+                String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
+                gpgnetSender.gameResult(army, result, SCORES.get(result));
             }
             gpgnetSender.jsonStats("{\"stats\": []}");
             gpgnetSender.gameEnded();
@@ -803,5 +803,23 @@ public final class MockGameLifecycle {
                             + "likely due to a shut down scheduler");
             return null;
         }
+    }
+
+    /* Sends the set of PlayerOption values needed for a player in the match. */
+    private void sendPlayerOptions(int playerId) throws IOException {
+        // Players assigned army number (and start spot, faction, and color) in arrival order, with
+        // the host being first.
+        int army = peers.size() + 1;
+        gpgnetSender.playerOption(playerId, "Army", army);
+        gpgnetSender.playerOption(playerId, "Team", teamForArmy(army));
+        gpgnetSender.playerOption(playerId, "StartSpot", army);
+        gpgnetSender.playerOption(playerId, "Faction", army);
+        gpgnetSender.playerOption(playerId, "Color", army);
+    }
+
+    /* The team an army plays on. Configured for a two-team game, so armies alternate between
+     * TEAMS[0] and TEAMS[1]; more than two teams would make faf-server mark the game MULTI_TEAM. */
+    private static int teamForArmy(int army) {
+        return TEAMS[(army - 1) % 2];
     }
 }

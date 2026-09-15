@@ -141,10 +141,19 @@ harness sets it per child when it spawns one; see
 7. Plays out the match for its duration, then reports one `GameResult` per army,
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
-The end-of-match result is fixed by design: army 1 wins and every other army loses, on
-every run. The harness asserts on the shape and ordering of those closing frames, and a
-result that varied would make those assertions depend on configuration nothing has
-asked to vary.
+Players are split into two teams in arrival order: armies 1, 3, ... on team 2 and
+armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it marks a
+game with more `MULTI_TEAM` invalid). The end-of-match result is fixed by design: army
+1's team wins and the other team loses, on every run, with each army reporting its
+team's result. The harness asserts on the shape and ordering of those closing frames,
+and a result that varied would make those assertions depend on configuration nothing
+has asked to vary.
+
+Before WBS-4.3.3 each player was its own team (`Team` = its army number), so at one
+or two players the `Team` option changes: the first player now sends `Team 2`
+(previously `1`, the free-for-all team) and the second `Team 3` (previously `2`).
+The `GameResult` frames at one and two players are unchanged (army 1 victory, army
+2 defeat), as are the exit codes.
 
 ## See also
 
