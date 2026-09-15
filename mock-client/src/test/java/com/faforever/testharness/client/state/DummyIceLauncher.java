@@ -15,7 +15,8 @@ class DummyIceLauncher extends IceAdapterLauncher {
     private LaunchIdentity identity;
 
     // #211: see DummyGameLauncher's matching constructors for why the default builder must not
-    // exit on its own.
+    // exit on its own, and for #303's decision to keep it that way and put the teardown obligation
+    // on the test instead.
     DummyIceLauncher(MockClientConfig config) {
         this(config, false, new ProcessBuilder("sort"));
     }
