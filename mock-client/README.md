@@ -7,7 +7,7 @@ do not require a real game install or a human at the keyboard.
 
 ## Subcommands
 
-Mock Client is a Picocli command tree: a root `mock-client` command plus four
+Mock Client is a Picocli command tree: a root `mock-client` command plus five
 subcommands that dispatch to the matching component.
 
 | Subcommand    | Purpose                                                                            | Needs a FAF account |
@@ -16,6 +16,7 @@ subcommands that dispatch to the matching component.
 | `launch-ice`  | Spawn `faf-ice-adapter`, attach a JSON-RPC peer, and hold it up for a window.       | no |
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          | no |
 | `ice-smoke`   | Bring up the adapter, verify its JSON-RPC and GPGNet endpoints are serving, tear it down. | no |
+| `session`     | Run a host and joiners through the live lobby to a full peer mesh, then tear everything down. | yes, one per peer |
 
 `run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
 (`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
@@ -41,6 +42,21 @@ the fields it actually reads — `ice-smoke` and `launch-ice` the adapter option
 OAuth options, which is what the runbook's
 `--oauth-refresh-token-file=dummy-unused-by-launch-ice` was.
 
+`session` (WBS-4.2.1) runs a multi-peer session and passes or fails on its own:
+one host and `--peers - 1` joiners (default 2 peers, up to 26), each with its own
+account, adapter and game, join one game through the live lobby, and the command
+exits `0` once every adapter reports every other peer connected. Give one
+refresh-token file per peer with `--peer-refresh-token-file`, host first, repeated
+or comma-separated. A failed checkpoint logs `session: FAIL <peer>: <stage>:
+<detail>`. The clients share one JVM, so anything that kills it ends every peer;
+their adapters and games are separate processes, and any still running after
+teardown are killed and fail the run. The session sets each peer's adapter ports,
+launch delay and host or join intent, so those options are ignored. Evidence lands
+in the working directory: `logs/mockclient.jsonl` (or `--log-file`) holds every
+client line with the captured adapter and game output, each tagged with the
+peer's `instance` label A, B, ..., and each game also writes
+`logs/mockgame-<label>.jsonl`. Do not set `INSTANCE_NAME`; `session` refuses it.
+
 Invocation shape:
 
 ```text
@@ -50,16 +66,16 @@ mock-client [global flags] <subcommand> [subcommand flags]
 Global flags — `--config`, `--help`, `--version`, plus the 32 config options —
 are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
-additionally take a subcommand-local `--duration-seconds` flag, and `ice-smoke`
-a `--timeout-seconds` flag.
+additionally take a subcommand-local `--duration-seconds` flag, `ice-smoke`
+a `--timeout-seconds` flag, and `session` `--peers` and `--peer-refresh-token-file`.
 
 ## Exit codes
 
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
-| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. |
-| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, or `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), or `ice-smoke` returned any verdict other than reachable. Also any exception that escapes a subcommand uncaught. |
+| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh, with no adapter or game left running. |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, fewer `--peer-refresh-token-file`s than peers, two peers on one file, an unreadable file, or `INSTANCE_NAME` set, all refused before any process starts. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
@@ -275,7 +291,7 @@ during development; the second is what CI and deployments use.
 ./gradlew :mock-client:run --args="run --help"
 ```
 
-Root help lists every global flag and the four subcommands. Per-subcommand
+Root help lists every global flag and the five subcommands. Per-subcommand
 help shows the same flag set (subcommands inherit the root's flags). This is
 the source of truth that the field-reference table above mirrors.
 

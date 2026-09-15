@@ -33,7 +33,7 @@ final class MockClientCliSubcommandHelpTest {
     }
 
     @Test
-    void rootHelpListsAllFourSubcommands() {
+    void rootHelpListsAllFiveSubcommands() {
         StringWriter out = new StringWriter();
         StringWriter err = new StringWriter();
         int exit = execute(new String[] {"--help"}, out, err);
@@ -49,6 +49,7 @@ final class MockClientCliSubcommandHelpTest {
         // documented while silently missing from MockClientCli's `subcommands` list — which is
         // exactly what a merge dropped once. This assertion is what catches that.
         assertTrue(text.contains("ice-smoke"), "Help should mention 'ice-smoke'. Got: " + text);
+        assertTrue(text.contains("session"), "Help should mention 'session'. Got: " + text);
     }
 
     @Test
@@ -69,6 +70,11 @@ final class MockClientCliSubcommandHelpTest {
     @Test
     void iceSmokeSubcommandHelpShortCircuitsRequiredCheck() {
         assertSubcommandHelpWorks("ice-smoke");
+    }
+
+    @Test
+    void sessionSubcommandHelpShortCircuitsRequiredCheck() {
+        assertSubcommandHelpWorks("session");
     }
 
     private static void assertSubcommandHelpWorks(final String subcommand) {
