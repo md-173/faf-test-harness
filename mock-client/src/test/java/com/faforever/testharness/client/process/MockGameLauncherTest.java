@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -211,6 +212,32 @@ final class MockGameLauncherTest {
         assertEquals("0", valueAfter(argv, "--crash-after-seconds"));
     }
 
+    /**
+     * Both fault-injection passthroughs set on one launch reach the game together (WBS-5.1,
+     * WBS-5.2).
+     *
+     * <p>The two emissions share the tail of {@code buildArgv} and came from different cards, so
+     * this pins that neither shadows or duplicates the other and that each value lands after its
+     * own flag rather than its neighbour's. It parses the client's real option names, so a rename
+     * on either side fails here as well.
+     */
+    @Test
+    void argvCarriesBothFaultFlagsWhenBothAreSet() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config =
+                configWithFlags(
+                        binary,
+                        "--mock-game-crash-after-seconds=5",
+                        "--mock-game-udp-drop-percent=25");
+
+        List<String> argv = new MockGameLauncher(config).buildArgv(binary);
+
+        assertEquals("25", valueAfter(argv, "--udp-drop-percent"));
+        assertEquals("5", valueAfter(argv, "--crash-after-seconds"));
+        assertEquals(1, Collections.frequency(argv, "--udp-drop-percent"), "argv: " + argv);
+        assertEquals(1, Collections.frequency(argv, "--crash-after-seconds"), "argv: " + argv);
+    }
+
     /** An explicitly negative value is the disable sentinel, so it stays off the argv. */
     @Test
     void argvOmitsAnExplicitlyNegativeCrashDelay() throws Exception {
@@ -379,6 +406,18 @@ final class MockGameLauncherTest {
 
     /** As {@link #configWithBinary(Path)}, with an explicit mock-game crash delay (WBS-5.2). */
     private static MockClientConfig configWithCrashDelay(final Path binary, final int seconds) {
+        return configWithFlags(binary, "--mock-game-crash-after-seconds=" + seconds);
+    }
+
+    /**
+     * As {@link #configWithBinary(Path)}, plus arbitrary extra CLI flags, parsed through {@link
+     * ConfigLoader} so the real option names are exercised.
+     *
+     * @param binary the stub mock-game binary
+     * @param extra flags appended after the minimal valid set
+     * @return the loaded config
+     */
+    private static MockClientConfig configWithFlags(final Path binary, final String... extra) {
         List<String> args =
                 new ArrayList<>(
                         List.of(
@@ -390,8 +429,8 @@ final class MockGameLauncherTest {
                                 "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
                                 "--oauth-refresh-token-file=/nonexistent/test-refresh-token",
                                 "--unique-id=00000000-0000-0000-0000-000000000000",
-                                "--mock-game-binary-path=" + binary,
-                                "--mock-game-crash-after-seconds=" + seconds));
+                                "--mock-game-binary-path=" + binary));
+        args.addAll(List.of(extra));
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
