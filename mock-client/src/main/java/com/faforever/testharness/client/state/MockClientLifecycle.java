@@ -218,6 +218,31 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Constructor for a caller that observes the adapter connection itself (WBS-4.2.1's {@code
+     * MultiPeerSession}). A notification consumer registered on {@code iceConnection} before this
+     * call runs ahead of the lifecycle's own consumers.
+     *
+     * @param config a set of configuration options passed by the user.
+     * @param session a not-yet-started lobby session; {@link #start(TokenSource)} opens it.
+     * @param iceConnection the ice adapter connection. {@link IceAdapterConnection#connect()}
+     *     should not be called on this object yet.
+     * @param teardown the session's coordinated teardown, shared with the CLI's signal hook.
+     */
+    public MockClientLifecycle(
+            MockClientConfig config,
+            LobbySession session,
+            IceAdapterConnection iceConnection,
+            SessionTeardown teardown) {
+        this(
+                config,
+                session,
+                iceConnection,
+                new MockGameLauncher(config),
+                new IceAdapterLauncher(config),
+                teardown);
+    }
+
+    /**
      * Constructor with all dependency-injected classes ({@code IceAdapterConnection}, {@code
      * MockGameLauncher}, and {@code IceAdapterLauncher}) available, used for testing with mock
      * versions of launchers and connection.
