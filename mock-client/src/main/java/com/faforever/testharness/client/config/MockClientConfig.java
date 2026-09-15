@@ -110,9 +110,11 @@ public record MockClientConfig(
      * a pre-signed access-token file ({@code oauthAccessTokenFile}), used verbatim with no exchange
      * and no renewal (WBS-3.1.6.4).
      *
-     * <p>Only the refresh channel exchanges anything, so only it requires {@code oauthTokenUrl} and
-     * {@code oauthClientId}; demanding them of a pre-signed token would be values invented to pass
-     * validation and then never read.
+     * <p>Only the refresh channel exchanges anything or runs a browser bootstrap, so only it
+     * requires {@code oauthTokenUrl}, {@code oauthClientId}, {@code oauthAuthEndpoint}, {@code
+     * oauthRedirectUri} and {@code oauthScopes}. Demanding any of the five of a pre-signed token
+     * would be values invented to pass validation and then never read — none of the last three has
+     * a reader in main source at all.
      *
      * <p>Both channels configured is rejected rather than resolved here, because by this point the
      * layer each came from is gone. Precedence is applied before construction, in {@code
@@ -144,16 +146,6 @@ public record MockClientConfig(
             missing.add("--lobby-websocket-url");
         }
 
-        if (oauthAuthEndpoint == null) {
-            missing.add("--oauth-auth-endpoint");
-        }
-        if (oauthRedirectUri == null) {
-            missing.add("--oauth-redirect-uri");
-        }
-        if (oauthScopes == null || oauthScopes.isBlank()) {
-            missing.add("--oauth-scopes");
-        }
-
         if (uniqueId == null || uniqueId.isBlank()) {
             missing.add("--unique-id");
         }
@@ -174,6 +166,23 @@ public record MockClientConfig(
             }
             if (oauthClientId == null || oauthClientId.isBlank()) {
                 missing.add("--oauth-client-id");
+            }
+            // The three bootstrap settings, behind the same guard. They describe the one-time
+            // browser exchange that mints a refresh token: nothing in main source reads
+            // oauthAuthEndpoint, oauthRedirectUri or oauthScopes at all, and none of them has a
+            // built-in default — what fills them in practice is mock-client.example.json. So on
+            // the pre-signed channel they were three values an operator had to invent to get past
+            // validation, for a flow that never runs. Verified end to end against the test lobby:
+            // with only --oauth-access-token-file, run exited 2 demanding exactly these three;
+            // with placeholders for them the session authenticated, hosted, and reached HOSTING.
+            if (oauthAuthEndpoint == null) {
+                missing.add("--oauth-auth-endpoint");
+            }
+            if (oauthRedirectUri == null) {
+                missing.add("--oauth-redirect-uri");
+            }
+            if (oauthScopes == null || oauthScopes.isBlank()) {
+                missing.add("--oauth-scopes");
             }
         }
         if (oauthRefreshTokenFile != null && hasAccessTokenFile) {

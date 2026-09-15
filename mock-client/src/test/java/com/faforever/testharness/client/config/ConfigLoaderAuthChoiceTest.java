@@ -154,6 +154,58 @@ final class ConfigLoaderAuthChoiceTest {
     }
 
     @Test
+    void theAccessTokenChannelNeedsNothingFromTheRefreshBootstrap(@TempDir Path dir)
+            throws Exception {
+        // The shape an operator can actually use, and the one the release needs. Verified end to
+        // end against the test lobby: with only --oauth-access-token-file the run used to exit 2
+        // demanding --oauth-auth-endpoint, --oauth-redirect-uri and --oauth-scopes; with
+        // placeholders for those three it authenticated, hosted and reached HOSTING — proving they
+        // are never read on this channel. Nothing here supplies any of the five refresh-bootstrap
+        // settings.
+        Path access = credentialFile(dir, "access.jwt");
+        String[] args =
+                new String[] {
+                    "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                    "--unique-id=" + TestFixtures.UNIQUE_ID,
+                    "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
+                    "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN,
+                    "--oauth-access-token-file=" + access
+                };
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
+    }
+
+    @Test
+    void theRefreshChannelStillDemandsTheBootstrapSettings() {
+        // The other half: relaxing these three must not relax them for the channel that does read
+        // them, or a refresh run loses its only validation of the bootstrap it depends on.
+        String[] args =
+                new String[] {
+                    "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                    "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
+                    "--oauth-client-id=" + TestFixtures.OAUTH_CLIENT_ID,
+                    "--oauth-refresh-token-file=" + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+                    "--unique-id=" + TestFixtures.UNIQUE_ID,
+                    "--ice-adapter-binary-path=" + TestFixtures.ICE_ADAPTER_BIN,
+                    "--mock-game-binary-path=" + TestFixtures.MOCK_GAME_BIN
+                };
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        String msg = ex.getMessage();
+        assertTrue(
+                msg.contains("--oauth-auth-endpoint")
+                        && msg.contains("--oauth-redirect-uri")
+                        && msg.contains("--oauth-scopes"),
+                "the refresh channel must still require all three; got: " + msg);
+    }
+
+    @Test
     void theAccessTokenChannelNeedsNoTokenUrlOrClientId(@TempDir Path dir) throws Exception {
         // The headline relaxation of this card, exercised through the config layer rather than by
         // building the record directly — which is the only path that proves an operator can use it.
