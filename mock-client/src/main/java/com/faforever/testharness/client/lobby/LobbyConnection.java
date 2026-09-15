@@ -277,8 +277,13 @@ public final class LobbyConnection {
         // "handed over" and "written" are separate facts. Without both, a timeout waiting for a
         // frame the client believed it sent cannot distinguish "never reached send()" from
         // "queued and the write never completed". Mirrors the inbound line in dispatch().
+        // Both lines under this connection's label (WBS-4.3.3): send() is called from whichever
+        // thread the caller is on (the handshake's ask_session runs on the common pool), and the
+        // write completes on a JDK thread.
         String forLog = redactedForLog(message);
-        LOG.debug("lobby sending frame: {}", forLog);
+        try (InstanceLabel.Scope ignored = label.apply()) {
+            LOG.debug("lobby sending frame: {}", forLog);
+        }
 
         synchronized (sendLock) {
             CompletableFuture<WebSocket> next =
@@ -287,10 +292,12 @@ public final class LobbyConnection {
                             .toCompletableFuture();
             next.whenComplete(
                     (ignored, error) -> {
-                        if (error == null) {
-                            LOG.debug("lobby sent frame: {}", forLog);
-                        } else {
-                            LOG.debug("lobby failed to send frame {}: {}", forLog, error);
+                        try (InstanceLabel.Scope scope = label.apply()) {
+                            if (error == null) {
+                                LOG.debug("lobby sent frame: {}", forLog);
+                            } else {
+                                LOG.debug("lobby failed to send frame {}: {}", forLog, error);
+                            }
                         }
                     });
             // Reset the chain to a non-failed stage so one failed send doesn't poison every
