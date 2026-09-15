@@ -33,11 +33,14 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -324,6 +327,14 @@ final class MultiPeerSessionLiveTest {
         }
     }
 
+    /**
+     * One {@code ConnectToPeer} as the lobby sent it.
+     *
+     * @param remoteId the peer to connect to
+     * @param offer whether this side makes the ICE offer
+     */
+    private record Offer(long remoteId, boolean offer) {}
+
     /** One client under test: its config, its session, and what its adapter reported. */
     private static final class Peer {
 
@@ -368,6 +379,12 @@ final class MultiPeerSessionLiveTest {
          */
         private final AtomicReference<String> joinRefusal = new AtomicReference<>();
 
+        /**
+         * Every {@code ConnectToPeer} this peer's lobby sent, as (remote id, offer). Filled on the
+         * lobby listener thread, read on the test thread.
+         */
+        private final Set<Offer> offers = ConcurrentHashMap.newKeySet();
+
         /** This peer's lobby-assigned identity, from its {@code welcome}. */
         private SessionState identity;
 
@@ -379,6 +396,8 @@ final class MultiPeerSessionLiveTest {
                 LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
                 lobby.registerHandler(
                         "game_join_failed", frame -> joinRefusal.set(frame.toString()));
+                // Registered before the lifecycle's own handler, so it runs first on each frame.
+                lobby.registerHandler("ConnectToPeer", this::recordOffer);
                 IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
                 adapter.registerNotification("onConnected", this::record);
                 this.teardown = new SessionTeardown(lobby);
@@ -416,6 +435,22 @@ final class MultiPeerSessionLiveTest {
                             params.get(0).asLong(),
                             params.get(1).asLong(),
                             params.get(2).asBoolean()));
+        }
+
+        /**
+         * Records one {@code ConnectToPeer} frame, {@code args: [login, id, offer]} (faf-server
+         * {@code GpgNetServerProtocol.send_ConnectToPeer}). A malformed frame is recorded with id
+         * -1, so it fails the offer check by name instead of vanishing on the listener thread.
+         *
+         * @param frame the lobby frame
+         */
+        private void recordOffer(final JsonNode frame) {
+            JsonNode args = frame.path("args");
+            boolean wellFormed = args.path(1).canConvertToLong() && args.path(2).isBoolean();
+            offers.add(
+                    new Offer(
+                            wellFormed ? args.path(1).asLong() : -1,
+                            wellFormed && args.path(2).asBoolean()));
         }
 
         /**
@@ -539,6 +574,9 @@ final class MultiPeerSessionLiveTest {
         // The card's definitive signal: every adapter reports every other peer connected.
         awaitFullMesh(allPeers);
 
+        // WBS-4.3.3: the peer-to-peer path, with its offer asymmetry, is what three players add.
+        assertOfferDirections(host, joiners);
+
         // Done differently as awaitPeerTraffic should be called once per pair rather than for each
         // direction.
         for (var p1 : allPeers) {
@@ -552,6 +590,38 @@ final class MultiPeerSessionLiveTest {
 
         // WBS-4.3.3: every instance's lines, its adapter and game output included, carry its label.
         assertInstanceLabels(allPeers);
+    }
+
+    /**
+     * Every peer received exactly the {@code ConnectToPeer} offers faf-server's protocol predicts
+     * (WBS-4.3.3), in join order. {@code connect_to_host} tells the host {@code offer=true} for
+     * each joiner. {@code connect_to_peer} tells a joiner {@code offer=true} for every earlier
+     * joiner and each earlier joiner {@code offer=false} for it. A joiner hears about the host
+     * through {@code JoinGame}, never {@code ConnectToPeer}.
+     *
+     * <p>Compared as sets, so a repeated frame does not fail the check. Checked after the mesh,
+     * which cannot complete before every frame has been dispatched: each peer's recorder is
+     * registered before its lifecycle's own handler, so it sees a frame before the adapter does.
+     *
+     * @param host the hosting peer
+     * @param joiners the joiners, in join order
+     */
+    private static void assertOfferDirections(final Peer host, final List<Peer> joiners) {
+        Set<Offer> hostExpected = new HashSet<>();
+        for (Peer joiner : joiners) {
+            hostExpected.add(new Offer(joiner.identity.id(), true));
+        }
+        assertEquals(hostExpected, host.offers, host.name + ": ConnectToPeer offers");
+        for (int k = 0; k < joiners.size(); k++) {
+            Set<Offer> expected = new HashSet<>();
+            for (int i = 0; i < joiners.size(); i++) {
+                if (i != k) {
+                    expected.add(new Offer(joiners.get(i).identity.id(), i < k));
+                }
+            }
+            Peer joiner = joiners.get(k);
+            assertEquals(expected, joiner.offers, joiner.name + ": ConnectToPeer offers");
+        }
     }
 
     /**
@@ -936,7 +1006,11 @@ final class MultiPeerSessionLiveTest {
         args.add("--host-title=" + title);
         args.add("--host-map=" + HOST_MAP);
         args.add("--host-mod=" + HOST_MOD);
-        args.add("--host-visibility=public");
+        // WBS-4.3.3: friends-only. faf-server's command_game_join checks foes, lobby state, init
+        // mode and password but never visibility, which only filters the game list, so joiners
+        // still join by uid. It also keeps strangers in the test lobby from seeing and joining the
+        // game, which would add peers the mesh and offer checks do not expect.
+        args.add("--host-visibility=friends");
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
