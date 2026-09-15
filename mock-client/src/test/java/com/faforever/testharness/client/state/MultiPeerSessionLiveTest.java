@@ -363,8 +363,7 @@ final class MultiPeerSessionLiveTest {
                 if (session != null) {
                     session.close();
                     for (ProcessHandle survivor : session.survivingSubprocesses()) {
-                        survivors.add(
-                                survivor.info().commandLine().orElse("pid " + survivor.pid()));
+                        survivors.add(session.describe(survivor));
                     }
                 }
                 // Checked on every path. The sweep sees every descendant of this JVM and the cases
@@ -497,11 +496,15 @@ final class MultiPeerSessionLiveTest {
         List<String> problems = new ArrayList<>();
         List<String> unlabelledOther = new ArrayList<>();
         for (ILoggingEvent event : captured.list) {
-            if (LOG.getName().equals(event.getLoggerName())) {
-                // This test's own case marker belongs to no instance.
+            String instance = event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY);
+            if (LOG.getName().equals(event.getLoggerName())
+                    || (instance == null
+                            && MultiPeerSession.class.getName().equals(event.getLoggerName()))) {
+                // This test's case marker and the session's start marker belong to no instance.
+                // The component can still be set on this thread by an earlier integration test's
+                // CLI run, so they are skipped by logger rather than by an empty label.
                 continue;
             }
-            String instance = event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY);
             String component = event.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY);
             String message = event.getFormattedMessage();
             SessionPeer peer = instance == null ? null : byLabel.get(instance);

@@ -12,6 +12,7 @@ import com.faforever.testharness.client.state.ClientState;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -141,7 +142,10 @@ public final class MultiPeerSession implements AutoCloseable {
     /** Poll slice for every bounded wait built on a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
 
-    /** Session markers and teardown warnings, each logged under the peer's label. */
+    /**
+     * The session's start marker, which belongs to no peer and so carries no label, and teardown
+     * warnings, each logged under its peer's label.
+     */
     private static final Logger LOG = LoggerFactory.getLogger(MultiPeerSession.class);
 
     /** One validated base config per peer, host first; each carries that peer's account. */
@@ -170,16 +174,16 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Prepares a session without starting anything: checks the peer count, that no two peers share
-     * a refresh-token file, and that every token file can be read. A second login with the same
-     * account signs the first out, which would otherwise surface much later as an unexplained lobby
-     * disconnect.
+     * a refresh-token file, that every token file can be read, and that the adapter, game and
+     * {@code faf-uid} binaries exist. A second login with the same account signs the first out,
+     * which would otherwise surface much later as an unexplained lobby disconnect.
      *
      * @param peerBases one validated config per peer, host first and joiners in join order. Each
      *     supplies the peer's account and the settings every peer shares; its ports, launch delay
      *     and host, join and queue intent are replaced by the session
      * @param hostTitle the title the host advertises
      * @throws IllegalArgumentException if the count is outside {@value #MIN_PEERS} to {@value
-     *     #MAX_PEERS}, a token file cannot be read, or two peers share one
+     *     #MAX_PEERS}, a token file cannot be read, two peers share one, or a binary is missing
      */
     public MultiPeerSession(final List<MockClientConfig> peerBases, final String hostTitle) {
         if (peerBases.size() < MIN_PEERS || peerBases.size() > MAX_PEERS) {
@@ -219,6 +223,13 @@ public final class MultiPeerSession implements AutoCloseable {
             }
         }
         this.tokens = List.copyOf(resolved);
+        // Checked here rather than at launch: the host would otherwise log in, rotating its
+        // refresh token, before a wrong path surfaced.
+        for (MockClientConfig base : bases) {
+            requireBinary("faf-ice-adapter", base.iceAdapterBinaryPath());
+            requireBinary("mock-game", base.mockGameBinaryPath());
+            base.uidBinaryPath().ifPresent(uid -> requireBinary("faf-uid", uid));
+        }
     }
 
     /**
@@ -324,30 +335,70 @@ public final class MultiPeerSession implements AutoCloseable {
             needles.add(peer.config().iceAdapterBinaryPath().getFileName().toString());
             needles.add(peer.config().mockGameBinaryPath().getFileName().toString());
         }
+        if (needles.isEmpty()) {
+            return List.of();
+        }
         long waitUntil = System.nanoTime() + NO_ORPHANS_TIMEOUT.toNanos();
-        List<ProcessHandle> survivors;
-        do {
-            survivors =
+        while (true) {
+            List<ProcessHandle> survivors =
                     ProcessHandle.current()
                             .descendants()
                             .filter(ProcessHandle::isAlive)
-                            .filter(
-                                    handle ->
-                                            handle.info()
-                                                    .commandLine()
-                                                    .filter(
-                                                            line ->
-                                                                    needles.stream()
-                                                                            .anyMatch(
-                                                                                    line::contains))
-                                                    .isPresent())
+                            .filter(handle -> runsAnyOf(handle, needles))
                             .toList();
-            if (survivors.isEmpty() || needles.isEmpty()) {
-                return List.of();
+            // Checked once more after the last pause, so a process that exits in the final slice
+            // is not reported.
+            if (survivors.isEmpty() || System.nanoTime() >= waitUntil) {
+                return survivors;
             }
             pollPause(waitUntil);
-        } while (System.nanoTime() < waitUntil);
-        return survivors;
+        }
+    }
+
+    /**
+     * Describes a surviving subprocess for a failure message, naming the peer it belonged to. Both
+     * the adapter and the game are launched with {@code --gpgnet-port}, and each peer's is its own.
+     *
+     * @param process a process from {@link #survivingSubprocesses()}
+     * @return the owning peer's name and the command line, or the command line alone
+     */
+    public String describe(final ProcessHandle process) {
+        String line = process.info().commandLine().orElse("pid " + process.pid());
+        return ownerOf(line, peers).map(owner -> owner + " " + line).orElse(line);
+    }
+
+    /**
+     * The peer whose GPGNet port a command line was launched with.
+     *
+     * @param commandLine a subprocess command line
+     * @param candidates the session's peers
+     * @return the peer's name, or empty if none matches
+     */
+    static Optional<String> ownerOf(final String commandLine, final List<SessionPeer> candidates) {
+        List<String> args = List.of(commandLine.split("\\s+"));
+        int flag = args.indexOf("--gpgnet-port");
+        if (flag < 0 || flag + 1 >= args.size()) {
+            return Optional.empty();
+        }
+        String port = args.get(flag + 1);
+        return candidates.stream()
+                .filter(peer -> port.equals(Integer.toString(peer.config().iceAdapterGpgNetPort())))
+                .map(SessionPeer::name)
+                .findFirst();
+    }
+
+    /**
+     * Whether a process's command line mentions any of the given binary names.
+     *
+     * @param process the process
+     * @param needles binary file names
+     * @return {@code true} if its command line contains one
+     */
+    private static boolean runsAnyOf(final ProcessHandle process, final Set<String> needles) {
+        return process.info()
+                .commandLine()
+                .filter(line -> needles.stream().anyMatch(line::contains))
+                .isPresent();
     }
 
     /**
@@ -478,12 +529,25 @@ public final class MultiPeerSession implements AutoCloseable {
         long waitUntil = System.nanoTime() + boundedNanos(PEER_CONNECTED_TIMEOUT);
         while (true) {
             boolean complete = true;
+            List<String> terminated = new ArrayList<>();
             for (SessionPeer peer : peers) {
                 peer.drainVerdicts();
                 complete &= missingLinks(peer).isEmpty();
+                if (peer.lifecycle().getState() == ClientState.TERMINATED) {
+                    terminated.add(peer.name());
+                }
             }
             if (complete) {
                 return;
+            }
+            if (!terminated.isEmpty()) {
+                // A terminated peer can never complete its links, so waiting out the budget would
+                // only hide what happened.
+                throw new CheckpointFailure(
+                        String.join(",", terminated),
+                        "full mesh",
+                        "session ended (TERMINATED) before every link was up; its log lines say"
+                                + " why");
             }
             if (System.nanoTime() >= waitUntil) {
                 break;
@@ -529,8 +593,10 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Bounded wait on one peer's checkpoint future, bound by the stage budget and the session
-     * deadline, failing with the peer, the stage and the limit that ran out. The join refusal is
-     * read here because it can only arrive during this wait.
+     * deadline, failing with the peer, the stage and the limit that ran out. It also fails as soon
+     * as the peer's session ends, since a TERMINATED lifecycle (a failed launch, a lobby
+     * disconnect) never reaches a later checkpoint. The join refusal is read here because it can
+     * only arrive during this wait.
      *
      * @param future the checkpoint
      * @param stageBudget its named budget
@@ -548,8 +614,19 @@ public final class MultiPeerSession implements AutoCloseable {
             final String stage)
             throws InterruptedException {
         String budget = budgetFor(stageBudget);
+        // TERMINATED is terminal, so asking for it now cannot miss it.
+        CompletableFuture<Void> ended = peer.lifecycle().stateReached(ClientState.TERMINATED);
         try {
-            return future.get(boundedNanos(stageBudget), TimeUnit.NANOSECONDS);
+            CompletableFuture.anyOf(future, ended)
+                    .get(boundedNanos(stageBudget), TimeUnit.NANOSECONDS);
+            if (future.isDone()) {
+                return future.get();
+            }
+            throw new CheckpointFailure(
+                    peer.name(),
+                    stage,
+                    "session ended (TERMINATED) before this checkpoint; its log lines say why"
+                            + peer.refusalHint());
         } catch (TimeoutException e) {
             throw new CheckpointFailure(
                     peer.name(), stage, "timed out after " + budget + peer.refusalHint());
@@ -592,6 +669,20 @@ public final class MultiPeerSession implements AutoCloseable {
         long remaining = waitUntil - System.nanoTime();
         if (remaining > 0) {
             TimeUnit.NANOSECONDS.sleep(Math.min(POLL_SLICE.toNanos(), remaining));
+        }
+    }
+
+    /**
+     * Refuses a binary path that is not a file, as the launchers would at launch.
+     *
+     * @param what the binary's name, for the message
+     * @param path the configured path, resolved against the working directory
+     * @throws IllegalArgumentException if it is not a regular file
+     */
+    private static void requireBinary(final String what, final Path path) {
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException(
+                    what + " binary not found: " + path.toAbsolutePath());
         }
     }
 
