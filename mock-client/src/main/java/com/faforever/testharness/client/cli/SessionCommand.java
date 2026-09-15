@@ -23,8 +23,10 @@ import picocli.CommandLine.Spec;
  * {@code session} subcommand (WBS-4.2.1): run a multi-peer session through the live lobby from the
  * release jars and pass or fail on its own. One host and {@code --peers - 1} joiners, each with its
  * own account, adapter and game, host and join a game until every adapter reports every other peer
- * connected. The orchestration is {@link MultiPeerSession}, shared with {@code
- * MultiPeerSessionLiveTest}; this class is the CLI shell around it: flags in, exit code out.
+ * connected and every game has received every other game's traffic, so an adapter that connects but
+ * does not forward game packets fails the run. The orchestration is {@link MultiPeerSession},
+ * shared with {@code MultiPeerSessionLiveTest}; this class is the CLI shell around it: flags in,
+ * exit code out.
  *
  * <p>The clients run in this JVM, and their adapters and games as subprocesses. Sharing the JVM
  * means sharing its fate: an OOM or a stuck lock ends every peer, and any peer failing fails the
@@ -37,11 +39,12 @@ import picocli.CommandLine.Spec;
  * --game-join-password}, {@code --queue-*} and {@code --oauth-refresh-token-file} are not used,
  * though they are still validated.
  *
- * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with no adapter or game left running; {@link
- * ExitCodes#USAGE} for a bad invocation, including fewer token files than peers, two peers on one
- * file, an unreadable file or a missing binary, all refused before any process starts; {@link
- * ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code session: FAIL <peer>: <stage>:
- * <detail>}) or a subprocess survives teardown, which is then killed.
+ * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
+ * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including
+ * fewer token files than peers, two peers on one file, an unreadable file, a missing binary or a
+ * {@code --log-level} above INFO (the traffic check reads INFO lines), all refused before any
+ * process starts; {@link ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code session: FAIL
+ * <peer>: <stage>: <detail>}) or a subprocess survives teardown, which is then killed.
  */
 @Command(
         name = "session",
@@ -50,7 +53,9 @@ import picocli.CommandLine.Spec;
         description =
                 "Run a multi-peer session through the live lobby: one host and --peers - 1 "
                         + "joiners, each with its own account, adapter and game. Exits 0 when "
-                        + "every adapter reports every other peer connected. Sets each peer's "
+                        + "every adapter reports every other peer connected and every game has "
+                        + "received every other game's traffic; needs --log-level INFO or finer. "
+                        + "Sets each peer's "
                         + "adapter ports, launch delay and host or join intent itself, so the "
                         + "--ice-adapter-*-port, --mock-game-launch-delay-seconds, --host-*, "
                         + "--target-game-id, --game-join-password, --queue-* and "
@@ -91,8 +96,8 @@ public final class SessionCommand implements Callable<Integer> {
      * Validates the invocation, runs the session, tears it down, and maps the verdict to an exit
      * code.
      *
-     * @return {@link ExitCodes#OK} on a full mesh with nothing left running, otherwise {@link
-     *     ExitCodes#RUNTIME}
+     * @return {@link ExitCodes#OK} on a full mesh with two-way game traffic and nothing left
+     *     running, otherwise {@link ExitCodes#RUNTIME}
      * @throws ParameterException for a bad invocation; picocli exits {@link ExitCodes#USAGE}
      */
     @Override
@@ -164,7 +169,10 @@ public final class SessionCommand implements Callable<Integer> {
         }
         // Only after teardown, so a consumer reading the log never sees PASS for a run that left
         // a subprocess behind.
-        log.info("session: PASS - {} peers, full mesh, nothing left running", peers);
+        log.info(
+                "session: PASS - {} peers, full mesh and two-way game traffic, "
+                        + "nothing left running",
+                peers);
         return ExitCodes.OK;
     }
 

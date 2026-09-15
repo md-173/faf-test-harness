@@ -67,23 +67,11 @@ import org.slf4j.LoggerFactory;
  * over host candidates and never need STUN or TURN. The session's only network dependence is that
  * the lobby is reachable, which this test probes and self-skips on.
  *
- * <p><b>Game traffic (WBS-4.3.2).</b> Each mock game binds its lobby port on {@code CreateLobby}
- * and starts sending to a peer as soon as the adapter names one, so datagrams cross the finished
- * ICE path during the lobby phase, as the real game's autolobby does, and without needing a launch
- * this session deliberately never performs. The evidence is each game's own progress line, captured
- * off its stdout by {@code ProcessOutputLogger}: a line naming a <em>receiving</em> and a
- * <em>sending</em> player id is one direction proven, and both lines together are the round trip.
- * Counts are asserted as "at least", never exactly: the adapter drops everything sent before ICE
- * completes ({@code PeerIceModule.sendViaIce} is guarded by {@code connected}), so a stream that
- * starts mid-sequence with gaps in it is the expected shape, not a defect.
- *
- * <p><b>One known cause of a slow pass.</b> If an adapter re-announces a peer at a
- * <em>different</em> relay port, that peer's send sequence restarts at zero (WBS-3.2.2.5 installs a
- * fresh counter per registration), while the receiving side only ever raises its highest-seen
- * sequence. The advancing check below then makes no progress until the restarted stream climbs past
- * the old high: bounded, about a second per ten datagrams already sent, but it can eat most of
- * {@link #TRAFFIC_TIMEOUT}. The same shape is what WBS-4.3.4 will hit deliberately when a peer
- * rejoins.
+ * <p><b>Game traffic (WBS-4.3.2)</b> is part of the session's verdict: {@link MultiPeerSession}
+ * fails with the {@code traffic} stage unless every game has received every other game's datagrams.
+ * Each mock game binds its lobby port on {@code CreateLobby} and starts sending to a peer as soon
+ * as the adapter names one, so datagrams cross the finished ICE path during the lobby phase, as the
+ * real game's autolobby does, without the launch this session never performs.
  *
  * <p><b>Prerequisites</b>, all probed by {@link #missingPrerequisites(int)} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
@@ -97,13 +85,11 @@ import org.slf4j.LoggerFactory;
  * bootstrap and run notes.
  *
  * <p><b>Every wait is bounded and named.</b> The session's checkpoints fail with {@link
- * CheckpointFailure}, reported here with any captured bind failure appended. The traffic wait is
- * bound by its own budget and by {@link #CASE_DEADLINE}, which starts with the session's own
- * deadline.
+ * CheckpointFailure}, reported here with any captured bind failure appended.
  *
  * <p><b>Duration.</b> A case typically takes 20 to 40 s and all three under two minutes, most of it
  * logins and JVM starts. {@link Timeout} applies to each case, not the class: 600 s, above the 420
- * s case deadline plus the at most 140 s of teardown, so it only fires if teardown itself hangs.
+ * s session deadline plus the at most 140 s of teardown, so it only fires if teardown itself hangs.
  * The worst case for all three is therefore 30 minutes.
  *
  * <p><b>Evidence.</b> Every line carries its instance label, A to D. In the JSONL they land under
@@ -164,39 +150,9 @@ final class MultiPeerSessionLiveTest {
     private static final Duration LOBBY_PROBE_TIMEOUT = Duration.ofSeconds(3);
 
     /**
-     * Budget for one whole case, from the first login to the last traffic check. It starts with
-     * {@link MultiPeerSession}'s own deadline of the same length, which bounds every session
-     * checkpoint; the traffic wait draws from this one, so a slow runner fails on a named
-     * checkpoint rather than on {@link Timeout}. Observed cases take 20 to 40 s; this is headroom
-     * for slower ICE negotiation on a CI runner (#343, #366), not a target. Teardown runs after it:
-     * at most 30 s per peer plus a 20 s orphan sweep, 140 s at four peers, which with this stays
-     * under the 600 s {@link Timeout}.
-     */
-    private static final Duration CASE_DEADLINE = Duration.ofSeconds(420);
-
-    /**
-     * Budget for one pair's traffic to show up in both games' logs once ICE is established.
-     * Generous against a 1 s progress interval: two samples per direction need two intervals plus
-     * whatever the first datagrams cost, and this is headroom rather than a measurement.
-     */
-    private static final Duration TRAFFIC_TIMEOUT = Duration.ofSeconds(30);
-
-    /**
-     * Datagrams a game must have attributed to the other player before the exchange counts as
-     * proven. Small on purpose: this asserts that the path carries traffic, not how much.
-     */
-    private static final int MIN_DATAGRAMS = 3;
-
-    /**
-     * Progress lines required per direction. Two, because one line proves a count and two
-     * consecutive lines are what proves the sequence is still advancing.
-     */
-    private static final int MIN_PROGRESS_SAMPLES = 2;
-
-    /**
-     * The mock game's progress line (WBS-4.3.2), as captured from its stdout. {@code
-     * TwoGameTrafficLoopbackTest} in mock-game holds a second copy of this pattern and these
-     * thresholds, and runs in the fast suite; change one and you must change the other.
+     * The mock game's progress line (WBS-4.3.2), as captured from its stdout. Read here only by the
+     * attribution checkpoint, which checks a game's line carries that game's label; the traffic
+     * verdict itself is {@code TrafficEvidence} in {@code main}.
      */
     private static final Pattern PROGRESS_LINE =
             Pattern.compile(
@@ -227,9 +183,6 @@ final class MultiPeerSessionLiveTest {
     /** {@code WelcomeStateSync}'s identity line, read by the attribution checkpoint. */
     private static final Pattern SESSION_READY_LINE = Pattern.compile("session ready: id=(\\d+) ");
 
-    /** Poll slice for the traffic wait. */
-    private static final Duration POLL_SLICE = Duration.ofMillis(250);
-
     /** Case markers, so a JSONL file several cases appended to can be split by case. */
     private static final org.slf4j.Logger LOG =
             LoggerFactory.getLogger(MultiPeerSessionLiveTest.class);
@@ -240,9 +193,6 @@ final class MultiPeerSessionLiveTest {
      */
     private MultiPeerSession session;
 
-    /** {@link System#nanoTime()} at which the current case's {@link #CASE_DEADLINE} runs out. */
-    private long caseDeadline;
-
     /** Root logger the mock-game capture appender is attached to. */
     private Logger root;
 
@@ -252,29 +202,6 @@ final class MultiPeerSessionLiveTest {
      * reader threads, client threads and the test thread touch it at once.
      */
     private ListAppender<ILoggingEvent> captured;
-
-    /**
-     * One captured progress line, parsed.
-     *
-     * @param receiverId the game that logged the line
-     * @param senderId the peer whose datagrams it counted
-     * @param datagrams how many it had attributed to that peer
-     * @param highestSequence the highest sequence number seen from that peer
-     */
-    private record TrafficSample(
-            int receiverId, int senderId, long datagrams, long highestSequence) {
-        @Override
-        public String toString() {
-            return "player "
-                    + receiverId
-                    + " <- player "
-                    + senderId
-                    + ": "
-                    + datagrams
-                    + " datagrams, highest sequence "
-                    + highestSequence;
-        }
-    }
 
     @BeforeEach
     void captureSubprocessLogs() {
@@ -387,7 +314,7 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * Runs one session through {@link MultiPeerSession}, then proves every pair's traffic. A
+     * Runs one session through {@link MultiPeerSession}, full mesh and game traffic included. A
      * checkpoint failure is re-reported with any captured bind failure appended, since a subprocess
      * that could not bind a port explains a silent path.
      *
@@ -408,20 +335,10 @@ final class MultiPeerSessionLiveTest {
         // though it is the uid, not the title, that the joiners actually target.
         session = new MultiPeerSession(bases, "faf-test-harness 4.3.1 " + runId);
 
-        caseDeadline = System.nanoTime() + CASE_DEADLINE.toNanos();
         try {
             session.run();
         } catch (CheckpointFailure f) {
             throw new AssertionError(f.getMessage() + bindFailureHint(), f);
-        }
-
-        // WBS-4.3.2: with every link up, each pair's traffic must be reaching both sides. Once per
-        // pair rather than per direction, since one wait proves both.
-        List<SessionPeer> peers = session.peers();
-        for (int i = 0; i < peers.size(); i++) {
-            for (int j = i + 1; j < peers.size(); j++) {
-                awaitPeerTraffic(peers.get(i), peers.get(j));
-            }
         }
     }
 
@@ -568,100 +485,6 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * Wait until both games report receiving the other's datagrams (WBS-4.3.2).
-     *
-     * <p>Gated on the {@code onConnected} checkpoints above, deliberately: the adapter drops
-     * anything sent before ICE completes, so counting from the start of the session would be
-     * counting a window that is expected to be lossy. Each direction needs {@link
-     * #MIN_PROGRESS_SAMPLES} progress lines whose datagram count reaches {@link #MIN_DATAGRAMS} and
-     * whose highest sequence has moved between the first and the last — which is what "still
-     * advancing" means, and is why a count alone is not enough.
-     *
-     * @param first one peer
-     * @param second the other
-     * @throws InterruptedException if the wait is interrupted
-     * @throws AssertionError if the traffic is not proven in time
-     */
-    private void awaitPeerTraffic(final SessionPeer first, final SessionPeer second)
-            throws InterruptedException {
-        int firstId = first.identity().id();
-        int secondId = second.identity().id();
-        String budget = budgetFor(TRAFFIC_TIMEOUT);
-        long deadline = System.nanoTime() + boundedNanos(TRAFFIC_TIMEOUT);
-        do {
-            if (exchangeProven(firstId, secondId) && exchangeProven(secondId, firstId)) {
-                return;
-            }
-            pollPause(deadline);
-        } while (System.nanoTime() < deadline);
-
-        throw new AssertionError(
-                first.name()
-                        + "/"
-                        + second.name()
-                        + ": traffic: no two-way peer traffic within "
-                        + budget
-                        + " (wanted "
-                        + MIN_PROGRESS_SAMPLES
-                        + " progress lines per direction reaching "
-                        + MIN_DATAGRAMS
-                        + " datagrams with an advancing sequence). "
-                        + first.name()
-                        + " received: "
-                        + samples(firstId, secondId)
-                        + "; "
-                        + second.name()
-                        + " received: "
-                        + samples(secondId, firstId)
-                        + bindFailureHint());
-    }
-
-    /**
-     * Whether {@code receiverId}'s game has proven it is receiving {@code senderId}'s traffic.
-     *
-     * @param receiverId the game doing the receiving
-     * @param senderId the game whose datagrams it must have counted
-     * @return {@code true} once the samples meet the thresholds and the sequence has advanced
-     */
-    private boolean exchangeProven(final int receiverId, final int senderId) {
-        List<TrafficSample> seen = samples(receiverId, senderId);
-        if (seen.size() < MIN_PROGRESS_SAMPLES) {
-            return false;
-        }
-        TrafficSample oldest = seen.get(0);
-        TrafficSample newest = seen.get(seen.size() - 1);
-        return newest.datagrams() >= MIN_DATAGRAMS
-                && newest.highestSequence() > oldest.highestSequence();
-    }
-
-    /**
-     * Every progress line captured so far for one direction, oldest first.
-     *
-     * @param receiverId the game that logged the line
-     * @param senderId the peer the line is about
-     * @return the parsed samples
-     */
-    private List<TrafficSample> samples(final int receiverId, final int senderId) {
-        List<TrafficSample> found = new ArrayList<>();
-        for (ILoggingEvent event : captured.list) {
-            Matcher matcher = PROGRESS_LINE.matcher(event.getFormattedMessage());
-            if (!matcher.find()) {
-                continue;
-            }
-            TrafficSample sample =
-                    new TrafficSample(
-                            Integer.parseInt(matcher.group(1)),
-                            Integer.parseInt(matcher.group(2)),
-                            Long.parseLong(matcher.group(3)),
-                            Long.parseLong(matcher.group(4)));
-            if (sample.receiverId() == receiverId && sample.senderId() == senderId) {
-                found.add(sample);
-            }
-        }
-        return found;
-    }
-
-    /**
      * A subprocess that could not bind a port it was given explains a silent path, so say so, with
      * every peer's ports, rather than leaving a bare timeout to be re-diagnosed.
      *
@@ -698,42 +521,6 @@ final class MultiPeerSessionLiveTest {
                 "tcp " + c.iceAdapterRpcPort(),
                 "tcp " + c.iceAdapterGpgNetPort(),
                 "udp " + c.iceAdapterLobbyPort());
-    }
-
-    /**
-     * The stage budget capped by what is left of the case deadline.
-     *
-     * @param stageBudget the wait's own budget
-     * @return the nanoseconds the wait may take
-     */
-    private long boundedNanos(final Duration stageBudget) {
-        long remaining = Math.max(0, caseDeadline - System.nanoTime());
-        return Math.min(stageBudget.toNanos(), remaining);
-    }
-
-    /**
-     * Names the limit a wait started now is bound by, for its failure message.
-     *
-     * @param stageBudget the wait's own budget
-     * @return the stage budget, or the case deadline when less of it remains
-     */
-    private String budgetFor(final Duration stageBudget) {
-        return caseDeadline - System.nanoTime() < stageBudget.toNanos()
-                ? "the remaining case deadline (" + CASE_DEADLINE + " per case)"
-                : stageBudget.toString();
-    }
-
-    /**
-     * One poll interval, cut short at the deadline so a wait never overruns it.
-     *
-     * @param deadline the wait's {@link System#nanoTime()} deadline
-     * @throws InterruptedException if interrupted
-     */
-    private static void pollPause(final long deadline) throws InterruptedException {
-        long remaining = deadline - System.nanoTime();
-        if (remaining > 0) {
-            TimeUnit.NANOSECONDS.sleep(Math.min(POLL_SLICE.toNanos(), remaining));
-        }
     }
 
     /**

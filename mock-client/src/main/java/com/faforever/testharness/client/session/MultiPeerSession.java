@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.session;
 
+import ch.qos.logback.classic.Level;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
@@ -18,6 +19,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -27,6 +29,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -44,10 +47,27 @@ import org.slf4j.MDC;
  * separate machines would. Sharing the JVM means sharing its fate: an OOM, a stuck lock or a stray
  * {@code System.exit} ends every peer, and any peer failing fails the session by design.
  *
- * <p><b>The verdict</b> is the adapter's {@code onConnected(localId, remoteId, connected)}
- * notification (json-rpc-spec.md §5), keeping the latest verdict per remote id, since verdicts
- * arrive in no fixed order once there are more than two peers. {@code onIceConnectionStateChanged}
- * is deliberately not waited on: {@code completed} is unreachable in adapter 3.3.14.
+ * <p><b>The verdict</b> has two parts, both required.
+ *
+ * <ul>
+ *   <li><b>Full mesh:</b> the adapter's {@code onConnected(localId, remoteId, connected)}
+ *       notification (json-rpc-spec.md §5), keeping the latest verdict per remote id, since
+ *       verdicts arrive in no fixed order once there are more than two peers. {@code
+ *       onIceConnectionStateChanged} is deliberately not waited on: {@code completed} is
+ *       unreachable in adapter 3.3.14.
+ *   <li><b>Game traffic (WBS-4.3.2):</b> every game has received every other game's datagrams, with
+ *       an advancing sequence ({@link TrafficEvidence}). {@code onConnected} is the adapter's own
+ *       claim; this is the games' independent proof that the adapter forwards what they send, so an
+ *       adapter that connects but drops game packets fails the session. It needs the games and the
+ *       client at INFO or finer, which the constructor enforces.
+ * </ul>
+ *
+ * <p><b>One known cause of a slow traffic pass.</b> If an adapter re-announces a peer at a
+ * <em>different</em> relay port, that peer's send sequence restarts at zero (WBS-3.2.2.5 installs a
+ * fresh counter per registration), while the receiving side only ever raises its highest-seen
+ * sequence. The advancing check then makes no progress until the restarted stream climbs past the
+ * old high: bounded, about a second per ten datagrams already sent, but it can eat most of {@link
+ * #TRAFFIC_TIMEOUT}. WBS-4.3.4 will hit the same shape deliberately when a peer rejoins.
  *
  * <p><b>Auto-launch is off on every peer</b> ({@code mockGameLaunchDelaySeconds = -1}, WBS-4.3.1).
  * faf-server accepts a {@code game_join} only while the game is in {@code GameState.LOBBY} and
@@ -106,6 +126,13 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     static final Duration SESSION_DEADLINE = Duration.ofSeconds(420);
 
+    /**
+     * Budget for every direction of game traffic to be proven once the mesh is up, shared by all of
+     * them: every pair starts sending as soon as its link is up, so they are proven together.
+     * Generous against a 1 s progress interval; headroom, not a measurement.
+     */
+    static final Duration TRAFFIC_TIMEOUT = Duration.ofSeconds(60);
+
     /** Budget for one client's connect, auth handshake and welcome, including the Hydra hop. */
     private static final Duration SESSION_TIMEOUT = Duration.ofSeconds(90);
 
@@ -154,6 +181,9 @@ public final class MultiPeerSession implements AutoCloseable {
     /** One token source per peer, in the same order, resolved before anything starts. */
     private final List<TokenSource> tokens;
 
+    /** What each game has received from each other game, captured while the session runs. */
+    private final TrafficEvidence traffic = new TrafficEvidence();
+
     /** Title the host advertises. */
     private final String hostTitle;
 
@@ -174,16 +204,18 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Prepares a session without starting anything: checks the peer count, that no two peers share
-     * a refresh-token file, that every token file can be read, and that the adapter, game and
-     * {@code faf-uid} binaries exist. A second login with the same account signs the first out,
-     * which would otherwise surface much later as an unexplained lobby disconnect.
+     * a refresh-token file, that every token file can be read, that the adapter, game and {@code
+     * faf-uid} binaries exist, and that the log level lets game traffic be seen. A second login
+     * with the same account signs the first out, which would otherwise surface much later as an
+     * unexplained lobby disconnect.
      *
      * @param peerBases one validated config per peer, host first and joiners in join order. Each
      *     supplies the peer's account and the settings every peer shares; its ports, launch delay
      *     and host, join and queue intent are replaced by the session
      * @param hostTitle the title the host advertises
      * @throws IllegalArgumentException if the count is outside {@value #MIN_PEERS} to {@value
-     *     #MAX_PEERS}, a token file cannot be read, two peers share one, or a binary is missing
+     *     #MAX_PEERS}, a token file cannot be read, two peers share one, a binary is missing, or
+     *     the log level is above INFO
      */
     public MultiPeerSession(final List<MockClientConfig> peerBases, final String hostTitle) {
         if (peerBases.size() < MIN_PEERS || peerBases.size() > MAX_PEERS) {
@@ -223,6 +255,21 @@ public final class MultiPeerSession implements AutoCloseable {
             }
         }
         this.tokens = List.copyOf(resolved);
+        for (MockClientConfig base : bases) {
+            // The traffic checkpoint reads the games' INFO progress lines, which neither the games
+            // nor this JVM emit above INFO. Logback reads an unrecognised level as DEBUG.
+            if (!Level.INFO.isGreaterOrEqual(Level.toLevel(base.logLevel(), Level.DEBUG))) {
+                throw new IllegalArgumentException(
+                        "--log-level must be INFO or finer for a session, which reads game traffic"
+                                + " from the games' INFO lines; got "
+                                + base.logLevel());
+            }
+        }
+        if (!TrafficEvidence.capturable()) {
+            throw new IllegalArgumentException(
+                    "this JVM does not log subprocess output at INFO, so game traffic cannot be"
+                            + " seen; set LOG_LEVEL to INFO or finer");
+        }
         // Checked here rather than at launch: the host would otherwise log in, rotating its
         // refresh token, before a wrong path surfaced.
         for (MockClientConfig base : bases) {
@@ -234,8 +281,9 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Runs the session: the host through welcome, {@code game_launch} and HOSTING, then each joiner
-     * in turn through welcome, {@code game_launch} and JOINING, then the full mesh. Returns
-     * normally only when every peer's adapter reports every other peer connected.
+     * in turn through welcome, {@code game_launch} and JOINING, then the full mesh, then game
+     * traffic. Returns normally only when every peer's adapter reports every other peer connected
+     * and every game has received every other game's datagrams.
      *
      * @throws CheckpointFailure naming the peer and the stage, if any checkpoint does not pass
      * @throws InterruptedException if any bounded wait is interrupted
@@ -247,6 +295,11 @@ public final class MultiPeerSession implements AutoCloseable {
                 throw new IllegalStateException("a session can only run once");
             }
             started = true;
+            // Before any game starts, so no progress line is missed, and under the monitor, so a
+            // concurrent close() either detaches it or runs first and leaves it unattached.
+            if (!closed) {
+                traffic.attach();
+            }
         }
         deadline = System.nanoTime() + SESSION_DEADLINE.toNanos();
         LOG.info("session: {} peers, host title '{}'", bases.size(), hostTitle);
@@ -284,6 +337,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
 
         awaitFullMesh();
+        awaitTraffic();
     }
 
     /**
@@ -310,6 +364,7 @@ public final class MultiPeerSession implements AutoCloseable {
             return;
         }
         closed = true;
+        traffic.detach();
         for (int i = peers.size() - 1; i >= 0; i--) {
             SessionPeer peer = peers.get(i);
             try (MDC.MDCCloseable ignored = peer.labelled()) {
@@ -529,17 +584,14 @@ public final class MultiPeerSession implements AutoCloseable {
         long waitUntil = System.nanoTime() + boundedNanos(PEER_CONNECTED_TIMEOUT);
         while (true) {
             boolean complete = true;
-            List<String> terminated = new ArrayList<>();
             for (SessionPeer peer : peers) {
                 peer.drainVerdicts();
                 complete &= missingLinks(peer).isEmpty();
-                if (peer.lifecycle().getState() == ClientState.TERMINATED) {
-                    terminated.add(peer.name());
-                }
             }
             if (complete) {
                 return;
             }
+            List<String> terminated = terminatedPeers();
             if (!terminated.isEmpty()) {
                 // A terminated peer can never complete its links, so waiting out the budget would
                 // only hide what happened.
@@ -573,6 +625,109 @@ public final class MultiPeerSession implements AutoCloseable {
                 String.join(",", incomplete),
                 "full mesh",
                 "not every link up within " + budget + ":" + report);
+    }
+
+    /**
+     * Waits until every game has proven it receives every other game's traffic.
+     *
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure if a direction is not proven in time, or a peer's session ends
+     */
+    private void awaitTraffic() throws InterruptedException {
+        Map<Long, String> names = new LinkedHashMap<>();
+        for (SessionPeer peer : peers) {
+            names.put((long) peer.identity().id(), peer.name());
+        }
+        awaitTraffic(
+                traffic,
+                names,
+                System.nanoTime() + boundedNanos(TRAFFIC_TIMEOUT),
+                budgetFor(TRAFFIC_TIMEOUT),
+                this::terminatedPeers);
+    }
+
+    /**
+     * The traffic wait itself, separated from the session so its failure can be tested without a
+     * lobby. Polls every direction between the given players under one deadline.
+     *
+     * @param evidence the captured progress lines
+     * @param names each player's id mapped to its peer name, in join order
+     * @param waitUntil the {@link System#nanoTime()} deadline
+     * @param budget the limit the deadline represents, for the failure message
+     * @param terminated the names of peers whose session has ended
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure naming every receiver still missing a direction
+     */
+    static void awaitTraffic(
+            final TrafficEvidence evidence,
+            final Map<Long, String> names,
+            final long waitUntil,
+            final String budget,
+            final Supplier<List<String>> terminated)
+            throws InterruptedException {
+        while (true) {
+            List<String> receivers = new ArrayList<>();
+            StringBuilder report = new StringBuilder();
+            for (Map.Entry<Long, String> receiver : names.entrySet()) {
+                for (Map.Entry<Long, String> sender : names.entrySet()) {
+                    if (receiver.getKey().equals(sender.getKey())
+                            || evidence.proven(receiver.getKey(), sender.getKey())) {
+                        continue;
+                    }
+                    if (!receivers.contains(receiver.getValue())) {
+                        receivers.add(receiver.getValue());
+                    }
+                    report.append(' ')
+                            .append(receiver.getValue())
+                            .append(" from ")
+                            .append(sender.getValue())
+                            .append(": ")
+                            .append(evidence.seen(receiver.getKey(), sender.getKey()))
+                            .append(';');
+                }
+            }
+            if (receivers.isEmpty()) {
+                return;
+            }
+            List<String> ended = terminated.get();
+            if (!ended.isEmpty()) {
+                throw new CheckpointFailure(
+                        String.join(",", ended),
+                        "traffic",
+                        "session ended (TERMINATED) before every game received traffic; its log"
+                                + " lines say why. Still waiting:"
+                                + report);
+            }
+            if (System.nanoTime() >= waitUntil) {
+                throw new CheckpointFailure(
+                        String.join(",", receivers),
+                        "traffic",
+                        "no two-way game traffic within "
+                                + budget
+                                + " (wanted "
+                                + TrafficEvidence.MIN_PROGRESS_SAMPLES
+                                + " progress lines per direction reaching "
+                                + TrafficEvidence.MIN_DATAGRAMS
+                                + " datagrams with an advancing sequence):"
+                                + report);
+            }
+            pollPause(waitUntil);
+        }
+    }
+
+    /**
+     * The peers whose session has ended, which can never pass a later checkpoint.
+     *
+     * @return their names, in join order
+     */
+    private List<String> terminatedPeers() {
+        List<String> terminated = new ArrayList<>();
+        for (SessionPeer peer : peers) {
+            if (peer.lifecycle().getState() == ClientState.TERMINATED) {
+                terminated.add(peer.name());
+            }
+        }
+        return terminated;
     }
 
     /**
