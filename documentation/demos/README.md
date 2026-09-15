@@ -47,17 +47,22 @@ Everything the 3.1.2.7 demo needs (adapter jar, mock-game distribution), plus:
    **Every file used is rewritten on every run**, because Hydra rotates the
    refresh token on use. Never run two sessions on the same accounts at once.
 
-The endpoint defaults to `wss://ws.faforever.xyz`; set `FAF_LOBBY_URL` to point
-elsewhere. Confirm it is reachable first — the test self-skips when it is not:
+The endpoint defaults to `wss://ws.faforever.xyz`, the FAF test lobby, which is
+public: no VPN or allowlist is needed. Set `FAF_LOBBY_URL` to point elsewhere,
+and `FAF_ICE_ADAPTER_JAR`, `FAF_MOCK_GAME_BINARY` and `FAF_UID_BINARY` to use
+binaries outside the repository. The test skips when the lobby does not accept a
+TCP connection within 3 s; to check by hand:
 
 ```bash
 timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
   && echo REACHABLE || echo UNREACHABLE
 ```
 
-Any missing prerequisite **skips** the test rather than failing it, printing
-each one it wanted. A skip is not a pass — check for a `[4.3.1] skipping` line
-before believing a green run.
+Any missing prerequisite **skips** the case rather than failing it, and one
+line lists everything it wanted. A skip is not a pass: check for a
+`[4.3.1] skipping` line before believing a green run. All prerequisite probing is
+in `missingPrerequisites`, the one place a CI run would turn skips into
+failures.
 
 ### Run
 
@@ -77,7 +82,10 @@ done
 
 No game auto-launches its match (`--mock-game-launch-delay-seconds=-1`), so a
 case costs roughly its sessions' setup rather than a simulated match: about
-20-40 seconds per case, and under two minutes for all three.
+20-40 seconds per case, and under two minutes for all three. Every wait is also
+bound by a 420 s per-case deadline and fails naming the peer and stage; the
+600 s JUnit timeout per case only covers a hung teardown, so all three cases
+take at most 30 minutes.
 That flag is load-bearing: faf-server accepts a `game_join` only while the game
 is in `GameState.LOBBY` and drops it out of that state as soon as the host
 reports `GameState Launching`, so a host on the default 5 s timer makes itself
@@ -91,8 +99,12 @@ component, `[2026-09-14 20:28:30.899] [Unknown] [A] [INFO ] state entry: CONNECT
 and as the `instance` field in JSONL. The label covers the client's own lines on
 every thread it owns and its captured adapter and game output; each game also
 writes its own `logs/mockgame-<label>.jsonl`. Filter on one label to read one
-peer. The order below is the one to read for, shown for A and a joiner B; C and
-D repeat B's rows.
+peer. The JSONL lands under `mock-client/logs/`: `test-harness.jsonl` for the
+clients with their captured adapter and game output, and `mockgame-A.jsonl` to
+`mockgame-D.jsonl` from the games themselves. Repeated cases append to the same
+files; each case starts with a `case: N peers, run <uuid>` line, and the uuid is
+also in the hosted game's title. The order below is the one to read for, shown
+for A and a joiner B; C and D repeat B's rows.
 
 | Stage | Log line | Source |
 |-------|----------|--------|

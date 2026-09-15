@@ -53,7 +53,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -119,7 +118,7 @@ import org.slf4j.MDC;
  * {@link #TRAFFIC_TIMEOUT}. The same shape is what WBS-4.3.4 will hit deliberately when a peer
  * rejoins.
  *
- * <p><b>Prerequisites</b>, all probed by {@link #liveEnvironmentAvailable()} so an unequipped
+ * <p><b>Prerequisites</b>, all probed by {@link #missingPrerequisites(int)} so an unequipped
  * machine skips rather than fails: the adapter jar ({@code ./gradlew downloadIceAdapter}), the
  * installed mock-game binary ({@code ./gradlew :mock-game:installDist}), the {@code faf-uid} binary
  * (the lobby's policy server rejects a placeholder {@code unique_id}), and one seeded account's
@@ -130,9 +129,21 @@ import org.slf4j.MDC;
  * because Hydra rotates the refresh token on use. See {@code documentation/demos/README.md} for the
  * bootstrap and run notes.
  *
- * <p><b>Every wait is bounded and named</b>, in the 3.1.2.7 pattern: a missed checkpoint fails with
- * the budget that ran out and what had been seen by then, so a regression names itself. The
- * class-level {@link Timeout} is only a total-runtime backstop.
+ * <p><b>Every wait is bounded and named</b>, in the 3.1.2.7 pattern: a missed checkpoint throws
+ * {@link CheckpointFailure} with the peer, the stage, the limit that ran out and what had been seen
+ * by then, so a regression names itself. Each wait is bound by its own budget and by {@link
+ * #CASE_DEADLINE}, whichever is sooner.
+ *
+ * <p><b>Duration.</b> A case typically takes 20 to 40 s and all three under two minutes, most of it
+ * logins and JVM starts. {@link Timeout} applies to each case, not the class: 600 s, above the 420
+ * s case deadline plus the at most 140 s of teardown, so it only fires if teardown itself hangs.
+ * The worst case for all three is therefore 30 minutes.
+ *
+ * <p><b>Evidence.</b> Every line carries its instance label, A to D. In the JSONL they land under
+ * {@code mock-client/logs/}: {@code test-harness.jsonl} for the clients and their captured adapter
+ * and game output, and {@code mockgame-A.jsonl} to {@code mockgame-D.jsonl} from the games
+ * themselves. Cases append to the same files; each starts with a {@code case: N peers, run <uuid>}
+ * line, and the uuid is also in the hosted game's title.
  */
 @Tag("integration")
 @Timeout(value = 600, unit = TimeUnit.SECONDS)
@@ -147,28 +158,54 @@ final class MultiPeerSessionLiveTest {
     /** Environment override for the {@code faf-uid} binary. */
     private static final String UID_BINARY_ENV = "FAF_UID_BINARY";
 
-    /** Environment override for the hosting account's refresh-token file. */
-    private static final String TOKEN_A_ENV = "FAF_REFRESH_TOKEN_A";
+    /**
+     * One peer's fixed slot: its label, role, and where its account's credential comes from.
+     *
+     * @param label the instance label and failure-message name, A to D
+     * @param role {@code host} or {@code joiner}
+     * @param tokenEnv the environment variable overriding its refresh-token file
+     * @param tokenFile its refresh-token file relative to the repository root
+     */
+    private record PeerSlot(String label, String role, String tokenEnv, String tokenFile) {}
 
-    /** Environment override for the joining (peer B) account's refresh-token file. */
-    private static final String TOKEN_B_ENV = "FAF_REFRESH_TOKEN_B";
-
-    /** Environment override for the joining (peer C) account's refresh-token file. */
-    private static final String TOKEN_C_ENV = "FAF_REFRESH_TOKEN_C";
-
-    /** Environment override for the joining (peer D) account's refresh-token file. */
-    private static final String TOKEN_D_ENV = "FAF_REFRESH_TOKEN_D";
+    /**
+     * Every peer this test can run, in join order: the host first. Each slot has its own variable
+     * and its own file and nothing falls back from one to another, so no peer can resolve another
+     * peer's account. A case with N peers uses the first N.
+     */
+    private static final List<PeerSlot> SLOTS =
+            List.of(
+                    new PeerSlot("A", "host", "FAF_REFRESH_TOKEN_A", ".secrets/refresh_token.txt"),
+                    new PeerSlot(
+                            "B", "joiner", "FAF_REFRESH_TOKEN_B", ".secrets/refresh_token_b.txt"),
+                    new PeerSlot(
+                            "C", "joiner", "FAF_REFRESH_TOKEN_C", ".secrets/refresh_token_c.txt"),
+                    new PeerSlot(
+                            "D", "joiner", "FAF_REFRESH_TOKEN_D", ".secrets/refresh_token_d.txt"));
 
     /** Environment override for the lobby endpoint. */
     private static final String LOBBY_URL_ENV = "FAF_LOBBY_URL";
 
     /**
-     * Lobby endpoint used when {@link #LOBBY_URL_ENV} is unset. The test environment's canonical
-     * host is {@code lobby.faforever.xyz}, but it is unreachable from most networks (see {@code
-     * LobbyConnectionLiveSmokeTest}'s javadoc); {@code ws.faforever.xyz} is what the 3.1.1.4 demo
-     * actually ran against, so it is the default and the other is one environment variable away.
+     * Lobby endpoint used when {@link #LOBBY_URL_ENV} is unset: the FAF test lobby. It is fronted
+     * by Cloudflare and publicly reachable, so no VPN or allowlist is involved; the older {@code
+     * lobby.faforever.xyz} host no longer answers.
      */
     private static final String DEFAULT_LOBBY_URL = "wss://ws.faforever.xyz";
+
+    /** How long the lobby probe waits for a TCP connection before calling the lobby unreachable. */
+    private static final Duration LOBBY_PROBE_TIMEOUT = Duration.ofSeconds(3);
+
+    /**
+     * Budget for one whole case, from the first login to the last checkpoint. Every named wait
+     * below draws from it as well as from its own budget, and a failure says which ran out, so a
+     * slow runner fails on a named checkpoint rather than on {@link Timeout}. Observed cases take
+     * 20 to 40 s; this is headroom for slower ICE negotiation on a CI runner (#343, #366), not a
+     * target. Teardown runs after it: at most {@link #TEARDOWN_TIMEOUT} per peer plus {@link
+     * #NO_ORPHANS_TIMEOUT}, 140 s at four peers, which with this stays under the 600 s {@link
+     * Timeout}.
+     */
+    private static final Duration CASE_DEADLINE = Duration.ofSeconds(420);
 
     /** Budget for one client's connect, auth handshake, and welcome — including the Hydra hop. */
     private static final Duration SESSION_TIMEOUT = Duration.ofSeconds(90);
@@ -223,8 +260,14 @@ final class MultiPeerSessionLiveTest {
                     "player (\\d+) peer traffic from player (\\d+): (\\d+) datagrams, "
                             + "highest sequence (-?\\d+), gaps (\\d+)");
 
-    /** A game that could not bind its lobby port, quoted into a failed traffic wait. */
-    private static final String BIND_FAILURE = "failed to bind lobby port";
+    /**
+     * Log text that means a subprocess could not bind a port it was given: mock-game's own line for
+     * its lobby port, and the JDK's wording when the adapter cannot bind its RPC or GPGNet port.
+     * Quoted into any failed wait, because the ports are released between allocation and bind, so
+     * another process on a busy runner can take one in between (see {@link #freeAdapterPorts}).
+     */
+    private static final List<String> BIND_FAILURES =
+            List.of("failed to bind lobby port", "BindException", "Address already in use");
 
     /**
      * Client log lines every peer must have emitted under its own label by the time the mesh and
@@ -260,12 +303,19 @@ final class MultiPeerSessionLiveTest {
     /** Featured mod the host advertises. */
     private static final String HOST_MOD = "faf";
 
+    /** Case markers, so a JSONL file several cases appended to can be split by case. */
+    private static final org.slf4j.Logger LOG =
+            LoggerFactory.getLogger(MultiPeerSessionLiveTest.class);
+
     /**
-     * The joining peers, added by {@link #runSession} as each is built. A field rather than a
-     * local, so the test's teardown can reach every joiner built so far even when a later
-     * checkpoint fails.
+     * Every peer built so far, host first, added by {@link #runSession} as each is built. A field
+     * rather than a local, so the test's teardown can reach every peer even when a later checkpoint
+     * fails.
      */
-    private List<Peer> joiners;
+    private List<Peer> peers;
+
+    /** {@link System#nanoTime()} at which the current case's {@link #CASE_DEADLINE} runs out. */
+    private long caseDeadline;
 
     /** Root logger the mock-game capture appender is attached to. */
     private Logger root;
@@ -344,6 +394,68 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
+     * A session checkpoint that did not pass, naming the peer and the stage. Deliberately not a
+     * JUnit type: the orchestration in {@link #runSession} and its waits throw only this, so the
+     * #87 {@code session} command can lift them into {@code main} unchanged and map this verdict to
+     * its exit code. JUnit reports it as the test's failure like any other exception.
+     */
+    static final class CheckpointFailure extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        /** The peer, or peers, the checkpoint was about. */
+        private final String peer;
+
+        /** The checkpoint that did not pass, e.g. {@code welcome} or {@code full mesh}. */
+        private final String stage;
+
+        CheckpointFailure(final String peer, final String stage, final String detail) {
+            this(peer, stage, detail, null);
+        }
+
+        CheckpointFailure(
+                final String peer, final String stage, final String detail, final Throwable cause) {
+            super(peer + ": " + stage + ": " + detail, cause);
+            this.peer = peer;
+            this.stage = stage;
+        }
+
+        String peer() {
+            return peer;
+        }
+
+        String stage() {
+            return stage;
+        }
+    }
+
+    /**
+     * A peer's account credential, which is all that differs between peers' lobby login settings.
+     * Today it is a refresh-token file exchanged at Hydra. The pre-signed access-token file (#340)
+     * becomes a second implementation with its own {@link #args()}, and nothing else changes.
+     *
+     * @param slot the peer this credential belongs to
+     * @param refreshTokenFile the account's refresh-token file, rewritten in place on every use
+     */
+    private record PeerCredential(PeerSlot slot, Path refreshTokenFile) {
+
+        /**
+         * The login arguments for this credential.
+         *
+         * @return argv entries for {@link ConfigLoader}
+         */
+        List<String> args() {
+            return List.of(
+                    "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
+                    "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
+                    "--oauth-redirect-uri=http://127.0.0.1",
+                    "--oauth-scopes=openid offline lobby",
+                    "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+                    "--oauth-refresh-token-file=" + refreshTokenFile.toAbsolutePath());
+        }
+    }
+
+    /**
      * One {@code ConnectToPeer} as the lobby sent it.
      *
      * @param remoteId the peer to connect to
@@ -404,9 +516,9 @@ final class MultiPeerSessionLiveTest {
         /** This peer's lobby-assigned identity, from its {@code welcome}. */
         private SessionState identity;
 
-        private Peer(final String label, final String role, final MockClientConfig config) {
-            this.label = label;
-            this.name = label + "(" + role + ")";
+        private Peer(final PeerSlot slot, final MockClientConfig config) {
+            this.label = slot.label();
+            this.name = slot.label() + "(" + slot.role() + ")";
             this.config = config;
             try (MDC.MDCCloseable ignored = labelled(this)) {
                 LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
@@ -482,145 +594,135 @@ final class MultiPeerSessionLiveTest {
 
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 3})
-    @EnabledIf("liveEnvironmentAvailable")
     void multiplePeersEstablishTheirLinkThroughTheLiveLobby(int joinerAmount) throws Exception {
-        // Not part of EnabledIf as it needs the number of joiners.
-        assumeTrue(
-                refreshFilesAvailable(joinerAmount),
-                "no refresh token for one of the " + joinerAmount + " joiners (see stdout)");
-        assumeTrue(
-                lobbyReachable(),
-                "lobby "
-                        + lobbyUrl()
-                        + " unreachable from this network (TCP timeout on :443). Self-skips "
-                        + "off-net; runs on a FAF-allowlisted host/VPN.");
+        // The one prerequisite gate. A machine without the live environment skips here, and
+        // #364's FAF_LIVE_REQUIRED only has to turn this assumption into a failure.
+        List<String> missing = missingPrerequisites(joinerAmount + 1);
+        if (!missing.isEmpty()) {
+            System.out.println("[4.3.1] skipping multi-peer session test: " + missing);
+        }
+        assumeTrue(missing.isEmpty(), () -> "missing live prerequisites: " + missing);
 
-        // Initialise joiner list
-        joiners = new ArrayList<>();
-
-        // Unique per run, so a stale game from an earlier run is never what this one observes,
-        // though it is the uid, not the title, that the joiners actually target.
-        Peer host =
-                new Peer("A", "host", hostConfig("faf-test-harness 4.3.1 " + UUID.randomUUID()));
+        String runId = UUID.randomUUID().toString();
+        LOG.info("case: {} peers, run {}", joinerAmount + 1, runId);
+        peers = new ArrayList<>();
+        caseDeadline = System.nanoTime() + CASE_DEADLINE.toNanos();
         Throwable failure = null;
         try {
-            runSession(host, joinerAmount);
+            runSession(joinerAmount + 1, runId);
+            // Checks on what the session produced. runSession and its waits are JUnit-free, so
+            // #87 can lift them; these two are specific to this test.
+            assertOfferDirections(peers);
+            assertInstanceLabels(peers);
         } catch (Throwable t) {
             failure = t;
             throw t;
         } finally {
-            // Always runs, so a failed checkpoint still leaves no adapter and no game behind.
-            // Joiners first: they are the side that may not exist yet. They are read from the
-            // field, which runSession fills as it builds each one, so every joiner that got as far
-            // as construction is shut down even when a later wait fails; a leaked one would also
-            // stay logged in for the next run to trip over.
-            for (var joiner : joiners) {
-                // One throwing shutdown must not stop the others, or the host's.
-                try {
-                    shutdown(joiner);
-                } catch (Exception e) {
-                    System.out.println("[4.3.1] " + joiner.name + " shutdown threw: " + e);
-                }
-            }
-            shutdown(host);
-
-            // Checked on every path. The check sees every descendant of this JVM, and the cases run
-            // back to back in it, so a failed case that skipped it would hand its survivors to the
-            // next case's check. After a checkpoint failure it is attached rather than thrown, so
-            // the checkpoint stays the reported cause.
+            // A @Timeout interrupt would otherwise cut every bounded teardown wait below short.
+            // Clear it for the teardown and restore it afterwards.
+            boolean interrupted = Thread.interrupted();
             try {
-                assertNoSurvivingSubprocesses(host.config);
-            } catch (AssertionError survivors) {
-                if (failure == null) {
-                    throw survivors;
+                shutdownAll();
+                List<String> survivors = survivingSubprocesses();
+                // Checked on every path. The sweep sees every descendant of this JVM and the cases
+                // run back to back in it, so a failed case that skipped it would hand its survivors
+                // to the next case. After a checkpoint failure it is attached rather than thrown,
+                // so the checkpoint stays the reported cause.
+                if (!survivors.isEmpty()) {
+                    AssertionError leak =
+                            new AssertionError(
+                                    "subprocesses survived teardown after "
+                                            + NO_ORPHANS_TIMEOUT
+                                            + ": "
+                                            + survivors);
+                    if (failure == null) {
+                        throw leak;
+                    }
+                    failure.addSuppressed(leak);
                 }
-                failure.addSuppressed(survivors);
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
 
     /**
-     * The ordered checkpoints, from A's welcome to every adapter reporting every link. Split out of
-     * the test method so the shutdown above wraps every one of them.
+     * Builds, starts and verifies one session: the host, then each joiner in turn, then the full
+     * mesh and every pair's traffic. JUnit-free: every checkpoint that does not pass throws {@link
+     * CheckpointFailure} naming the peer and the stage, which is what the #87 {@code session}
+     * command reuses as its verdict. Every peer is added to {@link #peers} before anything can
+     * fail, so the caller's teardown always reaches it.
      *
-     * @param host the hosting peer, not yet started
-     * @param joinerAmount a number between 1 and 3 for the total number of joiners to create.
+     * @param peerCount the number of peers, host included, 2 to {@link #SLOTS}'s size
+     * @param runId unique per case, carried into the hosted game's title
      * @throws InterruptedException if any bounded wait is interrupted
      */
-    private void runSession(final Peer host, final int joinerAmount) throws InterruptedException {
-        if (joinerAmount < 1 || joinerAmount > 3) {
-            throw new IllegalArgumentException("joinerAmount must be 1 to 3: " + joinerAmount);
+    private void runSession(final int peerCount, final String runId) throws InterruptedException {
+        if (peerCount < 2 || peerCount > SLOTS.size()) {
+            throw new IllegalArgumentException(
+                    "peerCount must be 2 to " + SLOTS.size() + ": " + peerCount);
         }
+        List<PeerCredential> credentials = distinctCredentials(peerCount);
+
+        // Unique per case, so a stale game from an earlier run is never what this one observes,
+        // though it is the uid, not the title, that the joiners actually target.
+        Peer host =
+                new Peer(
+                        SLOTS.get(0),
+                        hostConfig(credentials.get(0), "faf-test-harness 4.3.1 " + runId));
+        peers.add(host);
         // Taken before the events that can reach them. StateMachine.stateReached only
         // short-circuits while the state is still current, so a future asked for after the FSM has
-        // been through and left that state can never complete — and HOSTING is left the moment a
+        // been through and left that state can never complete, and HOSTING is left the moment a
         // session dies. Taking it up front is what makes this checkpoint honest; it does not make a
         // dead session report faster, since nothing here races the wait against TERMINATED.
         CompletableFuture<Void> hosting = host.lifecycle.stateReached(ClientState.HOSTING);
-
-        List<String> joinerNames = List.of("B", "C", "D");
 
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what
         // spawns A's adapter and game and completes gameLaunched with the uid.
         GameConfig hosted;
         try (MDC.MDCCloseable ignored = labelled(host)) {
             host.identity =
-                    await(host.lifecycle.start(tokensFor(host)), SESSION_TIMEOUT, "A: welcome");
-            hosted = await(host.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, "A: game_launch");
-            await(hosting, ROLE_TIMEOUT, "A: HOSTING");
+                    await(host.lifecycle.start(tokensFor(host)), SESSION_TIMEOUT, host, "welcome");
+            hosted = await(host.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, host, "game_launch");
+            await(hosting, ROLE_TIMEOUT, host, "HOSTING");
         }
 
         // Only now is the game joinable: the server marks it hosted when A's game reports Lobby,
         // which reaches the server only because R72 forwards it. Each joiner is started with A's
-        // uid as its join target, the one value that crosses between clients in-process, and is
-        // added to the field before anything can fail, so the caller's teardown can reach it. They
+        // uid as its join target, the one value that crosses between clients in-process. They
         // join one at a time, each after the previous reached JOINING, so join order (and with it
-        // the offer directions asserted below) is the loop order.
-        for (int i = 0; i < joinerAmount; i++) {
-            String joinerName = joinerNames.get(i);
-            Peer joiner = new Peer(joinerName, "joiner", joinConfig(hosted.uid(), i));
-            joiners.add(joiner);
+        // the offer directions the test asserts) is the slot order.
+        for (int i = 1; i < peerCount; i++) {
+            Peer joiner = new Peer(SLOTS.get(i), joinConfig(credentials.get(i), hosted.uid()));
+            peers.add(joiner);
+            checkDistinctPorts(joiner);
             CompletableFuture<Void> joining = joiner.lifecycle.stateReached(ClientState.JOINING);
             try (MDC.MDCCloseable ignored = labelled(joiner)) {
                 joiner.identity =
                         await(
                                 joiner.lifecycle.start(tokensFor(joiner)),
                                 SESSION_TIMEOUT,
-                                joinerName + ": welcome");
-                await(
-                        joiner.lifecycle.gameLaunched(),
-                        GAME_LAUNCH_TIMEOUT,
-                        joinerName + ": game_launch",
-                        joiner);
-                await(joining, ROLE_TIMEOUT, joinerName + ": JOINING");
+                                joiner,
+                                "welcome");
+                checkDistinctAccount(joiner);
+                await(joiner.lifecycle.gameLaunched(), GAME_LAUNCH_TIMEOUT, joiner, "game_launch");
+                await(joining, ROLE_TIMEOUT, joiner, "JOINING");
             }
         }
-
-        List<Peer> allPeers = new ArrayList<>(joiners);
-        allPeers.add(host);
-
-        // WBS-4.3.3: no two peers were given the same adapter port.
-        assertDistinctPorts(allPeers);
 
         // The card's definitive signal: every adapter reports every other peer connected.
-        awaitFullMesh(allPeers);
+        awaitFullMesh();
 
-        // WBS-4.3.3: the peer-to-peer path, with its offer asymmetry, is what three players add.
-        assertOfferDirections(host, joiners);
-
-        // Done differently as awaitPeerTraffic should be called once per pair rather than for each
-        // direction.
-        for (var p1 : allPeers) {
-            // Every peer after this one, done so that a pair is not tested twice.
-            List<Peer> others = allPeers.subList(allPeers.indexOf(p1) + 1, allPeers.size());
-            for (var p2 : others) {
-                // WBS-4.3.2: with the link up, each game's traffic must be reaching the other.
-                awaitPeerTraffic(p1, p2);
+        // WBS-4.3.2: with every link up, each pair's traffic must be reaching both sides. Once per
+        // pair rather than per direction, since one wait proves both.
+        for (int i = 0; i < peers.size(); i++) {
+            for (int j = i + 1; j < peers.size(); j++) {
+                awaitPeerTraffic(peers.get(i), peers.get(j));
             }
         }
-
-        // WBS-4.3.3: every instance's lines, its adapter and game output included, carry its label.
-        assertInstanceLabels(allPeers);
     }
 
     /**
@@ -634,10 +736,11 @@ final class MultiPeerSessionLiveTest {
      * which cannot complete before every frame has been dispatched: each peer's recorder is
      * registered before its lifecycle's own handler, so it sees a frame before the adapter does.
      *
-     * @param host the hosting peer
-     * @param joiners the joiners, in join order
+     * @param session every peer, host first and joiners in join order
      */
-    private static void assertOfferDirections(final Peer host, final List<Peer> joiners) {
+    private static void assertOfferDirections(final List<Peer> session) {
+        Peer host = session.get(0);
+        List<Peer> joiners = session.subList(1, session.size());
         Set<Offer> hostExpected = new HashSet<>();
         for (Peer joiner : joiners) {
             hostExpected.add(new Offer(joiner.identity.id(), true));
@@ -656,29 +759,103 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * No two peers share an adapter port (WBS-4.3.3). Each port set is allocated while the earlier
-     * peers' adapters already hold theirs, so a repeat here would be the OS handing out a port a
-     * running adapter or game has bound, which fails that peer's bind rather than any assertion.
-     * Naming it here says so directly.
+     * Resolves one credential per peer and refuses two peers that would share an account, before
+     * any of them logs in. A second login with the same account signs the first out, which would
+     * otherwise surface much later as an unexplained lobby disconnect.
      *
-     * @param peers every peer in the session
+     * @param peerCount the number of peers, host included
+     * @return the credentials, in slot order
+     * @throws CheckpointFailure if two slots resolve to the same file
      */
-    private static void assertDistinctPorts(final List<Peer> peers) {
-        Map<String, String> owners = new HashMap<>();
-        for (Peer peer : peers) {
-            MockClientConfig c = peer.config;
-            List<String> ports =
-                    List.of(
-                            "tcp " + c.iceAdapterRpcPort(),
-                            "tcp " + c.iceAdapterGpgNetPort(),
-                            "udp " + c.iceAdapterLobbyPort());
-            for (String port : ports) {
-                String previous = owners.putIfAbsent(port, peer.name);
-                if (previous != null) {
-                    fail(port + " given to both " + previous + " and " + peer.name);
+    private static List<PeerCredential> distinctCredentials(final int peerCount) {
+        List<PeerCredential> credentials = new ArrayList<>();
+        Map<Path, PeerSlot> owners = new HashMap<>();
+        for (PeerSlot slot : SLOTS.subList(0, peerCount)) {
+            PeerCredential credential = credentialFor(slot);
+            Path file;
+            try {
+                file = credential.refreshTokenFile().toRealPath();
+            } catch (IOException e) {
+                throw new CheckpointFailure(
+                        slot.label(), "setup", "cannot read " + credential.refreshTokenFile(), e);
+            }
+            PeerSlot previous = owners.putIfAbsent(file, slot);
+            if (previous != null) {
+                throw new CheckpointFailure(
+                        slot.label(),
+                        "setup",
+                        "resolves to the same token file as "
+                                + previous.label()
+                                + " ("
+                                + file
+                                + "); set "
+                                + slot.tokenEnv()
+                                + " to its own account");
+            }
+            credentials.add(credential);
+        }
+        return credentials;
+    }
+
+    /**
+     * Refuses a joiner the lobby authenticated as an account an earlier peer already uses: two
+     * different token files can still belong to one account.
+     *
+     * @param joiner the joiner that just received its welcome
+     * @throws CheckpointFailure if its id matches an earlier peer's
+     */
+    private void checkDistinctAccount(final Peer joiner) {
+        for (Peer other : peers) {
+            if (other != joiner
+                    && other.identity != null
+                    && other.identity.id() == joiner.identity.id()) {
+                throw new CheckpointFailure(
+                        joiner.name,
+                        "welcome",
+                        "logged in as id "
+                                + joiner.identity.id()
+                                + ", the same account as "
+                                + other.name
+                                + "; every peer needs its own account");
+            }
+        }
+    }
+
+    /**
+     * Refuses a joiner whose adapter ports repeat an earlier peer's, before it starts (WBS-4.3.3).
+     * Each port set is allocated after the earlier peers' adapters hold theirs, so a repeat means
+     * the OS handed out a bound port. Ports taken by an unrelated process in the gap before the
+     * adapter binds are not visible here; those surface as a bind failure quoted by the next wait.
+     *
+     * @param joiner the joiner just built
+     * @throws CheckpointFailure if a port repeats
+     */
+    private void checkDistinctPorts(final Peer joiner) {
+        for (Peer other : peers) {
+            if (other == joiner) {
+                continue;
+            }
+            for (String port : portsOf(joiner)) {
+                if (portsOf(other).contains(port)) {
+                    throw new CheckpointFailure(
+                            joiner.name, "ports", port + " was already given to " + other.name);
                 }
             }
         }
+    }
+
+    /**
+     * One peer's adapter ports, named by protocol so a TCP and a UDP port with one number differ.
+     *
+     * @param peer the peer
+     * @return its RPC, GPGNet and lobby ports
+     */
+    private static List<String> portsOf(final Peer peer) {
+        MockClientConfig c = peer.config;
+        return List.of(
+                "tcp " + c.iceAdapterRpcPort(),
+                "tcp " + c.iceAdapterGpgNetPort(),
+                "udp " + c.iceAdapterLobbyPort());
     }
 
     /**
@@ -701,13 +878,13 @@ final class MultiPeerSessionLiveTest {
      * wait, seconds after the in-process mesh check, so the adapter reader has long since logged
      * every verdict it delivered.
      *
-     * @param peers every peer in the session
+     * @param session every peer in the session
      */
-    private void assertInstanceLabels(final List<Peer> peers) {
+    private void assertInstanceLabels(final List<Peer> session) {
         Map<String, Peer> byLabel = new HashMap<>();
         Map<Peer, List<String>> wanted = new HashMap<>();
         Map<Peer, Set<Long>> loggedLinks = new HashMap<>();
-        for (Peer peer : peers) {
+        for (Peer peer : session) {
             byLabel.put(peer.label, peer);
             List<String> kinds = new ArrayList<>(LABELLED_CLIENT_LINES);
             kinds.add("component " + IceAdapterLauncher.COMPONENT_TAG);
@@ -719,6 +896,10 @@ final class MultiPeerSessionLiveTest {
         List<String> problems = new ArrayList<>();
         List<String> unlabelledOther = new ArrayList<>();
         for (ILoggingEvent event : captured.list) {
+            if (LOG.getName().equals(event.getLoggerName())) {
+                // This test's own case marker belongs to no instance.
+                continue;
+            }
             String instance = event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY);
             String component = event.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY);
             String message = event.getFormattedMessage();
@@ -754,7 +935,7 @@ final class MultiPeerSessionLiveTest {
             }
         }
 
-        for (Peer peer : peers) {
+        for (Peer peer : session) {
             if (!wanted.get(peer).isEmpty()) {
                 problems.add(
                         peer.name
@@ -763,7 +944,7 @@ final class MultiPeerSessionLiveTest {
                                 + " for "
                                 + wanted.get(peer));
             }
-            for (Peer other : peers) {
+            for (Peer other : session) {
                 if (other != peer && !loggedLinks.get(peer).contains((long) other.identity.id())) {
                     problems.add(
                             peer.name
@@ -804,21 +985,25 @@ final class MultiPeerSessionLiveTest {
      * @param first one peer
      * @param second the other
      * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure if the traffic is not proven in time
      */
     private void awaitPeerTraffic(final Peer first, final Peer second) throws InterruptedException {
         int firstId = first.identity.id();
         int secondId = second.identity.id();
-        long deadline = System.nanoTime() + TRAFFIC_TIMEOUT.toNanos();
+        String budget = budgetFor(TRAFFIC_TIMEOUT);
+        long deadline = System.nanoTime() + boundedNanos(TRAFFIC_TIMEOUT);
         do {
             if (exchangeProven(firstId, secondId) && exchangeProven(secondId, firstId)) {
                 return;
             }
-            Thread.sleep(POLL_SLICE.toMillis());
+            pollPause(deadline);
         } while (System.nanoTime() < deadline);
 
-        fail(
+        throw new CheckpointFailure(
+                first.name + "/" + second.name,
+                "traffic",
                 "no two-way peer traffic within "
-                        + TRAFFIC_TIMEOUT
+                        + budget
                         + " (wanted "
                         + MIN_PROGRESS_SAMPLES
                         + " progress lines per direction reaching "
@@ -880,43 +1065,50 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * A game that could not bind its lobby port explains a silent traffic path, so say so rather
-     * than leaving a bare timeout to be re-diagnosed.
+     * A subprocess that could not bind a port it was given explains a silent path, so say so, with
+     * every peer's ports, rather than leaving a bare timeout to be re-diagnosed.
      *
-     * @return the captured bind-failure lines in parentheses, or an empty string
+     * @return the captured bind-failure lines and the port sets in parentheses, or an empty string
      */
     private String bindFailureHint() {
         List<String> failures = new ArrayList<>();
         for (ILoggingEvent event : captured.list) {
             String message = event.getFormattedMessage();
-            if (message.contains(BIND_FAILURE)) {
-                failures.add(message);
+            if (BIND_FAILURES.stream().anyMatch(message::contains)) {
+                String instance = event.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY);
+                failures.add("[" + instance + "] " + message);
             }
         }
-        return failures.isEmpty()
-                ? ""
-                : " (a game could not bind its lobby port: " + failures + ")";
+        if (failures.isEmpty()) {
+            return "";
+        }
+        StringBuilder ports = new StringBuilder();
+        for (Peer peer : peers) {
+            ports.append(' ').append(peer.name).append(' ').append(portsOf(peer));
+        }
+        return " (a subprocess could not bind a port: " + failures + "; ports:" + ports + ")";
     }
 
     /**
      * Wait until every peer's adapter reports every other peer connected: two directed links per
-     * pair, so three connections at three players and six at four.
+     * pair, so one connection at two players, three at three and six at four.
      *
      * <p>Verdicts arrive in no fixed order once there are more than two peers (a joiner hears about
      * the host and about other joiners concurrently), so this keeps the latest verdict per remote
      * id and polls all peers under one deadline. A verdict about an id outside the session is kept
      * in the failure report but neither satisfies nor fails the wait.
      *
-     * @param peers every peer in the session, host included
      * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure if the mesh is not complete in time
      */
-    private void awaitFullMesh(final List<Peer> peers) throws InterruptedException {
-        long deadline = System.nanoTime() + PEER_CONNECTED_TIMEOUT.toNanos();
+    private void awaitFullMesh() throws InterruptedException {
+        String budget = budgetFor(PEER_CONNECTED_TIMEOUT);
+        long deadline = System.nanoTime() + boundedNanos(PEER_CONNECTED_TIMEOUT);
         while (true) {
             boolean complete = true;
             for (Peer peer : peers) {
                 drainVerdicts(peer);
-                complete &= missingLinks(peer, peers).isEmpty();
+                complete &= missingLinks(peer).isEmpty();
             }
             if (complete) {
                 return;
@@ -924,66 +1116,129 @@ final class MultiPeerSessionLiveTest {
             if (System.nanoTime() >= deadline) {
                 break;
             }
-            Thread.sleep(POLL_SLICE.toMillis());
+            pollPause(deadline);
         }
+        List<String> incomplete = new ArrayList<>();
         StringBuilder report = new StringBuilder();
         for (Peer peer : peers) {
+            List<String> missing = missingLinks(peer).stream().map(p -> p.name).toList();
+            if (!missing.isEmpty()) {
+                incomplete.add(peer.name);
+            }
             report.append(' ')
                     .append(peer.name)
                     .append(" missing ")
-                    .append(missingLinks(peer, peers))
+                    .append(missing)
                     .append(", seen ")
                     .append(peer.observed)
                     .append(';');
         }
-        fail("no full mesh within " + PEER_CONNECTED_TIMEOUT + ":" + report);
+        throw new CheckpointFailure(
+                String.join(",", incomplete),
+                "full mesh",
+                "not every link up within " + budget + ":" + report + bindFailureHint());
     }
 
     /**
      * Moves every queued verdict into {@code peer}'s record, checking each is about this adapter.
      *
      * @param peer the peer whose queue to drain
+     * @throws CheckpointFailure if the adapter reports another player as itself
      */
     private static void drainVerdicts(final Peer peer) {
         PeerVerdict verdict;
         while ((verdict = peer.verdicts.poll()) != null) {
             peer.observed.add(verdict);
-            assertEquals(
-                    peer.identity.id(),
-                    verdict.localId(),
-                    peer.name + ": the adapter must report its own lobby-assigned id");
+            if (verdict.localId() != peer.identity.id()) {
+                throw new CheckpointFailure(
+                        peer.name,
+                        "full mesh",
+                        "adapter reported "
+                                + verdict
+                                + " but its lobby-assigned id is "
+                                + peer.identity.id());
+            }
             peer.latestByRemote.put(verdict.remoteId(), verdict.connected());
         }
     }
 
     /**
-     * The ids of the session's other peers that {@code peer}'s adapter does not currently report
-     * connected.
+     * The session's other peers that {@code peer}'s adapter does not currently report connected.
      *
      * @param peer the reporting peer
-     * @param peers every peer in the session
-     * @return the missing remote ids, empty when this peer's links are all up
+     * @return the peers it is missing, empty when all its links are up
      */
-    private static List<Long> missingLinks(final Peer peer, final List<Peer> peers) {
-        List<Long> missing = new ArrayList<>();
+    private List<Peer> missingLinks(final Peer peer) {
+        List<Peer> missing = new ArrayList<>();
         for (Peer other : peers) {
-            long otherId = other.identity.id();
-            if (other != peer && !peer.latestByRemote.getOrDefault(otherId, false)) {
-                missing.add(otherId);
+            if (other != peer
+                    && !peer.latestByRemote.getOrDefault((long) other.identity.id(), false)) {
+                missing.add(other);
             }
         }
         return missing;
     }
 
     /**
-     * Shut one session down and wait for its teardown, tolerating a peer that never started.
+     * The stage budget capped by what is left of the case deadline.
      *
-     * @param peer the peer to shut down, or {@code null} if it was never constructed
+     * @param stageBudget the wait's own budget
+     * @return the nanoseconds the wait may take
      */
-    private void shutdown(final Peer peer) {
-        if (peer == null) {
+    private long boundedNanos(final Duration stageBudget) {
+        long remaining = Math.max(0, caseDeadline - System.nanoTime());
+        return Math.min(stageBudget.toNanos(), remaining);
+    }
+
+    /**
+     * Names the limit a wait started now is bound by, for its failure message.
+     *
+     * @param stageBudget the wait's own budget
+     * @return the stage budget, or the case deadline when less of it remains
+     */
+    private String budgetFor(final Duration stageBudget) {
+        return caseDeadline - System.nanoTime() < stageBudget.toNanos()
+                ? "the remaining case deadline (" + CASE_DEADLINE + " per case)"
+                : stageBudget.toString();
+    }
+
+    /**
+     * One poll interval, cut short at the deadline so a wait never overruns it.
+     *
+     * @param deadline the wait's {@link System#nanoTime()} deadline
+     * @throws InterruptedException if interrupted
+     */
+    private static void pollPause(final long deadline) throws InterruptedException {
+        long remaining = deadline - System.nanoTime();
+        if (remaining > 0) {
+            TimeUnit.NANOSECONDS.sleep(Math.min(POLL_SLICE.toNanos(), remaining));
+        }
+    }
+
+    /**
+     * Shuts every peer down, joiners first in reverse join order and the host last. One throwing
+     * shutdown never stops the others, so every adapter and game gets its teardown.
+     */
+    private void shutdownAll() {
+        if (peers == null) {
             return;
         }
+        for (int i = peers.size() - 1; i >= 0; i--) {
+            Peer peer = peers.get(i);
+            try {
+                shutdown(peer);
+            } catch (RuntimeException e) {
+                System.out.println("[4.3.1] " + peer.name + " shutdown threw: " + e);
+            }
+        }
+    }
+
+    /**
+     * Shut one session down and wait for its teardown.
+     *
+     * @param peer the peer to shut down
+     */
+    private void shutdown(final Peer peer) {
         try (MDC.MDCCloseable ignored = labelled(peer)) {
             shutdownLabelled(peer);
         }
@@ -1014,17 +1269,16 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * The "pgrep-clean" checkpoint: once every session has shut down, neither binary may still be
-     * running under this JVM. All peers use the same two binaries, so one check covers every
-     * adapter and game.
+     * The "pgrep-clean" sweep: once every session has shut down, neither binary may still be
+     * running under this JVM. All peers use the same two binaries, so one sweep covers every
+     * adapter and game. JUnit-free; the test decides what a survivor means.
      *
-     * @param config any peer's config, read only for the binary file names
+     * @return the command lines still running after {@link #NO_ORPHANS_TIMEOUT}, or empty
      * @throws InterruptedException if the wait is interrupted
      */
-    private void assertNoSurvivingSubprocesses(final MockClientConfig config)
-            throws InterruptedException {
-        String adapterNeedle = config.iceAdapterBinaryPath().getFileName().toString();
-        String gameNeedle = config.mockGameBinaryPath().getFileName().toString();
+    private static List<String> survivingSubprocesses() throws InterruptedException {
+        String adapterNeedle = requireAdapterBinary().getFileName().toString();
+        String gameNeedle = requireGameBinary().getFileName().toString();
         long deadline = System.nanoTime() + NO_ORPHANS_TIMEOUT.toNanos();
         List<String> survivors;
         do {
@@ -1035,11 +1289,11 @@ final class MultiPeerSessionLiveTest {
                 }
             }
             if (survivors.isEmpty()) {
-                return;
+                return survivors;
             }
-            Thread.sleep(POLL_SLICE.toMillis());
+            pollPause(deadline);
         } while (System.nanoTime() < deadline);
-        fail("subprocesses survived teardown after " + NO_ORPHANS_TIMEOUT + ": " + survivors);
+        return survivors;
     }
 
     /**
@@ -1056,61 +1310,51 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * Bounded wait on a checkpoint future, failing with the checkpoint's own name.
+     * Bounded wait on one peer's checkpoint future, bound by the stage budget and the case
+     * deadline, failing with the peer, the stage and the limit that ran out.
+     *
+     * <p>{@code peer}'s join refusal and any bind failure are read here rather than folded in by
+     * the caller because both, by construction, can only arrive <em>during</em> this wait: a
+     * message built before the call would always report the empty string.
      *
      * @param future the checkpoint
-     * @param timeout its named budget
-     * @param what what reaching it proves, used verbatim in the failure message
+     * @param stageBudget its named budget
+     * @param peer the peer the checkpoint is about
+     * @param stage what reaching it proves, e.g. {@code welcome}
      * @param <T> the checkpoint's value type
      * @return the future's value
      * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure if the checkpoint times out or fails
      */
-    private static <T> T await(
-            final CompletableFuture<T> future, final Duration timeout, final String what)
-            throws InterruptedException {
-        return await(future, timeout, what, null);
-    }
-
-    /**
-     * As {@link #await(CompletableFuture, Duration, String)}, but reads {@code peer}'s join-refusal
-     * recorder when the wait times out.
-     *
-     * <p>The hint is read here rather than folded into {@code what} by the caller because the
-     * refusal, by construction, can only arrive <em>during</em> this wait: a message built before
-     * the call would always report the empty string.
-     *
-     * @param future the checkpoint
-     * @param timeout its named budget
-     * @param what what reaching it proves
-     * @param peer the peer whose refusal recorder to consult on timeout, or {@code null}
-     * @param <T> the checkpoint's value type
-     * @return the future's value
-     * @throws InterruptedException if the wait is interrupted
-     */
-    private static <T> T await(
+    private <T> T await(
             final CompletableFuture<T> future,
-            final Duration timeout,
-            final String what,
-            final Peer peer)
+            final Duration stageBudget,
+            final Peer peer,
+            final String stage)
             throws InterruptedException {
+        String budget = budgetFor(stageBudget);
         try {
-            return future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            return future.get(boundedNanos(stageBudget), TimeUnit.NANOSECONDS);
         } catch (TimeoutException e) {
-            String hint = peer == null ? "" : peer.refusalHint();
-            return fail("timed out after " + timeout + " waiting for: " + what + hint);
+            throw new CheckpointFailure(
+                    peer.name,
+                    stage,
+                    "timed out after " + budget + peer.refusalHint() + bindFailureHint());
         } catch (ExecutionException e) {
-            return fail("failed waiting for: " + what, e.getCause());
+            throw new CheckpointFailure(peer.name, stage, "failed", e.getCause());
         }
     }
 
     /**
      * The hosting client's config: its own port set, account A, and a unique game title.
      *
+     * @param credential account A's credential
      * @param title the advertised game title
      * @return the validated config
      */
-    private static MockClientConfig hostConfig(final String title) {
-        List<String> args = new ArrayList<>(commonArgs(tokenFileA()));
+    private static MockClientConfig hostConfig(
+            final PeerCredential credential, final String title) {
+        List<String> args = new ArrayList<>(commonArgs(credential));
         args.add("--host-title=" + title);
         args.add("--host-map=" + HOST_MAP);
         args.add("--host-mod=" + HOST_MOD);
@@ -1123,55 +1367,45 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * A joining client's config: its own port set, account B, C or D, and A's uid as the target.
+     * A joining client's config: its own port set, its own account, and A's uid as the target.
      *
+     * @param credential this joiner's credential
      * @param targetGameId the uid A's session was launched under
-     * @param joinerPosition 0 for the joiner B, 1 for joiner C, 2 for joiner D
      * @return the validated config
      */
-    private static MockClientConfig joinConfig(final int targetGameId, final int joinerPosition) {
-        Path tokenFile =
-                switch (joinerPosition) {
-                    case 0 -> tokenFileB();
-                    case 1 -> tokenFileC();
-                    case 2 -> tokenFileD();
-                    default ->
-                            throw new IllegalArgumentException(
-                                    "joinerPosition must be 0 to 2: " + joinerPosition);
-                };
-        List<String> args = new ArrayList<>(commonArgs(tokenFile));
+    private static MockClientConfig joinConfig(
+            final PeerCredential credential, final int targetGameId) {
+        List<String> args = new ArrayList<>(commonArgs(credential));
         args.add("--target-game-id=" + targetGameId);
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
     /**
-     * The settings every peer shares, with a freshly allocated port set per call so clients never
-     * collide, and auto-launch disabled so the hosted game stays joinable.
+     * The settings every peer shares plus its own credential, with a freshly allocated port set per
+     * call so clients never collide, and auto-launch disabled so the hosted game stays joinable.
      *
-     * @param refreshTokenFile this peer's account
+     * @param credential this peer's account
      * @return the argv for {@link ConfigLoader}
      */
-    private static List<String> commonArgs(final Path refreshTokenFile) {
+    private static List<String> commonArgs(final PeerCredential credential) {
         AdapterPorts ports = freeAdapterPorts();
-        return List.of(
-                "--lobby-websocket-url=" + lobbyUrl(),
-                "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
-                "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
-                "--oauth-redirect-uri=http://127.0.0.1",
-                "--oauth-scopes=openid offline lobby",
-                "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                "--oauth-refresh-token-file=" + refreshTokenFile.toAbsolutePath(),
-                // Fallback only: the handshake derives the real unique_id from faf-uid, which the
-                // lobby's policy server requires.
-                "--unique-id=00000000-0000-0000-0000-000000000000",
-                "--uid-binary-path=" + requireUidBinary().toAbsolutePath(),
-                "--ice-adapter-binary-path=" + requireAdapterBinary().toAbsolutePath(),
-                "--mock-game-binary-path=" + requireGameBinary().toAbsolutePath(),
-                "--ice-adapter-rpc-port=" + ports.rpc(),
-                "--ice-adapter-gpg-net-port=" + ports.gpgnet(),
-                "--ice-adapter-lobby-port=" + ports.lobby(),
-                // The reason this test can exist at all; see the class javadoc.
-                "--mock-game-launch-delay-seconds=-1");
+        List<String> args = new ArrayList<>();
+        args.add("--lobby-websocket-url=" + lobbyUrl());
+        args.addAll(credential.args());
+        args.addAll(
+                List.of(
+                        // Fallback only: the handshake derives the real unique_id from faf-uid,
+                        // which the lobby's policy server requires.
+                        "--unique-id=00000000-0000-0000-0000-000000000000",
+                        "--uid-binary-path=" + requireUidBinary().toAbsolutePath(),
+                        "--ice-adapter-binary-path=" + requireAdapterBinary().toAbsolutePath(),
+                        "--mock-game-binary-path=" + requireGameBinary().toAbsolutePath(),
+                        "--ice-adapter-rpc-port=" + ports.rpc(),
+                        "--ice-adapter-gpg-net-port=" + ports.gpgnet(),
+                        "--ice-adapter-lobby-port=" + ports.lobby(),
+                        // The reason this test can exist at all; see the class javadoc.
+                        "--mock-game-launch-delay-seconds=-1"));
+        return args;
     }
 
     /**
@@ -1222,15 +1456,16 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * Whether the lobby host accepts a TCP connection within a short timeout.
+     * Whether the lobby host accepts a TCP connection within {@link #LOBBY_PROBE_TIMEOUT}.
      *
-     * @return {@code true} if the lobby is reachable from this network
+     * @return {@code true} if the lobby is reachable from this machine
      */
     private static boolean lobbyReachable() {
         URI url = lobbyUrl();
-        int port = url.getPort() == -1 ? 443 : url.getPort();
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(url.getHost(), port), 3000);
+            socket.connect(
+                    new InetSocketAddress(url.getHost(), lobbyPort(url)),
+                    (int) LOBBY_PROBE_TIMEOUT.toMillis());
             return true;
         } catch (IOException e) {
             return false;
@@ -1238,99 +1473,86 @@ final class MultiPeerSessionLiveTest {
     }
 
     /**
-     * {@code @EnabledIf} probe — skips cleanly (never fails) when the machine is not equipped.
+     * The lobby URL's port, defaulting to the {@code wss} one.
      *
-     * @return {@code true} when every prerequisite resolves
+     * @param url the lobby URL
+     * @return its explicit port, or 443
      */
-    @SuppressWarnings("unused")
-    static boolean liveEnvironmentAvailable() {
-        // Every prerequisite is probed, not short-circuited, so one run reports everything missing
-        // rather than making the operator rediscover them one at a time.
-        boolean adapter =
-                present(
-                        "faf-ice-adapter jar",
-                        findAdapterBinary(),
-                        ADAPTER_JAR_ENV,
-                        "run ./gradlew downloadIceAdapter");
-        boolean game =
-                present(
-                        "mock-game binary",
-                        findGameBinary(),
-                        MOCK_GAME_ENV,
-                        "run ./gradlew :mock-game:installDist");
-        boolean uid =
-                present(
-                        "faf-uid binary",
-                        findUidBinary(),
-                        UID_BINARY_ENV,
-                        "see documentation/demos/README.md");
-        boolean tokenA =
-                present(
-                        "hosting account's refresh token",
-                        findTokenA(),
-                        TOKEN_A_ENV,
-                        "bootstrap .secrets/refresh_token.txt");
-        return adapter && game && uid && tokenA;
-    }
-
-    static boolean refreshFilesAvailable(int joinerAmount) {
-        // Default to true for the cases where joinerAmount < 3.
-        boolean tokenB = true;
-        boolean tokenC = true;
-        boolean tokenD = true;
-
-        if (joinerAmount >= 1) {
-            tokenB =
-                    present(
-                            "joiner B's refresh token",
-                            findTokenB(),
-                            TOKEN_B_ENV,
-                            "bootstrap .secrets/refresh_token_b.txt for a SECOND seeded account");
-        }
-
-        if (joinerAmount >= 2) {
-            tokenC =
-                    present(
-                            "joiner C's refresh token",
-                            findTokenC(),
-                            TOKEN_C_ENV,
-                            "bootstrap .secrets/refresh_token_c.txt for a THIRD seeded account");
-        }
-
-        if (joinerAmount >= 3) {
-            tokenD =
-                    present(
-                            "joiner D's refresh token",
-                            findTokenD(),
-                            TOKEN_D_ENV,
-                            "bootstrap .secrets/refresh_token_d.txt for a FOURTH seeded account");
-        }
-        return tokenB && tokenC && tokenD;
+    private static int lobbyPort(final URI url) {
+        return url.getPort() == -1 ? 443 : url.getPort();
     }
 
     /**
-     * Reports one missing prerequisite on stdout, so a skipped run says what it wanted.
+     * Every live prerequisite this case lacks, in one place: the binaries, one token per peer, and
+     * a reachable lobby. Everything is probed rather than short-circuited, so one run reports all
+     * of it. The test skips on a non-empty result, which is the single spot #364's {@code
+     * FAF_LIVE_REQUIRED} turns into a failure.
      *
+     * @param peerCount the number of peers the case needs, host included
+     * @return one line per missing prerequisite naming its override and remedy; empty when ready
+     */
+    static List<String> missingPrerequisites(final int peerCount) {
+        List<String> missing = new ArrayList<>();
+        expect(
+                missing,
+                "faf-ice-adapter jar",
+                findAdapterBinary(),
+                ADAPTER_JAR_ENV,
+                "run ./gradlew downloadIceAdapter");
+        expect(
+                missing,
+                "mock-game binary",
+                findGameBinary(),
+                MOCK_GAME_ENV,
+                "run ./gradlew :mock-game:installDist");
+        expect(
+                missing,
+                "faf-uid binary",
+                findUidBinary(),
+                UID_BINARY_ENV,
+                "see documentation/demos/README.md");
+        for (PeerSlot slot : SLOTS.subList(0, peerCount)) {
+            expect(
+                    missing,
+                    slot.label() + "'s refresh token",
+                    findRefreshToken(slot),
+                    slot.tokenEnv(),
+                    "bootstrap " + slot.tokenFile() + " for its own seeded account");
+        }
+        if (!lobbyReachable()) {
+            URI url = lobbyUrl();
+            missing.add(
+                    "lobby "
+                            + url
+                            + " did not accept a TCP connection on :"
+                            + lobbyPort(url)
+                            + " within "
+                            + LOBBY_PROBE_TIMEOUT
+                            + " (the FAF test lobby is public; check outbound network access or "
+                            + LOBBY_URL_ENV
+                            + ")");
+        }
+        return missing;
+    }
+
+    /**
+     * Adds a line to {@code missing} when a prerequisite did not resolve.
+     *
+     * @param missing the list being built
      * @param what the prerequisite's name
      * @param found the resolved path, or {@code null}
      * @param env the environment variable that overrides its location
      * @param remedy what to do about it
-     * @return whether it was present
      */
-    private static boolean present(
-            final String what, final Path found, final String env, final String remedy) {
-        if (found != null) {
-            return true;
+    private static void expect(
+            final List<String> missing,
+            final String what,
+            final Path found,
+            final String env,
+            final String remedy) {
+        if (found == null) {
+            missing.add("no " + what + " (set " + env + ", or " + remedy + ")");
         }
-        System.out.println(
-                "[4.3.1] skipping multi-peer session test: no "
-                        + what
-                        + " (set "
-                        + env
-                        + ", or "
-                        + remedy
-                        + ").");
-        return false;
     }
 
     private static Path requireAdapterBinary() {
@@ -1345,24 +1567,19 @@ final class MultiPeerSessionLiveTest {
         return required(findUidBinary(), "faf-uid binary");
     }
 
-    private static Path tokenFileA() {
-        return required(findTokenA(), "hosting account's refresh token");
-    }
-
-    private static Path tokenFileB() {
-        return required(findTokenB(), "joining (peer B) account's refresh token");
-    }
-
-    private static Path tokenFileC() {
-        return required(findTokenC(), "joining (peer C) account's refresh token");
-    }
-
-    private static Path tokenFileD() {
-        return required(findTokenD(), "joining (peer D) account's refresh token");
+    /**
+     * The credential for one peer, resolved from its own variable or file only.
+     *
+     * @param slot the peer
+     * @return its credential
+     */
+    private static PeerCredential credentialFor(final PeerSlot slot) {
+        return new PeerCredential(
+                slot, required(findRefreshToken(slot), slot.label() + "'s refresh token"));
     }
 
     /**
-     * Non-null variant for the test body; guaranteed present once the gate passes.
+     * Non-null variant for the session; guaranteed present once the prerequisite gate passed.
      *
      * @param resolved the resolved path, or {@code null}
      * @param what the prerequisite's name, for the failure message
@@ -1370,7 +1587,7 @@ final class MultiPeerSessionLiveTest {
      */
     private static Path required(final Path resolved, final String what) {
         if (resolved == null) {
-            throw new IllegalStateException(what + " vanished after the @EnabledIf gate");
+            throw new IllegalStateException(what + " vanished after the prerequisite gate");
         }
         return resolved;
     }
@@ -1390,23 +1607,8 @@ final class MultiPeerSessionLiveTest {
         return resolve(UID_BINARY_ENV, "faf-uid", "../faf-uid");
     }
 
-    private static Path findTokenA() {
-        return resolve(TOKEN_A_ENV, ".secrets/refresh_token.txt", "../.secrets/refresh_token.txt");
-    }
-
-    private static Path findTokenB() {
-        return resolve(
-                TOKEN_B_ENV, ".secrets/refresh_token_b.txt", "../.secrets/refresh_token_b.txt");
-    }
-
-    private static Path findTokenC() {
-        return resolve(
-                TOKEN_C_ENV, ".secrets/refresh_token_c.txt", "../.secrets/refresh_token_c.txt");
-    }
-
-    private static Path findTokenD() {
-        return resolve(
-                TOKEN_D_ENV, ".secrets/refresh_token_d.txt", "../.secrets/refresh_token_d.txt");
+    private static Path findRefreshToken(final PeerSlot slot) {
+        return resolve(slot.tokenEnv(), slot.tokenFile(), "../" + slot.tokenFile());
     }
 
     /**

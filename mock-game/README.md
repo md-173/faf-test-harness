@@ -149,6 +149,12 @@ team's result. The harness asserts on the shape and ordering of those closing fr
 and a result that varied would make those assertions depend on configuration nothing
 has asked to vary.
 
+Before WBS-4.3.3 each player was its own team (`Team` = its army number), so at one
+or two players the `Team` option changes: the first player now sends `Team 2`
+(previously `1`, the free-for-all team) and the second `Team 3` (previously `2`).
+The `GameResult` frames at one and two players are unchanged (army 1 victory, army
+2 defeat), as are the exit codes.
+
 ## See also
 
 - [documentation/operations/harness-runbook.md](../documentation/operations/harness-runbook.md)

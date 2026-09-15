@@ -765,12 +765,11 @@ public final class MockGameLifecycle {
     private void gameEnds(Event event) throws FailedTransitionException {
         try {
             // Fixed by design, not pending configuration (WBS-3.2.4.3-fix, #281). Army 1's team
-            // wins
-            // and the other team loses, on every run: the harness asserts on the shape and ordering
-            // of the closing frames, and a result that varied would make those assertions depend
-            // on configuration that no consumer has asked to vary. A mock whose output is the same
-            // every time is the point of it. If a card ever needs a specific outcome, the values
-            // belong on MockGameConfig alongside gameOptions rather than here.
+            // wins and the other team loses, on every run: the harness asserts on the shape and
+            // ordering of the closing frames, and a result that varied would make those assertions
+            // depend on configuration that no consumer has asked to vary. A mock whose output is
+            // the same every time is the point of it. If a card ever needs a specific outcome, the
+            // values belong on MockGameConfig alongside gameOptions rather than here.
             //
             // GameResult is keyed by army, not team (faf-server handle_game_result(army, result)),
             // so every army reports its team's result (WBS-4.3.3). Army 1 is always on TEAMS[0].
