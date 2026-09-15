@@ -99,6 +99,17 @@ final class MultiPeerSessionTest {
     }
 
     @Test
+    void refusesALogLevelThatHidesGameTraffic() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a"), "--log-level=WARN"), base(token("b"), "--log-level=WARN"));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(e.getMessage().startsWith("--log-level must be INFO or finer"), e.getMessage());
+    }
+
+    @Test
     void refusesAMissingAdapterBinaryBeforeAnyLogin() throws IOException {
         List<MockClientConfig> bases = List.of(base(token("a")), base(token("b")));
 

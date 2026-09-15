@@ -6,7 +6,7 @@ package com.faforever.testharness.client.session;
  * line, and {@code MultiPeerSessionLiveTest} reports it as the test's failure.
  *
  * <p>Stages: {@code ports}, {@code shutdown}, {@code welcome}, {@code game_launch}, {@code
- * HOSTING}, {@code JOINING} and {@code full mesh}.
+ * HOSTING}, {@code JOINING}, {@code full mesh} and {@code traffic}.
  */
 public final class CheckpointFailure extends RuntimeException {
 

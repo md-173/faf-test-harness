@@ -16,7 +16,7 @@ subcommands that dispatch to the matching component.
 | `launch-ice`  | Spawn `faf-ice-adapter`, attach a JSON-RPC peer, and hold it up for a window.       | no |
 | `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          | no |
 | `ice-smoke`   | Bring up the adapter, verify its JSON-RPC and GPGNet endpoints are serving, tear it down. | no |
-| `session`     | Run a host and joiners through the live lobby to a full peer mesh, then tear everything down. | yes, one per peer |
+| `session`     | Run a host and joiners through the live lobby to a full peer mesh with two-way game traffic, then tear everything down. | yes, one per peer |
 
 `run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
 (`ask_session → session → auth → welcome`), hydrates the welcome state, logs the
@@ -45,7 +45,11 @@ OAuth options, which is what the runbook's
 `session` (WBS-4.2.1) runs a multi-peer session and passes or fails on its own:
 one host and `--peers - 1` joiners (default 2 peers, up to 26), each with its own
 account, adapter and game, join one game through the live lobby, and the command
-exits `0` once every adapter reports every other peer connected. Give one
+exits `0` once every adapter reports every other peer connected and every game
+has received every other game's datagrams with an advancing sequence, so an
+adapter that connects but does not forward game packets fails the run (stage
+`traffic`). That evidence is each game's INFO progress line, so `session` needs
+`--log-level` INFO or finer. Give one
 refresh-token file per peer with `--peer-refresh-token-file`, host first, repeated
 or comma-separated. A failed checkpoint logs `session: FAIL <peer>: <stage>:
 <detail>`. The clients share one JVM, so anything that kills it ends every peer;
@@ -76,9 +80,9 @@ a `--timeout-seconds` flag, and `session` `--peers` and `--peer-refresh-token-fi
 
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
-| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh, with no adapter or game left running. |
-| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, fewer `--peer-refresh-token-file`s than peers, two peers on one file, an unreadable file, a missing binary, or `INSTANCE_NAME` set, all refused before any process starts. |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
+| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running. |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, fewer `--peer-refresh-token-file`s than peers, two peers on one file, an unreadable file, a missing binary, a `--log-level` above INFO, or `INSTANCE_NAME` set, all refused before any process starts. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed (including no two-way game traffic) or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.

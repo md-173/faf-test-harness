@@ -58,21 +58,22 @@ final class TwoGameTrafficLoopbackTest {
     private static final int JOINER_ID = 202;
 
     /**
-     * The progress line, verbatim from {@code MultiPeerSessionLiveTest} (mock-client). The two
-     * copies are deliberate — an independent restatement is what gives this test its value — but
-     * they are in different modules and nothing links them, so <b>a change to either the format
-     * string in {@code GameTrafficSession} or to one copy of this pattern must be made to both</b>.
-     * This copy is the one that fails fast; the live copy may not run for weeks.
+     * The progress line, verbatim from {@code TrafficEvidence} (mock-client), which reads it for
+     * the {@code session} verdict. The two copies are deliberate: an independent restatement is
+     * what gives this test its value. But they are in different modules and nothing links them, so
+     * <b>a change to either the format string in {@code GameTrafficSession} or to one copy of this
+     * pattern must be made to both</b>. This copy is the one that fails fast; the live one may not
+     * run for weeks.
      */
     private static final Pattern PROGRESS_LINE =
             Pattern.compile(
                     "player (\\d+) peer traffic from player (\\d+): (\\d+) datagrams, "
                             + "highest sequence (-?\\d+), gaps (\\d+)");
 
-    /** Datagrams a direction must carry, matching the live test's threshold. */
+    /** Datagrams a direction must carry, matching {@code TrafficEvidence}'s threshold. */
     private static final int MIN_DATAGRAMS = 3;
 
-    /** Progress lines required per direction, matching the live test. */
+    /** Progress lines required per direction, matching {@code TrafficEvidence}. */
     private static final int MIN_PROGRESS_SAMPLES = 2;
 
     /** Budget for both directions to be proven; generous against a 1 s progress interval. */
