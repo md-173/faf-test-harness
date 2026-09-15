@@ -751,7 +751,7 @@ than once per lost datagram, so its expectation is `n·p·(1 - p)` — peaking a
 50% and falling back to zero at 100%, where nothing arrives at all.
 
 An orchestrated run reaches the same fault through the mock client:
-`--game-udp-drop-percent` on `mock-client` is passed straight through to the
+`--mock-game-udp-drop-percent` on `mock-client` is passed straight through to the
 mock-game it launches as `--udp-drop-percent` (WBS-5.1-fix, #322). It is emitted
 only when non-zero, so a default run produces the argv it always produced. Both
 spellings exist because both callers do: `mock-game` takes its own flag when run

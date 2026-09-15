@@ -303,7 +303,7 @@ public final class MockClientCli implements Callable<Integer> {
      * turn the fault on at all.
      */
     @Option(
-            names = "--game-udp-drop-percent",
+            names = "--mock-game-udp-drop-percent",
             scope = ScopeType.INHERIT,
             defaultValue = "0",
             description =
@@ -311,7 +311,7 @@ public final class MockClientCli implements Callable<Integer> {
                             + "drawn independently per peer per round (default: ${DEFAULT-VALUE}). "
                             + "Dropped datagrams still consume their sequence number, so the "
                             + "receiving peer sees them as gaps.")
-    private int gameUdpDropPercent;
+    private int mockGameUdpDropPercent;
 
     /** Optional JSONL log file path. */
     @Option(
@@ -508,7 +508,7 @@ public final class MockClientCli implements Callable<Integer> {
                 buildJoinConfig(),
                 buildQueueConfig(),
                 iceRelayDelayMs,
-                gameUdpDropPercent);
+                mockGameUdpDropPercent);
     }
 
     /**
