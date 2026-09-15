@@ -456,9 +456,11 @@ public final class LobbyConnection {
                 String full = partial.toString();
                 partial.setLength(0);
                 try (InstanceLabel.Scope ignored = label.apply()) {
-                    dispatch(full);
-                } catch (RuntimeException e) {
-                    LOG.warn("lobby dispatch threw: {}", e.toString());
+                    try {
+                        dispatch(full);
+                    } catch (RuntimeException e) {
+                        LOG.warn("lobby dispatch threw: {}", e.toString());
+                    }
                 }
             }
             socket.request(1);

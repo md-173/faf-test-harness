@@ -57,11 +57,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>No {@code LOG_FILE} / {@code LOG_DIR} is set on the child. mock-game's stdout and stderr are
  * captured by {@code ProcessOutputLogger} tagged {@link #COMPONENT_TAG} and merged into the parent
- * log stream, so giving the child its own log file would duplicate that capture (or worse, pit two
- * writers against one file). This is intentionally asymmetric with {@link IceAdapterLauncher},
- * which sets {@code LOG_DIR} only because faf-ice-adapter is an external binary with its own
- * logging conventions; mock-game uses our {@link LoggingSetup} and inherits the parent's stream by
- * design.
+ * log stream; the child's own {@link LoggingSetup} still writes its default file in the working
+ * directory. A labelled launcher (WBS-4.3.3) also passes {@code INSTANCE_NAME}, which names that
+ * file {@code logs/mockgame-<label>.jsonl}, so concurrent games no longer share one rolling file.
+ * This is intentionally asymmetric with {@link IceAdapterLauncher}, which sets {@code LOG_DIR} only
+ * because faf-ice-adapter is an external binary with its own logging conventions.
  *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
@@ -86,7 +86,8 @@ public class MockGameLauncher {
 
     /**
      * The constructing thread's instance label (WBS-4.3.3), captured here rather than at launch
-     * because the launch runs on whichever lobby thread delivered {@code game_launch}.
+     * because the launch runs on whichever lobby thread delivered {@code game_launch}. It is the
+     * one source for both the child's {@code INSTANCE_NAME} and the label on its captured output.
      */
     private final InstanceLabel label;
 
@@ -146,7 +147,8 @@ public class MockGameLauncher {
         // stderr separate so stderr can be routed to WARN (spec §4 / §5.3).
 
         LOG.info("Launching mock-game: {}", String.join(" ", argv));
-        try {
+        // Under the launcher's own label, which output capture takes from the starting thread.
+        try (InstanceLabel.Scope ignored = label.apply()) {
             SubprocessManager manager = SubprocessManager.start(pb, COMPONENT_TAG, TERMINATE_GRACE);
             LOG.info("mock-game started, pid={}", manager.pid());
             return manager;

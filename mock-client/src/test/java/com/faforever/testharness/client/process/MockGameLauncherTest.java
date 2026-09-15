@@ -278,10 +278,11 @@ final class MockGameLauncherTest {
                                 + "while true; do echo heartbeat; sleep 1; done\n");
 
         MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "B");
-        SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
-        // Off the test thread before polling, so only a label carried onto the reader thread can
-        // satisfy the predicate below.
+        MockGameLauncher launcher = new MockGameLauncher(configWithBinary(binary));
+        // Off the test thread before starting, as on the live path where a lobby thread launches:
+        // both the env var and the captured output's label must come from construction.
         MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        SubprocessManager game = launcher.start();
         try {
             awaitLog(
                     e ->
@@ -304,11 +305,15 @@ final class MockGameLauncherTest {
                                 + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
                                 + "while true; do echo heartbeat; sleep 1; done\n");
 
+        // The child inherits this JVM's environment, so an INSTANCE_NAME exported in the shell
+        // running the build is expected to reach it; the launcher itself must add nothing.
+        String inherited = System.getenv(LoggingSetup.INSTANCE_NAME_ENV);
+        String expected = "instance=" + (inherited == null ? "none" : inherited);
         SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
         try {
             awaitLog(
                     e ->
-                            "instance=none".equals(e.getMessage())
+                            expected.equals(e.getMessage())
                                     && !e.getMDCPropertyMap()
                                             .containsKey(LoggingSetup.INSTANCE_MDC_KEY));
         } finally {

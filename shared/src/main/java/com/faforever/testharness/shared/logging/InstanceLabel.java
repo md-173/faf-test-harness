@@ -16,6 +16,11 @@ import org.slf4j.MDC;
  * <p>Only the {@value LoggingSetup#INSTANCE_MDC_KEY} key is carried. {@link ProcessOutputLogger}
  * owns the component key on its threads and must keep doing so. When nothing is labelled at capture
  * time every method here is a no-op, so single-instance runs behave exactly as before.
+ *
+ * <p>The label source is implicit: components capture whatever label is on the thread that builds
+ * them, so anything built outside a labelled scope is silently unlabelled. That keeps the change
+ * out of the configuration classes while other work is open on them. A caller that runs several
+ * clients as a product feature (R59a's session command) should pass the label explicitly instead.
  */
 public final class InstanceLabel {
 
