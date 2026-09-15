@@ -78,6 +78,16 @@ application {
     mainClass = 'com.faforever.testharness.client.Main'
 }
 
+// VersionProvider reads Implementation-Version back for --version (WBS-3.1.5.2, #383). It is
+// written from project.version, which release.yml's -Pversion sets, so a release reports the
+// version it was cut as. Shadow inherits this manifest, so the -all jar that ships carries it too.
+// Implementation-Title is the conventional companion; the lookup does not depend on it.
+jar {
+    manifest {
+        attributes('Implementation-Title': project.name, 'Implementation-Version': project.version)
+    }
+}
+
 // The example lives in src/test so it documents the SubprocessManager API without shipping in
 // the release shadow jar; a consumer of mock-client-*.jar has no use for demo classes.
 tasks.register('runSubprocessExample', JavaExec) {

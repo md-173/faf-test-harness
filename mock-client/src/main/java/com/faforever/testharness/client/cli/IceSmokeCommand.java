@@ -2,6 +2,7 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientCli;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.faforever.testharness.client.process.IceReachabilityCheck;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
@@ -41,6 +42,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "ice-smoke",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "ICE-adapter reachability check: bring up the adapter, verify its JSON-RPC and "

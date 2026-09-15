@@ -2,6 +2,7 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.MockClientCli;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.faforever.testharness.client.lobby.AuthenticationException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -49,6 +50,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "run",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description = "Connect to the lobby, authenticate, and sit idle until interrupted.")
 public final class RunCommand implements Callable<Integer> {

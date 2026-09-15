@@ -14,6 +14,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.Main;
 import com.faforever.testharness.client.config.ConfigLoader;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.fasterxml.jackson.core.StreamReadConstraints;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -30,6 +31,8 @@ import java.util.concurrent.Callable;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 
@@ -216,6 +219,28 @@ final class MockClientCliExitCodeTest {
     @Test
     void rootVersionExitsZero() {
         assertEquals(ExitCodes.OK, execute(new String[] {"--version"}));
+    }
+
+    /**
+     * The {@code execute} route {@code Main.run} takes, from class directories, so the manifest is
+     * absent and the fallback is what prints. Subcommands are included because they each declare
+     * their own {@code --version}, which printed an empty line before they shared the provider. The
+     * jar route is {@code VersionFlagJarTest}.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"", "run", "launch-ice", "launch-game", "ice-smoke", "session"})
+    void versionPrintsTheProviderTextOnEveryCommand(final String subcommand) {
+        String[] args =
+                subcommand.isEmpty()
+                        ? new String[] {"--version"}
+                        : new String[] {subcommand, "--version"};
+        CommandLine cmd = ConfigLoader.newCommandLine(args, Map.of());
+        StringWriter out = new StringWriter();
+        cmd.setOut(new PrintWriter(out));
+        cmd.setErr(new PrintWriter(new StringWriter()));
+
+        assertEquals(ExitCodes.OK, cmd.execute(args));
+        assertEquals(VersionProvider.DEVELOPMENT_BUILD, out.toString().strip());
     }
 
     @Test
