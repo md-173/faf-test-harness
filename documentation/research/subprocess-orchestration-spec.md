@@ -237,6 +237,19 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > `StateMachine.receiveEvent`, during which no other event is processed. Same
 > shape as before, ten times the window.
 >
+> **Correction (WBS-3.1.3.3, #266).** The paragraph below counted two bounds;
+> there are now three, and the third is what closes this window rather than
+> merely bounding it. The bring-up races the connect against the adapter
+> process's own exit future, so an adapter that dies on the way up — which is
+> exactly the usage-error case this note is about, since it exits `0` while
+> doing so — ends the wait the moment the process goes, not when the connect
+> budget expires. Measured at roughly 10 ms against the 20 s below. The two
+> bounds that follow still hold and still matter for an adapter that stays up
+> without ever binding; what no longer holds is "a broken adapter is noticed
+> late and `AdapterExited` sits queued for that window", in the common case.
+> `IceAdapterConnection.DEFAULT_CONNECT_ATTEMPTS`' javadoc is the code half of
+> this correction.
+>
 > Two things bound that cost, so it is late detection rather than a hang.
 > `connectWithRetry` aborts as soon as `close()` is requested, and the CLI's
 > signal hook reaches `SessionTeardown` **without** going through the state
