@@ -38,6 +38,7 @@ described under [Logging](#logging).
 | `--launch-delay-seconds <n>` | no | `5` | How long to sit in the lobby before launching the match unprompted. **Negative never auto-launches** — see below. |
 | `--lobby-timeout-seconds <n>` | no | wait forever | How long to wait in the lobby for a `HostGame` or `JoinGame` before giving up and exiting `75`. A game driven into a role never trips it. |
 | `--udp-drop-percent <n>` | no | `0` | Percentage of outbound peer datagrams the UDP sender suppresses, simulating a lossy link (WBS-5.1). The sequence number is still advanced, so the loss is visible to the receiving peer. |
+| `--crash-after-seconds <n>` | no | `-1` (never) | Seconds after the game first has a session to lose (a peer registers, or the match goes live) before it halts the JVM with no shutdown, simulating a crash and exiting `134` (WBS-5.2). Negative never crashes; `0` crashes immediately. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
 
 ### `--launch-delay-seconds` is the flag a multi-peer host needs
 
@@ -75,6 +76,7 @@ does the same job from the outside and this flag buys you only the distinct exit
 | `69` | `ADAPTER_LOST` | The GPGNet connection was established and then went down mid-session. The game booted and connected fine; the link did not survive. |
 | `70` | `RUNTIME` | Never reached the adapter within the connect window, or the run failed for a reason with no more specific code. |
 | `75` | `LOBBY_TIMEOUT` | `--lobby-timeout-seconds` elapsed with nothing driving the game into a role. Only reachable when that flag is set. |
+| `134` | `INJECTED_CRASH` | `--crash-after-seconds` fired. The JVM is halted with no shutdown sequence, so no closing frames are sent. `128 + SIGABRT`, what a shell reports for an aborted process. Only reachable when that flag is set. |
 | `1` | — | An unchecked throw escaped the bootstrap. The JVM's uncaught-exception default, not a code this program sets. No modelled failure produces it. |
 | `143` / `130` | — | `SIGTERM` / Ctrl-C. The JVM's own signal defaults. **A signal always wins**: a terminated run reports the signal's code, never one of the above. |
 
@@ -144,6 +146,9 @@ harness sets it per child when it spawns one; see
 6. Exchanges peer traffic for the duration of the match: one datagram per peer every
    100 ms on the lobby port, with per-sender sequence numbers so the receiving side can
    see loss (WBS-4.3.2). `--udp-drop-percent` suppresses a share of the outbound ones.
+   If `--crash-after-seconds` was set, the game halts that many seconds after its first
+   peer registers or its match goes live, whichever comes first, and exits `134`
+   without reaching step 7.
 7. Plays out the match for its duration, then reports one `GameResult` per army,
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
