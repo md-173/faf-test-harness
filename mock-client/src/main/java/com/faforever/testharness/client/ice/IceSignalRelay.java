@@ -67,8 +67,9 @@ import org.slf4j.LoggerFactory;
  * reader thread, so a malformed frame is still rejected immediately and the delay applies only to
  * the forward itself. The scheduler is single-threaded and every forward takes the same delay, so
  * tasks fire in submission order and candidates keep their relative sequence. At the default of
- * zero the scheduler is never created and each forward runs inline on the reader thread, exactly as
- * it did before the flag existed.
+ * zero the scheduler is never created and each forward runs inline on the reader thread, as it did
+ * before the flag existed. In either mode a forward that throws is logged by the relay with its
+ * direction and peer id, so enabling the flag does not change how a failed forward is reported.
  */
 public final class IceSignalRelay {
 
@@ -203,6 +204,7 @@ public final class IceSignalRelay {
             }
         }
         forward(
+                "to lobby for remoteId=" + remoteId,
                 () ->
                         lobby.send(mapper.valueToTree(new IceMsgMessage(remoteId, msgString)))
                                 .whenComplete(
@@ -255,6 +257,7 @@ public final class IceSignalRelay {
             return;
         }
         forward(
+                "to adapter for senderId=" + senderId,
                 () ->
                         adapter.call("iceMsg", senderId, msgString)
                                 .whenComplete(
@@ -277,22 +280,40 @@ public final class IceSignalRelay {
      * scheduler slot. Submission order is preserved because the scheduler is single-threaded and
      * every task takes the same delay, so their deadlines fall in the order they were queued.
      *
+     * <p>A forward that throws is logged here, in both modes, so the flag does not change what a
+     * fault looks like in the log. Scheduled, the exception would otherwise be captured in the
+     * discarded {@code ScheduledFuture} and the candidate would vanish without a line. Inline, it
+     * would reach the connection's shield, which logs it without saying which peer it was for.
+     *
+     * @param description where the forward goes and for which peer, for the failure log line
      * @param action the send or call to perform
      */
-    private void forward(final Runnable action) {
+    private void forward(final String description, final Runnable action) {
+        Runnable guarded =
+                () -> {
+                    try {
+                        action.run();
+                    } catch (RuntimeException e) {
+                        LOG.warn(
+                                "ICE forward {} threw {}: {}",
+                                description,
+                                e.getClass().getSimpleName(),
+                                e.getMessage());
+                    }
+                };
         if (scheduler == null) {
-            action.run();
+            guarded.run();
             return;
         }
         try {
-            scheduler.schedule(action, delayMillis, TimeUnit.MILLISECONDS);
+            scheduler.schedule(guarded, delayMillis, TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException e) {
             // Only reachable after stop(), which today only tests call. Saying so out loud matters
-            // because the alternative is a silently dropped candidate against this class's "delay,
-            // never drop" contract — and the connections' catch (RuntimeException) would swallow
-            // the rejection without a word. If stop() ever moves into session teardown, this line
-            // is what will show which candidates the teardown ate.
-            LOG.warn("ICE relay is stopped; candidate not forwarded");
+            // because the alternative is a dropped candidate against this class's "delay, never
+            // drop" contract, reported only by the connection's generic "handler threw" line. If
+            // stop() ever moves into session teardown, this line is what will show which
+            // candidates the teardown ate.
+            LOG.warn("ICE relay is stopped; candidate not forwarded {}", description);
         }
     }
 
