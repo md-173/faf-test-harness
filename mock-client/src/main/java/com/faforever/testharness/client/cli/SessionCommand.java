@@ -34,13 +34,14 @@ import picocli.CommandLine.Spec;
  * adapter and game binaries, log level). The session sets each peer's adapter ports, auto-launch
  * off, and the host or join intent itself, so {@code --ice-adapter-*-port}, {@code
  * --mock-game-launch-delay-seconds}, {@code --host-*}, {@code --target-game-id}, {@code
- * --game-join-password}, {@code --queue-*} and {@code --oauth-refresh-token-file} are ignored.
+ * --game-join-password}, {@code --queue-*} and {@code --oauth-refresh-token-file} are not used,
+ * though they are still validated.
  *
  * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with no adapter or game left running; {@link
  * ExitCodes#USAGE} for a bad invocation, including fewer token files than peers, two peers on one
- * file or an unreadable file, all refused before any process starts; {@link ExitCodes#RUNTIME} when
- * a checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a subprocess
- * survives teardown, which is then killed.
+ * file, an unreadable file or a missing binary, all refused before any process starts; {@link
+ * ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code session: FAIL <peer>: <stage>:
+ * <detail>}) or a subprocess survives teardown, which is then killed.
  */
 @Command(
         name = "session",
@@ -53,7 +54,8 @@ import picocli.CommandLine.Spec;
                         + "adapter ports, launch delay and host or join intent itself, so the "
                         + "--ice-adapter-*-port, --mock-game-launch-delay-seconds, --host-*, "
                         + "--target-game-id, --game-join-password, --queue-* and "
-                        + "--oauth-refresh-token-file options are ignored.")
+                        + "--oauth-refresh-token-file options are not used, though they are still "
+                        + "validated.")
 public final class SessionCommand implements Callable<Integer> {
 
     /** Picocli auto-injects the root command so the subcommand can read the populated config. */
@@ -148,7 +150,6 @@ public final class SessionCommand implements Callable<Integer> {
         try {
             session.run();
             passed = true;
-            log.info("session: PASS - {} peers, full mesh", peers);
         } catch (CheckpointFailure f) {
             log.error("session: FAIL {}", f.getMessage());
             log.debug("checkpoint failure", f);
@@ -158,7 +159,13 @@ public final class SessionCommand implements Callable<Integer> {
         } finally {
             cleanTeardown = tearDown(session, log);
         }
-        return passed && cleanTeardown ? ExitCodes.OK : ExitCodes.RUNTIME;
+        if (!passed || !cleanTeardown) {
+            return ExitCodes.RUNTIME;
+        }
+        // Only after teardown, so a consumer reading the log never sees PASS for a run that left
+        // a subprocess behind.
+        log.info("session: PASS - {} peers, full mesh, nothing left running", peers);
+        return ExitCodes.OK;
     }
 
     /**
@@ -179,7 +186,7 @@ public final class SessionCommand implements Callable<Integer> {
             }
             List<String> described = new ArrayList<>();
             for (ProcessHandle survivor : survivors) {
-                described.add(survivor.info().commandLine().orElse("pid " + survivor.pid()));
+                described.add(session.describe(survivor));
                 survivor.destroyForcibly();
             }
             log.error("session: FAIL teardown: killed subprocesses that survived: {}", described);

@@ -70,8 +70,9 @@ public final class SessionPeer {
      *
      * <p>Source-verified, because this command is missing from lobby-protocol-spec.md's §10.6
      * lookup table: faf-server's {@code lobbyconnection.command_game_join} sends {@code {"command":
-     * "game_join_failed", "reason": …, "uid": …}} on every refusal. The reason codes it can carry
-     * are {@code host_left_game}, {@code game_not_ready}, and {@code bad_password}.
+     * "game_join_failed", "reason": …, "uid": …}} for three refusals: {@code host_left_game},
+     * {@code game_not_ready} and {@code bad_password}. A foe of the host or a game in the wrong
+     * init mode is refused with a {@code ClientError} instead, which records nothing here.
      */
     private final AtomicReference<String> joinRefusal = new AtomicReference<>();
 

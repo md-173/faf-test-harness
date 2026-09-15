@@ -40,7 +40,10 @@ or comma-separated. A failed checkpoint logs `session: FAIL <peer>: <stage>:
 <detail>`. The clients share one JVM, so anything that kills it ends every peer;
 their adapters and games are separate processes, and any still running after
 teardown are killed and fail the run. The session sets each peer's adapter ports,
-launch delay and host or join intent, so those options are ignored. Evidence lands
+launch delay and host or join intent, so those options are not used, though they
+are still validated. Missing adapter, game or `faf-uid` binaries are refused
+before any login. In a `--config` file the token files go under
+`peerRefreshTokenFiles` as one comma-separated string, not a JSON array. Evidence lands
 in the working directory: `logs/mockclient.jsonl` (or `--log-file`) holds every
 client line with the captured adapter and game output, each tagged with the
 peer's `instance` label A, B, ..., and each game also writes
@@ -70,7 +73,7 @@ a `--timeout-seconds` flag, and `session` `--peers` and `--peer-refresh-token-fi
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh, with no adapter or game left running. |
-| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, fewer `--peer-refresh-token-file`s than peers, two peers on one file, an unreadable file, or `INSTANCE_NAME` set, all refused before any process starts. |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, fewer `--peer-refresh-token-file`s than peers, two peers on one file, an unreadable file, a missing binary, or `INSTANCE_NAME` set, all refused before any process starts. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window, `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.

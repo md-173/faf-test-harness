@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -95,6 +96,46 @@ final class MultiPeerSessionTest {
                 assertThrows(
                         IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
         assertTrue(e.getMessage().startsWith("peer B: cannot read"), e.getMessage());
+    }
+
+    @Test
+    void refusesAMissingAdapterBinaryBeforeAnyLogin() throws IOException {
+        List<MockClientConfig> bases = List.of(base(token("a")), base(token("b")));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
+    }
+
+    @Test
+    void attributesASurvivorToThePeerWhoseGpgNetPortItCarries() throws IOException {
+        List<SessionPeer> peers =
+                List.of(
+                        new SessionPeer(
+                                "A",
+                                "host",
+                                MultiPeerSession.hostConfig(base(token("a")), PORTS, "t")),
+                        new SessionPeer(
+                                "B",
+                                "joiner",
+                                MultiPeerSession.joinConfig(
+                                        base(token("b")),
+                                        new MultiPeerSession.AdapterPorts(40011, 40012, 40013),
+                                        1)));
+
+        assertEquals(
+                Optional.of("B(joiner)"),
+                MultiPeerSession.ownerOf(
+                        "java -jar mock-game.jar --gpgnet-port 40012 --id 2", peers));
+        assertEquals(
+                Optional.of("A(host)"),
+                MultiPeerSession.ownerOf(
+                        "java -jar faf-ice-adapter.jar --gpgnet-port 40002", peers));
+        assertEquals(
+                Optional.empty(),
+                MultiPeerSession.ownerOf("java -jar mock-game.jar --gpgnet-port 400021", peers));
+        assertEquals(Optional.empty(), MultiPeerSession.ownerOf("java -jar other.jar", peers));
     }
 
     /**

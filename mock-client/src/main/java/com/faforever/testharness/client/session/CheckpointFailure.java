@@ -12,12 +12,6 @@ public final class CheckpointFailure extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
-    /** The peer, or peers, the checkpoint was about. */
-    private final String peer;
-
-    /** The checkpoint that did not pass, e.g. {@code welcome} or {@code full mesh}. */
-    private final String stage;
-
     /**
      * A failure with no underlying cause.
      *
@@ -40,25 +34,5 @@ public final class CheckpointFailure extends RuntimeException {
     CheckpointFailure(
             final String peer, final String stage, final String detail, final Throwable cause) {
         super(peer + ": " + stage + ": " + detail, cause);
-        this.peer = peer;
-        this.stage = stage;
-    }
-
-    /**
-     * The peer, or peers, the checkpoint was about.
-     *
-     * @return the peer name, or several joined by commas
-     */
-    public String peer() {
-        return peer;
-    }
-
-    /**
-     * The checkpoint that did not pass.
-     *
-     * @return the stage name
-     */
-    public String stage() {
-        return stage;
     }
 }
