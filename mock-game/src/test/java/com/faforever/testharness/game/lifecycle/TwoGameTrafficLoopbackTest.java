@@ -115,7 +115,8 @@ final class TwoGameTrafficLoopbackTest {
                             Map.of(),
                             0,
                             -1,
-                            0);
+                            0,
+                            -1);
             this.lifecycle =
                     new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
         }

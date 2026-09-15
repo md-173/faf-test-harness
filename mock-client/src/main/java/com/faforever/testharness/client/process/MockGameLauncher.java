@@ -28,7 +28,14 @@ import org.slf4j.LoggerFactory;
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
  *          --player-id <id> --player-login <login> --game-uid <uid>
  *          --launch-delay-seconds <seconds>
+ *          [--udp-drop-percent <percent>] [--crash-after-seconds <seconds>]
  * }</pre>
+ *
+ * <p>The two fault-injection arguments are optional. {@code --udp-drop-percent} (WBS-5.1) is
+ * emitted only when the client's own {@code --mock-game-udp-drop-percent} is non-zero, and {@code
+ * --crash-after-seconds} (WBS-5.2) only when {@code --mock-game-crash-after-seconds} is
+ * non-negative, so a launch that asks for no fault produces exactly the argv it produced before
+ * either flag existed.
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
@@ -231,6 +238,18 @@ public class MockGameLauncher {
         if (config.mockGameUdpDropPercent() > 0) {
             argv.add("--udp-drop-percent");
             argv.add(Integer.toString(config.mockGameUdpDropPercent()));
+        }
+        // Conditional like the drop percentage above, and unlike the launch delay before it
+        // (WBS-5.2). The launch delay is always stated because its value decides whether the
+        // session's game stays joinable, so inheriting mock-game's default would be a silent
+        // behaviour choice. This one is off by default at both ends, and a run that asks for no
+        // fault must produce the argv it always produced, so a reader diffing two launches sees
+        // the flag only where a fault was asked for. The guard is >= 0 where the drop's is > 0
+        // because the sentinels differ: a 0% drop is off, but a zero-second crash delay is a
+        // real fault that fires immediately.
+        if (config.mockGameCrashAfterSeconds() >= 0) {
+            argv.add("--crash-after-seconds");
+            argv.add(Integer.toString(config.mockGameCrashAfterSeconds()));
         }
         return argv;
     }

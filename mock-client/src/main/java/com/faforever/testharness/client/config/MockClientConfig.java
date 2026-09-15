@@ -80,6 +80,10 @@ import java.util.OptionalInt;
  *     {@code 0} (the default) drops nothing. The lossy-link half of WBS-5.1's fault injection, and
  *     the only way to reach it in an orchestrated run — mock-game's own flag is otherwise settable
  *     only by hand
+ * @param mockGameCrashAfterSeconds how long after entering a session the launched mock-game halts
+ *     itself without an orderly shutdown, standing in for a game crash (WBS-5.2); negative, the
+ *     default, never crashes. Passed through to mock-game as {@code --crash-after-seconds}, and
+ *     emitted only when set so a run that asks for no fault produces the argv it always did
  */
 public record MockClientConfig(
         URI lobbyWebSocketUrl,
@@ -108,7 +112,8 @@ public record MockClientConfig(
         Optional<GameJoinConfig> joinConfig,
         Optional<GameQueueConfig> queueConfig,
         int iceRelayDelayMs,
-        int mockGameUdpDropPercent) {
+        int mockGameUdpDropPercent,
+        int mockGameCrashAfterSeconds) {
 
     /** Upper bound for {@code mockGameUdpDropPercent}; mirrors mock-game's own range check. */
     private static final int MAX_PERCENT = 100;
