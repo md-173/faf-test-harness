@@ -62,10 +62,17 @@ final class LaunchIceCommandTest {
     private Thread rpcAcceptor;
 
     /**
-     * Completes with the wall-clock millisecond at which the command's JSON-RPC peer went away,
-     * observed as EOF on the accepted socket. Used to pin the close-before-terminate ordering.
+     * Completes with whether the adapter process was still alive at the moment the command's
+     * JSON-RPC peer went away, observed as EOF on the accepted socket.
+     *
+     * <p>Liveness rather than a timestamp, deliberately. Comparing a time taken on the acceptor
+     * thread against one taken on the command thread is both unable to catch the bug — the
+     * "terminated" line is logged after <em>both</em> calls, so swapping them keeps the peer
+     * closing first — and flaky under load, because a late-scheduled acceptor makes the correct
+     * order look wrong. In the correct order the peer closes before SIGTERM is even sent, so the
+     * adapter is alive with a wide margin; swapped, terminate() has already awaited the exit.
      */
-    private final CompletableFuture<Long> peerClosedAt = new CompletableFuture<>();
+    private final CompletableFuture<Boolean> adapterAliveWhenPeerClosed = new CompletableFuture<>();
 
     @BeforeEach
     void attachAppender() {
@@ -116,14 +123,45 @@ final class LaunchIceCommandTest {
                                 // so the old loop condition was dead and the wait/notify only ever
                                 // ended via the listener. A blocking read ends exactly when the
                                 // command closes its peer, which is the event worth observing.
-                                if (held.getInputStream().read() == -1) {
-                                    peerClosedAt.complete(System.currentTimeMillis());
-                                }
+                                // Blocks until the command closes its peer; this acceptor only
+                                // needs to hold the socket open until then.
+                                held.getInputStream().read();
                             } catch (IOException ignored) {
                                 // The listener was closed in teardown, or the test ended.
                             }
                         },
                         "stub-rpc-acceptor");
+        rpcAcceptor.setDaemon(true);
+        rpcAcceptor.start();
+        return "--ice-adapter-rpc-port=" + rpcListener.getLocalPort();
+    }
+
+    /**
+     * As {@link #rpcPortFlagForAListenerThatAccepts()}, but records whether the adapter process was
+     * still alive when the peer's socket reached EOF.
+     *
+     * @param pidFile the file the stub writes its pid to
+     * @return the {@code --ice-adapter-rpc-port} flag pointing at this listener
+     * @throws IOException if the listener cannot be opened
+     */
+    private String rpcPortFlagRecordingAdapterLiveness(final Path pidFile) throws IOException {
+        rpcListener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        rpcAcceptor =
+                new Thread(
+                        () -> {
+                            try (Socket held = rpcListener.accept()) {
+                                if (held.getInputStream().read() == -1) {
+                                    long pid = Long.parseLong(Files.readString(pidFile).trim());
+                                    adapterAliveWhenPeerClosed.complete(
+                                            ProcessHandle.of(pid)
+                                                    .map(ProcessHandle::isAlive)
+                                                    .orElse(false));
+                                }
+                            } catch (IOException | NumberFormatException ignored) {
+                                // The listener was closed in teardown, or the test ended.
+                            }
+                        },
+                        "stub-rpc-acceptor-liveness");
         rpcAcceptor.setDaemon(true);
         rpcAcceptor.start();
         return "--ice-adapter-rpc-port=" + rpcListener.getLocalPort();
@@ -233,30 +271,31 @@ final class LaunchIceCommandTest {
      */
     @Test
     void thePeerIsClosedBeforeTheAdapterIsTerminated() throws Exception {
-        Path stub = createSleepingStub();
+        Path pidFile = tempDir.resolve("stub.pid");
+        // Takes a second to die on SIGTERM, so "the adapter was still alive" has a wide margin
+        // instead of being a millisecond race.
+        Path stub =
+                createStub(
+                        "#!/bin/sh\n"
+                                + "echo $$ > '"
+                                + pidFile
+                                + "'\n"
+                                + "trap 'sleep 1; exit 143' TERM\n"
+                                + "echo ICE-ADAPTER-STUB-UP\n"
+                                + "while true; do sleep 0.2; done\n");
 
         int exit =
                 execute(
                         launchIceArgs(
                                 stub,
                                 "--duration-seconds=1",
-                                rpcPortFlagForAListenerThatAccepts()));
+                                rpcPortFlagRecordingAdapterLiveness(pidFile)));
 
         assertEquals(ExitCodes.OK, exit, "a healthy run must still exit OK");
-        Long closedAt = peerClosedAt.get(5, TimeUnit.SECONDS);
-        ILoggingEvent terminated =
-                findEvent(
-                        e ->
-                                e.getFormattedMessage()
-                                        .startsWith("ICE adapter terminated; exit code"));
         assertTrue(
-                closedAt <= terminated.getTimeStamp(),
-                "the JSON-RPC peer must go away before the adapter is terminated, so the adapter"
-                        + " sees a client disconnect rather than dying with a peer attached; peer"
-                        + " closed at "
-                        + closedAt
-                        + ", terminate logged at "
-                        + terminated.getTimeStamp());
+                adapterAliveWhenPeerClosed.get(10, TimeUnit.SECONDS),
+                "the JSON-RPC peer must go away while the adapter is still alive, so the adapter"
+                        + " sees a client disconnect rather than dying with a peer attached");
     }
 
     /**

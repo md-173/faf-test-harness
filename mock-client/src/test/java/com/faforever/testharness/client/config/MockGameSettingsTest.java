@@ -34,6 +34,7 @@ final class MockGameSettingsTest {
                 OptionalInt.of(42),
                 "Rhiza",
                 5,
+                0,
                 options,
                 "INFO",
                 Optional.empty());
@@ -53,6 +54,7 @@ final class MockGameSettingsTest {
                                         OptionalInt.empty(),
                                         "   ",
                                         5,
+                                        0,
                                         Map.of(),
                                         "INFO",
                                         Optional.empty()));
@@ -141,8 +143,16 @@ final class MockGameSettingsTest {
         // The comparison that would have caught launch-game forwarding host options the
         // lobby-driven path drops. Loaded through the real CLI, so the narrowing is checked
         // against a config an operator could actually produce.
+        // Non-zero on purpose. At 0 the launcher leaves --udp-drop-percent out of the command
+        // line entirely, so a zero-valued assertion cannot tell a correct narrowing from a field
+        // that was dropped on the way through.
         MockClientConfig config =
-                ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of()).orElseThrow();
+                ConfigLoader.load(
+                                concat(
+                                        TestFixtures.minimalRequiredCli(),
+                                        new String[] {"--mock-game-udp-drop-percent=37"}),
+                                Map.of())
+                        .orElseThrow();
         MockGameSettings narrowed = MockGameSettings.from(config);
 
         assertEquals(config.mockGameBinaryPath(), narrowed.binaryPath());
@@ -152,6 +162,7 @@ final class MockGameSettingsTest {
         assertEquals(config.playerIdOverride(), narrowed.playerIdOverride());
         assertEquals(config.playerLogin(), narrowed.playerLogin());
         assertEquals(config.mockGameLaunchDelaySeconds(), narrowed.launchDelaySeconds());
+        assertEquals(37, narrowed.mockGameUdpDropPercent(), "the drop percent must survive");
         assertEquals(config.logLevel(), narrowed.logLevel());
         assertEquals(config.logFile(), narrowed.logFile());
         assertEquals(

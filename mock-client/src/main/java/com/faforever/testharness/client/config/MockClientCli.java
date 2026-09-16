@@ -73,9 +73,6 @@ import picocli.CommandLine.Spec;
         })
 public final class MockClientCli implements Callable<Integer> {
 
-    /** Upper bound for {@code --mock-game-udp-drop-percent}; mirrors mock-game's own check. */
-    private static final int MAX_DROP_PERCENT = 100;
-
     /** Component label written to log records by every Mock Client subcommand. */
     public static final String COMPONENT_NAME = "MockClient";
 
@@ -84,6 +81,9 @@ public final class MockClientCli implements Callable<Integer> {
 
     /** Highest port number the adapter's three listeners may be assigned. */
     private static final int MAX_PORT = 65535;
+
+    /** Upper bound for {@code --mock-game-udp-drop-percent}; mirrors mock-game's own check. */
+    private static final int MAX_DROP_PERCENT = 100;
 
     /**
      * Picocli auto-injects the active {@link CommandSpec}; used by {@link #call()} to print usage.
