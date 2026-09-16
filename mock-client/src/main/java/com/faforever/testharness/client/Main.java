@@ -21,27 +21,15 @@ import picocli.CommandLine;
  * <p><b>On a signal, the code below never reaches the process, and that is deliberate</b>
  * (WBS-3.1.3.2-fix, #296). {@code run} installs a JVM shutdown hook; a {@code SIGINT} or {@code
  * SIGTERM} runs it, the coordinated teardown closes the lobby, the resulting disconnect drives the
- * FSM to TERMINATED, and the main thread unblocks and reaches {@link System#exit(int)} <em>while
- * the shutdown sequence is already running</em>. {@link Runtime#exit(int)} does not return in that
- * state: it parks the calling thread until the JVM dies, and the JVM then exits with the signal's
- * own code — 130 for {@code SIGINT}, 143 for {@code SIGTERM}. Pinned by {@code
- * SignalExitCodeEndToEndTest}.
- *
- * <p>That is the right outcome and the one {@code mock-client/README.md} documents, so this accepts
- * it rather than working around it. The alternative — capturing the computed code and calling
- * {@link Runtime#halt(int)} from the hook — would deliver a harness code at the cost of skipping
- * every shutdown hook that had not finished, {@code SubprocessRegistry}'s included, so a run
- * interrupted mid-session could leave an orphaned adapter or game behind. A tidier number is not
- * worth an orphaned subprocess.
- *
- * <p><b>On a signal, the code below never reaches the process, and that is deliberate</b>
- * (WBS-3.1.3.2-fix, #296). {@code run} installs a JVM shutdown hook; a {@code SIGINT} or {@code
- * SIGTERM} runs it, the coordinated teardown closes the lobby, the resulting disconnect drives the
- * FSM to TERMINATED, and the main thread unblocks and reaches {@link System#exit(int)} <em>while
- * the shutdown sequence is already running</em>. {@link Runtime#exit(int)} does not return in that
- * state: it parks the calling thread until the JVM dies, and the JVM then exits with the signal's
- * own code — 130 for {@code SIGINT}, 143 for {@code SIGTERM}. Pinned by {@code
- * SignalExitCodeEndToEndTest}.
+ * FSM to TERMINATED, and the main thread unblocks — often, though not always, reaching {@link
+ * System#exit(int)} <em>while the shutdown sequence is already running</em>. The exit code is 143
+ * either way; which thread gets there first is incidental and must not be relied on. In particular,
+ * anything added between {@code execute} and {@code System.exit} — flushing a report, say —
+ * frequently will not run on this path. {@link Runtime#exit(int)} does not return in that state: it
+ * parks the calling thread until the JVM dies, and the JVM then exits with the signal's own code —
+ * 130 for {@code SIGINT}, 143 for {@code SIGTERM}. The JDK behaviour behind this is pinned by
+ * {@code SignalExitCodeEndToEndTest}, which exercises those semantics directly rather than through
+ * this class.
  *
  * <p>That is the right outcome and the one {@code mock-client/README.md} documents, so this accepts
  * it rather than working around it. The alternative — capturing the computed code and calling
@@ -83,11 +71,12 @@ public final class Main {
      *     receives nothing else: once {@code execute} is entered, picocli writes parse errors,
      *     usage text and subcommand failures to its own writer, which defaults to {@link
      *     System#err} and is not redirected here.
-     * @return the process exit code, always one of {@link ExitCodes}. An exception escaping a
-     *     subcommand's {@code call()} would otherwise be picocli's {@code ExitCode.SOFTWARE}
-     *     ({@code 1}); {@link com.faforever.testharness.client.cli.ExecutionExceptionHandler},
-     *     installed by {@link ConfigLoader#newCommandLine(String[], Map)}, maps it to {@link
-     *     ExitCodes#RUNTIME} instead
+     * @return the exit code this method computes, always one of {@link ExitCodes} — but the process
+     *     reports it only when this method is what ended the run; a SIGINT/SIGTERM supersedes it
+     *     with 130/143 (see the class javadoc). An exception escaping a subcommand's {@code call()}
+     *     would otherwise be picocli's {@code ExitCode.SOFTWARE} ({@code 1}); {@link
+     *     com.faforever.testharness.client.cli.ExecutionExceptionHandler}, installed by {@link
+     *     ConfigLoader#newCommandLine(String[], Map)}, maps it to {@link ExitCodes#RUNTIME} instead
      */
     public static int run(
             final String[] args, final Map<String, String> env, final PrintStream err) {

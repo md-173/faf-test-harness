@@ -47,8 +47,12 @@ final class SignalExitCodeEndToEndTest {
 
     /**
      * The signal's code wins, and the code the main thread computed never reaches the process.
-     * Asserted together, because either alone would also pass against an implementation that simply
-     * exited 143 without ever running a teardown.
+     *
+     * <p>These two are one assertion, not two: 143 and "not 70" cannot disagree, so the second
+     * cannot fail independently of the first. It is kept for the message it carries — naming what
+     * to fix if the computed code ever does reach the process — rather than as separate evidence.
+     * Neither detects a missing teardown; the output assertions in the sibling test are what cover
+     * that.
      */
     @Test
     void aSigtermSupersedesTheCodeTheMainThreadComputed(@TempDir final Path dir) throws Exception {

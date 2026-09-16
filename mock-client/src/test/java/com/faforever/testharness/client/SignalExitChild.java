@@ -25,7 +25,7 @@ public final class SignalExitChild {
     /** The code the main thread computes and tries to exit with. Never reaches the process. */
     public static final int COMPUTED_EXIT_CODE = 70;
 
-    /** Printed once the hook body has finished; its absence is the point of the test. */
+    /** Printed once the hook body has finished; the test asserts it ran. */
     public static final String HOOK_FINISHED = "hook: finished";
 
     /** Printed immediately before {@code System.exit}, so its presence proves main got there. */
@@ -47,6 +47,7 @@ public final class SignalExitChild {
      */
     public static void main(final String[] args) throws InterruptedException {
         CountDownLatch terminated = new CountDownLatch(1);
+        CountDownLatch mainReachedExit = new CountDownLatch(1);
 
         Runtime.getRuntime()
                 .addShutdownHook(
@@ -56,6 +57,21 @@ public final class SignalExitChild {
                                     // drives the FSM to TERMINATED and releases the main thread.
                                     terminated.countDown();
                                     say(HOOK_FINISHED);
+                                    // Wait for main to actually get to System.exit before
+                                    // returning. Without this the hook finishes, runHooks()
+                                    // completes and halt() fires whether or not the released main
+                                    // thread was ever scheduled — on one core under load, "main:
+                                    // about to exit" went missing in roughly 20 of 25 runs, and
+                                    // the EXIT_RETURNED guard below passed vacuously with it.
+                                    //
+                                    // This deliberately does not mirror the production hook, which
+                                    // waits for nothing. The job here is pinning JDK exit
+                                    // semantics, and that needs main to reach the call at all.
+                                    try {
+                                        mainReachedExit.await(30, TimeUnit.SECONDS);
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                    }
                                 },
                                 "mc-shutdown"));
 
@@ -65,6 +81,7 @@ public final class SignalExitChild {
         terminated.await(60, TimeUnit.SECONDS);
 
         say(MAIN_EXITING);
+        mainReachedExit.countDown();
         System.exit(COMPUTED_EXIT_CODE);
         say(EXIT_RETURNED);
     }
