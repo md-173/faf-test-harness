@@ -116,6 +116,21 @@ Higher sources override lower ones.
 3. **Environment variables** — `FAF_MOCK_CLIENT_*`, see convention below.
 4. **CLI flags** — `--kebab-case`, see `--help` output.
 
+These four are the whole story for `logLevel` too. A bare `LOG_LEVEL` in the
+environment is Logback's own channel and is **not** a fifth layer: the value
+resolved from the four above — including the built-in default of `INFO` — is
+written to the `LOG_LEVEL` *system property* before the first logger exists, and
+Logback resolves system properties ahead of environment variables. So
+`LOG_LEVEL=DEBUG mock-client run …` produces no `DEBUG` records; reach for
+`--log-level DEBUG` or `FAF_MOCK_CLIENT_LOG_LEVEL=DEBUG` instead.
+
+`mock-game` has no `--log-level` flag and does honour a bare `LOG_LEVEL` — but
+only when run directly. Under `mock-client run`, which is the example above,
+even that does not apply: `MockGameLauncher` and `IceAdapterLauncher` each
+overwrite `LOG_LEVEL` in the child they spawn with `mock-client`'s own resolved
+level, so an orchestrated run comes up at that level in all three processes.
+`LOG_LEVEL=DEBUG mock-client run …` gives `INFO` everywhere.
+
 ### Environment variable convention
 
 `FAF_MOCK_CLIENT_<UPPER_SNAKE_CASE>` of the JSON / CLI key. The `_CLIENT_`

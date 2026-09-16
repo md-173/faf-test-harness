@@ -290,9 +290,18 @@ single-instance output is unchanged.
 
 | Variable | Default                  | Description |
 | :--- |:-------------------------| :--- |
-| `LOG_LEVEL` | `INFO` (the `mock-client` test tasks override to `DEBUG`, see § 3) | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`), for components that do not configure one themselves |
+| `LOG_LEVEL` | `INFO` | Minimum level for all loggers (`DEBUG`, `INFO`, `WARN`, `ERROR`), for components that do not configure one themselves — see below. |
 | `LOG_FILE` | `logs/<component>.jsonl` | JSONL output file path |
 | `INSTANCE_NAME` | unset                    | Labels one of several concurrent instances of a component. Pairs with `LOG_FILE`; see `mock-client/README.md` § "Harness log contract". Set it as an environment variable so subprocesses inherit it. |
+
+**On `LOG_LEVEL` specifically.** Logback resolves the *system property* of that name ahead of the
+environment variable, and `mock-client` writes its resolved `--log-level` — including the built-in
+default of `INFO` — into that property before the first logger exists. So a bare `LOG_LEVEL` does
+not raise `mock-client`'s level; use `--log-level` or `FAF_MOCK_CLIENT_LOG_LEVEL`. `mock-game` has
+no such flag and honours the variable **when run directly** — but not under `mock-client run`,
+because `MockGameLauncher` and `IceAdapterLauncher` both overwrite `LOG_LEVEL` in the children they
+spawn with `mock-client`'s own resolved level. An orchestrated run therefore comes up at
+`mock-client`'s level in all three processes.
 
 
 ## 8. When in doubt
