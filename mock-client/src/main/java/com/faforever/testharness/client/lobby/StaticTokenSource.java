@@ -9,10 +9,12 @@ import java.util.concurrent.CompletableFuture;
 /**
  * A {@link TokenSource} that hands out a token someone else signed (WBS-3.1.6.4, #325).
  *
- * <p>Not any JWT. The lobby decodes it in {@code oauth_service.py} as RS256 against Hydra's JWKS,
- * so the token must be Hydra-issued, must carry {@code lobby} in its {@code scp} claim, and must
- * have a numeric {@code sub} — that claim is the player id. An arbitrary JWT is rejected by the
- * server with no indication of which of the three it failed, so check them here first.
+ * <p>Not any JWT. The lobby decodes it as RS256 against the JWKS its own configuration names, so
+ * the token must be signed with a key that endpoint publishes, must carry {@code lobby} in its
+ * {@code scp} claim, and must have a numeric {@code sub} naming a real account, that claim being
+ * the player id. Several distinct faults are reported identically, so the full contract and the
+ * rejection-to-cause mapping live in one place: the access-token section of runbook §3. This class
+ * deliberately checks none of it.
  *
  * <p>No network exchange, no rotation, no file rewriting. It reads the token once at construction
  * and returns it for the life of the process.
@@ -24,11 +26,12 @@ import java.util.concurrent.CompletableFuture;
  * per-developer state.
  *
  * <p><b>It cannot renew, and that is the failure mode operators will hit.</b> A refresh-token
- * source notices an expired token and exchanges for another; this one has nothing to exchange. So
- * an expired static token is not caught here — it is sent, and the lobby rejects it. That is
- * deliberate: the lobby's own rejection says the token is bad far more precisely than a local
- * expiry guess could, since only the issuer knows what it signed. What this class must not do is
- * turn that into a generic failure, so it does nothing but hand the token over.
+ * source exchanges once when the run starts, so it begins on a fresh token; this one has nothing to
+ * exchange and no expiry is read anywhere. So an expired static token is not caught here — it is
+ * sent, and the lobby rejects it. That is deliberate: the lobby's own rejection says the token is
+ * bad far more precisely than a local expiry guess could, since only the issuer knows what it
+ * signed. What this class must not do is turn that into a generic failure, so it does nothing but
+ * hand the token over.
  *
  * <p>The token is read from a file rather than taken as a flag value so it stays out of the process
  * table and out of CI logs — {@code ps} and a build log both show a command line.
