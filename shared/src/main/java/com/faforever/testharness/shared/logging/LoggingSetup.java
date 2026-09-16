@@ -28,16 +28,19 @@ import org.slf4j.MDC;
  * // File:    {"timestamp":"2026-04-17 12:00:00","component":"MockClient",...}
  * }</pre>
  *
- * <p>Log level is read by Logback from the {@value #LOG_LEVEL_ENV} environment variable at
- * config-parse time via {@code ${LOG_LEVEL:-INFO}} in {@code logback.xml} — this class does not
- * apply it programmatically. The default is {@code INFO}.
+ * <p>Log level is read by Logback at config-parse time via {@code ${LOG_LEVEL:-INFO}} in {@code
+ * logback.xml}, resolving the <em>system property</em> of that name ahead of the {@value
+ * #LOG_LEVEL_ENV} environment variable — this class does not apply it programmatically. The
+ * default is {@code INFO}.
  *
  * <p><b>A component that configures its own level overrides it</b> (WBS-2.3.6-fix, #306). Logback
  * resolves the system property ahead of the environment variable, so a component that writes {@code
  * LOG_LEVEL} as a system property before the first logger exists decides the level for that
  * process, whatever the environment says. Mock Client does exactly that: {@code
- * MockClientCli.applyLoggingProperties} writes its resolved {@code --log-level} — including the
- * built-in default of {@code INFO} — so {@code LOG_LEVEL=DEBUG mock-client run …} produces no
+ * ConfigLoader.applyLoggingThenRun} calls {@code
+ * MockClientCli.applyLoggingPropertiesFromOptions}, writing its resolved {@code --log-level} —
+ * including the built-in default of {@code INFO} — immediately before the first logger is created,
+ * so {@code LOG_LEVEL=DEBUG mock-client run …} produces no
  * {@code DEBUG} records and {@code --log-level} / {@code FAF_MOCK_CLIENT_LOG_LEVEL} is the knob to
  * reach for. Mock Game has no such flag and honours the variable directly. This is the intended
  * split, not an accident: the harness documents a precedence of {@code --log-level} &gt; {@code

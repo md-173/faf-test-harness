@@ -20,8 +20,13 @@
                     converterClass="com.faforever.testharness.shared.logging.InstanceConverter" />
 
     <!--
-      Log level: set LOG_LEVEL env var (DEBUG, INFO, WARN, ERROR).
-      Default: INFO.
+      Log level: set LOG_LEVEL (DEBUG, INFO, WARN, ERROR). Default: INFO.
+
+      Logback resolves the system property of this name ahead of the environment variable, so a
+      component that writes it as a system property decides the level for its own process whatever
+      the environment says. mock-client does exactly that, from its resolved log-level flag;
+      mock-game, which has no such flag, honours the variable when run directly. See LoggingSetup's
+      javadoc for the full precedence.
     -->
     <property name="LOG_LEVEL" value="${LOG_LEVEL:-INFO}" />
 

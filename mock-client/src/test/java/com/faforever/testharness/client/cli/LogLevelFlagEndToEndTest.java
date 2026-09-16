@@ -290,12 +290,7 @@ final class LogLevelFlagEndToEndTest {
      */
     private List<JsonNode> runChild(final String... extraArgs)
             throws IOException, InterruptedException {
-        String absentBinary = tempDir.resolve("no-such-faf-ice-adapter").toString();
-        return runChild(
-                LogLevelFlagChild.class,
-                true,
-                CliTestFixtures.withSubcommandAndIceBinary("launch-ice", absentBinary),
-                extraArgs);
+        return runChildWithEnv(Map.of(), extraArgs);
     }
 
     /**

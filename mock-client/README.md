@@ -118,9 +118,14 @@ resolved from the four above — including the built-in default of `INFO` — is
 written to the `LOG_LEVEL` *system property* before the first logger exists, and
 Logback resolves system properties ahead of environment variables. So
 `LOG_LEVEL=DEBUG mock-client run …` produces no `DEBUG` records; reach for
-`--log-level DEBUG` or `FAF_MOCK_CLIENT_LOG_LEVEL=DEBUG` instead. `mock-game`
-has no `--log-level` flag and does honour a bare `LOG_LEVEL`, so the same
-variable behaves differently per component by design.
+`--log-level DEBUG` or `FAF_MOCK_CLIENT_LOG_LEVEL=DEBUG` instead.
+
+`mock-game` has no `--log-level` flag and does honour a bare `LOG_LEVEL` — but
+only when run directly. Under `mock-client run`, which is the example above,
+even that does not apply: `MockGameLauncher` and `IceAdapterLauncher` each
+overwrite `LOG_LEVEL` in the child they spawn with `mock-client`'s own resolved
+level, so an orchestrated run comes up at that level in all three processes.
+`LOG_LEVEL=DEBUG mock-client run …` gives `INFO` everywhere.
 
 ### Environment variable convention
 
