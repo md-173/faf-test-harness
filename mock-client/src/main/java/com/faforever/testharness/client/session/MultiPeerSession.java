@@ -955,7 +955,7 @@ public final class MultiPeerSession implements AutoCloseable {
                 join,
                 Optional.empty(),
                 base.iceRelayDelayMs(),
-                base.gameUdpDropPercent());
+                base.mockGameUdpDropPercent());
     }
 
     /**

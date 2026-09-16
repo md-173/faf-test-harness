@@ -274,12 +274,12 @@ public final class SessionPeer {
     }
 
     /**
-     * Records one {@code onConnected} notification off the R36 fan-out. Every parameter is
-     * checked, not just the boolean: {@code asLong} answers 0 for a non-numeric node, which would
-     * record a verdict from player 0 and fail the mesh checkpoint by blaming this peer's id rather
-     * than the malformed frame. Malformed ones are dropped rather than failing here: this runs on
-     * the adapter's reader thread, where an exception would be swallowed, so a missing verdict
-     * surfaces as the checkpoint that timed out instead.
+     * Records one {@code onConnected} notification off the R36 fan-out. Every parameter is checked,
+     * not just the boolean: {@code asLong} answers 0 for a non-numeric node, which would record a
+     * verdict from player 0 and fail the mesh checkpoint by blaming this peer's id rather than the
+     * malformed frame. Malformed ones are dropped rather than failing here: this runs on the
+     * adapter's reader thread, where an exception would be swallowed, so a missing verdict surfaces
+     * as the checkpoint that timed out instead.
      *
      * @param notification the raw JSON-RPC notification
      */
