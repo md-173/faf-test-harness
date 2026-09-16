@@ -144,8 +144,9 @@ harness sets it per child when it spawns one; see
 Players are split into two teams in arrival order: armies 1, 3, ... on team 2 and
 armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it marks a
 game with more `MULTI_TEAM` invalid). The end-of-match result is fixed by design: army
-1's team wins and the other team loses, on every run, with each army reporting its
-team's result. The harness asserts on the shape and ordering of those closing frames,
+1's team wins and the other team loses, on every run. Each game reports every army, one
+`GameResult` per army, and an army's result is its team's, so the winning team's armies
+all report victory. The harness asserts on the shape and ordering of those closing frames,
 and a result that varied would make those assertions depend on configuration nothing
 has asked to vary.
 
