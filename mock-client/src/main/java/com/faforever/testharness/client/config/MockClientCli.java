@@ -5,6 +5,7 @@ import com.faforever.testharness.client.cli.IceSmokeCommand;
 import com.faforever.testharness.client.cli.LaunchGameCommand;
 import com.faforever.testharness.client.cli.LaunchIceCommand;
 import com.faforever.testharness.client.cli.RunCommand;
+import com.faforever.testharness.client.cli.SessionCommand;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.net.URI;
 import java.nio.file.Path;
@@ -24,10 +25,10 @@ import picocli.CommandLine.Spec;
 
 /**
  * Picocli root command for the Mock Client. Holds every {@link MockClientConfig} field as a
- * {@code @Option} and registers the four subcommands ({@code run}, {@code launch-ice}, {@code
- * launch-game}, {@code ice-smoke}). Picocli populates the fields by merging (in priority order):
- * CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also
- * via the provider), and built-in {@code defaultValue} attributes.
+ * {@code @Option} and registers the five subcommands ({@code run}, {@code launch-ice}, {@code
+ * launch-game}, {@code ice-smoke}, {@code session}). Picocli populates the fields by merging (in
+ * priority order): CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON
+ * config file (also via the provider), and built-in {@code defaultValue} attributes.
  *
  * <p>Every {@code @Option} declared here uses {@link ScopeType#INHERIT}, so the same flags are
  * accepted by every subcommand and may appear before <em>or</em> after the subcommand name on the
@@ -70,6 +71,7 @@ import picocli.CommandLine.Spec;
             LaunchIceCommand.class,
             LaunchGameCommand.class,
             IceSmokeCommand.class,
+            SessionCommand.class,
         })
 public final class MockClientCli implements Callable<Integer> {
 
@@ -499,6 +501,20 @@ public final class MockClientCli implements Callable<Integer> {
      *     {@link MockClientConfig} compact constructor)
      */
     public MockClientConfig toConfig() {
+        return toConfig(oauthRefreshTokenFile);
+    }
+
+    /**
+     * {@link #toConfig()} with the refresh-token file supplied by the caller instead of {@code
+     * --oauth-refresh-token-file}: the {@code session} command builds one config per peer this way,
+     * each with its own account.
+     *
+     * @param refreshTokenFile the refresh-token file this config authenticates with
+     * @return the validated configuration
+     * @throws IllegalArgumentException if a mandatory field is missing (raised by the {@link
+     *     MockClientConfig} compact constructor)
+     */
+    private MockClientConfig toConfig(final Path refreshTokenFile) {
         return new MockClientConfig(
                 lobbyWebSocketUrl,
                 oauthTokenUrl,
@@ -506,7 +522,7 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthRedirectUri,
                 oauthScopes,
                 oauthClientId,
-                oauthRefreshTokenFile,
+                refreshTokenFile,
                 Optional.ofNullable(oauthAccessTokenFile),
                 uniqueId,
                 clientVersion,
@@ -597,7 +613,30 @@ public final class MockClientCli implements Callable<Integer> {
     public MockClientConfig toValidatedConfig(final CommandSpec callerSpec) {
         try {
             dropShadowedCredentialChannel(callerSpec);
+            // Read after the precedence step, which may clear a shadowed refresh-token file.
             return toConfig();
+        } catch (IllegalArgumentException e) {
+            throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Same as {@link #toValidatedConfig(CommandSpec)} but authenticating with {@code
+     * refreshTokenFile} rather than {@code --oauth-refresh-token-file}, for the {@code session}
+     * command's per-peer accounts (WBS-4.2.1). It runs the same credential precedence and the same
+     * record validation, so an access-token file supplied alongside still counts: a peer config
+     * with both channels is rejected rather than silently choosing one.
+     *
+     * @param callerSpec the {@link CommandSpec} of the command requesting validation
+     * @param refreshTokenFile the refresh-token file this config authenticates with
+     * @return the validated configuration
+     * @throws CommandLine.ParameterException if a mandatory field is missing
+     */
+    public MockClientConfig toValidatedConfig(
+            final CommandSpec callerSpec, final Path refreshTokenFile) {
+        try {
+            dropShadowedCredentialChannel(callerSpec);
+            return toConfig(refreshTokenFile);
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }

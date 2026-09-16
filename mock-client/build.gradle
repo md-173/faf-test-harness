@@ -16,6 +16,10 @@ dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.java-websocket:Java-WebSocket:1.5.7'
+    // Test only, never in the release jar: TrafficEvidenceTest feeds TrafficEvidence a line
+    // formatted by mock-game's own GameTrafficSession.progressLine, so the session verdict's parser
+    // cannot drift from what the game logs (WBS-4.2.1).
+    testImplementation project(':mock-game')
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
