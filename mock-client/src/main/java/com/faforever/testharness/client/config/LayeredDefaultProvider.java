@@ -211,11 +211,21 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                             + ": "
                             + oneLine(
                                     Objects.requireNonNullElse(
-                                            e.getOriginalMessage(), e.toString())),
+                                            e.getOriginalMessage(), e.getClass().getName())),
                     e);
         } catch (IOException e) {
+            // Same guard as the parse branch above, for the same reason: oneLine is
+            // String.valueOf, so a null message renders the literal "null" — the exact symptom
+            // #285 exists to prevent, two lines below the guard that prevents it. No current input
+            // reaches it (FileSystemException and MalformedInputException both override
+            // getMessage() non-null), which is the standing #285 itself had.
             throw new IllegalArgumentException(
-                    "failed to parse config file " + oneLine(path) + ": " + oneLine(e.getMessage()),
+                    "failed to parse config file "
+                            + oneLine(path)
+                            + ": "
+                            + oneLine(
+                                    Objects.requireNonNullElse(
+                                            e.getMessage(), e.getClass().getName())),
                     e);
         }
     }

@@ -14,6 +14,7 @@ import ch.qos.logback.classic.spi.IThrowableProxy;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.Main;
 import com.faforever.testharness.client.config.ConfigLoader;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
@@ -49,7 +50,8 @@ final class MockClientCliExitCodeTest {
      * A JSON nesting depth comfortably past Jackson's {@code StreamReadConstraints} default maximum
      * of 1000, so the document is rejected by the constraint rather than parsed.
      */
-    private static final int NESTING_OVER_JACKSON_LIMIT = 1200;
+    private static final int NESTING_OVER_JACKSON_LIMIT =
+            StreamReadConstraints.defaults().getMaxNestingDepth() + 1;
 
     @TempDir private Path tempDir;
 
@@ -248,7 +250,13 @@ final class MockClientCliExitCodeTest {
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertEquals(List.of("config file is not readable: " + absent), errorLines(outcome.err()));
-        assertTrue(outcome.err().contains("Usage: mock-client"), "usage text was not printed");
+        // The longer form, deliberately: the forged paths in
+        // everyConfigDiagnosticEscapesANewlineInThePath contain the literal "Usage: mock-client"
+        // once escaped onto the error line, so the short form is satisfied by the path itself
+        // whether or not picocli printed a usage block at all. Because this helper is shared, the
+        // short form regressed that for all six call sites, not only the forged ones.
+        assertTrue(
+                outcome.err().contains("Usage: mock-client [-hV]"), "usage text was not printed");
         assertNoStackTrace(outcome.err());
     }
 
@@ -519,6 +527,35 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
+    void mainRunPropagatesANonZeroExitCodeFromExecute() {
+        // The row above cannot prove either of its claims on its own: --version returns OK, which
+        // is 0, so "returned what execute returned" is indistinguishable from "returned OK" — a
+        // mutation replacing the return with a literal ExitCodes.OK still passes it — and
+        // --version writes nothing to stderr through any channel, so the empty-stream assertion is
+        // unfalsifiable there.
+        //
+        // A parse failure raised inside execute makes both real: the code must come back from
+        // execute, and picocli writes the error and usage block to its own writer, which defaults
+        // to System.err rather than the stream Main.run was handed. That is the javadoc claim, and
+        // this is the input it is actually about.
+        PrintStream originalErr = System.err;
+        MainOutcome outcome;
+        try {
+            System.setErr(
+                    new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+            outcome = runMain(new String[] {"run", "--definitely-not-a-flag"});
+        } finally {
+            System.setErr(originalErr);
+        }
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        assertEquals(
+                "",
+                outcome.err(),
+                "picocli's parse error must not reach the construction guard's stream");
+    }
+
+    @Test
     void configFlagInItsEqualsFormIsPreParsed() {
         // preParseConfigFlag accepts both `--config <path>` and `--config=<path>`, and only the
         // space-separated form was covered. The equals branch failing open is invisible rather
@@ -569,11 +606,15 @@ final class MockClientCliExitCodeTest {
 
     @Test
     void aParseFailureWithNoLocationOmitsTheLineAndColumnClause() throws IOException {
-        // describeLocation's no-location branch. Jackson enforces a maximum nesting depth of 1000
-        // and reports a breach as StreamConstraintsException — a JsonProcessingException that
-        // carries no JsonLocation, because nothing about the document's shape localises the
-        // failure. Interpolated unguarded that would read "(line -1, column -1)"; the branch exists
-        // to leave the clause out, and this is the only input that reaches it.
+        // describeLocation's no-location branch. Jackson reports a nesting-depth breach as
+        // StreamConstraintsException — a JsonProcessingException whose getLocation() is genuinely
+        // null, because nothing about the document's shape localises the failure. Unguarded, that
+        // would throw NPE rather than print anything, which is what this row covers.
+        //
+        // describeLocation's guard has a second half, getLineNr() < 1, which this does not reach:
+        // that one is for a JsonLocation.NA location, whose line and column are both -1 and would
+        // interpolate as "(line -1, column -1)". No input here produces an NA location, so that
+        // half stays uncovered and is not claimed to be.
         String deep =
                 "[".repeat(NESTING_OVER_JACKSON_LIMIT) + "]".repeat(NESTING_OVER_JACKSON_LIMIT);
         Path nested = Files.writeString(tempDir.resolve("deeply-nested.json"), deep);
