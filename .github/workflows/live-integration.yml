@@ -141,3 +141,189 @@ jobs:
             **/logs/*.jsonl*
           retention-days: 14
           if-no-files-found: warn
+
+  # The main check, and the job the runbook gives a consumer: one host and one joiner, each with its
+  # own account, adapter and game, meeting through the live lobby. It runs from the release jars, as
+  # a consumer would, rather than through Gradle.
+  #
+  # It runs in parallel with live-tests on purpose. The two answer different questions, and a flaky
+  # no-login test must not hide this verdict.
+  session:
+    name: Two-peer session (accounts C and D)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Pinned, with the digest GitHub publishes for the release asset. faf-uid produces the
+      # RSA-encrypted unique_id the lobby's policy server requires; a placeholder is rejected.
+      FAF_UID_VERSION: v4.0.7
+      FAF_UID_SHA256: 1136d0e1cd7e61682ad375043fdac4bae690bf63d7fdd98a7a3a1fb9ccac61da
+      FAF_UID_BINARY: ${{ runner.temp }}/bin/faf-uid
+      # Under RUNNER_TEMP, so no upload path and no checked-out directory can reach the tokens.
+      TOKENS: ${{ runner.temp }}/faf-tokens
+      # The session's working directory: its logs land in session-run/logs/, which is what the
+      # failure upload collects.
+      WORK: ${{ github.workspace }}/session-run
+
+    steps:
+      # First, so a run without its secrets fails in seconds rather than after a build, and names
+      # exactly which secret is missing.
+      #
+      # TEMPORARY (#364): these are refresh tokens, which Hydra rotates on every use, so each run
+      # spends them and the accounts are re-bootstrapped afterwards. #340's access-token files
+      # replace them: swap the secret names here and the two marked lines in the session step.
+      - name: Write the peer token files
+        timeout-minutes: 1
+        env:
+          PEER_C: ${{ secrets.FAF_CI_REFRESH_TOKEN_C }}
+          PEER_D: ${{ secrets.FAF_CI_REFRESH_TOKEN_D }}
+        run: |
+          umask 077
+          mkdir -p "$TOKENS"
+          missing=""
+          [ -n "$PEER_C" ] || missing="$missing FAF_CI_REFRESH_TOKEN_C"
+          [ -n "$PEER_D" ] || missing="$missing FAF_CI_REFRESH_TOKEN_D"
+          if [ -n "$missing" ]; then
+            echo "::error::token secret not set:$missing - set it with 'gh secret set', one seeded account per peer"
+            exit 1
+          fi
+          printf '%s' "$PEER_C" > "$TOKENS/c.txt"
+          printf '%s' "$PEER_D" > "$TOKENS/d.txt"
+          echo "wrote one token file per peer, owner-readable only"
+
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs third-party binaries (faf-uid and the adapter jar) and needs no git
+          # credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        timeout-minutes: 5
+
+      - name: Download the pinned faf-ice-adapter jar
+        run: ./gradlew downloadIceAdapter
+        timeout-minutes: 5
+
+      - name: Download and verify faf-uid
+        timeout-minutes: 3
+        run: |
+          mkdir -p "$(dirname "$FAF_UID_BINARY")"
+          curl -fsSL --retry 3 --retry-all-errors -o "$FAF_UID_BINARY" \
+            "https://github.com/FAForever/uid/releases/download/${FAF_UID_VERSION}/faf-uid"
+          echo "${FAF_UID_SHA256}  ${FAF_UID_BINARY}" | sha256sum -c -
+          chmod +x "$FAF_UID_BINARY"
+
+      # faf-uid reads DMI, BIOS and CPU details, which a cloud VM may withhold. The client only
+      # warns and falls back to the placeholder unique_id when it fails, and the lobby answers that
+      # with `invalid`, so without this probe a broken faf-uid would surface as an unexplained login
+      # failure. Its output is the machine's identity blob and is never printed; only its length is.
+      - name: Check faf-uid runs on this runner
+        timeout-minutes: 2
+        run: |
+          set +e
+          uid=$("$FAF_UID_BINARY" 1 2>"$RUNNER_TEMP/faf-uid.stderr")
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] || [ -z "$uid" ]; then
+            echo "::error::faf-uid exited $code with ${#uid} chars of output; the lobby rejects a placeholder unique_id, so a session would fail at login"
+            head -c 200 "$RUNNER_TEMP/faf-uid.stderr"
+            exit 1
+          fi
+          echo "faf-uid $FAF_UID_VERSION produced a ${#uid}-character unique_id"
+
+      - name: Build the release jars
+        run: ./gradlew :mock-client:shadowJar :mock-game:shadowJar
+        timeout-minutes: 10
+
+      # The session's own deadline is 420 s, plus at most 140 s of teardown, so this step's timeout
+      # is a backstop rather than the bound that matters. A failed checkpoint exits 70 having logged
+      # `session: FAIL <peer>: <stage>: <detail>`.
+      - name: Run a two-peer session through the live lobby
+        timeout-minutes: 12
+        run: |
+          umask 077
+          mkdir -p "$WORK"
+          set -- "$GITHUB_WORKSPACE"/mock-client/build/libs/mock-client-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-client shadow jar, found $#"; exit 1; }
+          client=$1
+          set -- "$GITHUB_WORKSPACE"/mock-game/build/libs/mock-game-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-game shadow jar, found $#"; exit 1; }
+          game=$1
+
+          # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
+          # only its one-time bootstrap uses. With #340's access-token files this becomes
+          # --peer-access-token-file and the array goes away entirely.
+          CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #87
+          REFRESH_ONLY_ARGS=(                                                        # drop with #87
+            --oauth-token-url=https://hydra.faforever.xyz/oauth2/token
+            --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8
+            --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth
+            --oauth-redirect-uri=http://127.0.0.1
+            "--oauth-scopes=openid offline lobby"
+          )
+
+          cd "$WORK"
+          java -jar "$client" \
+            --lobby-websocket-url=wss://ws.faforever.xyz \
+            --unique-id=00000000-0000-0000-0000-000000000000 \
+            --uid-binary-path="$FAF_UID_BINARY" \
+            --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
+            --mock-game-binary-path="$game" \
+            "${REFRESH_ONLY_ARGS[@]}" \
+            session \
+              --peers=2 \
+              "$CREDENTIAL_FLAG=$TOKENS/c.txt" \
+              "$CREDENTIAL_FLAG=$TOKENS/d.txt"
+
+      # Immediately after the run, on every path including the step timeout. The file the session
+      # leaves behind holds the rotated refresh token, which is a live credential that no secret
+      # masks, so it never outlives the step that used it.
+      - name: Remove the token files
+        if: always()
+        timeout-minutes: 1
+        run: rm -rf "$TOKENS"
+
+      # Uploads are failure-only, so a passing run would otherwise leave its evidence only in this
+      # log. The policy answer (#365 Q1) is exactly what a passing run has to record: that faf-uid
+      # produced a unique_id and that each account reached `welcome`. Account logins and the verdict
+      # line hold no credential.
+      - name: Record the login and session evidence
+        if: always()
+        timeout-minutes: 2
+        run: |
+          log="$WORK/logs/mockclient.jsonl"
+          {
+            echo "### Two-peer session on a runner"
+            echo
+            if [ -f "$log" ]; then
+              echo '```text'
+              grep -o 'generated unique_id via faf-uid ([0-9]* chars)' "$log" | sort | uniq -c
+              grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
+              grep -oE 'session: (PASS|FAIL)[^"]*' "$log" | head -5
+              echo '```'
+            else
+              echo "No client log at $log, so the session never started."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the session's own JSONL logs: the client's lines with every adapter's and game's
+      # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are
+      # deleted above, so no path here can reach them.
+      - name: Upload the session logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: session-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: session-run/logs/*.jsonl*
+          retention-days: 14
+          if-no-files-found: warn
