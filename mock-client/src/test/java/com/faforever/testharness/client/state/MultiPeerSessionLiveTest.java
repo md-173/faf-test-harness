@@ -271,7 +271,7 @@ final class MultiPeerSessionLiveTest {
         // secret until #340's access-token files land.
         List<String> missing = missingPrerequisites(joinerAmount + 1);
         if (!missing.isEmpty()) {
-            if ("true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
                 fail(LIVE_REQUIRED_ENV + "=true but missing live prerequisites: " + missing);
             }
             System.out.println("[4.3.1] skipping multi-peer session test: " + missing);

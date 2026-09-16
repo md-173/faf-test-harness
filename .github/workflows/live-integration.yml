@@ -2,7 +2,11 @@
 #
 # ci.yml runs ./gradlew build, which excludes every @Tag("integration") test, so nothing there
 # shows the client, adapter and game path working on a GitHub runner. This workflow does, and it is
-# the job a consumer (first: the java-ice-adapter maintainer) copies into their own CI.
+# the shape of the job a consumer (first: the java-ice-adapter maintainer) runs in their own CI.
+# Two steps differ for them, and #87's runbook section carries that variant: they download the
+# mock-client and mock-game jars from releases/latest instead of building them here, and they point
+# --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
+# pins. Everything else, including the session invocation, is the same.
 #
 # Advisory, never a PR gate: the shared test lobby's availability is outside our control, so a
 # failure here is a finding rather than a reason to block a merge. ci.yml stays the gate.
@@ -107,9 +111,13 @@ jobs:
               status=1
               return
             fi
-            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1)
-            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*')
-            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*')
+            # `|| true` on each: the step runs under `bash -e`, and an assignment whose pipeline
+            # ends in a grep that matches nothing would abort it, losing the message below that
+            # names the offending class. The `${var:-0}` defaults then turn "no match" into a
+            # reported failure instead of a bare non-zero exit.
+            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1 || true)
+            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' || true)
+            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*' || true)
             if [ "${tests:-0}" -lt 1 ] || [ "${skipped:-0}" -ne 0 ]; then
               echo "::error::$2 ran ${tests:-0} test(s) with ${skipped:-0} skipped; expected at least one run and none skipped"
               status=1
@@ -230,9 +238,11 @@ jobs:
           chmod +x "$FAF_UID_BINARY"
 
       # faf-uid reads DMI, BIOS and CPU details, which a cloud VM may withhold. The client only
-      # warns and falls back to the placeholder unique_id when it fails, and the lobby answers that
-      # with `invalid`, so without this probe a broken faf-uid would surface as an unexplained login
-      # failure. Its output is the machine's identity blob and is never printed; only its length is.
+      # warns and falls back to the placeholder unique_id when it fails, and a login fails when the
+      # lobby's policy POST is not 2xx, which is what a placeholder or broken uid causes (the policy
+      # verdict itself is ignored at login, `ignore_result=True`). Without this probe that would
+      # surface as an unexplained login failure. Its output is the machine's identity blob and is
+      # never printed; only its length is.
       - name: Check faf-uid runs on this runner
         timeout-minutes: 2
         run: |
@@ -253,18 +263,25 @@ jobs:
 
       # The session's own deadline is 420 s, plus at most 140 s of teardown, so this step's timeout
       # is a backstop rather than the bound that matters. A failed checkpoint exits 70 having logged
-      # `session: FAIL <peer>: <stage>: <detail>`.
+      # `session: FAIL <peer>: <stage>: <detail>`. Raise the 12 minutes if --peers grows or that
+      # deadline moves: #87 defers whether the deadline scales with the peer count, and this step
+      # would start cutting runs short before the session could report its own verdict.
       - name: Run a two-peer session through the live lobby
         timeout-minutes: 12
         run: |
           umask 077
           mkdir -p "$WORK"
+          # nullglob matters: without it a pattern that matches nothing is passed through
+          # literally, so the count check below would see one "jar" and java would fail later with
+          # an unexplained "unable to access jarfile <pattern>".
+          shopt -s nullglob
           set -- "$GITHUB_WORKSPACE"/mock-client/build/libs/mock-client-*-all.jar
           [ "$#" -eq 1 ] || { echo "::error::expected one mock-client shadow jar, found $#"; exit 1; }
           client=$1
           set -- "$GITHUB_WORKSPACE"/mock-game/build/libs/mock-game-*-all.jar
           [ "$#" -eq 1 ] || { echo "::error::expected one mock-game shadow jar, found $#"; exit 1; }
           game=$1
+          shopt -u nullglob
 
           # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
           # only its one-time bootstrap uses. With #340's access-token files this becomes
@@ -297,7 +314,10 @@ jobs:
       - name: Remove the token files
         if: always()
         timeout-minutes: 1
-        run: rm -rf "$TOKENS"
+        # The fallback matters: TOKENS is exported by the first step, so a job cancelled before it
+        # would otherwise run `rm -rf ""`, which succeeds without removing anything and looks
+        # identical to a real cleanup.
+        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
 
       # Uploads are failure-only, so a passing run would otherwise leave its evidence only in this
       # log. The policy answer (#365 Q1) is exactly what a passing run has to record: that faf-uid
@@ -308,19 +328,52 @@ jobs:
         timeout-minutes: 2
         run: |
           log="$WORK/logs/mockclient.jsonl"
+          peers=2
+          uids=0
+          logins=0
+          verdicts=0
+          # Counted first, then used to decide what the summary says. A missing line is itself the
+          # finding, so it has to be stated rather than left as a blank: the counts are what make
+          # that possible, since the step's shell has no pipefail and a grep that matches nothing
+          # inside a pipeline cannot be detected from the pipeline's exit status.
+          if [ -f "$log" ]; then
+            uids=$(grep -c 'generated unique_id via faf-uid' "$log" || true)
+            logins=$(grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u | wc -l)
+            verdicts=$(grep -cE 'session: (PASS|FAIL)' "$log" || true)
+          fi
           {
             echo "### Two-peer session on a runner"
             echo
-            if [ -f "$log" ]; then
-              echo '```text'
-              grep -o 'generated unique_id via faf-uid ([0-9]* chars)' "$log" | sort | uniq -c
-              grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
-              grep -oE 'session: (PASS|FAIL)[^"]*' "$log" | head -5
-              echo '```'
-            else
+            if [ ! -f "$log" ]; then
               echo "No client log at $log, so the session never started."
+            else
+              echo '```text'
+              if [ "$uids" -gt 0 ]; then
+                grep -o 'generated unique_id via faf-uid ([0-9]* chars)' "$log" | sort | uniq -c
+              else
+                echo '(no faf-uid line: every peer fell back to the placeholder unique_id)'
+              fi
+              if [ "$logins" -gt 0 ]; then
+                grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
+              else
+                echo '(no lobby authentication line: no peer reached welcome)'
+              fi
+              if [ "$verdicts" -gt 0 ]; then
+                grep -oE 'session: (PASS|FAIL)[^"]*' "$log" | sed -n '1,5p'
+              else
+                echo '(no session verdict line: the run ended before the session could report)'
+              fi
+              echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          # The policy answer (#365 Q1) is only recorded if every peer really produced a faf-uid
+          # blob and reached `welcome`. LobbyHandshake falls back to the placeholder unique_id with
+          # only a WARN when faf-uid fails for a session, and since the lobby ignores the policy
+          # verdict, such a run could still pass while proving nothing about faf-uid. Warn rather
+          # than fail: the session's own verdict decides the job.
+          if [ "${uids:-0}" -lt "$peers" ] || [ "${logins:-0}" -lt "$peers" ]; then
+            echo "::warning::expected $peers faf-uid lines and $peers distinct logins, saw ${uids:-0} and ${logins:-0}; this run does not answer the policy question"
+          fi
 
       # Only the session's own JSONL logs: the client's lines with every adapter's and game's
       # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are

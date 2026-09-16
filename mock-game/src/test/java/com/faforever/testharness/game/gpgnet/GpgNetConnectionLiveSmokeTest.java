@@ -388,7 +388,7 @@ final class GpgNetConnectionLiveSmokeTest {
                             + ADAPTER_JAR_ENV
                             + " or run ./gradlew downloadIceAdapter; see "
                             + "documentation/operations/ice-adapter-setup.md).";
-            if ("true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
                 throw new IllegalStateException(LIVE_REQUIRED_ENV + "=true but " + reason);
             }
             System.out.println("[live smoke] skipping GPGNet live smoke test: " + reason);

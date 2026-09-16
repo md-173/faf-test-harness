@@ -695,7 +695,7 @@ final class ClientGameLifecycleLiveTest {
         }
         if (!missing.isEmpty()) {
             // Both are reported, so one run names everything an unequipped machine has to fix.
-            if ("true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
                 throw new IllegalStateException(
                         LIVE_REQUIRED_ENV + "=true but " + String.join("; ", missing) + ".");
             }

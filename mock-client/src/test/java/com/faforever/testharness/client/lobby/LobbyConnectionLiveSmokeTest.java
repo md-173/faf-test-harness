@@ -113,7 +113,7 @@ final class LobbyConnectionLiveSmokeTest {
         // This case needs no credential, so it is the one live lobby check a CI job can run
         // (WBS-2.3.3.1). There, an unreachable lobby is the finding, not a reason to skip: it
         // separates a runner that cannot reach the lobby at all from a credential failure later.
-        if (!reachable && "true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+        if (!reachable && Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
             fail(LIVE_REQUIRED_ENV + "=true but " + unreachable);
         }
         assumeTrue(reachable, unreachable);

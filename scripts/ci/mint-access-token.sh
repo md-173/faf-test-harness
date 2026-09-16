@@ -8,6 +8,11 @@
 # access token does not rotate, lasts about an hour, and is exactly what the lobby validates, so it
 # is what CI gets, minted right before a dispatch.
 #
+# NOT YET WIRED UP. `session` takes only --peer-refresh-token-file today, so the workflow still
+# reads FAF_CI_REFRESH_TOKEN_C and _D and those runs spend the tokens. This script is ready for
+# #340's access-token files plus #87's access-token step, which is when FAF_CI_ACCESS_TOKEN_C and
+# _D start being read.
+#
 # Usage:
 #   scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name> [--dry-run]
 #
@@ -65,7 +70,13 @@ response=$(printf '%s' "$refresh_token" | curl -sS --max-time 30 -w '\n%{http_co
     -H 'Content-Type: application/x-www-form-urlencoded' \
     --data-urlencode 'grant_type=refresh_token' \
     --data-urlencode "client_id=$CLIENT_ID" \
-    --data-urlencode 'refresh_token@-')
+    --data-urlencode 'refresh_token@-') || {
+    # Without this, `set -e` would end the script here with no output at all, and a DNS or TLS
+    # failure would be indistinguishable from a rejected token. Nothing was exchanged, so the
+    # refresh token in the file is still good.
+    echo "$0: could not reach $TOKEN_URL; the refresh token was not used and $token_file is unchanged" >&2
+    exit 1
+}
 http_code=${response##*$'\n'}
 body=${response%$'\n'*}
 
@@ -86,6 +97,9 @@ access_token=$(printf '%s' "$body" | jq -r '.access_token // empty')
 # copy. Hydra has already invalidated the old value, so this is the only surviving credential.
 if [ -n "$rotated" ]; then
     tmp="$token_file.tmp.$$"
+    # The temp file holds a live credential between the write and the move, so it is cleaned up on
+    # any exit path, including a write that fails partway.
+    trap 'rm -f "$tmp"' EXIT
     ( umask 077; printf '%s' "$rotated" > "$tmp" )
     mv -f "$tmp" "$token_file"
     echo "rotated refresh token written back to $token_file"
@@ -95,18 +109,22 @@ fi
 
 # A JWT payload is base64url with the padding stripped; decode it for the operator-visible claims.
 # None of sub, scp or exp is a secret, and the signature is never touched.
-payload=$(printf '%s' "$access_token" | cut -d. -f2 | tr '_-' '/+')
+# `cut -s` matters: without it, a token carrying no "." at all comes back whole, and the decode
+# below could then fail in ways that abort the script after the rotation has already been spent.
+payload=$(printf '%s' "$access_token" | cut -s -d. -f2 | tr '_-' '/+')
 case $(( ${#payload} % 4 )) in
     2) payload="$payload==" ;;
     3) payload="$payload=" ;;
 esac
 claims=$(printf '%s' "$payload" | base64 -d 2>/dev/null || true)
-if [ -n "$claims" ]; then
-    sub=$(printf '%s' "$claims" | jq -r '.sub // "?"')
-    scp=$(printf '%s' "$claims" | jq -r 'if (.scp|type) == "array" then (.scp|join(" ")) else (.scp // .scope // "?") end')
-    exp=$(printf '%s' "$claims" | jq -r '.exp // 0')
+if printf '%s' "$claims" | jq -e . >/dev/null 2>&1; then
+    sub=$(printf '%s' "$claims" | jq -r '.sub // "?"' || echo '?')
+    scp=$(printf '%s' "$claims" | jq -r 'if (.scp|type) == "array" then (.scp|join(" ")) else (.scp // .scope // "?") end' || echo '?')
+    exp=$(printf '%s' "$claims" | jq -r '.exp // 0' || echo 0)
     echo "access token: sub=$sub scp=$scp"
-    if [ "$exp" -gt 0 ]; then
+    # Guarded as a string first: a malformed exp would otherwise be an arithmetic error, and by
+    # this point the rotation is spent, so aborting here would cost a re-bootstrap.
+    if printf '%s' "$exp" | grep -qE '^[0-9]+$' && [ "$exp" -gt 0 ]; then
         echo "              exp=$(date -u -d "@$exp" +%Y-%m-%dT%H:%M:%SZ) ($(( (exp - $(date +%s)) / 60 )) minutes from now)"
     fi
     case " $scp " in
@@ -122,5 +140,8 @@ if [ "$dry_run" = true ]; then
     exit 0
 fi
 
+# `gh` resolves the repository from the working directory's git remote, so say which one is about
+# to receive the secret rather than letting a run from the wrong checkout be silent about it.
+echo "setting $secret_name on $(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo 'the repository gh resolves from this directory')"
 printf '%s' "$access_token" | gh secret set "$secret_name"
 echo "secret $secret_name set; it expires with the token above, so dispatch the workflow now"
