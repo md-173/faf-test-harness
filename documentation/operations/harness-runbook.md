@@ -509,8 +509,9 @@ hostname appears at all).
 
 `--oauth-access-token-file` takes a token someone else signed and sends it as-is
 — no exchange with Hydra, no rotation, no file rewriting (WBS-3.1.6.4). It is
-mutually exclusive with `--oauth-refresh-token-file`; configuring both is a
-config error naming them, not a precedence rule.
+mutually exclusive with `--oauth-refresh-token-file`. Where both are configured
+at different layers, the higher layer wins: CLI flag, then `FAF_MOCK_CLIENT_*`,
+then the config file. Both at the same layer is a config error naming them.
 
 ```bash
 printf '%s' "$FAF_ACCESS_TOKEN" > .secrets/access_token.jwt
