@@ -115,8 +115,9 @@ sha256sum mock-client-<version>-all.jar
 ```
 
 Both assets are named on that pattern deliberately — a consumer matching on it is
-relying on a contract, and it is intended as one, though no CI step asserts the
-asset names yet.
+relying on a contract, and it is intended as one. `./gradlew check` asserts both
+names (`verifyReleaseAssetName`, defined in the root `build.gradle`), so a rename
+fails the pull request that makes it rather than the next release.
 
 You also need `faf-ice-adapter` itself, which is not ours to publish. Take the
 pinned version from

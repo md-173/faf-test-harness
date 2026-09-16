@@ -31,6 +31,48 @@ subprojects {
     }
 }
 
+// --- Release asset name contract (WBS-7.6, #386) ---
+// A downstream pipeline pulls releases/latest and greps for `<module>-<version>-all.jar`
+// (documentation/operations/harness-runbook.md § 2a), so the shadow jar names are a contract with a
+// consumer, not an internal detail: renaming one breaks their build with no commit on their side
+// (#317). Until now the only thing enforcing them was release.yml's checksum glob, which fires when
+// someone cuts a release, possibly weeks after the commit that renamed the jar.
+//
+// This reads the name the task is configured to produce rather than building the jar, so it costs
+// nothing and keeps the slow shadowJar out of `check`. The expected version comes from the root
+// project, which is what -Pversion sets: comparing against each subproject's own version would let a
+// module override it and move both sides of the comparison together. release.yml runs `check` with
+// the release's -Pversion, so the version segment is exercised with the value a release actually
+// uses, which no local build covers.
+['mock-client', 'mock-game'].each { moduleName ->
+    // Deliberately not guarded by plugins.withId('com.gradleup.shadow'): a guard would silently drop
+    // the assertion if the module stopped applying shadow, which is one of the renames this exists to
+    // catch. Without it, `shadowJar` is missing and configuration fails loudly instead.
+    def expectedName = "${moduleName}-${version}-all.jar".toString()
+    project(":${moduleName}") {
+        def verifyReleaseAssetName = tasks.register('verifyReleaseAssetName') {
+            group = 'verification'
+            description = "Fails unless the shadow jar is named ${expectedName}, the release asset name consumers match on."
+            def actualName = tasks.named('shadowJar', Jar).flatMap { it.archiveFileName }
+            doLast {
+                if (actualName.get() != expectedName) {
+                    throw new GradleException(
+                            "Release asset name contract broken (#317): shadowJar is configured to "
+                                    + "produce ${actualName.get()}, expected ${expectedName}.\n"
+                                    + "Downstream pipelines pull releases/latest and match on "
+                                    + "<module>-<version>-all.jar (see harness-runbook.md § 2a), so this "
+                                    + "rename breaks their build rather than an internal rule.\n"
+                                    + "If it is intended, agree it with the consumer first, then update "
+                                    + "verifyReleaseAssetName in the root build.gradle, the artifact and "
+                                    + "checksum globs in .github/workflows/release.yml, and the runbook "
+                                    + "together.")
+                }
+            }
+        }
+        tasks.named('check') { dependsOn verifyReleaseAssetName }
+    }
+}
+
 // --- faf-ice-adapter provisioning (WBS 3.1.4.4) ---
 // Fetches the pinned, headless (-nojfx) adapter jar that IceAdapterLauncher spawns. Deliberately
 // NOT wired into `build`/`check` so CI stays offline; run it explicitly on a fresh checkout:
