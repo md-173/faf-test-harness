@@ -32,7 +32,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 
@@ -222,13 +222,37 @@ final class MockClientCliExitCodeTest {
     }
 
     /**
+     * Every command the tree registers, plus the root as the empty string. Derived from the command
+     * tree rather than listed here, so a subcommand added later is covered the day it is
+     * registered. A hand-written list is a mirror of the {@code subcommands} attribute that nothing
+     * keeps in sync: {@code session} (#391) was added to the tree while this test already existed,
+     * and only a reviewer noticing kept it from shipping with a blank {@code --version}.
+     *
+     * @return the argument each case runs {@code --version} against
+     */
+    private static Stream<String> everyCommand() {
+        Stream<String> subcommands =
+                ConfigLoader.newCommandLine(new String[0], Map.of())
+                        .getSubcommands()
+                        .keySet()
+                        .stream();
+        return Stream.concat(Stream.of(""), subcommands);
+    }
+
+    /**
      * The {@code execute} route {@code Main.run} takes, from class directories, so the manifest is
      * absent and the fallback is what prints. Subcommands are included because they each declare
      * their own {@code --version}, which printed an empty line before they shared the provider. The
      * jar route is {@code VersionFlagJarTest}.
+     *
+     * <p>This also pins that every subcommand accepts {@code --version} at all: one declared
+     * without {@code mixinStandardHelpOptions} would exit {@link ExitCodes#USAGE} here rather than
+     * print.
+     *
+     * @param subcommand the subcommand to test, or the empty string for the root command
      */
     @ParameterizedTest
-    @ValueSource(strings = {"", "run", "launch-ice", "launch-game", "ice-smoke", "session"})
+    @MethodSource("everyCommand")
     void versionPrintsTheProviderTextOnEveryCommand(final String subcommand) {
         String[] args =
                 subcommand.isEmpty()
