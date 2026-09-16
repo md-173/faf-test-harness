@@ -55,7 +55,9 @@ items below are pointless to obtain otherwise.
 
 - **A FAF test account.** Test users on `*.faforever.xyz` share the password
   `foo` — see [§3](#3-credentials).
-- **Its OAuth refresh token**, bootstrapped once through a browser (§3).
+- **A credential for it** (§3), either an **OAuth refresh token**, bootstrapped
+  once through a browser, or a **pre-signed access token** handed to you and used
+  as-is, which needs no bootstrap and no account password.
 - **The `faf-uid` binary**, referenced by the `uidBinaryPath` config key. This
   is a **hard requirement** for a live session: the lobby's policy server
   rejects a placeholder `unique_id`, and the login ends in
