@@ -111,6 +111,9 @@ final class MultiPeerSessionLiveTest {
     /** Environment override for the {@code faf-uid} binary. */
     private static final String UID_BINARY_ENV = "FAF_UID_BINARY";
 
+    /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     /**
      * One peer's fixed slot: its label, role, and where its account's credential comes from.
      *
@@ -261,10 +264,16 @@ final class MultiPeerSessionLiveTest {
     @ParameterizedTest
     @ValueSource(ints = {1, 2, 3})
     void multiplePeersEstablishTheirLinkThroughTheLiveLobby(int joinerAmount) throws Exception {
-        // The one prerequisite gate. A machine without the live environment skips here, and
-        // #364's FAF_LIVE_REQUIRED only has to turn this assumption into a failure.
+        // The one prerequisite gate. A machine without the live environment skips here; under
+        // FAF_LIVE_REQUIRED (WBS-2.3.3.1) the same list fails the case instead, so a job that
+        // means to run this cannot go green having run nothing. No CI job runs this test today:
+        // every peer needs its own refresh token, which rotates on use and so cannot be a CI
+        // secret until #340's access-token files land.
         List<String> missing = missingPrerequisites(joinerAmount + 1);
         if (!missing.isEmpty()) {
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
+                fail(LIVE_REQUIRED_ENV + "=true but missing live prerequisites: " + missing);
+            }
             System.out.println("[4.3.1] skipping multi-peer session test: " + missing);
         }
         assumeTrue(missing.isEmpty(), () -> "missing live prerequisites: " + missing);

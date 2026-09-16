@@ -106,6 +106,9 @@ final class ClientGameLifecycleLiveTest {
     /** Environment override for the installed mock-game binary. */
     private static final String MOCK_GAME_ENV = "FAF_MOCK_GAME_BINARY";
 
+    /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     /**
      * Budget for the posted welcome to move the FSM into IDLE. Effectively instant — {@code
      * receiveEvent} is synchronous — so this is a guard, not a measurement.
@@ -665,27 +668,43 @@ final class ClientGameLifecycleLiveTest {
         return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
-    /** {@code @EnabledIf} probe — skips cleanly (never fails) when either binary is missing. */
+    /**
+     * {@code @EnabledIf} probe — skips cleanly (never fails) when either binary is missing, unless
+     * {@value #LIVE_REQUIRED_ENV} is {@code true}, which turns the skip into a failure naming every
+     * binary that is missing (WBS-2.3.3.1). A CI job that provisions them sets it, so a
+     * misprovisioned run cannot go green having tested nothing; a local run leaves it unset and
+     * still self-skips.
+     */
     @SuppressWarnings("unused")
     static boolean binariesAvailable() {
         Path adapter = findAdapterBinary();
         Path game = findGameBinary();
+        List<String> missing = new ArrayList<>();
         if (adapter == null) {
-            System.out.println(
-                    "[3.1.2.7] skipping client-game lifecycle test: no faf-ice-adapter jar found "
-                            + "(set "
+            missing.add(
+                    "no faf-ice-adapter jar found (set "
                             + ADAPTER_JAR_ENV
                             + " or run ./gradlew downloadIceAdapter; see "
-                            + "documentation/operations/ice-adapter-setup.md).");
+                            + "documentation/operations/ice-adapter-setup.md)");
         }
         if (game == null) {
-            System.out.println(
-                    "[3.1.2.7] skipping client-game lifecycle test: no mock-game binary found "
-                            + "(set "
+            missing.add(
+                    "no mock-game binary found (set "
                             + MOCK_GAME_ENV
-                            + " or run ./gradlew :mock-game:installDist).");
+                            + " or run ./gradlew :mock-game:installDist)");
         }
-        return adapter != null && game != null;
+        if (!missing.isEmpty()) {
+            // Both are reported, so one run names everything an unequipped machine has to fix.
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
+                throw new IllegalStateException(
+                        LIVE_REQUIRED_ENV + "=true but " + String.join("; ", missing) + ".");
+            }
+            for (String reason : missing) {
+                System.out.println(
+                        "[3.1.2.7] skipping client-game lifecycle test: " + reason + ".");
+            }
+        }
+        return missing.isEmpty();
     }
 
     /** Non-null variant for the test body; guaranteed present once the gate passes. */

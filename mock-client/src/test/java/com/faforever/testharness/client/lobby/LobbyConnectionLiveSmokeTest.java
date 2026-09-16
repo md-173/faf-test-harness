@@ -2,6 +2,7 @@ package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -91,17 +92,31 @@ final class LobbyConnectionLiveSmokeTest {
     /** Placeholder hardware identifier; spec §3 leaves the exact value to the implementer. */
     private static final String FAF_MOCK_UNIQUE_ID = "00000000-0000-0000-0000-000000000000";
 
+    /**
+     * Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). It
+     * covers {@link #connectSucceeds()} only: {@link #authHandshakeYieldsTerminalReply()} needs a
+     * refresh token, which rotates on use and so is not a CI credential.
+     */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
     void connectSucceeds() throws Exception {
-        assumeTrue(
-                lobbyReachable(),
+        boolean reachable = lobbyReachable();
+        String unreachable =
                 "FAF test lobby "
                         + FAF_TEST_LOBBY
                         + " unreachable from this network (TCP timeout on :443). Self-skips "
                         + "off-net — check local DNS/proxy/firewall first, this host is publicly "
-                        + "reachable (Cloudflare-fronted, no FAF allowlist or VPN needed).");
+                        + "reachable (Cloudflare-fronted, no FAF allowlist or VPN needed).";
+        // This case needs no credential, so it is the one live lobby check a CI job can run
+        // (WBS-2.3.3.1). There, an unreachable lobby is the finding, not a reason to skip: it
+        // separates a runner that cannot reach the lobby at all from a credential failure later.
+        if (!reachable && Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
+            fail(LIVE_REQUIRED_ENV + "=true but " + unreachable);
+        }
+        assumeTrue(reachable, unreachable);
         LobbyConnection lobby = new LobbyConnection(FAF_TEST_LOBBY);
         List<LobbyConnection.DisconnectEvent> disconnects = new CopyOnWriteArrayList<>();
         CountDownLatch disconnected = new CountDownLatch(1);

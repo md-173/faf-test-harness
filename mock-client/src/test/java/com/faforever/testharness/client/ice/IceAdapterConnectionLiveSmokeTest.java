@@ -62,6 +62,9 @@ final class IceAdapterConnectionLiveSmokeTest {
      */
     private static final String ADAPTER_JAR_ENV = "FAF_ICE_ADAPTER_JAR";
 
+    /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     /**
      * The real adapter JVM is far slower to bind its RPC port than the in-process fixture, so this
      * test has always asked for 100 attempts × 200 ms ≈ 20 s of cold-start headroom.
@@ -170,17 +173,26 @@ final class IceAdapterConnectionLiveSmokeTest {
                 "adapter `status` never became ready within " + READINESS_TIMEOUT, last);
     }
 
-    /** {@code @EnabledIf} probe — skips cleanly (not fails) when no real adapter JAR is present. */
+    /**
+     * {@code @EnabledIf} probe — skips cleanly (not fails) when no real adapter JAR is present,
+     * unless {@value #LIVE_REQUIRED_ENV} is {@code true}, which turns the skip into a failure
+     * naming what is missing (WBS-2.3.3.1). A CI job that provisions the binaries sets it, so a
+     * misprovisioned run cannot go green having tested nothing; a local run leaves it unset and
+     * still self-skips.
+     */
     @SuppressWarnings("unused")
     static boolean adapterJarAvailable() {
         Path binary = findAdapterBinary();
         if (binary == null) {
-            System.out.println(
-                    "[live smoke] skipping ICE adapter live smoke test: no real faf-ice-adapter "
-                            + "JAR found (set "
+            String reason =
+                    "no real faf-ice-adapter JAR found (set "
                             + ADAPTER_JAR_ENV
                             + " or run ./gradlew downloadIceAdapter; see "
-                            + "documentation/operations/ice-adapter-setup.md).");
+                            + "documentation/operations/ice-adapter-setup.md).";
+            if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
+                throw new IllegalStateException(LIVE_REQUIRED_ENV + "=true but " + reason);
+            }
+            System.out.println("[live smoke] skipping ICE adapter live smoke test: " + reason);
         }
         return binary != null;
     }

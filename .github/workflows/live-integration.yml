@@ -1,0 +1,389 @@
+# Live integration checks against the FAF test environment (WBS-2.3.3.1, #364).
+#
+# ci.yml runs ./gradlew build, which excludes every @Tag("integration") test, so nothing there
+# shows the client, adapter and game path working on a GitHub runner. This workflow does, and it is
+# the shape of the job a consumer (first: the java-ice-adapter maintainer) runs in their own CI.
+# Two steps differ for them, and #87's runbook section carries that variant: they download the
+# mock-client and mock-game jars from releases/latest instead of building them here, and they point
+# --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
+# pins. Everything else, including the session invocation, is the same.
+#
+# Advisory, never a PR gate: the shared test lobby's availability is outside our control, so a
+# failure here is a finding rather than a reason to block a merge. ci.yml stays the gate.
+#
+# The live tests self-skip when a binary is missing, which would let a misprovisioned run go green
+# having tested nothing. FAF_LIVE_REQUIRED turns each of those skips into a failure naming what is
+# missing; local runs leave it unset and keep skipping.
+
+name: Live integration (advisory)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Fixed name, deliberately not keyed on the ref: the FAF accounts are the resource being
+# serialised, not the branch. A second login as the same account signs the first out, fatally, and a
+# dispatch can name any ref, so two dispatches must never overlap. Runs queue instead of cancelling,
+# since cancelling a run mid-session would leave its game hosted on the lobby. GitHub keeps one
+# running and one pending run per group, and a newer pending run replaces an older one.
+concurrency:
+  group: live-integration-accounts-c-d
+  cancel-in-progress: false
+
+jobs:
+  live-tests:
+    name: Live tests that need no account
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Every prerequisite this job provisions is therefore a failure when absent, not a skip.
+      FAF_LIVE_REQUIRED: "true"
+      # downloadIceAdapter writes the jar to the repository root. Naming it explicitly means a
+      # broken download fails at the probe with the variable named, rather than resolving some
+      # other jar that happens to be on a relative path.
+      FAF_ICE_ADAPTER_JAR: ${{ github.workspace }}/faf-ice-adapter.jar
+
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs a third-party binary (the adapter jar) and needs no git credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Held at v5 rather than v6 for the licensing reason ci.yml documents at length; keep the two
+      # workflows on the same pinned commit.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        timeout-minutes: 5
+
+      - name: Download the pinned faf-ice-adapter jar
+        run: ./gradlew downloadIceAdapter
+        timeout-minutes: 5
+
+      # The four classes plus one case that need no FAF account. The credentialed live tests
+      # (MultiPeerSessionLiveTest, LobbyAuthenticatorLiveTest and this class's
+      # authHandshakeYieldsTerminalReply) read .secrets/refresh_token*.txt: a refresh token rotates
+      # on every use, so using one here would spend a developer's local copy. connectSucceeds needs
+      # no credential and is worth running: it separates "this runner cannot reach the lobby at all"
+      # from a credential failure in the session job.
+      - name: Run the live tests that need no account
+        timeout-minutes: 20
+        run: |
+          ./gradlew \
+            :mock-client:integrationTest \
+              --tests '*.IceSmokeLiveTest' \
+              --tests '*.IceAdapterConnectionLiveSmokeTest' \
+              --tests '*.ClientGameLifecycleLiveTest' \
+              --tests '*.LobbyConnectionLiveSmokeTest.connectSucceeds' \
+            :mock-game:integrationTest \
+              --tests '*.GpgNetConnectionLiveSmokeTest'
+
+      # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
+      # would leave its --tests pattern matching nothing while the others still ran, and the job
+      # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
+      # would have failed in never existed. Check the JUnit XML instead.
+      - name: Check every expected live test ran
+        if: success()
+        timeout-minutes: 2
+        run: |
+          status=0
+          check() {
+            xml="$1/build/test-results/integrationTest/TEST-$2.xml"
+            if [ ! -f "$xml" ]; then
+              echo "::error::$2 did not run: no $xml (did the class move or get renamed?)"
+              status=1
+              return
+            fi
+            # `|| true` on each: the step runs under `bash -e`, and an assignment whose pipeline
+            # ends in a grep that matches nothing would abort it, losing the message below that
+            # names the offending class. The `${var:-0}` defaults then turn "no match" into a
+            # reported failure instead of a bare non-zero exit.
+            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1 || true)
+            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' || true)
+            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*' || true)
+            if [ "${tests:-0}" -lt 1 ] || [ "${skipped:-0}" -ne 0 ]; then
+              echo "::error::$2 ran ${tests:-0} test(s) with ${skipped:-0} skipped; expected at least one run and none skipped"
+              status=1
+              return
+            fi
+            echo "$2: ${tests} test(s), none skipped"
+          }
+          check mock-client com.faforever.testharness.client.cli.IceSmokeLiveTest
+          check mock-client com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest
+          check mock-client com.faforever.testharness.client.state.ClientGameLifecycleLiveTest
+          check mock-client com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest
+          check mock-game com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
+          exit $status
+
+      # Failure only, as in ci.yml: a green run has nothing to explain. The JSONL logs are what
+      # makes a live failure readable (the adapter's and the game's captured output next to the
+      # client's own lines), and the runner is destroyed with them otherwise. The glob keeps rolled
+      # archives (.jsonl.<date>.<n>.gz) too, since this task logs at DEBUG. Nothing in this job
+      # holds a credential: the tests it runs have no account.
+      - name: Upload test reports and JSONL logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: live-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            **/build/reports/tests
+            **/build/test-results
+            **/logs/*.jsonl*
+          retention-days: 14
+          if-no-files-found: warn
+
+  # The main check, and the shape of the job the runbook gives a consumer: one host and one joiner,
+  # each with its own account, adapter and game, meeting through the live lobby. It runs from the
+  # release jars, as a consumer would, rather than through Gradle.
+  #
+  # It runs in parallel with live-tests on purpose. The two answer different questions, and a flaky
+  # no-login test must not hide this verdict.
+  session:
+    name: Two-peer session (accounts C and D)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Pinned, with the digest GitHub publishes for the release asset. faf-uid produces the
+      # RSA-encrypted unique_id the lobby's policy server can decode; a placeholder makes that check
+      # answer non-2xx, which fails the login.
+      FAF_UID_VERSION: v4.0.7
+      FAF_UID_SHA256: 1136d0e1cd7e61682ad375043fdac4bae690bf63d7fdd98a7a3a1fb9ccac61da
+      # FAF_UID_BINARY and TOKENS belong here too, but both live under RUNNER_TEMP and the runner
+      # context is not available in a job's env (github, needs, strategy, matrix, vars, secrets and
+      # inputs are). Each is exported to GITHUB_ENV by the step that first needs it, from the
+      # RUNNER_TEMP variable the runner sets in the shell.
+      #
+      # The session's working directory: its logs land in session-run/logs/, which is what the
+      # failure upload collects.
+      WORK: ${{ github.workspace }}/session-run
+      # One place, because both the session invocation and the evidence check below depend on it:
+      # the evidence check expects one faf-uid line and one login per peer. The job and step names
+      # say "two-peer" in prose and would need editing too.
+      PEERS: "2"
+
+    steps:
+      # First, so a run without its secrets fails in seconds rather than after a build, and names
+      # exactly which secret is missing.
+      #
+      # TEMPORARY (#364): these are refresh tokens, which Hydra rotates on every use, so each run
+      # spends them and the accounts are re-bootstrapped afterwards. #340's access-token channel has
+      # merged, so what remains is #87's step giving `session` one access-token file per peer: then
+      # these become FAF_CI_ACCESS_TOKEN_C and _D, set by scripts/ci/mint-access-token.sh, and the
+      # two marked lines in the session step change with them.
+      - name: Write the peer token files
+        timeout-minutes: 1
+        env:
+          PEER_C: ${{ secrets.FAF_CI_REFRESH_TOKEN_C }}
+          PEER_D: ${{ secrets.FAF_CI_REFRESH_TOKEN_D }}
+        run: |
+          umask 077
+          # Outside the workspace, so no upload path and no checked-out directory can reach them.
+          TOKENS="$RUNNER_TEMP/faf-tokens"
+          echo "TOKENS=$TOKENS" >> "$GITHUB_ENV"
+          mkdir -p "$TOKENS"
+          missing=""
+          [ -n "$PEER_C" ] || missing="$missing FAF_CI_REFRESH_TOKEN_C"
+          [ -n "$PEER_D" ] || missing="$missing FAF_CI_REFRESH_TOKEN_D"
+          if [ -n "$missing" ]; then
+            echo "::error::token secret not set:$missing - set it with 'gh secret set', one seeded account per peer"
+            exit 1
+          fi
+          printf '%s' "$PEER_C" > "$TOKENS/c.txt"
+          printf '%s' "$PEER_D" > "$TOKENS/d.txt"
+          echo "wrote one token file per peer, owner-readable only"
+
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs third-party binaries (faf-uid and the adapter jar) and needs no git
+          # credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        timeout-minutes: 5
+
+      - name: Download the pinned faf-ice-adapter jar
+        run: ./gradlew downloadIceAdapter
+        timeout-minutes: 5
+
+      - name: Download and verify faf-uid
+        timeout-minutes: 3
+        run: |
+          FAF_UID_BINARY="$RUNNER_TEMP/bin/faf-uid"
+          echo "FAF_UID_BINARY=$FAF_UID_BINARY" >> "$GITHUB_ENV"
+          mkdir -p "$(dirname "$FAF_UID_BINARY")"
+          curl -fsSL --retry 3 --retry-all-errors -o "$FAF_UID_BINARY" \
+            "https://github.com/FAForever/uid/releases/download/${FAF_UID_VERSION}/faf-uid"
+          echo "${FAF_UID_SHA256}  ${FAF_UID_BINARY}" | sha256sum -c -
+          chmod +x "$FAF_UID_BINARY"
+
+      # faf-uid reads DMI, BIOS and CPU details, which a cloud VM may withhold. The client only
+      # warns and falls back to the placeholder unique_id when it fails, and a login fails when the
+      # lobby's policy POST is not 2xx, which is what a placeholder or broken uid causes (the policy
+      # verdict itself is ignored at login, `ignore_result=True`). Without this probe that would
+      # surface as an unexplained login failure. Its output is the machine's identity blob and is
+      # never printed; only its length is.
+      - name: Check faf-uid runs on this runner
+        timeout-minutes: 2
+        run: |
+          set +e
+          uid=$("$FAF_UID_BINARY" 1 2>"$RUNNER_TEMP/faf-uid.stderr")
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] || [ -z "$uid" ]; then
+            echo "::error::faf-uid exited $code with ${#uid} chars of output; the client would fall back to the placeholder unique_id, whose policy check answers non-2xx, so every login in this session would fail"
+            head -c 200 "$RUNNER_TEMP/faf-uid.stderr"
+            exit 1
+          fi
+          echo "faf-uid $FAF_UID_VERSION produced a ${#uid}-character unique_id"
+
+      - name: Build the release jars
+        run: ./gradlew :mock-client:shadowJar :mock-game:shadowJar
+        timeout-minutes: 10
+
+      # The session's own deadline is 420 s, plus at most 140 s of teardown, so this step's timeout
+      # is a backstop rather than the bound that matters. A failed checkpoint exits 70 having logged
+      # `session: FAIL <peer>: <stage>: <detail>`. Raise the 12 minutes if --peers grows or that
+      # deadline moves: #87 defers whether the deadline scales with the peer count, and this step
+      # would start cutting runs short before the session could report its own verdict.
+      - name: Run a two-peer session through the live lobby
+        timeout-minutes: 12
+        run: |
+          umask 077
+          mkdir -p "$WORK"
+          # nullglob matters: without it a pattern that matches nothing is passed through
+          # literally, so the count check below would see one "jar" and java would fail later with
+          # an unexplained "unable to access jarfile <pattern>".
+          shopt -s nullglob
+          set -- "$GITHUB_WORKSPACE"/mock-client/build/libs/mock-client-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-client shadow jar, found $#"; exit 1; }
+          client=$1
+          set -- "$GITHUB_WORKSPACE"/mock-game/build/libs/mock-game-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-game shadow jar, found $#"; exit 1; }
+          game=$1
+          shopt -u nullglob
+
+          # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
+          # only its one-time bootstrap uses. Once #87's step gives `session` per-peer access-token
+          # files, this becomes --peer-access-token-file and the array goes away entirely.
+          CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #87
+          REFRESH_ONLY_ARGS=(                                                        # drop with #87
+            --oauth-token-url=https://hydra.faforever.xyz/oauth2/token
+            --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8
+            --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth
+            --oauth-redirect-uri=http://127.0.0.1
+            "--oauth-scopes=openid offline lobby"
+          )
+
+          cd "$WORK"
+          java -jar "$client" \
+            --lobby-websocket-url=wss://ws.faforever.xyz \
+            --unique-id=00000000-0000-0000-0000-000000000000 \
+            --uid-binary-path="$FAF_UID_BINARY" \
+            --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
+            --mock-game-binary-path="$game" \
+            "${REFRESH_ONLY_ARGS[@]}" \
+            session \
+              --peers="$PEERS" \
+              "$CREDENTIAL_FLAG=$TOKENS/c.txt" \
+              "$CREDENTIAL_FLAG=$TOKENS/d.txt"
+
+      # Immediately after the run, on every path including the step timeout. The file the session
+      # leaves behind holds the rotated refresh token, which is a live credential that no secret
+      # masks, so it never outlives the step that used it.
+      - name: Remove the token files
+        if: always()
+        timeout-minutes: 1
+        # The fallback matters: TOKENS is exported by the first step, so a job cancelled before it
+        # would otherwise run `rm -rf ""`, which succeeds without removing anything and looks
+        # identical to a real cleanup.
+        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
+
+      # Uploads are failure-only, so a passing run would otherwise leave its evidence only in this
+      # log. The policy answer (#365 Q1) is exactly what a passing run has to record: that faf-uid
+      # produced a unique_id and that each account reached `welcome`. Account logins and the verdict
+      # line hold no credential.
+      - name: Record the login and session evidence
+        if: always()
+        timeout-minutes: 2
+        run: |
+          log="$WORK/logs/mockclient.jsonl"
+          peers="$PEERS"
+          uids=0
+          logins=0
+          verdicts=0
+          # Counted first, then used to decide what the summary says. A missing line is itself the
+          # finding, so it has to be stated rather than left as a blank: the counts are what make
+          # that possible, since the step's shell has no pipefail and a grep that matches nothing
+          # inside a pipeline cannot be detected from the pipeline's exit status.
+          if [ -f "$log" ]; then
+            uids=$(grep -c 'generated unique_id via faf-uid' "$log" || true)
+            logins=$(grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u | wc -l)
+            verdicts=$(grep -cE 'session: (PASS|FAIL)' "$log" || true)
+          fi
+          {
+            echo "### Two-peer session on a runner"
+            echo
+            if [ ! -f "$log" ]; then
+              echo "No client log at $log, so the session never started."
+            else
+              echo '```text'
+              if [ "$uids" -gt 0 ]; then
+                grep -o 'generated unique_id via faf-uid ([0-9]* chars)' "$log" | sort | uniq -c
+              else
+                echo '(no faf-uid line: every peer fell back to the placeholder unique_id)'
+              fi
+              if [ "$logins" -gt 0 ]; then
+                grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
+              else
+                echo '(no lobby authentication line: no peer reached welcome)'
+              fi
+              if [ "$verdicts" -gt 0 ]; then
+                grep -oE 'session: (PASS|FAIL)[^"]*' "$log" | sed -n '1,5p'
+              else
+                echo '(no session verdict line: the run ended before the session could report)'
+              fi
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The policy answer (#365 Q1) is only recorded if every peer really produced a faf-uid
+          # blob and reached `welcome`. LobbyHandshake falls back to the placeholder unique_id with
+          # only a WARN when faf-uid fails for a session, and since the lobby ignores the policy
+          # verdict, such a run could still pass while proving nothing about faf-uid. Warn rather
+          # than fail: the session's own verdict decides the job.
+          if [ "${uids:-0}" -lt "$peers" ] || [ "${logins:-0}" -lt "$peers" ]; then
+            echo "::warning::expected $peers faf-uid lines and $peers distinct logins, saw ${uids:-0} and ${logins:-0}; this run does not answer the policy question"
+          fi
+
+      # Only the session's own JSONL logs: the client's lines with every adapter's and game's
+      # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are
+      # deleted above, so no path here can reach them.
+      - name: Upload the session logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: session-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: session-run/logs/*.jsonl*
+          retention-days: 14
+          if-no-files-found: warn
