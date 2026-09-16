@@ -15,6 +15,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import picocli.CommandLine.IDefaultValueProvider;
@@ -194,16 +195,37 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             // renders this as a single-line usage error. Take the reason on its own, then put back
             // the line/column that block carried — that is what tells the user where to look — and
             // the file name, which Jackson redacts (INCLUDE_SOURCE_IN_LOCATION is off by default).
+            //
+            // getOriginalMessage() is the unguarded half of the pair (#285): getMessage() falls
+            // back to "N/A" when the cause carried no message of its own, this one returns the
+            // null straight through, and the diagnostic would read "…: null". No input tried
+            // reaches it — every malformed document produced a real reason, and nothing in
+            // readTree(String) uses the JsonProcessingException(Throwable) constructor that leaves
+            // the message null — so the fallback is insurance against a future Jackson, not a
+            // reproduced defect. toString() rather than "N/A": if this ever does fire, the
+            // exception type is the only thing left that says anything about the failure.
             throw new IllegalArgumentException(
                     "failed to parse config file "
                             + oneLine(path)
                             + describeLocation(e.getLocation())
                             + ": "
-                            + oneLine(e.getOriginalMessage()),
+                            + oneLine(
+                                    Objects.requireNonNullElse(
+                                            e.getOriginalMessage(), e.getClass().getName())),
                     e);
         } catch (IOException e) {
+            // Same guard as the parse branch above, for the same reason: oneLine is
+            // String.valueOf, so a null message renders the literal "null" — the exact symptom
+            // #285 exists to prevent, two lines below the guard that prevents it. No current input
+            // reaches it (FileSystemException and MalformedInputException both override
+            // getMessage() non-null), which is the standing #285 itself had.
             throw new IllegalArgumentException(
-                    "failed to parse config file " + oneLine(path) + ": " + oneLine(e.getMessage()),
+                    "failed to parse config file "
+                            + oneLine(path)
+                            + ": "
+                            + oneLine(
+                                    Objects.requireNonNullElse(
+                                            e.getMessage(), e.getClass().getName())),
                     e);
         }
     }
