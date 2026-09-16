@@ -22,6 +22,16 @@ test {
     useJUnitPlatform {
         excludeTags 'integration'
     }
+    // VersionFlagJarTest runs the shadow jar that ships, because no test from class directories can
+    // see a manifest (WBS-3.1.5.2, #383). inputs.files on the task provider builds the jar first and
+    // reruns the test when it changes. The path goes through an argument provider because Gradle
+    // passes a Provider given to systemProperty as its toString(), not its value.
+    def shadowJarFile = tasks.named('shadowJar').flatMap { it.archiveFile }
+    inputs.files(tasks.named('shadowJar')).withPropertyName('shadowJarUnderTest')
+    jvmArgumentProviders.add({
+        ["-Dtestharness.shadowJar=${shadowJarFile.get().asFile.absolutePath}".toString()]
+    } as CommandLineArgumentProvider)
+    systemProperty 'testharness.version', project.version
 }
 
 tasks.register('integrationTest', Test) {
