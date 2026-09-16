@@ -1,0 +1,143 @@
+# Live integration checks against the FAF test environment (WBS-2.3.3.1, #364).
+#
+# ci.yml runs ./gradlew build, which excludes every @Tag("integration") test, so nothing there
+# shows the client, adapter and game path working on a GitHub runner. This workflow does, and it is
+# the job a consumer (first: the java-ice-adapter maintainer) copies into their own CI.
+#
+# Advisory, never a PR gate: the shared test lobby's availability is outside our control, so a
+# failure here is a finding rather than a reason to block a merge. ci.yml stays the gate.
+#
+# The live tests self-skip when a binary is missing, which would let a misprovisioned run go green
+# having tested nothing. FAF_LIVE_REQUIRED turns each of those skips into a failure naming what is
+# missing; local runs leave it unset and keep skipping.
+
+name: Live integration (advisory)
+
+on:
+  workflow_dispatch:
+  # TEMPORARY, remove before merge (#364). GitHub only runs workflow_dispatch for a workflow file
+  # that is on the default branch, so this job cannot be tried on a runner until it has merged, and
+  # merging a live job nobody has run defeats the card. A push run in this repository (as opposed to
+  # a fork) does get the repository's secrets, so this branch can run exactly what the merged,
+  # dispatch-only workflow will run.
+  push:
+    branches: [ "chore/2.3.3.1-live-integration-ci" ]
+
+permissions:
+  contents: read
+
+# Fixed name, deliberately not keyed on the ref: the FAF accounts are the resource being
+# serialised, not the branch. A second login as the same account signs the first out, fatally, so a
+# push run on a branch and a dispatch on main must never overlap. Runs queue instead of cancelling,
+# since cancelling a run mid-session would leave its game hosted on the lobby. GitHub keeps one
+# running and one pending run per group, and a newer pending run replaces an older one.
+concurrency:
+  group: live-integration-accounts-c-d
+  cancel-in-progress: false
+
+jobs:
+  live-tests:
+    name: Live tests that need no account
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Every prerequisite this job provisions is therefore a failure when absent, not a skip.
+      FAF_LIVE_REQUIRED: "true"
+      # downloadIceAdapter writes the jar to the repository root. Naming it explicitly means a
+      # broken download fails at the probe with the variable named, rather than resolving some
+      # other jar that happens to be on a relative path.
+      FAF_ICE_ADAPTER_JAR: ${{ github.workspace }}/faf-ice-adapter.jar
+
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs a third-party binary (the adapter jar) and needs no git credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Held at v5 rather than v6 for the licensing reason ci.yml documents at length; keep the two
+      # workflows on the same pinned commit.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        timeout-minutes: 5
+
+      - name: Download the pinned faf-ice-adapter jar
+        run: ./gradlew downloadIceAdapter
+        timeout-minutes: 5
+
+      # The four classes plus one case that need no FAF account. The credentialed live tests
+      # (MultiPeerSessionLiveTest, LobbyAuthenticatorLiveTest and this class's
+      # authHandshakeYieldsTerminalReply) read .secrets/refresh_token*.txt: a refresh token rotates
+      # on every use, so using one here would spend a developer's local copy. connectSucceeds needs
+      # no credential and is worth running: it separates "this runner cannot reach the lobby at all"
+      # from a credential failure in the session job.
+      - name: Run the live tests that need no account
+        timeout-minutes: 20
+        run: |
+          ./gradlew \
+            :mock-client:integrationTest \
+              --tests '*.IceSmokeLiveTest' \
+              --tests '*.IceAdapterConnectionLiveSmokeTest' \
+              --tests '*.ClientGameLifecycleLiveTest' \
+              --tests '*.LobbyConnectionLiveSmokeTest.connectSucceeds' \
+            :mock-game:integrationTest \
+              --tests '*.GpgNetConnectionLiveSmokeTest'
+
+      # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
+      # would leave its --tests pattern matching nothing while the others still ran, and the job
+      # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
+      # would have failed in never existed. Check the JUnit XML instead.
+      - name: Check every expected live test ran
+        if: success()
+        timeout-minutes: 2
+        run: |
+          status=0
+          check() {
+            xml="$1/build/test-results/integrationTest/TEST-$2.xml"
+            if [ ! -f "$xml" ]; then
+              echo "::error::$2 did not run: no $xml (did the class move or get renamed?)"
+              status=1
+              return
+            fi
+            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1)
+            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*')
+            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*')
+            if [ "${tests:-0}" -lt 1 ] || [ "${skipped:-0}" -ne 0 ]; then
+              echo "::error::$2 ran ${tests:-0} test(s) with ${skipped:-0} skipped; expected at least one run and none skipped"
+              status=1
+              return
+            fi
+            echo "$2: ${tests} test(s), none skipped"
+          }
+          check mock-client com.faforever.testharness.client.cli.IceSmokeLiveTest
+          check mock-client com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest
+          check mock-client com.faforever.testharness.client.state.ClientGameLifecycleLiveTest
+          check mock-client com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest
+          check mock-game com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
+          exit $status
+
+      # Failure only, as in ci.yml: a green run has nothing to explain. The JSONL logs are what
+      # makes a live failure readable (the adapter's and the game's captured output next to the
+      # client's own lines), and the runner is destroyed with them otherwise. The glob keeps rolled
+      # archives (.jsonl.<date>.<n>.gz) too, since this task logs at DEBUG. Nothing in this job
+      # holds a credential: the tests it runs have no account.
+      - name: Upload test reports and JSONL logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: live-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            **/build/reports/tests
+            **/build/test-results
+            **/logs/*.jsonl*
+          retention-days: 14
+          if-no-files-found: warn
