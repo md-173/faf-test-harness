@@ -84,6 +84,14 @@ class SubprocessManagerStartTest {
         SubprocessManager m =
                 SubprocessManager.start(TestSupport.testChild("sleep", "500"), TAG, GRACE);
         assertTrue(m.isAlive());
+        // Positive control for fastExitingChildDoesNotLeakIntoRegistry, which asserts a manager
+        // left this registry. Without a check that one can be in it, that assertion is vacuous on
+        // macOS: the only test covering registration, SubprocessManagerShutdownTest, is
+        // @EnabledOnOs(LINUX) and is skipped on the platform this card exists to fix. This is the
+        // one workable site — in the leak test the child is already dead and already deregistered
+        // by the time start() returns — and it adds no new flakiness, because the assertions
+        // either side of it fail in exactly the same window.
+        assertTrue(SubprocessRegistry.contains(m), "a live child must be in the registry");
         assertEquals(OptionalInt.empty(), m.exitCode());
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertFalse(m.isAlive());
@@ -177,8 +185,8 @@ class SubprocessManagerStartTest {
      * SubprocessManager#start} adds the manager to {@link SubprocessRegistry}, leaving the manager
      * pinned in the active set for the JVM lifetime. The {@code true} utility is the
      * most-aggressive trigger available; {@link TestSupport#fastExitingNativeChild()} resolves it
-     * from {@code PATH} rather than assuming a path, because the two supported platforms disagree
-     * about where it lives (#227).
+     * from {@code PATH} rather than assuming a path, because Linux and a bare-metal macOS dev box
+     * disagree about where it lives (#227).
      */
     @Test
     void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
@@ -192,12 +200,18 @@ class SubprocessManagerStartTest {
      * Waits for {@code m} to leave {@link SubprocessRegistry}, failing if it has not within {@link
      * #POLL_BUDGET_MS}.
      *
-     * <p>Deregistration happens on the reaper thread, so it is not ordered against {@code onExit()}
-     * completing on the test thread. The previous fixed 50ms sleep was a guess at how long that
-     * takes rather than a wait for it to have happened; polling asserts the condition and lets a
-     * machine under load take longer without failing. The leak this guards against is permanent —
-     * the manager stays pinned for the JVM's lifetime — so a budget cannot mask it, only delay the
-     * report.
+     * <p>Deregistration is in fact ordered <em>before</em> {@code onExit()} completes: {@code
+     * deregister(this)} runs inside the {@code thenApply} that completes {@code exitFuture}, and
+     * {@code onExit()} hands out a copy of it, so {@code get()} returning already implies the
+     * removal ran — via the reaper path or {@code start()}'s synchronous {@code !isAlive()}
+     * fallback. Measured: a 400ms child was out of the registry on the first check, 40/40, with no
+     * polling at all.
+     *
+     * <p>The poll stays regardless. It costs nothing, it replaces a fixed 50ms sleep that was a
+     * guess at how long to wait rather than a wait for the condition, and it keeps this correct if
+     * that chain is ever reordered into a sibling {@code thenRun}. The leak it guards against is
+     * permanent — the manager stays pinned for the JVM's lifetime — so a budget cannot mask it,
+     * only delay the report.
      *
      * @param m the manager whose deregistration to await
      * @throws InterruptedException if the wait is interrupted
