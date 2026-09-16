@@ -143,9 +143,9 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
-  # The main check, and the job the runbook gives a consumer: one host and one joiner, each with its
-  # own account, adapter and game, meeting through the live lobby. It runs from the release jars, as
-  # a consumer would, rather than through Gradle.
+  # The main check, and the shape of the job the runbook gives a consumer: one host and one joiner,
+  # each with its own account, adapter and game, meeting through the live lobby. It runs from the
+  # release jars, as a consumer would, rather than through Gradle.
   #
   # It runs in parallel with live-tests on purpose. The two answer different questions, and a flaky
   # no-login test must not hide this verdict.
@@ -156,7 +156,8 @@ jobs:
 
     env:
       # Pinned, with the digest GitHub publishes for the release asset. faf-uid produces the
-      # RSA-encrypted unique_id the lobby's policy server requires; a placeholder is rejected.
+      # RSA-encrypted unique_id the lobby's policy server can decode; a placeholder makes that check
+      # answer non-2xx, which fails the login.
       FAF_UID_VERSION: v4.0.7
       FAF_UID_SHA256: 1136d0e1cd7e61682ad375043fdac4bae690bf63d7fdd98a7a3a1fb9ccac61da
       # FAF_UID_BINARY and TOKENS belong here too, but both live under RUNNER_TEMP and the runner
@@ -167,6 +168,10 @@ jobs:
       # The session's working directory: its logs land in session-run/logs/, which is what the
       # failure upload collects.
       WORK: ${{ github.workspace }}/session-run
+      # One place, because both the session invocation and the evidence check below depend on it:
+      # the evidence check expects one faf-uid line and one login per peer. The job and step names
+      # say "two-peer" in prose and would need editing too.
+      PEERS: "2"
 
     steps:
       # First, so a run without its secrets fails in seconds rather than after a build, and names
@@ -246,7 +251,7 @@ jobs:
           code=$?
           set -e
           if [ "$code" -ne 0 ] || [ -z "$uid" ]; then
-            echo "::error::faf-uid exited $code with ${#uid} chars of output; the lobby rejects a placeholder unique_id, so a session would fail at login"
+            echo "::error::faf-uid exited $code with ${#uid} chars of output; the client would fall back to the placeholder unique_id, whose policy check answers non-2xx, so every login in this session would fail"
             head -c 200 "$RUNNER_TEMP/faf-uid.stderr"
             exit 1
           fi
@@ -299,7 +304,7 @@ jobs:
             --mock-game-binary-path="$game" \
             "${REFRESH_ONLY_ARGS[@]}" \
             session \
-              --peers=2 \
+              --peers="$PEERS" \
               "$CREDENTIAL_FLAG=$TOKENS/c.txt" \
               "$CREDENTIAL_FLAG=$TOKENS/d.txt"
 
@@ -323,7 +328,7 @@ jobs:
         timeout-minutes: 2
         run: |
           log="$WORK/logs/mockclient.jsonl"
-          peers=2
+          peers="$PEERS"
           uids=0
           logins=0
           verdicts=0
