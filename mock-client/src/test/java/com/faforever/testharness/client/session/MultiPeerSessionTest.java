@@ -120,8 +120,33 @@ final class MultiPeerSessionTest {
 
     @Test
     void copiesEveryFieldExceptTheOnesTheSessionOwns() throws Exception {
-        MockClientConfig base = distinctBase();
+        MockClientConfig base = distinctBase("--oauth-refresh-token-file=" + token("distinct"));
 
+        assertCopiesEveryOtherField(base);
+    }
+
+    @Test
+    void copiesTheAccessTokenFileOnTheAccessTokenChannel() throws Exception {
+        // A config holds one credential channel or the other, never both, so the access-token
+        // component gets its distinct value from a base on that channel.
+        Path accessToken = Files.writeString(dir.resolve("access_token.txt"), "access-token");
+        MockClientConfig base = distinctBase("--oauth-access-token-file=" + accessToken);
+        assertEquals(Optional.of(accessToken), base.oauthAccessTokenFile());
+        assertEquals(null, base.oauthRefreshTokenFile());
+
+        assertCopiesEveryOtherField(base);
+    }
+
+    /**
+     * Copies {@code base} as the host and as a joiner and checks every component the session does
+     * not own survives unchanged, and every one it owns holds the session's value. The compiler
+     * catches a missing argument in the positional copy, but not two ints or two paths given in the
+     * wrong order, which only a base with a distinct value in each component can.
+     *
+     * @param base a config with a distinct value in every component
+     * @throws Exception if a record accessor cannot be invoked
+     */
+    private static void assertCopiesEveryOtherField(final MockClientConfig base) throws Exception {
         MockClientConfig host = MultiPeerSession.hostConfig(base, PORTS, "title-1");
         MockClientConfig joiner = MultiPeerSession.joinConfig(base, PORTS, 12345);
 
@@ -230,10 +255,10 @@ final class MultiPeerSessionTest {
      * A base config whose every copied component holds a value of its own, so a copy that moves a
      * value to the wrong component cannot still compare equal.
      *
+     * @param credentialFlag the one credential channel flag, refresh-token or access-token file
      * @return the config
-     * @throws IOException if the token file cannot be written
      */
-    private MockClientConfig distinctBase() throws IOException {
+    private MockClientConfig distinctBase(final String credentialFlag) {
         List<String> args =
                 List.of(
                         "--lobby-websocket-url=wss://lobby.example.test",
@@ -242,7 +267,7 @@ final class MultiPeerSessionTest {
                         "--oauth-redirect-uri=http://127.0.0.2",
                         "--oauth-scopes=openid offline lobby extra",
                         "--oauth-client-id=client-id-1",
-                        "--oauth-refresh-token-file=" + token("distinct"),
+                        credentialFlag,
                         "--unique-id=11111111-1111-1111-1111-111111111111",
                         "--client-version=1.2.3-distinct",
                         "--user-agent=agent-1",

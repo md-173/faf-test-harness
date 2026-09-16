@@ -936,6 +936,7 @@ public final class MultiPeerSession implements AutoCloseable {
                 base.oauthScopes(),
                 base.oauthClientId(),
                 base.oauthRefreshTokenFile(),
+                base.oauthAccessTokenFile(),
                 base.uniqueId(),
                 base.clientVersion(),
                 base.userAgent(),
