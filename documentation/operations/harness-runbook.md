@@ -15,8 +15,9 @@ This document sequences and resolves material that already exists in
 [`ice-adapter-setup.md`](ice-adapter-setup.md), and
 [`component-isolation.md`](component-isolation.md) — it is not a rewrite of
 any of them, and it does not restate their field reference, log-line contract,
-or developer conventions. Multi-peer sessions (two or more Mock Clients on one
-box) are out of scope here; see the stub at [§9](#9-multi-peer-sessions-r79b).
+or developer conventions. Two Mock Clients on one box (WBS-4.3.1) are covered
+at [§9](#9-two-peer-sessions-wbs-431). Three and four peers (WBS-4.3.3, 4.2.2)
+are out of scope here — see the note at the end of that section.
 
 ## 1. Prerequisites
 
@@ -861,17 +862,215 @@ avoided here:
    individual demo — its captured transcript, its acceptance-criteria mapping,
    and how to capture a fresh recording. It covers `lobby-connect-idle` (whose
    captured log §6 links directly), `client-game-lifecycle` (linked from §2),
-   and `multi-peer-session`, whose subject is out of scope here (see §9). Both
+   and `multi-peer-session`, whose two-peer evidence and full log-line table
+   §9 draws on directly (three and four peers remain out of scope here). Both
    files now say this explicitly, so a reader is never following two versions
    of the same setup path.
 
-## 9. Multi-peer sessions (R79b)
+## 9. Two-peer sessions (WBS 4.3.1)
 
-Running two or more Mock Client instances on one box — per-instance ports,
-log attribution, the `INSTANCE_NAME` convention, and true N-peer sessions —
-is out of scope for this document. It lands with R79b, immediately after the
-two-peer and N-peer cards, as sections appended here rather than a
-restructure of what exists above.
+Two Mock Clients on one machine, each with its own lobby account, its own
+port set, its own real `faf-ice-adapter`, and its own real mock game, complete
+a host/join **through the live lobby**. The clients never touch each other
+in-process — the only value that crosses between them outside the lobby is
+A's game uid, which is what an operator reads off A's own `game launch:` log
+line, and which B needs to join.
+
+This section is the followable path to it: one verified command
+([§9.2](#92-running-two-clients)) that drives what
+[`MultiPeerSessionLiveTest`](../../mock-client/src/test/java/com/faforever/testharness/client/state/MultiPeerSessionLiveTest.java)
+automates, plus everything a reader needs to set up first and read
+afterwards — the second account, the ports, the log attribution, and what the
+result should look like, evidenced by `demos/README.md`'s real, dated runs
+(see [§9.5](#95-what-a-healthy-run-looks-like)). It covers what differs from
+a single session (§3 credentials, §4 configuration, §5 running); it does not
+restate them.
+
+**Scope.** Two peers only. Three and four peers — where faf-server's
+peer-to-peer path starts, alongside its own offer-direction asymmetry — are
+WBS-4.3.3 and depend on 4.2.2; see the note at the end of this section.
+
+### 9.1 The second identity
+
+One account cannot host and join its own game, and logging in twice on one
+account signs the first session out — `MultiPeerSessionLiveTest` enforces
+this itself, before either peer connects
+(`distinctCredentials`/`checkDistinctAccount`, same file). Two peers need two
+distinct seeded test accounts and two distinct bootstrapped refresh tokens.
+
+Bootstrap the second account exactly as §3 bootstraps the first — same Hydra
+flow, same shared `foo` password, same one-time browser step — writing the
+result to a second file instead of the first:
+
+| Peer | Role | Refresh-token file | Override |
+|---|---|---|---|
+| A | host | `.secrets/refresh_token.txt` | `FAF_REFRESH_TOKEN_A` |
+| B | joiner | `.secrets/refresh_token_b.txt` | `FAF_REFRESH_TOKEN_B` |
+
+Both files are gitignored and, like the single-session case, **rewritten in
+place on every run** — Hydra rotates the refresh token on use, so never run
+two sessions against the same account's file concurrently.
+
+### 9.2 Running two clients
+
+**The verified path.** The whole session — host, join, ICE, and the game
+traffic that rides it — is exercised by the live test, which is what §9.5's
+evidence comes from:
+
+```bash
+./gradlew :mock-client:integrationTest --tests '*MultiPeerSessionLiveTest*' --rerun
+```
+
+`--rerun` is not optional, for the reason given under §2's `ClientGameLifecycleLiveTest`
+note. This runs three parameterized cases back to back — two, three and four
+peers — and the two-peer case is the first of them; there is no Gradle test
+filter in this repo that isolates it from the other two. A missing
+prerequisite (either token, the adapter jar, the mock-game distribution, or
+the `faf-uid` binary — see §1 and §9.1) **skips** the case it affects rather
+than failing it, with one line naming what was missing
+(`missingPrerequisites`, same file); a skip is not a pass.
+
+**Driving it outside the test.** `mock-client run` takes the same host/join
+arguments the live test builds directly — `--host-title`, `--host-map`,
+`--host-mod`, `--host-visibility`, `--target-game-id`, and the three
+`--ice-adapter-*-port` flags are ordinary `MockClientCli` options, and
+`MockClientLifecycle`'s IDLE-entry hooks send `game_host` / `game_join` from
+them exactly as they would from the test's config
+(`MultiPeerSessionLiveTest.hostConfig`/`joinConfig`, same file, is the exact
+argument list). This section does not turn that into a two-terminal
+walkthrough: no one has bootstrapped a second account on any machine this
+work touched to run it by hand and check it, and per this card's own rule, an
+unverified sequence of commands does not belong here. The live test above is
+the followable, verified path; if a hand-run walkthrough gets checked against
+a real second account later, it belongs here as its own subsection with its
+own capture.
+
+### 9.3 Port allocation
+
+Each peer's adapter needs its own three listener ports — the same three §2a
+already documents the meaning of (`--ice-adapter-rpc-port`,
+`--ice-adapter-gpg-net-port`, `--ice-adapter-lobby-port`) — and the two peers
+must not share any of them. The live test never risks this by hand: it
+allocates a fresh, OS-assigned free port set per peer and asserts no two
+peers share one before either starts (`freeAdapterPorts`/`checkDistinctPorts`,
+`MultiPeerSessionLiveTest`) — so under the verified path in §9.2, port
+collision is something the test rules out, not something a reader manages.
+
+**What a collision looks like.** Neither subprocess hangs silently — the one
+that lost the race to bind logs its own failure: mock-game logs `failed to
+bind lobby port`, and the adapter's JVM reports a `BindException` /
+`Address already in use` for whichever of its two TCP ports was taken
+(the same three strings `MultiPeerSessionLiveTest` greps for in a failed
+wait). A benign TOCTOU window exists either way — ports are chosen free and
+released before the subprocess binds them — so a collision can also come from
+an unrelated process on a busy machine, not only from reusing A's set.
+
+**Not ours to allocate.** The three ports above are listener ports the
+harness picks. The actual UDP ports `faf-ice-adapter` opens per peer link for
+ICE connectivity checks are chosen by the adapter itself, once negotiation
+starts — there is no harness flag for them, and a reader looking for a fourth
+port to configure will not find one.
+
+### 9.4 Per-instance logs and attribution
+
+A single-session run (§6) never needs to tell one client's lines from
+another's. Two do, and the affordance behind it is `InstanceLabel`
+(WBS-3.1.6.2/4.3.3): every log record — the client's own, its captured
+adapter output, and its captured game output — carries an `instance` MDC
+field naming the peer, `A` or `B`, and the JSONL contract exposes it as the
+`instance` field on every record (`mock-client/README.md`'s harness log
+contract documents its exact shape; not restated here).
+
+Under the verified path (§9.2), this needs no action from the reader: the
+live test builds each peer under `MDC.putCloseable(INSTANCE_MDC_KEY, label)`
+(`MultiPeerSessionLiveTest.labelled`), so every peer's own lines, its
+adapter's, and its game's are already attributable in the shared
+`mock-client/logs/test-harness.jsonl` and each peer's own
+`mock-client/logs/mockgame-<label>.jsonl` (one JSONL per game, since
+concurrent games would otherwise share `mockgame.jsonl` —
+`MockGameLauncher` forwards the label to the child it spawns for exactly this
+reason). Filter on `instance` to read one peer, as `demos/README.md`'s
+log-line table already shows.
+
+The same mechanism is available to a single `mock-client run` process on its
+own: `LoggingSetup.configure` resolves the label from the `INSTANCE_NAME`
+environment variable (or a `-DINSTANCE_NAME=…` system property, which wins),
+and a named instance gets its own default log file,
+`logs/mockclient-<label>.jsonl`, instead of the shared
+`logs/mockclient.jsonl` — the part worth knowing before running two of them
+concurrently by hand is that **without it, two such processes default to the
+same log file** and contend on its rollover. This is source-verified
+(`LoggingSetup.java`) but not exercised by the verified path above, which
+never launches two separate `mock-client run` processes.
+
+### 9.5 What a healthy run looks like
+
+The stage order below is [`demos/README.md`](../demos/README.md)'s own
+two-peer table — the `MultiPeerSessionLiveTest` evidence trimmed to A and its
+joiner B, which is what that file already keeps for exactly this reason. It
+is a real capture, not a reconstruction:
+
+| Stage | Log line | Source |
+|-------|----------|--------|
+| A authenticated | `session ready: id=<idA> login=<loginA>` | `WelcomeStateSync` |
+| A hosts | `Sending game_host for title=faf-test-harness 4.3.1 <uuid>` | `MockClientLifecycle` |
+| A's session up | `game launch: uid=<uid> mod=faf name=…`, then `state entry: STARTING_GAME` | `MockClientLifecycle` |
+| A's game in the lobby | `Received GPGNet message: GameState Idle` → `GameState Lobby` | `[ICEAdapter]` |
+| A is hosting | `Sent GPGNet message: HostGame scmp_007`, then `state entry: HOSTING` | `[ICEAdapter]` / `MockClientLifecycle` |
+| B authenticated | `session ready: id=<idB> login=<loginB>` | `WelcomeStateSync` |
+| B joins | `Sending game_join for uid=<uid>`, then `game launch: uid=<uid> …` | `MockClientLifecycle` |
+| B is joining | `state entry: JOINING` | `MockClientLifecycle` |
+| A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
+| Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
+| Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
+| **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
+| Teardown | `state entry: TERMINATED` → `session teardown complete`, on both peers | `MockClientLifecycle` |
+
+`offer=true` on A is the server's own doing (`connect_to_host` in
+faf-server's `gameconnection.py` makes whichever side is already in the lobby
+the ICE initiator), not something either client decides. The `peer ice`
+states are informational — `completed` never arrives, because adapter 3.3.14
+has no `setState(COMPLETED)` call site — which is why **the verdict line is
+the one to wait for**, not a "final" ICE state. A run that never reaches it
+on both sides has not established the session, regardless of how far the ICE
+states got.
+
+*Provenance: this table, and the two-peer case it describes, were verified
+live against the real lobby on **2026-08-25** with two seeded accounts
+(`test` as host, `Foo` as joiner) — recorded in
+[`demos/README.md`](../demos/README.md#multi-peer-session-host-join-full-mesh-wbs-431-433),
+which also carries the three- and four-peer evidence (2026-09-15), the full
+acceptance-criteria mapping, and how to capture a fresh recording. Not
+repeated here.*
+
+### 9.6 Known limitations
+
+- **The lobby is reachable only from some networks.** `wss://ws.faforever.xyz`
+  is Cloudflare-fronted and publicly reachable — no VPN or allowlist needed —
+  but §3/§8 already found this worth confirming per-network; the same probe
+  applies here.
+- **The run needs two real, seeded test accounts**, each with its own
+  bootstrapped refresh token (§9.1) — there is no way to exercise this
+  section with only the single account §3 bootstraps.
+- **Matchmaker violations are a different path from this one.** A live
+  matchmaker run (queueing via `game_matchmaking`, out of scope for this
+  section) can accrue violations on the accounts used; the custom-game
+  host/join this section documents never touches that path. FAF's violation
+  service penalises failing to connect to a game *after being matched*, not
+  the act of queueing itself, so the exposure specific to running this
+  harness live is two accounts matching each other in a matchmaker queue and
+  then failing to connect — not anything §9.2's host/join session does. The
+  first violation carries no penalty; bans escalate after that and are held
+  in memory rather than the database. Modelling or predicting ban timing is
+  out of scope here, as WBS-3.1.1.9 already scopes it out.
+
+**Out of scope: three and four peers.** `MultiPeerSessionLiveTest` already
+runs both cases (`demos/README.md`'s 2026-09-15 evidence above), and its
+class javadoc documents the offer-direction asymmetry that starts at three
+peers, but writing the human-followable equivalent of those cases — the
+deterministic N-peer scheme, and what a healthy run looks like beyond two —
+depends on WBS-4.3.3 and 4.2.2 and is deferred to a later section appended
+here, not a restructure of what exists above.
 
 ## 10. Network fault injection (WBS 5.1)
 

@@ -350,7 +350,7 @@ final class MockGameLauncherTest {
         List<String> args =
                 new ArrayList<>(
                         List.of(
-                                "--lobby-websocket-url=wss://lobby.faforever.xyz",
+                                "--lobby-websocket-url=wss://ws.faforever.xyz",
                                 "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
                                 "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
                                 "--oauth-redirect-uri=http://127.0.0.1",
@@ -402,7 +402,7 @@ final class MockGameLauncherTest {
         List<String> args =
                 new ArrayList<>(
                         List.of(
-                                "--lobby-websocket-url=wss://lobby.faforever.xyz",
+                                "--lobby-websocket-url=wss://ws.faforever.xyz",
                                 "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
                                 "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
                                 "--oauth-redirect-uri=http://127.0.0.1",
