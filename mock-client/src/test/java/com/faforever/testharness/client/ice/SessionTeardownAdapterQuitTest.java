@@ -8,6 +8,7 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.net.URI;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -148,8 +149,19 @@ final class SessionTeardownAdapterQuitTest {
     void rpcDisconnectedAfterConnectingSkipsQuitAndTerminatesAsBefore() throws Exception {
         connectAdapterRpc();
         SubprocessManager adapter = startSleeper();
+
+        // Await the disconnect rather than sleeping for it (#269). The drop is observed on the
+        // connection's reader thread, so a fixed 100ms was an assumption about scheduling, not a
+        // barrier: under load it expires before disconnectFired is set and the isOpen() assertion
+        // below fails for a reason that has nothing to do with teardown. The listener must be
+        // registered before dropClient, or the event it is waiting for can fire first. Two seconds
+        // is an upper bound, not an expectation — a local socket drop lands in microseconds.
+        CountDownLatch disconnected = new CountDownLatch(1);
+        connection.onDisconnect(event -> disconnected.countDown());
         server.dropClient();
-        Thread.sleep(100); // let the reader thread observe the drop and fire the disconnect
+        assertTrue(
+                disconnected.await(2, TimeUnit.SECONDS),
+                "the connection never observed the drop, so there is no closed state to test");
 
         assertFalse(connection.isOpen(), "a dropped connection must report closed");
 
