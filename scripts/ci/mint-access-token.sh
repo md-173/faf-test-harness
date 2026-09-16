@@ -9,9 +9,9 @@
 # is what CI gets, minted right before a dispatch.
 #
 # NOT YET WIRED UP. `session` takes only --peer-refresh-token-file today, so the workflow still
-# reads FAF_CI_REFRESH_TOKEN_C and _D and those runs spend the tokens. This script is ready for
-# #340's access-token files plus #87's access-token step, which is when FAF_CI_ACCESS_TOKEN_C and
-# _D start being read.
+# reads FAF_CI_REFRESH_TOKEN_C and _D and those runs spend the tokens. #340's access-token channel
+# has merged; this script starts being used when #87's step gives `session` one access-token file
+# per peer, which is when FAF_CI_ACCESS_TOKEN_C and _D start being read.
 #
 # Usage:
 #   scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name> [--dry-run]

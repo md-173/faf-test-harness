@@ -19,20 +19,13 @@ name: Live integration (advisory)
 
 on:
   workflow_dispatch:
-  # TEMPORARY, remove before merge (#364). GitHub only runs workflow_dispatch for a workflow file
-  # that is on the default branch, so this job cannot be tried on a runner until it has merged, and
-  # merging a live job nobody has run defeats the card. A push run in this repository (as opposed to
-  # a fork) does get the repository's secrets, so this branch can run exactly what the merged,
-  # dispatch-only workflow will run.
-  push:
-    branches: [ "chore/2.3.3.1-live-integration-ci" ]
 
 permissions:
   contents: read
 
 # Fixed name, deliberately not keyed on the ref: the FAF accounts are the resource being
-# serialised, not the branch. A second login as the same account signs the first out, fatally, so a
-# push run on a branch and a dispatch on main must never overlap. Runs queue instead of cancelling,
+# serialised, not the branch. A second login as the same account signs the first out, fatally, and a
+# dispatch can name any ref, so two dispatches must never overlap. Runs queue instead of cancelling,
 # since cancelling a run mid-session would leave its game hosted on the lobby. GitHub keeps one
 # running and one pending run per group, and a newer pending run replaces an older one.
 concurrency:
@@ -180,8 +173,10 @@ jobs:
       # exactly which secret is missing.
       #
       # TEMPORARY (#364): these are refresh tokens, which Hydra rotates on every use, so each run
-      # spends them and the accounts are re-bootstrapped afterwards. #340's access-token files
-      # replace them: swap the secret names here and the two marked lines in the session step.
+      # spends them and the accounts are re-bootstrapped afterwards. #340's access-token channel has
+      # merged, so what remains is #87's step giving `session` one access-token file per peer: then
+      # these become FAF_CI_ACCESS_TOKEN_C and _D, set by scripts/ci/mint-access-token.sh, and the
+      # two marked lines in the session step change with them.
       - name: Write the peer token files
         timeout-minutes: 1
         env:
@@ -284,8 +279,8 @@ jobs:
           shopt -u nullglob
 
           # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
-          # only its one-time bootstrap uses. With #340's access-token files this becomes
-          # --peer-access-token-file and the array goes away entirely.
+          # only its one-time bootstrap uses. Once #87's step gives `session` per-peer access-token
+          # files, this becomes --peer-access-token-file and the array goes away entirely.
           CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #87
           REFRESH_ONLY_ARGS=(                                                        # drop with #87
             --oauth-token-url=https://hydra.faforever.xyz/oauth2/token
