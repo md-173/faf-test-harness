@@ -44,6 +44,7 @@ final class LobbyDisconnectPlayingTest {
                     "openid offline lobby",
                     "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
                     Path.of("/nonexistent/test-refresh-token"),
+                    Optional.empty(),
                     "00000000-0000-0000-0000-000000000000",
                     "0.0.0-mock",
                     "faf-test-harness",
