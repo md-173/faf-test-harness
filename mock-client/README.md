@@ -13,8 +13,8 @@ subcommands that dispatch to the matching component.
 | Subcommand    | Purpose                                                                            | Needs a FAF account |
 |---------------|------------------------------------------------------------------------------------|---|
 | `run`         | Connect to the lobby, authenticate, and sit idle until interrupted.                 | yes |
-| `launch-ice`  | Spawn `faf-ice-adapter` only and forward its output through the harness logger.    | no¹ |
-| `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          | no¹ |
+| `launch-ice`  | Spawn `faf-ice-adapter`, attach a JSON-RPC peer, and hold it up for a window.       | no |
+| `launch-game` | Spawn `mock-game` only and forward its output through the harness logger.          | no |
 | `ice-smoke`   | Bring up the adapter, verify its JSON-RPC and GPGNet endpoints are serving, tear it down. | no |
 
 `run` (WBS-3.1.1.4) connects to the lobby, runs the auth handshake
@@ -24,18 +24,22 @@ to the lobby's `ping` heartbeats. `Ctrl-C` / `SIGTERM` closes the WebSocket
 cleanly (the process exit code then follows the signal: 130 for SIGINT, 143 for
 SIGTERM). `launch-ice` (WBS-3.1.2.2) and `launch-game` (WBS-3.1.2.3) each spawn
 their respective binary, run it for `--duration-seconds`, terminate it, and log
-the exit code. `ice-smoke` (WBS-3.1.4.3) is the reachability gate: it spawns the
+the exit code. `launch-ice` also attaches a JSON-RPC peer to the adapter and
+holds it open for the window (WBS-3.1.6.3), which is what lets a separately
+launched `launch-game` complete a real GPGNet handshake against it — the adapter
+will not serve a game until a peer exists. `ice-smoke` (WBS-3.1.4.3) is the reachability gate: it spawns the
 adapter, connects to its JSON-RPC port, sends one request, connects to its GPGNet
 port and waits for the adapter to announce that connection back over RPC, then
 tears everything down. Exit `0` means reachable; any other exit names the phase
 that failed. A healthy run takes about two seconds.
 
-¹ `launch-ice` and `launch-game` never contact the lobby, but they are still
-validated as full-session invocations, so they require syntactically valid
-placeholders for the lobby and OAuth options (see the worked example in
-[`harness-runbook.md`](../documentation/operations/harness-runbook.md) §2).
-`ice-smoke` deliberately does not: it validates only the adapter options, so it
-runs with no credentials of any kind.
+None of the three diagnostics needs credentials of any kind. Each validates only
+the fields it actually reads — `ice-smoke` and `launch-ice` the adapter options,
+`launch-game` the mock-game options — so `mock-client launch-ice
+--ice-adapter-binary-path=…` runs with no other flags at all (WBS-3.1.5.2-fix,
+#308). They used to demand syntactically valid placeholders for the lobby and
+OAuth options, which is what the runbook's
+`--oauth-refresh-token-file=dummy-unused-by-launch-ice` was.
 
 Invocation shape:
 
@@ -55,7 +59,7 @@ a `--timeout-seconds` flag.
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. |
-| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary or the child exited before its run window, or `ice-smoke` returned any verdict other than reachable. Also any exception that escapes a subcommand uncaught. |
+| `70` | `RUNTIME`         | A runtime failure after a subcommand started — e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, or `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), or `ice-smoke` returned any verdict other than reachable. Also any exception that escapes a subcommand uncaught. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
@@ -140,9 +144,10 @@ the output of `--help`:
 
 The table below is a quick reference. If it ever drifts from `--help`,
 `--help` wins. **Required** there means required by the full-session config
-validation, which `run`, `launch-ice`, and `launch-game` all share. `ice-smoke`
-does not: it validates only the `iceAdapter*` / `player*` / logging fields, so
-none of the lobby or OAuth rows apply to it.
+validation, which only `run` applies. The three diagnostics each validate a
+narrower slice: `ice-smoke` and `launch-ice` the `iceAdapter*` / `player*` /
+logging fields, and `launch-game` the `mockGame*` / port / `player*` / logging
+fields. None of the lobby or OAuth rows applies to any of them.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
@@ -323,11 +328,21 @@ the harness then "just works" when invoked from the repo root with the default.
 Override the path only when the layout differs (e.g. a Docker image baking the
 binary in at a fixed location).
 
-### `launch-ice` — spawn faf-ice-adapter only
+### `launch-ice` — spawn faf-ice-adapter and hold it up
 
-Spawns the adapter, runs it for `--duration-seconds` (default `10`), terminates
-it, and logs the exit code. The adapter's output appears in the logs tagged
-`[ICEAdapter]`. Having no lobby, this diagnostic takes `--id`, `--login`, and
+Spawns the adapter, attaches a JSON-RPC peer, runs it for `--duration-seconds`
+(default `10`), terminates it, and logs the exit code. The adapter's output
+appears in the logs tagged `[ICEAdapter]`.
+
+The peer is what makes this composable (WBS-3.1.6.3): `faf-ice-adapter` parks
+inside `GPGNetClient`'s constructor waiting for its first JSON-RPC client, so
+without one it accepts a game's connection and then drops it. With `launch-ice`
+running, a separate `launch-game` completes the `GameState Idle` →
+`CreateLobby` → `GameState Lobby` handshake — verified against 3.3.14; the
+transcript is in
+[`harness-runbook.md`](../documentation/operations/harness-runbook.md) §2. If the
+peer cannot be attached the run reports `70` (`RUNTIME`) rather than leaving you
+an adapter that looks healthy and is not usable. Having no lobby, this diagnostic takes `--id`, `--login`, and
 `--game-id` from `playerIdOverride`, `playerLogin`, and `iceAdapterGameId`
 (default `0`, meaning no session) rather than from the lobby `welcome` and
 `game_launch` a full `run` uses.
@@ -368,8 +383,10 @@ exits `70` (`RUNTIME`) — no stack trace.
 
 ### `ice-smoke` — is a local adapter reachable?
 
-The one command that exercises the harness without a FAF account: no lobby, no
-OAuth, and nothing this harness sends leaves loopback. Run it as a precondition
+The fullest of the three no-account diagnostics: no lobby, no OAuth, and nothing
+this harness sends leaves loopback. `launch-ice` and `launch-game` need no
+credentials either (WBS-3.1.6.3), but this is the one that reports a verdict
+rather than just running a subprocess. Run it as a precondition
 before paying for a full session test, and to tell "the adapter never came up"
 apart from "the session logic is wrong".
 

@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockGameSettings;
 import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -81,8 +82,8 @@ public class MockGameLauncher {
     /** Grace between SIGTERM and SIGKILL for mock-game (spec §5.3). */
     private static final Duration TERMINATE_GRACE = Duration.ofSeconds(5);
 
-    /** Validated configuration the argument list is built from. */
-    private final MockClientConfig config;
+    /** Validated settings the argument list is built from. */
+    private final MockGameSettings settings;
 
     /**
      * The constructing thread's instance label (WBS-4.3.3), captured here rather than at launch
@@ -92,12 +93,25 @@ public class MockGameLauncher {
     private final InstanceLabel label;
 
     /**
-     * Creates a launcher bound to {@code config}.
+     * Creates a launcher bound to {@code config}, narrowing it to the fields a launch reads.
+     *
+     * <p>The session path keeps using this: it holds a full configuration already, and narrowing
+     * here means both routes build the same argv from the same fields (WBS-3.1.5.2-fix, #308).
      *
      * @param config the validated Mock Client configuration; must not be {@code null}
      */
     public MockGameLauncher(final MockClientConfig config) {
-        this.config = Objects.requireNonNull(config, "config");
+        this(MockGameSettings.from(Objects.requireNonNull(config, "config")));
+    }
+
+    /**
+     * Creates a launcher bound to the mock-game slice alone, for the no-lobby {@code launch-game}
+     * diagnostic (WBS-3.1.5.2-fix, #308).
+     *
+     * @param settings the validated mock-game settings; must not be {@code null}
+     */
+    public MockGameLauncher(final MockGameSettings settings) {
+        this.settings = Objects.requireNonNull(settings, "settings");
         this.label = InstanceLabel.capture();
     }
 
@@ -136,7 +150,7 @@ public class MockGameLauncher {
 
         ProcessBuilder pb = new ProcessBuilder(argv);
         // Forward LOG_LEVEL so mock-game's LoggingSetup observes the same level as the harness.
-        pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, config.logLevel());
+        pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, settings.logLevel());
         // A labelled client passes its label on, so the game self-labels its lines and writes
         // logs/mockgame-<label>.jsonl instead of every game sharing logs/mockgame.jsonl. The
         // adapter gets no such variable: it is third-party and ignores it.
@@ -171,7 +185,7 @@ public class MockGameLauncher {
      * @throws MockGameLaunchException if the path is missing or not a regular file
      */
     Path resolveBinary() throws MockGameLaunchException {
-        Path binary = config.mockGameBinaryPath();
+        Path binary = settings.binaryPath();
         if (!Files.isRegularFile(binary)) {
             throw new MockGameLaunchException(
                     "mock-game binary not found: " + binary.toAbsolutePath());
@@ -187,7 +201,7 @@ public class MockGameLauncher {
      * @return the config-derived launch identity
      */
     LaunchIdentity configIdentity() {
-        return LaunchIdentity.fromConfig(config, DEFAULT_PLAYER_ID);
+        return LaunchIdentity.fromGameSettings(settings, DEFAULT_PLAYER_ID);
     }
 
     /**
@@ -221,32 +235,30 @@ public class MockGameLauncher {
         // CLI parser is ours (MockGameCli, WBS 3.2.1.1), no positional-prefix constraint like the
         // upstream adapter has.
         argv.add("--gpgnet-port");
-        argv.add(Integer.toString(config.iceAdapterGpgNetPort()));
+        argv.add(Integer.toString(settings.gpgNetPort()));
         argv.add("--lobby-port");
-        argv.add(Integer.toString(config.iceAdapterLobbyPort()));
+        argv.add(Integer.toString(settings.lobbyPort()));
         argv.add("--player-id");
         argv.add(Integer.toString(identity.playerId()));
         argv.add("--player-login");
         argv.add(identity.login());
         argv.add("--game-uid");
         argv.add(Integer.toString(identity.gameUid()));
-        if (config.hostConfig().isPresent()) {
-            for (var option : config.hostConfig().get().gameOptions().entrySet()) {
-                argv.add("--game-option");
-                argv.add(String.format("%s=%s", option.getKey(), option.getValue()));
-            }
+        for (var option : settings.gameOptions().entrySet()) {
+            argv.add("--game-option");
+            argv.add(String.format("%s=%s", option.getKey(), option.getValue()));
         }
         // Always emitted, never left to mock-game's own default (WBS-4.3.1): the value decides
         // whether this session's game stays joinable, so an orchestrated launch states it rather
         // than inheriting it. mock-game's default exists only for a hand-run binary.
         argv.add("--launch-delay-seconds");
-        argv.add(Integer.toString(config.mockGameLaunchDelaySeconds()));
+        argv.add(Integer.toString(settings.launchDelaySeconds()));
         // Only emitted when set (WBS-5.1-fix, #322). mock-game defaults it to 0 and an orchestrated
         // run that wants no fault should produce the argv it always produced, so a reader diffing
         // two launches sees the flag only where a fault was actually asked for.
-        if (config.mockGameUdpDropPercent() > 0) {
+        if (settings.mockGameUdpDropPercent() > 0) {
             argv.add("--udp-drop-percent");
-            argv.add(Integer.toString(config.mockGameUdpDropPercent()));
+            argv.add(Integer.toString(settings.mockGameUdpDropPercent()));
         }
         return argv;
     }

@@ -14,11 +14,15 @@ import com.faforever.testharness.client.config.ConfigLoader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -33,6 +37,16 @@ import picocli.CommandLine;
  * End-to-end tests for the {@code launch-ice} subcommand (WBS-3.1.2.2): a stub shell script stands
  * in for the real {@code faf-ice-adapter} binary. Covers the spawn/run/terminate happy path and the
  * clear-error / non-zero-exit contract for a missing binary.
+ *
+ * <p>Since WBS-3.1.6.3 (#279) the command also attaches a JSON-RPC peer, which is what lets a
+ * separate {@code launch-game} complete a GPGNet handshake against the adapter it is holding open.
+ * A shell stub cannot serve JSON-RPC, so the happy-path cases point {@code --ice-adapter-rpc-port}
+ * at a bare {@link ServerSocket} this class owns: {@code IceAdapterConnection.connect()} completes
+ * on the TCP connect, and nothing here calls anything over it.
+ *
+ * <p>The invocations carry no lobby or OAuth flags at all, which is WBS-3.1.5.2-fix (#308): the
+ * command validates only the adapter settings, so the eight placeholder values these tests used to
+ * pass are gone.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class LaunchIceCommandTest {
@@ -41,6 +55,24 @@ final class LaunchIceCommandTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
+
+    /** Stands in for the adapter's JSON-RPC listener; accepts and holds, never speaks. */
+    private ServerSocket rpcListener;
+
+    private Thread rpcAcceptor;
+
+    /**
+     * Completes with whether the adapter process was still alive at the moment the command's
+     * JSON-RPC peer went away, observed as EOF on the accepted socket.
+     *
+     * <p>Liveness rather than a timestamp, deliberately. Comparing a time taken on the acceptor
+     * thread against one taken on the command thread is both unable to catch the bug — the
+     * "terminated" line is logged after <em>both</em> calls, so swapping them keeps the peer
+     * closing first — and flaky under load, because a late-scheduled acceptor makes the correct
+     * order look wrong. In the correct order the peer closes before SIGTERM is even sent, so the
+     * adapter is alive with a wide margin; swapped, terminate() has already awaited the exit.
+     */
+    private final CompletableFuture<Boolean> adapterAliveWhenPeerClosed = new CompletableFuture<>();
 
     @BeforeEach
     void attachAppender() {
@@ -55,11 +87,84 @@ final class LaunchIceCommandTest {
     }
 
     @AfterEach
-    void detachAppender() {
+    void detachAppender() throws InterruptedException {
         if (appender != null) {
             appender.stop();
             root.detachAppender(appender);
         }
+        if (rpcListener != null) {
+            try {
+                rpcListener.close();
+            } catch (IOException ignored) {
+                // Best effort; the accept thread is a daemon and ends with it.
+            }
+        }
+        if (rpcAcceptor != null) {
+            rpcAcceptor.interrupt();
+            rpcAcceptor.join(2000);
+        }
+    }
+
+    /**
+     * Opens a listener on an ephemeral port and returns the {@code --ice-adapter-rpc-port} flag
+     * pointing at it. Accepts one connection and holds it, which is all the command's peer needs.
+     */
+    private String rpcPortFlagForAListenerThatAccepts() throws IOException {
+        rpcListener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        rpcAcceptor =
+                new Thread(
+                        () -> {
+                            // try-with-resources: teardown closes only the listener, so without
+                            // this each happy-path test leaked the accepted descriptor until the
+                            // socket's Cleaner ran.
+                            try (Socket held = rpcListener.accept()) {
+                                // Read rather than poll. Socket.isConnected() reports whether the
+                                // socket was *ever* connected and stays true after a remote close,
+                                // so the old loop condition was dead and the wait/notify only ever
+                                // ended via the listener. A blocking read ends exactly when the
+                                // command closes its peer, which is the event worth observing.
+                                // Blocks until the command closes its peer; this acceptor only
+                                // needs to hold the socket open until then.
+                                held.getInputStream().read();
+                            } catch (IOException ignored) {
+                                // The listener was closed in teardown, or the test ended.
+                            }
+                        },
+                        "stub-rpc-acceptor");
+        rpcAcceptor.setDaemon(true);
+        rpcAcceptor.start();
+        return "--ice-adapter-rpc-port=" + rpcListener.getLocalPort();
+    }
+
+    /**
+     * As {@link #rpcPortFlagForAListenerThatAccepts()}, but records whether the adapter process was
+     * still alive when the peer's socket reached EOF.
+     *
+     * @param pidFile the file the stub writes its pid to
+     * @return the {@code --ice-adapter-rpc-port} flag pointing at this listener
+     * @throws IOException if the listener cannot be opened
+     */
+    private String rpcPortFlagRecordingAdapterLiveness(final Path pidFile) throws IOException {
+        rpcListener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+        rpcAcceptor =
+                new Thread(
+                        () -> {
+                            try (Socket held = rpcListener.accept()) {
+                                if (held.getInputStream().read() == -1) {
+                                    long pid = Long.parseLong(Files.readString(pidFile).trim());
+                                    adapterAliveWhenPeerClosed.complete(
+                                            ProcessHandle.of(pid)
+                                                    .map(ProcessHandle::isAlive)
+                                                    .orElse(false));
+                                }
+                            } catch (IOException | NumberFormatException ignored) {
+                                // The listener was closed in teardown, or the test ended.
+                            }
+                        },
+                        "stub-rpc-acceptor-liveness");
+        rpcAcceptor.setDaemon(true);
+        rpcAcceptor.start();
+        return "--ice-adapter-rpc-port=" + rpcListener.getLocalPort();
     }
 
     @Test
@@ -90,18 +195,145 @@ final class LaunchIceCommandTest {
 
     @Test
     void stubAdapterRunsForTheWindowThenTerminatesAndLogsExitCode() throws Exception {
-        Path stub =
-                createStub(
-                        "#!/bin/sh\n"
-                                + "echo ICE-ADAPTER-STUB-UP\n"
-                                + "while true; do sleep 1; done\n");
+        Path stub = createSleepingStub();
 
-        int exit = execute(launchIceArgs(stub, "--duration-seconds=1"));
+        int exit =
+                execute(
+                        launchIceArgs(
+                                stub,
+                                "--duration-seconds=1",
+                                rpcPortFlagForAListenerThatAccepts()));
 
         assertEquals(ExitCodes.OK, exit, "a clean spawn-and-terminate cycle should exit OK");
         assertTrue(
                 appender.list.stream().anyMatch(e -> e.getFormattedMessage().contains("exit code")),
                 "the subprocess exit code must be logged. captured: " + appender.list);
+    }
+
+    /**
+     * The JSON-RPC peer is what makes {@code launch-ice} and {@code launch-game} compose (#279), so
+     * it is reported and attributed rather than logged at INFO alongside a healthy-looking run.
+     */
+    @Test
+    void theAttachedRpcPeerIsReported() throws Exception {
+        Path stub = createSleepingStub();
+
+        execute(launchIceArgs(stub, "--duration-seconds=1", rpcPortFlagForAListenerThatAccepts()));
+
+        assertTrue(
+                appender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("JSON-RPC peer attached")),
+                "the run must say the adapter can now serve a game. captured: " + appender.list);
+    }
+
+    /**
+     * A deliberate behaviour change from #279. An adapter with no reachable RPC port cannot serve a
+     * game at all — its {@code GPGNetClient} constructor blocks forever waiting for a peer — so
+     * reporting OK here would mean reporting success for an adapter that will drop the first game
+     * that connects to it.
+     */
+    @Test
+    void anAdapterWithNoRpcPortExitsRuntime() throws Exception {
+        Path stub = createSleepingStub();
+
+        // Port 1: below every platform's ephemeral range, so nothing in this JVM can hold it.
+        int exit = execute(launchIceArgs(stub, "--duration-seconds=1", "--ice-adapter-rpc-port=1"));
+
+        assertEquals(
+                ExitCodes.RUNTIME,
+                exit,
+                "an adapter no peer can attach to is not a usable adapter");
+        // Matched on the message, not merely on "the first ERROR": another error path preceding
+        // this one would otherwise satisfy the assertion without the command having said anything
+        // about the peer.
+        ILoggingEvent error =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage()
+                                                .contains("could not attach a JSON-RPC peer"));
+        assertTrue(
+                error.getFormattedMessage().contains("could not attach a JSON-RPC peer"),
+                "the failure must name what went wrong; got: " + error.getFormattedMessage());
+    }
+
+    /**
+     * #279's deliverable is "test coverage for the connect <em>and the teardown</em>". The connect
+     * half was covered; this is the other half.
+     *
+     * <p>The ordering is a real property, not a detail: the command closes the peer before
+     * terminating the adapter so the adapter sees an ordinary client disconnect rather than dying
+     * with one attached. Nothing caught a reordering before this.
+     *
+     * <p>Observed rather than timed — the stub reads its accepted socket to EOF, which happens
+     * exactly when the command closes its peer. Resolution is a millisecond, so a same-millisecond
+     * tie passes; a reordering moves the close after process teardown and is caught.
+     */
+    @Test
+    void thePeerIsClosedBeforeTheAdapterIsTerminated() throws Exception {
+        Path pidFile = tempDir.resolve("stub.pid");
+        // Takes a second to die on SIGTERM, so "the adapter was still alive" has a wide margin
+        // instead of being a millisecond race.
+        Path stub =
+                createStub(
+                        "#!/bin/sh\n"
+                                + "echo $$ > '"
+                                + pidFile
+                                + "'\n"
+                                + "trap 'sleep 1; exit 143' TERM\n"
+                                + "echo ICE-ADAPTER-STUB-UP\n"
+                                + "while true; do sleep 0.2; done\n");
+
+        int exit =
+                execute(
+                        launchIceArgs(
+                                stub,
+                                "--duration-seconds=1",
+                                rpcPortFlagRecordingAdapterLiveness(pidFile)));
+
+        assertEquals(ExitCodes.OK, exit, "a healthy run must still exit OK");
+        assertTrue(
+                adapterAliveWhenPeerClosed.get(10, TimeUnit.SECONDS),
+                "the JSON-RPC peer must go away while the adapter is still alive, so the adapter"
+                        + " sees a client disconnect rather than dying with a peer attached");
+    }
+
+    /**
+     * An adapter that starts and then dies must be reported as having exited, with its code — not
+     * as an RPC-port problem.
+     *
+     * <p>Before this, the connect retry budget expired first and the operator was told "could not
+     * attach a JSON-RPC peer on port N", pointing at the wrong subsystem and discarding the exit
+     * code that would have explained it. subprocess-orchestration-spec §2.6 records that
+     * faf-ice-adapter exits 0 on a usage error, so timing out is a legitimate detector — losing the
+     * exit code is the defect.
+     */
+    @Test
+    void anAdapterThatDiesBeforeThePeerAttachesReportsItsExitCode() throws Exception {
+        Path stub = createStub("#!/bin/sh\necho ICE-ADAPTER-STUB-UP\nexit 3\n");
+
+        // Port 1: nothing can attach, so the command is forced down the connect-failure path.
+        // One second, because the connect budget is derived from it: the liveness check runs after
+        // the retry budget is spent, so the report is correct but not yet early. Racing the connect
+        // against the adapter's own exit is #341.
+        int exit = execute(launchIceArgs(stub, "--duration-seconds=1", "--ice-adapter-rpc-port=1"));
+
+        assertEquals(ExitCodes.RUNTIME, exit, "an adapter that died is still a failed run");
+        ILoggingEvent error =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage().contains("exited on its own"));
+        assertTrue(
+                error.getFormattedMessage().contains("3"),
+                "the adapter's exit code is the diagnosis and must be reported; got: "
+                        + error.getFormattedMessage());
+    }
+
+    /** A stub adapter that starts, says so, and stays up until it is terminated. */
+    private Path createSleepingStub() throws IOException {
+        return createStub(
+                "#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-UP\n" + "while true; do sleep 1; done\n");
     }
 
     private Path createStub(final String body) throws IOException {
@@ -119,21 +351,16 @@ final class LaunchIceCommandTest {
     }
 
     /**
-     * {@code launch-ice} plus the required flags, with the adapter binary pointed at {@code bin}.
+     * {@code launch-ice} with the adapter binary pointed at {@code bin} — and nothing else.
+     *
+     * <p>No lobby or OAuth flags, which is the point of #308: this command opens no lobby
+     * connection, so every one of the eight values this helper used to pass was a placeholder
+     * invented to get past validation.
      */
     private static String[] launchIceArgs(final Path bin, final String... extra) {
         List<String> args = new ArrayList<>();
         args.add("launch-ice");
-        args.add("--lobby-websocket-url=" + CliTestFixtures.LOBBY_URL);
-        args.add("--oauth-token-url=" + CliTestFixtures.OAUTH_TOKEN_URL);
-        args.add("--oauth-auth-endpoint=" + CliTestFixtures.OAUTH_AUTH_ENDPOINT);
-        args.add("--oauth-redirect-uri=" + CliTestFixtures.OAUTH_REDIRECT_URI);
-        args.add("--oauth-scopes=" + CliTestFixtures.OAUTH_SCOPES);
-        args.add("--oauth-client-id=" + CliTestFixtures.OAUTH_CLIENT_ID);
-        args.add("--oauth-refresh-token-file=" + CliTestFixtures.OAUTH_REFRESH_TOKEN_FILE);
-        args.add("--unique-id=" + CliTestFixtures.UNIQUE_ID);
         args.add("--ice-adapter-binary-path=" + bin);
-        args.add("--mock-game-binary-path=" + CliTestFixtures.MOCK_GAME_BIN);
         args.addAll(List.of(extra));
         return args.toArray(new String[0]);
     }

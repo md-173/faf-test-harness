@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockGameSettings;
 import java.util.Objects;
 
 /**
@@ -50,10 +51,26 @@ public record LaunchIdentity(int playerId, String login, int gameUid) {
     }
 
     /**
+     * The same identity, assembled from the mock-game slice {@code launch-game} runs on
+     * (WBS-3.1.6.3). Identical to {@link #fromConfig} for a settings object narrowed from the same
+     * configuration — the two differ only in which fields the caller had to supply to get here.
+     *
+     * @param settings the validated mock-game settings
+     * @param defaultPlayerId player id to use when {@code playerIdOverride} is empty
+     * @return the settings-derived launch identity
+     */
+    static LaunchIdentity fromGameSettings(
+            final MockGameSettings settings, final int defaultPlayerId) {
+        return new LaunchIdentity(
+                settings.playerIdOverride().orElse(defaultPlayerId),
+                settings.playerLogin(),
+                settings.gameUid());
+    }
+
+    /**
      * The same diagnostic identity, assembled from the adapter-only settings the no-lobby {@code
      * ice-smoke} check runs on (WBS-3.1.4.3). Identical to {@link #fromConfig} for a settings
-     * object narrowed from the same configuration — the two differ only in which fields the caller
-     * had to supply to get here.
+     * object narrowed from the same configuration.
      *
      * @param settings the validated adapter settings
      * @param defaultPlayerId player id to use when {@code playerIdOverride} is empty
