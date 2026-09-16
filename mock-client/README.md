@@ -50,9 +50,10 @@ and every game has received every other game's datagrams with an advancing
 sequence, so an adapter that connects but does not forward game packets fails the
 run (stage `traffic`). That evidence is each game's INFO progress line, so
 `session` needs `--log-level` INFO or finer. Runs have been verified at 2 to 4
-peers. The 420 s session deadline does not yet grow with `--peers`, so a larger
-session can hit it before its own checkpoints do, after every peer has logged in;
-the ceiling step (#87) measures that limit and sizes the deadline. Give one
+peers. The 420 s session deadline does not yet grow with `--peers`, and joiners
+start one at a time, so a larger session can run out of it part-way through, after
+the peers started so far have logged in and rotated their refresh tokens. The
+ceiling step in #87 will measure that limit and size the deadline. Give one
 refresh-token file per peer with `--peer-refresh-token-file`, host first, repeated
 or comma-separated. A failed checkpoint logs `session: FAIL <peer>: <stage>:
 <detail>`. The clients share one JVM, so anything that kills it ends every peer;

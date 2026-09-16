@@ -72,7 +72,7 @@ public final class SessionCommand implements Callable<Integer> {
     /**
      * Number of peers, host included. The upper bound is the instance labels A to Z, not a tested
      * limit: runs are verified at 2 to 4 peers, and {@code MultiPeerSession}'s fixed session
-     * deadline is sized by #87's ceiling step.
+     * deadline will be sized by #87's ceiling step.
      */
     @Option(
             names = "--peers",
