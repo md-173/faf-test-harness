@@ -84,6 +84,14 @@ class SubprocessManagerStartTest {
         SubprocessManager m =
                 SubprocessManager.start(TestSupport.testChild("sleep", "500"), TAG, GRACE);
         assertTrue(m.isAlive());
+        // Positive control for fastExitingChildDoesNotLeakIntoRegistry, which asserts a manager
+        // left this registry. Without a check that one can be in it, that assertion is vacuous on
+        // macOS: the only test covering registration, SubprocessManagerShutdownTest, is
+        // @EnabledOnOs(LINUX) and is skipped on the platform this card exists to fix. This is the
+        // one workable site — in the leak test the child is already dead and already deregistered
+        // by the time start() returns — and it adds no new flakiness, because the assertions
+        // either side of it fail in exactly the same window.
+        assertTrue(SubprocessRegistry.contains(m), "a live child must be in the registry");
         assertEquals(OptionalInt.empty(), m.exitCode());
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertFalse(m.isAlive());
@@ -175,20 +183,48 @@ class SubprocessManagerStartTest {
     /**
      * Regression for the race where a fast-exiting child's deregister callback fires before {@link
      * SubprocessManager#start} adds the manager to {@link SubprocessRegistry}, leaving the manager
-     * pinned in the active set for the JVM lifetime. {@code /bin/true} is the most-aggressive
-     * trigger and is always present on the supported Linux substrate (spec §1.1); the assertion
-     * remains valid on any platform that ships the binary.
+     * pinned in the active set for the JVM lifetime. The {@code true} utility is the
+     * most-aggressive trigger available; {@link TestSupport#fastExitingNativeChild()} resolves it
+     * from {@code PATH} rather than assuming a path, because Linux and a bare-metal macOS dev box
+     * disagree about where it lives (#227).
      */
     @Test
     void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
-        ProcessBuilder pb = new ProcessBuilder("/bin/true");
-        SubprocessManager m = SubprocessManager.start(pb, TAG, GRACE);
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.fastExitingNativeChild(), TAG, GRACE);
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
-        // Give any racing deregister on the reaper thread time to settle.
-        Thread.sleep(50);
-        assertFalse(
-                SubprocessRegistry.contains(m),
-                "manager leaked into SubprocessRegistry.ACTIVE after process exited");
+        awaitDeregistered(m);
+    }
+
+    /**
+     * Waits for {@code m} to leave {@link SubprocessRegistry}, failing if it has not within {@link
+     * #POLL_BUDGET_MS}.
+     *
+     * <p>Deregistration is in fact ordered <em>before</em> {@code onExit()} completes: {@code
+     * deregister(this)} runs inside the {@code thenApply} that completes {@code exitFuture}, and
+     * {@code onExit()} hands out a copy of it, so {@code get()} returning already implies the
+     * removal ran — via the reaper path or {@code start()}'s synchronous {@code !isAlive()}
+     * fallback. Measured: a 400ms child was out of the registry on the first check, 40/40, with no
+     * polling at all.
+     *
+     * <p>The poll stays regardless. It costs nothing, it replaces a fixed 50ms sleep that was a
+     * guess at how long to wait rather than a wait for the condition, and it keeps this correct if
+     * that chain is ever reordered into a sibling {@code thenRun}. The leak it guards against is
+     * permanent — the manager stays pinned for the JVM's lifetime — so a budget cannot mask it,
+     * only delay the report.
+     *
+     * @param m the manager whose deregistration to await
+     * @throws InterruptedException if the wait is interrupted
+     */
+    private static void awaitDeregistered(final SubprocessManager m) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
+        while (System.currentTimeMillis() < deadline) {
+            if (!SubprocessRegistry.contains(m)) {
+                return;
+            }
+            Thread.sleep(POLL_INTERVAL_MS);
+        }
+        fail("manager leaked into SubprocessRegistry.ACTIVE after process exited");
     }
 
     private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {
