@@ -32,9 +32,15 @@ final class MockGameCliReportTest {
 
     private final ByteArrayOutputStream errBuffer = new ByteArrayOutputStream();
     private final PrintStream err = new PrintStream(errBuffer, true, StandardCharsets.UTF_8);
+    private final ByteArrayOutputStream outBuffer = new ByteArrayOutputStream();
+    private final PrintStream out = new PrintStream(outBuffer, true, StandardCharsets.UTF_8);
 
     private String stderr() {
         return errBuffer.toString(StandardCharsets.UTF_8);
+    }
+
+    private String stdout() {
+        return outBuffer.toString(StandardCharsets.UTF_8);
     }
 
     /**
@@ -49,7 +55,7 @@ final class MockGameCliReportTest {
 
     @Test
     void validArgsReturnOkWithConfigAndNoOutput() {
-        ParseOutcome outcome = MockGameCli.parseOrReport(VALID_ARGS, err);
+        ParseOutcome outcome = MockGameCli.parseOrReport(VALID_ARGS, out, err);
 
         assertEquals(ExitCodes.OK, outcome.exitCode());
         assertNotNull(outcome.config());
@@ -59,11 +65,37 @@ final class MockGameCliReportTest {
         assertTrue(stderr().isEmpty(), "a valid set must pass through silently; got: " + stderr());
     }
 
+    /**
+     * {@code --version} identifies the jar, so it must work with none of the session facts and
+     * without touching stderr, which the Mock Client captures as failure output. From class
+     * directories there is no manifest, so the fallback is what prints; the jar route, the one that
+     * matters to a consumer, is {@code VersionFlagJarTest}.
+     */
+    @Test
+    void versionPrintsTheProviderTextAndExitsOk() {
+        ParseOutcome outcome = MockGameCli.parseOrReport(new String[] {"--version"}, out, err);
+
+        assertEquals(ExitCodes.OK, outcome.exitCode());
+        assertNull(outcome.config(), "there is no game to run after printing version text");
+        assertEquals(VersionProvider.DEVELOPMENT_BUILD, stdout().strip());
+        assertTrue(stderr().isEmpty(), "version text must not reach stderr; got: " + stderr());
+    }
+
+    @Test
+    void helpPrintsUsageOnStdoutAndExitsOk() {
+        ParseOutcome outcome = MockGameCli.parseOrReport(new String[] {"--help"}, out, err);
+
+        assertEquals(ExitCodes.OK, outcome.exitCode());
+        assertNull(outcome.config(), "there is no game to run after printing help");
+        assertTrue(stdout().contains("Usage: mock-game"), "got: " + stdout());
+        assertTrue(stderr().isEmpty(), "help text must not reach stderr; got: " + stderr());
+    }
+
     @Test
     void missingRequiredArgumentReturnsUsageAndNamesTheArgument() {
         String[] args = {"--gpgnet-port", "7237", "--lobby-port", "6112", "--player-id", "42"};
 
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
+        ParseOutcome outcome = MockGameCli.parseOrReport(args, out, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config(), "no partial config on a usage error");
@@ -79,7 +111,7 @@ final class MockGameCliReportTest {
         args[VALID_ARGS.length] = "--faction";
         args[VALID_ARGS.length + 1] = "3";
 
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
+        ParseOutcome outcome = MockGameCli.parseOrReport(args, out, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());
@@ -108,7 +140,7 @@ final class MockGameCliReportTest {
         String[] args = VALID_ARGS.clone();
         args[index] = value;
 
-        ParseOutcome outcome = MockGameCli.parseOrReport(args, err);
+        ParseOutcome outcome = MockGameCli.parseOrReport(args, out, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());

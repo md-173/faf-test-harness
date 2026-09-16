@@ -21,6 +21,12 @@ is required and never defaulted. A guessed port or player id produces a session 
 looks alive and is wrong, so the parser refuses to guess. Unknown arguments fail the
 parse.
 
+`--help` (`-h`) and `--version` (`-V`) need none of the arguments below and exit `0`.
+`--version` prints `mock-game <version>`, read from the jar manifest, so a release jar
+reports the version it was released as; run from classes (`./gradlew run`, an IDE) it
+prints `mock-game (development build)`. Like any run, both create the `logs/` directory
+described under [Logging](#logging).
+
 | Flag | Required | Default | What it is |
 | :--- | :--- | :--- | :--- |
 | `--gpgnet-port <port>` | yes | — | The adapter's GPGNet TCP port, the one it was started with as `--gpgnet-port`. This is what the game connects *out* to. |
@@ -64,7 +70,7 @@ does the same job from the outside and this flag buys you only the distinct exit
 
 | Code | Name | What produces it |
 | :--- | :--- | :--- |
-| `0` | `OK` | The match played out and ended normally: every closing frame was handed to the transport without error. |
+| `0` | `OK` | The match played out and ended normally: every closing frame was handed to the transport without error. Also `--help` and `--version`. |
 | `2` | `USAGE` | A missing, unknown, malformed or out-of-range launch argument. Exits before any connect attempt. |
 | `69` | `ADAPTER_LOST` | The GPGNet connection was established and then went down mid-session. The game booted and connected fine; the link did not survive. |
 | `70` | `RUNTIME` | Never reached the adapter within the connect window, or the run failed for a reason with no more specific code. |
