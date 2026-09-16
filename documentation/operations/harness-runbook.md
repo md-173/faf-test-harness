@@ -518,15 +518,157 @@ can: a statically signed token has no rotation to lose and no bootstrap to
 repeat. A file rather than a flag value so the token stays out of the process
 table and out of build logs.
 
-**What it cannot do is renew.** The refresh channel notices an expired token and
-exchanges for another; this one has nothing to exchange. An expired static token
-is therefore *sent*, and the lobby rejects it — deliberately, because the lobby's
-rejection identifies a bad token far more precisely than a local expiry guess
-could. Expect to see the lobby's own auth failure, not a harness error, and
-re-mint the token.
+**What it cannot do is renew.** Neither channel renews mid-run, and nothing in
+the harness reads a token's expiry. The refresh channel exchanges once, when a
+run starts, so every run begins on a token minted seconds earlier. A pre-signed
+token is whatever was minted whenever it was minted, so an expired one is still
+*sent*, and the lobby rejects it. That is deliberate: the lobby's rejection
+identifies a bad token far more precisely than a local expiry guess could. Expect
+the lobby's own auth failure, not a harness error, and re-mint the token.
 
 `--oauth-token-url` and `--oauth-client-id` are not required on this channel,
-since nothing is exchanged.
+since nothing is exchanged. `--oauth-auth-endpoint`, `--oauth-redirect-uri` and
+`--oauth-scopes` are required by neither channel: they describe the one-time
+browser bootstrap earlier in this section, which no run performs.
+
+**What the lobby checks.** `oauth_service.get_player_id_from_token` accepts a
+token only if all four of these hold. There is no fifth check hiding anywhere,
+and no local check at all: the first thing that inspects the token is the lobby.
+
+- **RS256, signed with a key the lobby's JWKS publishes**, located by the token's
+  `kid` header. For `ws.faforever.xyz` that JWKS is
+  `https://hydra.faforever.xyz/.well-known/jwks.json`. The token does not have to
+  come from Hydra's own OAuth flow, but the key that signed it has to be one that
+  endpoint publishes, and only Hydra holds those private keys. Signing your own
+  therefore means pointing the harness at a lobby whose JWKS you control.
+- **`exp` in the future, if present.** PyJWT checks `exp`, `nbf` and `iat` by
+  default when the claims are there, and none of them is required to be there. A
+  token with no `exp` is accepted.
+- **`lobby` in `scp`.**
+- **A numeric `sub` naming an account on that environment.** That claim is the
+  player id the session runs as.
+
+Audience and issuer are **not** checked. The lobby decodes with
+`verify_aud: False` and passes no issuer, so `aud` and `iss` are ignored even
+though Hydra sets both. Do not spend time matching them.
+
+`faf-uid` is still required on this channel. The `auth` frame carries
+`unique_id` whichever channel produced the token, and the lobby posts it to its
+policy server for token logins exactly as for password logins. The verdict is
+currently ignored, but the request is not: a placeholder the policy server
+refuses makes that request fail, and the login then ends in
+`{"command":"invalid"}` rather than an auth error. Keep `--uid-binary-path`
+pointed at a real `faf-uid`.
+
+**What a rejection looks like.** Most faults collapse into one message, because
+the lobby catches `InvalidTokenError`, `KeyError` and `ValueError` together. The
+harness logs the lobby's text verbatim:
+
+| `lobby authentication_failed:` | What to look at |
+|---|---|
+| `Token signature was invalid` | `kid` missing or absent from the JWKS; a signature that key does not verify; an expired `exp`; `scp` missing entirely; `sub` missing or not a number |
+| `Token does not have permission to login to the lobby server` | `scp` is present but does not contain `lobby` |
+| `Cannot find user id` | `sub` is a number but names no account on this environment |
+
+A bad token can also produce no `authentication_failed` line at all, just
+`{"command":"invalid"}` and a closed connection. That means either the lobby
+could not fetch its own JWKS, or a claim had an unexpected JSON type, such as
+`scp` as a number rather than a list. Both escape the catch above. It is also
+what a placeholder `unique_id` produces, so rule the UID out before suspecting
+the token.
+
+**Reading a token without printing it.** This prints the five claims that decide
+the outcome and nothing else. It never prints the token, and never touches the
+signature:
+
+```bash
+python3 - .secrets/access_token.jwt <<'EOF'
+import base64, json, string, sys, time
+
+WANTED = ("alg", "kid", "sub", "scp", "exp")
+B64URL = set(string.ascii_letters + string.digits + "-_")
+try:
+    try:
+        raw = open(sys.argv[1], encoding="utf-8").read().strip()
+    except UnicodeDecodeError:
+        raise ValueError("it is not UTF-8 text")
+    if not raw or any(c.isspace() for c in raw):
+        raise ValueError("it holds whitespace, so more than just the token")
+    parts = raw.split(".")
+    if len(parts) != 3:
+        raise ValueError("it has %d dot-separated segments, not 3" % len(parts))
+    claims = {}
+    for n, part in enumerate(parts[:2], 1):
+        if not part or set(part) - B64URL or len(part) % 4 == 1:
+            raise ValueError("segment %d is not base64url" % n)
+        obj = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        if not isinstance(obj, dict):
+            raise ValueError("segment %d is not a JSON object" % n)
+        claims.update({k: v for k, v in obj.items() if k in WANTED})
+except OSError as exc:
+    sys.exit("cannot open that file: %s" % exc.strerror)
+except ValueError as exc:
+    sys.exit("that file is not a JWT access token: %s" % exc)
+
+for name in WANTED:
+    print("%-4s %s" % (name + ":", claims.get(name, "(absent)")))
+exp = claims.get("exp")
+if isinstance(exp, int) and not isinstance(exp, bool):
+    try:
+        when = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(exp))
+    except (OverflowError, OSError, ValueError):
+        when = "a time out of range"
+    print("     expires %s (%s)" % (when, "EXPIRED" if exp <= time.time() else "valid now"))
+elif exp is not None:
+    print("     exp is not a number, so the lobby will reject this token")
+EOF
+```
+
+Output is five lines plus an expiry verdict, with `(absent)` naming any claim
+that is not there, which is what tells a `Token signature was invalid` apart from
+the several other things that produce it. The base64url padding the JWT strips is
+restored before decoding, so no segment length fails.
+
+Two things not to tidy. The `<<'EOF'` quotes are load-bearing: unquoted, the
+shell expands `$` inside the script. And keep the token path quoted if it can
+contain spaces.
+
+This does not tell you whether the signature is good, only what the token claims.
+A token that reads correctly here and is still rejected has a signature the
+lobby's JWKS does not verify, or a `sub` that names no account there.
+
+**A run with no other OAuth options.** Nothing below configures OAuth except the
+token file:
+
+```bash
+./gradlew :mock-client:installDist
+./mock-client/build/install/mock-client/bin/mock-client run \
+  --oauth-access-token-file=.secrets/access_token.jwt \
+  --lobby-websocket-url=wss://ws.faforever.xyz \
+  --unique-id=placeholder \
+  --uid-binary-path=./faf-uid \
+  --ice-adapter-binary-path=./faf-ice-adapter.jar \
+  --mock-game-binary-path=mock-game/build/libs/mock-game-<version>-all.jar \
+  --host-title="token channel check" \
+  --host-map=scmp_007 \
+  --host-mod=faf \
+  --host-visibility=friends \
+  --mock-game-launch-delay-seconds=-1
+```
+
+Four of those are less obvious than they look. `--unique-id` satisfies the
+required field and `--uid-binary-path` then overrides it at handshake time with
+real `faf-uid` output, so both are needed. The four `--host-*` options have to be
+set together or not at all; a partial set is rejected by name, and omitting all
+four leaves the session at IDLE rather than HOSTING.
+`--mock-game-launch-delay-seconds=-1` is what makes HOSTING an observable state:
+the default of 5 has mock-game start the match on its own, moving the client
+straight on to PLAYING.
+
+Run live on 2026-09-16 against `ws.faforever.xyz`: `CONNECTING`, `IDLE`,
+`STARTING_GAME`, `HOSTING`, held for over a minute, on a Hydra-minted token and
+no other OAuth option. Use §5's installed launcher, not `./gradlew
+:mock-client:run`, for the reasons §5 gives.
 
 ### Trusting a private certificate authority
 
@@ -549,11 +691,17 @@ keytool -importcert -noprompt -alias test-ca \
 ```
 
 Two practical notes. A truststore **replaces** the JDK's default rather than
-adding to it, so if the run also talks to a publicly trusted host — the ICE
-adapter's telemetry websocket does — start from a copy of `$JAVA_HOME/lib/security/cacerts`
-(default password `changeit`) and import your CA into that. And these are JVM
-flags, not harness flags: they go before `-jar`, and `./gradlew run` needs them
-passed through rather than appended to `--args`.
+adding to it, so if the run also reaches a host with a publicly trusted
+certificate, start from a copy of `$JAVA_HOME/lib/security/cacerts` (default
+password `changeit`) and import your CA into that. The usual case is a private CA
+in front of the lobby only, leaving the Hydra token exchange on the public roots.
+This covers what mock-client itself opens and nothing else: the ICE adapter runs
+in its own JVM, launched with `-Dlogback.configurationFile` and no other system
+property, so a truststore set here never reaches it. Its telemetry websocket is
+its own affair. And these are JVM flags, not harness flags: they go before
+`-jar`, and `./gradlew run` needs them passed through rather than appended to
+`--args`.
+
 ## 4. Configuration
 
 Every Mock Client field is resolved from four layered sources, lowest to
@@ -606,6 +754,10 @@ before the process ever tries to connect. Gradle also collapses every exit
 code below to its own `1`, so the picocli/`RUNTIME` distinction the next
 section depends on is lost. The installed binary, run from the repo root, has
 neither problem.
+
+This uses the refresh-token credential channel via `--config`. For a run driven
+by a pre-signed access token instead, with no refresh token and no Hydra
+exchange, see the access-token section of §3.
 
 A successful run prints, in order, the lines documented in
 [`mock-client/README.md`](../../mock-client/README.md#harness-log-contract)
