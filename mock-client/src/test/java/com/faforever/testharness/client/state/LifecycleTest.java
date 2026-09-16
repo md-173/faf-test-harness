@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -144,25 +145,53 @@ final class LifecycleTest {
             }
         }
 
-        // Then say so out loud. The default stub blocks on stdin and never exits by itself, so a
+        // Then enforce it, rather than only detecting it. Terminating the children directly is
+        // what PlayingTransitionTest and PeerSessionWiringTest already do, and it means a test
+        // that misses a teardown path leaks nothing even while the assertion below reports it.
+        for (Launched entry : launched) {
+            terminateIfStarted(entry.game().getSubprocess());
+            terminateIfStarted(entry.ice().getSubprocess());
+        }
+
+        // And say so out loud. The default stub blocks on stdin and never exits by itself, so a
         // test that spawns one and does not tear it down leaks silently — the JVM-exit hook reaps
         // it eventually and the only trace is a warning under some later Gradle task. Asserting it
         // here turns the next occurrence into a failure in the test that caused it, which is the
         // half of #303 that stops this coming back.
-        for (Launched entry : launched) {
-            assertChildDied(entry.game().getSubprocess(), "mock-game");
-            assertChildDied(entry.ice().getSubprocess(), "ICE adapter");
-        }
-        launched.clear();
-
-        if (lobby != null) {
-            try {
-                lobby.close().get(2, TimeUnit.SECONDS);
-            } catch (Exception ignored) {
-                // some tests close the underlying socket already
+        //
+        // In a try/finally: AssertionFailedError is an Error, so the catch above does not contain
+        // it, and without this the failure would also leak the fixture it was guarding — the
+        // scripted server's selector and decoder threads and the lobby reader would survive for
+        // the rest of the forked JVM, and the leaked lifecycle would keep logging into whichever
+        // later class attaches an appender to the same logger. That is #287's pattern, and turning
+        // one honest failure into a cascade is exactly what this card's Notes warn about.
+        try {
+            for (Launched entry : launched) {
+                assertChildDied(entry.game().getSubprocess(), "mock-game");
+                assertChildDied(entry.ice().getSubprocess(), "ICE adapter");
             }
+        } finally {
+            if (lobby != null) {
+                try {
+                    lobby.close().get(2, TimeUnit.SECONDS);
+                } catch (Exception ignored) {
+                    // some tests close the underlying socket already
+                }
+            }
+            server.stop(1000);
         }
-        server.stop(1000);
+    }
+
+    /**
+     * Terminates a launched child if there is one, so a missed teardown path leaks nothing even
+     * when the assertion that reports it fails.
+     *
+     * @param child the subprocess handle, or {@code null} if this launcher never started one
+     */
+    private static void terminateIfStarted(final SubprocessManager child) {
+        if (child != null) {
+            child.terminate(Duration.ofSeconds(1));
+        }
     }
 
     @Test

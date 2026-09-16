@@ -21,10 +21,20 @@ class DummyGameLauncher extends MockGameLauncher {
     // test's duration unless a test explicitly supplies its own (quick-exiting) builder.
     //
     // #303 asked whether that default should be a stub that exits promptly instead, on the grounds
-    // that blocking forever is a trap for the next person. It stays as it is, for two reasons: a
-    // quick-exiting default reintroduces exactly the race #211 removed, and every alternative that
-    // blocks portably is either this or a POSIX-only "sleep" (#302). What changed instead is where
-    // the obligation lives. A test that spawns one of these owns it until it drives the lifecycle
+    // that blocking forever is a trap for the next person. It stays as it is, and the card's
+    // premise does not hold on #211's terms: a promptly-exiting stub completes gameExit and posts
+    // GameExited, which #211 made a TERMINATED edge from STARTING_GAME, HOSTING and JOINING — so it
+    // would silently race the state assertions in happyPath and disconnection rather than fail
+    // loudly.
+    //
+    // A portable alternative does exist, and #302 names it: a small Java stub re-invoked through
+    // the current JRE, the pattern shared's TestSupport.forMain already uses. It is not reachable
+    // from here — mock-client declares only implementation project(':shared') with no dependency on
+    // shared's test output, so TestSupport and TestChild are not on this source set's test
+    // classpath without new test-fixtures wiring — and a re-invoked JVM per stub costs roughly
+    // 100-200ms against sort's ~1ms, twice per launching test. That, not the absence of an option,
+    // is why sort stays. What changed instead is where the obligation lives. A test that spawns one
+    // of these owns it until it drives the lifecycle
     // to TERMINATED — SessionTeardown is what actually reaps it — and LifecycleTest now asserts in
     // @AfterEach that nothing it launched is still alive, so the next leak fails in the test that
     // caused it rather than surfacing as a stray SIGTERM warning under a later Gradle task.
