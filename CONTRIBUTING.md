@@ -95,7 +95,7 @@ From the repository root, run:
 What this does:
 
 - `spotlessApply` — rewrites source files to Google Java Format (AOSP).
-- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, and `spotlessCheck`.
+- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, `spotlessCheck`, and the release asset-name assertion (see [Section 8](#8-releases)).
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
@@ -310,10 +310,11 @@ assets.
    Releasing from a branch is a convention, not an enforced rule, and it cannot be enforced in this
    file: `workflow_dispatch` runs the copy of `release.yml` on the branch selected, so a branch whose
    copy predates a change simply runs the older workflow, gate and all.
-2. **The workflow verifies before it builds.** The first step runs `./gradlew -Pversion=<version>
-   check`, the same gate `ci.yml` applies to every pull request, because a release is dispatched at
-   an arbitrary commit and nothing else guarantees CI ran green on it. If it fails, no draft and no
-   assets are created, so re-running the failed job is safe: nothing was tagged or published.
+2. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
+   -Pversion=<version> check`, the verification `ci.yml` applies to every pull request (`check` is
+   the verification half of ci's `build`), because a release is dispatched at an arbitrary commit and
+   nothing else guarantees CI ran green on it. If it fails, no draft and no assets are created, so
+   re-running the failed job is safe: nothing was tagged or published.
    A red gate is not to be worked around. If it is a known flake rather than a real failure (the
    lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
    its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.
@@ -322,9 +323,12 @@ assets.
    them and confirm the checksums:
 
    ```bash
-   gh release download <version> --dir /tmp/release-check
+   gh release download <version> --dir /tmp/release-check --clobber
    ( cd /tmp/release-check && sha256sum -c ./*.sha256 )
    ```
+
+   If the workflow has to be re-run after a run that *succeeded*, delete the draft first. The release
+   step does not pass `allowUpdates`, so it fails while a release already exists for the tag.
 
 4. **Publish the draft.** `GET /releases/latest` skips drafts and prereleases alike, so until someone
    opens the draft and clicks Publish, a consumer following that route keeps getting the previous

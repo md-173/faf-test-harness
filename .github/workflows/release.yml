@@ -53,14 +53,20 @@ jobs:
 
       # A release is dispatched against an arbitrary commit, so nothing guarantees ci.yml ever ran
       # green on it: a release cut between a bad merge and its CI run used to ship unverified jars
-      # (#375). This is the same gate ci.yml applies on every pull request, re-applied at the moment
-      # it decides what ships. A failing step ends the job, so the checksum and release steps below
-      # never run and no draft or asset appears.
+      # (#375). This applies the verification ci.yml applies to every pull request (`check` is the
+      # verification half of ci's `build`) at the moment it decides what ships. A failing step ends
+      # the job, so the checksum and release steps below never run and no draft or asset appears.
+      # FAForever does the same upstream: downlords-faf-client runs `check` before building its
+      # release media, and java-ice-adapter, which this workflow is modelled on, runs its checks
+      # before the shadowJar steps.
       #
-      # `check`, not `build`: `build` also assembles, which produces a shadow jar per module, and a
-      # second jar in build/libs would be picked up by the checksum loop and the release globs below.
-      # `check` builds no shadow jar. Passing -Pversion is what makes verifyReleaseAssetName compare
-      # against the version being released (WBS-7.6, #386), which no local build covers.
+      # `check`, not `build`: `build` is `assemble` plus `check`, and the two steps below already do
+      # the assembling with this same -Pversion, so `check` is that verification without a duplicate
+      # jar build. It also keeps this step incapable of leaving a differently versioned jar in
+      # build/libs, which is what a gate that lost its -Pversion would do: the default version is a
+      # SNAPSHOT, and `mock-client-<default>-all.jar` matches the release globs below just as well as
+      # the real one. Passing -Pversion additionally makes verifyReleaseAssetName compare against the
+      # version being released (WBS-7.6, #386), which no local build covers.
       - name: Verify the commit being released
         run: ./gradlew -Pversion="$VERSION" --stacktrace check
 

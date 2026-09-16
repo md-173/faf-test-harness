@@ -50,6 +50,9 @@ subprojects {
     // catch. Without it, `shadowJar` is missing and configuration fails loudly instead.
     def expectedName = "${moduleName}-${version}-all.jar".toString()
     project(":${moduleName}") {
+        // No declared inputs or outputs, so this never reports UP-TO-DATE and `check` always runs it.
+        // That is deliberate: the work is one string comparison, and declaring the jar as an input
+        // would wire the slow shadowJar into `check`, which is what this design avoids.
         def verifyReleaseAssetName = tasks.register('verifyReleaseAssetName') {
             group = 'verification'
             description = "Fails unless the shadow jar is named ${expectedName}, the release asset name consumers match on."
