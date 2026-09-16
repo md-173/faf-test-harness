@@ -69,8 +69,10 @@ import org.slf4j.LoggerFactory;
  * the forward itself. The scheduler is single-threaded and every forward takes the same delay, so
  * tasks fire in submission order and candidates keep their relative sequence. At the default of
  * zero the scheduler is never created and each forward runs inline on the reader thread, as it did
- * before the flag existed. In either mode a forward that throws is logged by the relay with its
- * direction and peer id, so enabling the flag does not change how a failed forward is reported.
+ * before the flag existed. In either mode a forward that throws a {@code RuntimeException} is
+ * logged by the relay with its direction and peer id. An {@code Error} is not caught, so it still
+ * behaves differently under the flag: inline it escapes to the connection's reader thread, while a
+ * delayed one is lost in the discarded future.
  */
 public final class IceSignalRelay {
 
@@ -281,10 +283,16 @@ public final class IceSignalRelay {
      * scheduler slot. Submission order is preserved because the scheduler is single-threaded and
      * every task takes the same delay, so their deadlines fall in the order they were queued.
      *
-     * <p>A forward that throws is logged here, in both modes, so the flag does not change what a
-     * fault looks like in the log. Scheduled, the exception would otherwise be captured in the
-     * discarded {@code ScheduledFuture} and the candidate would vanish without a line. Inline, it
-     * would reach the connection's shield, which logs it without saying which peer it was for.
+     * <p>A forward that throws a {@code RuntimeException} is logged here, in both modes, so the
+     * flag does not change what that fault looks like in the log. Scheduled, the exception would
+     * otherwise be captured in the discarded {@code ScheduledFuture} and the candidate would vanish
+     * without a line. Inline, it would reach the connection's shield, which logs it without saying
+     * which peer it was for.
+     *
+     * <p>An {@code Error} is not caught, so for one the two modes still differ. Inline it escapes
+     * the shield, which also catches only {@code RuntimeException}, and unwinds the reader thread;
+     * on the adapter's reader that ends the connection. Scheduled, it is captured in the discarded
+     * future and lost without a line.
      *
      * @param description where the forward goes and for which peer, for the failure log line
      * @param action the send or call to perform
