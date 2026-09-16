@@ -466,7 +466,10 @@ entirely if you only need §2.
    share the password `foo` (`documentation/research/lobby-protocol-spec.md`
    §2). No signup step — log in with any known test username against Hydra
    in the bootstrap below.
-2. **Bootstrap a refresh token** (manual, one-time, valid ~30 days):
+2. **Bootstrap a refresh token** (manual, one-time, valid ~30 days). Skip this
+   step if someone has handed you a pre-signed access token instead; that
+   channel is [below](#the-other-credential-channel-a-pre-signed-access-token).
+   Otherwise:
    - Visit, in a browser:
      `https://hydra.faforever.xyz/oauth2/auth?client_id=95ecec08-29c1-4c48-ae0a-b000ff349cb8&response_type=code&redirect_uri=http://127.0.0.1&scope=openid+offline+lobby&state=<random, ≥8 chars>`
    - Log in as the test user and grant consent.
