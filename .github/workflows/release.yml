@@ -62,11 +62,10 @@ jobs:
       #
       # `check`, not `build`: `build` is `assemble` plus `check`, and the two steps below already do
       # the assembling with this same -Pversion, so `check` is that verification without a duplicate
-      # jar build. It also keeps this step incapable of leaving a differently versioned jar in
-      # build/libs, which is what a gate that lost its -Pversion would do: the default version is a
-      # SNAPSHOT, and `mock-client-<default>-all.jar` matches the release globs below just as well as
-      # the real one. Passing -Pversion additionally makes verifyReleaseAssetName compare against the
-      # version being released (WBS-7.6, #386), which no local build covers.
+      # jar build. Passing -Pversion makes verifyReleaseAssetName compare against the version being
+      # released (WBS-7.6, #386), which no local build covers, and it versions the shadow jars this
+      # step builds on the way to VersionFlagJarTest (WBS-3.1.5.2, #383). Nothing else in build/libs
+      # can reach the release regardless: every step below names the exact files it acts on.
       - name: Verify the commit being released
         run: ./gradlew -Pversion="$VERSION" --stacktrace check
 
@@ -90,14 +89,12 @@ jobs:
         run: ./gradlew -Pversion="$VERSION" --stacktrace :mock-game:shadowJar
 
       # Both jars read their --version out of their own manifest, which is written from
-      # project.version, so -Pversion above is what they report (WBS-3.1.5.2, #383). This is the
-      # only check that ever sees a real release version: the jar tests in CI run against the
-      # development default in gradle.properties. Before that manifest existed, 0.2.0 shipped
+      # project.version, so -Pversion above is what they report (WBS-3.1.5.2, #383). VersionFlagJarTest
+      # asserts the same thing during the gate; this step is the one that reads the exact files
+      # about to be attached to the release. Before that manifest existed, 0.2.0 shipped
       # reporting "mock-client 1.0-SNAPSHOT", which is the string a consumer records in CI to say
       # which build they ran.
       - name: Verify each jar reports the released version
-        env:
-          VERSION: ${{ github.event.inputs.version }}
         run: |
           for name in mock-client mock-game; do
             # Without the guard, the default `bash -e` would kill the step on a failed jar before
@@ -115,10 +112,13 @@ jobs:
 
       # An integrity check for the consumer, not a reproducibility one: they pull the *latest*
       # release rather than pinning a version, and a checksum cannot be pinned to a moving target.
-      # Written beside each jar so the release-action glob picks them up.
+      # Written beside each jar under the name the release step attaches.
       - name: Write checksums beside each jar
         run: |
-          for jar in mock-client/build/libs/mock-client-*-all.jar mock-game/build/libs/mock-game-*-all.jar; do
+          # Named, not globbed: `check` above builds shadow jars too, so a gate that lost its
+          # -Pversion would leave a SNAPSHOT jar here that a *-all.jar glob would happily attach
+          # alongside the real one. sha256sum fails the step if a named jar is missing.
+          for jar in "mock-client/build/libs/mock-client-${VERSION}-all.jar" "mock-game/build/libs/mock-game-${VERSION}-all.jar"; do
             # Run in the jar's own directory so the file records a bare name: that is what
             # `sha256sum -c mock-game-<version>-all.jar.sha256` expects beside a downloaded jar.
             ( cd "$(dirname "$jar")" && sha256sum "$(basename "$jar")" > "$(basename "$jar").sha256" )
@@ -148,5 +148,5 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease }}
           generateReleaseNotes: true
           bodyFile: ".github/RELEASE_BODY.md"
-          artifacts: "mock-game/build/libs/mock-game-*-all.jar,mock-game/build/libs/mock-game-*-all.jar.sha256,mock-client/build/libs/mock-client-*-all.jar,mock-client/build/libs/mock-client-*-all.jar.sha256"
+          artifacts: "mock-game/build/libs/mock-game-${{ env.VERSION }}-all.jar,mock-game/build/libs/mock-game-${{ env.VERSION }}-all.jar.sha256,mock-client/build/libs/mock-client-${{ env.VERSION }}-all.jar,mock-client/build/libs/mock-client-${{ env.VERSION }}-all.jar.sha256"
 

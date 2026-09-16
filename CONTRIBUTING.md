@@ -352,7 +352,7 @@ greps for after pulling `releases/latest` (`documentation/operations/harness-run
 Renaming either breaks that build with no commit on the consumer's side, so `check` asserts both
 names through `verifyReleaseAssetName` in the root `build.gradle`, and a rename fails the pull
 request that makes it. Changing the names is a decision to take with the consumer first, and it then
-has to be applied to that task, the globs in `release.yml`, and the runbook together.
+has to be applied to that task, the names in `release.yml`, and the runbook together.
 
 ### Checksums on earlier releases
 
