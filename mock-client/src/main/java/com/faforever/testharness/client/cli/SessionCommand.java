@@ -2,6 +2,7 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.MockClientCli;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.faforever.testharness.client.session.CheckpointFailure;
 import com.faforever.testharness.client.session.MultiPeerSession;
 import com.faforever.testharness.shared.logging.LoggingSetup;
@@ -49,6 +50,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "session",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "Run a multi-peer session through the live lobby: one host and --peers - 1 "

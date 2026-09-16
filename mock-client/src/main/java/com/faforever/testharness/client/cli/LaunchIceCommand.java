@@ -2,6 +2,7 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientCli;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
@@ -54,6 +55,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "launch-ice",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description =
                 "Spawn faf-ice-adapter only and forward its output through the harness logger.")

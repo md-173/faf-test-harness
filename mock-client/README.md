@@ -80,6 +80,11 @@ subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag, `ice-smoke`
 a `--timeout-seconds` flag, and `session` `--peers` and `--peer-refresh-token-file`.
 
+`--version` prints `mock-client <version>`, where the version is read from the
+jar manifest, so a release jar reports the version it was released as. Every
+subcommand prints the same line. Run from classes (`./gradlew run`, an IDE) there
+is no manifest, and it prints `mock-client (development build)` instead.
+
 ## Exit codes
 
 | Code | Constant          | When                                                                             |

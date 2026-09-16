@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -85,6 +86,11 @@ final class ConfigLoaderHelpTest {
         }
 
         assertTrue(result.isEmpty(), "--version should return Optional.empty().");
+        // The printVersionHelp route. Tests run from class directories, so there is no manifest
+        // and the fallback is the expected text; the jar route is VersionFlagJarTest.
+        assertEquals(
+                VersionProvider.DEVELOPMENT_BUILD,
+                captured.toString(StandardCharsets.UTF_8).strip());
     }
 
     @Test

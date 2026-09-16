@@ -127,8 +127,11 @@ public final class Main {
      * @return the exit code this run should produce; see {@link ExitCodes}
      */
     static int run(final String[] args, final Duration matchDuration) {
-        MockGameCli.ParseOutcome outcome = MockGameCli.parseOrReport(args, System.err);
-        if (outcome.exitCode() != ExitCodes.OK) {
+        MockGameCli.ParseOutcome outcome = MockGameCli.parseOrReport(args, System.out, System.err);
+        // No config means there is no game to run: either a usage error, or --help / --version
+        // already printed its text and the exit is OK. The exit code is tested too so that an
+        // outcome carrying both a failure code and a config could never start a game.
+        if (outcome.config() == null || outcome.exitCode() != ExitCodes.OK) {
             return outcome.exitCode();
         }
         MockGameConfig config = outcome.config();

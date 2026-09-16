@@ -34,10 +34,18 @@ import picocli.CommandLine.ParameterException;
  * }</pre>
  *
  * <p>Failures throw picocli's {@link ParameterException}. {@link #parseOrReport(String[],
- * PrintStream)} (WBS-3.2.1.2) catches it, prints the error and usage text to stderr, and returns a
- * stable exit code from {@link ExitCodes}.
+ * PrintStream, PrintStream)} (WBS-3.2.1.2) catches it, prints the error and usage text to stderr,
+ * and returns a stable exit code from {@link ExitCodes}.
+ *
+ * <p>{@code --help} and {@code --version} are for a person or a pipeline identifying the jar, not
+ * for the machine caller, which never passes them (WBS-3.1.5.2, #383). They print to stdout and
+ * exit {@link ExitCodes#OK} with no config. Picocli skips required-option checks when either is
+ * present, and {@link #validate} is skipped too, so neither needs the session facts.
  */
-@Command(name = "mock-game")
+@Command(
+        name = "mock-game",
+        mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class)
 public final class MockGameCli {
 
     /** Highest valid TCP/UDP port number. */
@@ -137,20 +145,52 @@ public final class MockGameCli {
                             + "not measure loss.")
     private int udpDropPercent;
 
-    /** Instantiated only by {@link #parse(String[])}. */
+    /** Instantiated only by {@link #parseArgs(String[])}. */
     private MockGameCli() {}
 
     /**
      * Parses and validates the launch argv into an immutable config.
      *
+     * <p>Help and version requests are rejected rather than half-handled: with the required options
+     * skipped, validating would report a port of {@code 0} instead of what actually happened. Only
+     * {@link #parseOrReport(String[], PrintStream, PrintStream)} prints that text.
+     *
      * @param args the raw argv as passed to {@code main}
      * @return the fully populated config; never partial
-     * @throws ParameterException if any argument is missing, unknown, malformed, or out of range
+     * @throws ParameterException if any argument is missing, unknown, malformed, or out of range,
+     *     or if {@code --help} or {@code --version} was requested
      */
     public static MockGameConfig parse(final String[] args) {
-        MockGameCli cli = new MockGameCli();
-        CommandLine commandLine = new CommandLine(cli);
+        CommandLine commandLine = parseArgs(args);
+        if (commandLine.isUsageHelpRequested() || commandLine.isVersionHelpRequested()) {
+            throw new ParameterException(
+                    commandLine, "--help and --version produce no config; use parseOrReport");
+        }
+        return toConfig(commandLine);
+    }
+
+    /**
+     * Runs picocli over {@code args} into a fresh instance, without validating.
+     *
+     * @param args the raw argv as passed to {@code main}
+     * @return the parsed command line, whose user object is the populated {@link MockGameCli}
+     * @throws ParameterException if any argument is missing, unknown, or malformed
+     */
+    private static CommandLine parseArgs(final String[] args) {
+        CommandLine commandLine = new CommandLine(new MockGameCli());
         commandLine.parseArgs(args);
+        return commandLine;
+    }
+
+    /**
+     * Validates the parsed values and builds the config from them.
+     *
+     * @param commandLine a command line returned by {@link #parseArgs(String[])}
+     * @return the fully populated config; never partial
+     * @throws ParameterException if any value is out of range
+     */
+    private static MockGameConfig toConfig(final CommandLine commandLine) {
+        MockGameCli cli = commandLine.getCommand();
         cli.validate(commandLine);
         return new MockGameConfig(
                 cli.gpgNetPort,
@@ -165,20 +205,24 @@ public final class MockGameCli {
     }
 
     /**
-     * The outcome of {@link #parseOrReport(String[], PrintStream)}: an exit code, plus the parsed
-     * config on success.
+     * The outcome of {@link #parseOrReport(String[], PrintStream, PrintStream)}: an exit code, plus
+     * the parsed config when there is a game to run.
      *
-     * @param exitCode {@link ExitCodes#OK} on success, {@link ExitCodes#USAGE} on a bad argument
-     * @param config the parsed config on success, or {@code null} on a usage error
+     * @param exitCode {@link ExitCodes#OK} on success or after printing help or version text,
+     *     {@link ExitCodes#USAGE} on a bad argument
+     * @param config the parsed config on success; {@code null} on a usage error and after help or
+     *     version text, both of which mean the process should exit with {@code exitCode} now
      */
     public record ParseOutcome(int exitCode, MockGameConfig config) {}
 
     /**
-     * Parses the launch argv the way the machine caller expects, turning {@link #parse(String[])}'s
-     * exception into a diagnostic and a stable exit code. On a bad argument it writes picocli's
-     * error message and the generated usage text to {@code err}, then returns {@link
-     * ExitCodes#USAGE} with a {@code null} config. On success it returns {@link ExitCodes#OK} with
-     * the config and writes nothing — a valid set passes through silently.
+     * Parses the launch argv the way the machine caller expects, turning a {@link
+     * ParameterException} into a diagnostic and a stable exit code. On a bad argument it writes
+     * picocli's error message and the generated usage text to {@code err}, then returns {@link
+     * ExitCodes#USAGE} with a {@code null} config. On {@code --help} or {@code --version} it writes
+     * that text to {@code out} and returns {@link ExitCodes#OK} with a {@code null} config. On
+     * success it returns {@link ExitCodes#OK} with the config and writes nothing: a valid set
+     * passes through silently.
      *
      * <p>It returns the code rather than calling {@link System#exit(int)} so it stays
      * unit-testable; the bootstrap (WBS-3.2.5.1) maps the code to the process exit status. The
@@ -186,13 +230,26 @@ public final class MockGameCli {
      * captures it, tagged {@code [MockGame]}, for a developer reading logs after a failed run.
      *
      * @param args the raw argv as passed to {@code main}
+     * @param out the stream help and version text are written and flushed to
      * @param err the stream bad-argument diagnostics are written and flushed to
-     * @return {@link ExitCodes#OK} with the config, or {@link ExitCodes#USAGE} with a {@code null}
-     *     config
+     * @return {@link ExitCodes#OK} with the config, {@link ExitCodes#OK} with a {@code null} config
+     *     after help or version text, or {@link ExitCodes#USAGE} with a {@code null} config
      */
-    public static ParseOutcome parseOrReport(final String[] args, final PrintStream err) {
+    public static ParseOutcome parseOrReport(
+            final String[] args, final PrintStream out, final PrintStream err) {
         try {
-            return new ParseOutcome(ExitCodes.OK, parse(args));
+            CommandLine commandLine = parseArgs(args);
+            if (commandLine.isUsageHelpRequested()) {
+                commandLine.usage(out);
+                out.flush();
+                return new ParseOutcome(ExitCodes.OK, null);
+            }
+            if (commandLine.isVersionHelpRequested()) {
+                commandLine.printVersionHelp(out);
+                out.flush();
+                return new ParseOutcome(ExitCodes.OK, null);
+            }
+            return new ParseOutcome(ExitCodes.OK, toConfig(commandLine));
         } catch (ParameterException e) {
             err.println(e.getMessage());
             e.getCommandLine().usage(err);

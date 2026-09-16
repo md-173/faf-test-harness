@@ -22,6 +22,16 @@ test {
     useJUnitPlatform {
         excludeTags 'integration'
     }
+    // VersionFlagJarTest runs the shadow jar that ships, because no test from class directories can
+    // see a manifest (WBS-3.1.5.2, #383). inputs.files on the task provider builds the jar first and
+    // reruns the test when it changes. The path goes through an argument provider because Gradle
+    // passes a Provider given to systemProperty as its toString(), not its value.
+    def shadowJarFile = tasks.named('shadowJar').flatMap { it.archiveFile }
+    inputs.files(tasks.named('shadowJar')).withPropertyName('shadowJarUnderTest')
+    jvmArgumentProviders.add({
+        ["-Dtestharness.shadowJar=${shadowJarFile.get().asFile.absolutePath}".toString()]
+    } as CommandLineArgumentProvider)
+    systemProperty 'testharness.version', project.version
 }
 
 tasks.register('integrationTest', Test) {
@@ -46,6 +56,16 @@ tasks.withType(Checkstyle).configureEach {
 
 application {
     mainClass = 'com.faforever.testharness.game.Main'
+}
+
+// VersionProvider reads Implementation-Version back for --version (WBS-3.1.5.2, #383). It is
+// written from project.version, which release.yml's -Pversion sets, so a release reports the
+// version it was cut as. Shadow inherits this manifest, so the -all jar that ships carries it too.
+// Implementation-Title is the conventional companion; the lookup does not depend on it.
+jar {
+    manifest {
+        attributes('Implementation-Title': project.name, 'Implementation-Version': project.version)
+    }
 }
 
 spotless {

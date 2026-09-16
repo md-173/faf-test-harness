@@ -24,8 +24,9 @@ package com.faforever.testharness.game.config;
  * <table border="1">
  *   <caption>mock-game exit codes</caption>
  *   <tr><th>Code</th><th>Meaning</th><th>Source</th></tr>
- *   <tr><td>{@link #OK}</td><td>match played out and ended normally</td>
- *       <td>{@code ExitStatus.OK}</td></tr>
+ *   <tr><td>{@link #OK}</td><td>match played out and ended normally; or {@code --help} /
+ *       {@code --version} printed its text</td>
+ *       <td>{@code ExitStatus.OK}; {@code MockGameCli.parseOrReport}</td></tr>
  *   <tr><td>{@link #USAGE}</td><td>bad launch argument; exits before any connect attempt</td>
  *       <td>{@code MockGameCli.parseOrReport}</td></tr>
  *   <tr><td>{@link #ADAPTER_LOST}</td><td>GPGNet connection went down mid-session</td>

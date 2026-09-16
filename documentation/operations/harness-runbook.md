@@ -121,6 +121,14 @@ relying on a contract, and it is intended as one. `./gradlew check` asserts both
 names (`verifyReleaseAssetName`, defined in the root `build.gradle`), so a rename
 fails the pull request that makes it rather than the next release.
 
+To record which build a pipeline ran, ask the jar rather than the file name:
+`java -jar mock-client-<version>-all.jar --version` prints `mock-client
+<version>`, read from the jar manifest, and `mock-game` prints its own the same
+way. The release workflow fails if either disagrees with the version it was
+given. Releases before this landed report the build default instead: `0.2.0`
+reports `mock-client 1.0-SNAPSHOT`, and the 0.1.0 and 0.2.0 `mock-game` jars have
+no `--version` at all.
+
 You also need `faf-ice-adapter` itself, which is not ours to publish. Take the
 pinned version from
 [FAForever/java-ice-adapter](https://github.com/FAForever/java-ice-adapter/releases)

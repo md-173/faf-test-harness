@@ -196,6 +196,17 @@ final class MockGameCliTest {
         assertEquals(Integer.parseInt(percent), MockGameCli.parse(args).udpDropPercent());
     }
 
+    /**
+     * Help and version produce text, not a config, so this seam refuses them rather than validating
+     * options picocli deliberately left unset. Without the refusal the caller would see
+     * "--gpgnet-port out of range (1-65535): 0", which describes nothing that happened.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"--help", "--version"})
+    void helpAndVersionFailTheParseSeam(final String flag) {
+        assertThrows(ParameterException.class, () -> MockGameCli.parse(new String[] {flag}));
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"0", "-1", "65536"})
     void outOfRangeLobbyPortFailsTheParse(final String port) {

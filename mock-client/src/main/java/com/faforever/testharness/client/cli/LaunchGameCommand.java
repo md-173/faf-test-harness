@@ -2,6 +2,7 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.MockClientCli;
 import com.faforever.testharness.client.config.MockGameSettings;
+import com.faforever.testharness.client.config.VersionProvider;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.shared.logging.LoggingSetup;
@@ -45,6 +46,7 @@ import picocli.CommandLine.Spec;
 @Command(
         name = "launch-game",
         mixinStandardHelpOptions = true,
+        versionProvider = VersionProvider.class,
         exitCodeOnExecutionException = ExitCodes.RUNTIME,
         description = "Spawn mock-game only and forward its output through the harness logger.")
 public final class LaunchGameCommand implements Callable<Integer> {
