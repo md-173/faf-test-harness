@@ -23,6 +23,7 @@ import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.MockGameLaunchException;
 import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
@@ -42,6 +43,7 @@ import java.util.TimerTask;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -140,6 +142,20 @@ public final class MockClientLifecycle {
      * GameEnded} to have delivered, so the absence of one says nothing about it.
      */
     private final AtomicBoolean matchStarted = new AtomicBoolean(false);
+
+    /**
+     * The constructing thread's instance label (WBS-4.3.3). The process-exit and connectToPeer
+     * continuations run on the JVM-wide common pool and the safety net on its own timer thread, so
+     * several clients in one JVM would otherwise log those lines unattributed.
+     */
+    private final InstanceLabel label = InstanceLabel.capture();
+
+    /**
+     * The executor the {@code *Async} continuations used before WBS-4.3.3 ({@link
+     * CompletableFuture#defaultExecutor()}, normally the common pool), now carrying {@link #label}.
+     */
+    private final Executor labelledAsync =
+            label.wrap(new CompletableFuture<Void>().defaultExecutor());
 
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
@@ -429,7 +445,7 @@ public final class MockClientLifecycle {
         // It also keeps GameExited's TERMINATED entry hook (which synchronously terminates the
         // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
         // own exit wiring below needs free to observe that death.
-        gameExit.thenAcceptAsync(this::onGameProcessExit);
+        gameExit.thenAcceptAsync(this::onGameProcessExit, labelledAsync);
     }
 
     /**
@@ -746,10 +762,12 @@ public final class MockClientLifecycle {
                 new TimerTask() {
                     @Override
                     public void run() {
-                        LOG.warn(
-                                "Game did not exit within {} of GameEnded; requesting shutdown",
-                                safetyNetWindow);
-                        machine.receiveEvent(new ShutdownRequested());
+                        try (InstanceLabel.Scope ignored = label.apply()) {
+                            LOG.warn(
+                                    "Game did not exit within {} of GameEnded; requesting shutdown",
+                                    safetyNetWindow);
+                            machine.receiveEvent(new ShutdownRequested());
+                        }
                     }
                 };
         safetyNetTask = task;
@@ -1026,7 +1044,9 @@ public final class MockClientLifecycle {
             // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
             // a full termination grace. thenAcceptAsync moves the event post off that thread.
             adapterExit()
-                    .thenAcceptAsync(exitCode -> machine.receiveEvent(new AdapterExited(exitCode)));
+                    .thenAcceptAsync(
+                            exitCode -> machine.receiveEvent(new AdapterExited(exitCode)),
+                            labelledAsync);
             // Harness-facing connection-state reporting (WBS-3.1.6.2). Read-only observer on the
             // adapter fan-out: it reports the GPGNet link and the per-peer ICE transitions the
             // Phase 5 fault-injection tests measure, and sends nothing. Registered before connect
@@ -1327,7 +1347,8 @@ public final class MockClientLifecycle {
                                     peerId,
                                     error.getMessage());
                             machine.receiveEvent(new ShutdownRequested());
-                        });
+                        },
+                        labelledAsync);
     }
 
     /**

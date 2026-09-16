@@ -48,7 +48,9 @@ public final class ProcessOutputLogger {
      *
      * <p>Each stream is read on a separate thread so that neither stream can block the other. Both
      * threads set the SLF4J MDC component key to {@code componentTag} so every captured line
-     * appears tagged in the logs.
+     * appears tagged in the logs. They also carry the calling thread's instance label, if any
+     * ({@link InstanceLabel}), so a subprocess launched for one of several in-process instances is
+     * attributed to that instance.
      *
      * @param process the child process whose output to capture; must be started before this call
      * @param componentTag component label applied to every captured log line, e.g. {@code
@@ -60,8 +62,11 @@ public final class ProcessOutputLogger {
         ExecutorService executor =
                 Executors.newFixedThreadPool(
                         READER_THREAD_COUNT, new DaemonThreadFactory(componentTag));
-        executor.submit(() -> streamToLog(process.getInputStream(), componentTag, false));
-        executor.submit(() -> streamToLog(process.getErrorStream(), componentTag, true));
+        InstanceLabel label = InstanceLabel.capture();
+        executor.submit(
+                label.wrap(() -> streamToLog(process.getInputStream(), componentTag, false)));
+        executor.submit(
+                label.wrap(() -> streamToLog(process.getErrorStream(), componentTag, true)));
         return executor;
     }
 

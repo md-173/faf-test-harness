@@ -65,9 +65,11 @@ public final class LoggingSetup {
      * Environment variable naming this instance of the component. Use a real environment variable
      * rather than a {@code -D} system property. {@code ProcessBuilder} inherits the parent
      * environment, so a spawner's value reaches the mock game this process launches and its own
-     * logs self-label with it. A system property is honoured for this JVM only and does not cross a
-     * process boundary. The third-party ICE adapter knows nothing of this variable, so its output
-     * carries the label only where this process captures it.
+     * logs self-label with it. A system property is honoured for this JVM only and is not inherited
+     * by a child; since WBS-4.3.3 a Mock Client's game launcher forwards whichever label it was
+     * built under, so a property-set label reaches the game that way. The third-party ICE adapter
+     * knows nothing of this variable, so its output carries the label only where this process
+     * captures it.
      */
     public static final String INSTANCE_NAME_ENV = "INSTANCE_NAME";
 
@@ -126,10 +128,10 @@ public final class LoggingSetup {
         context.putProperty(COMPONENT_MDC_KEY, componentName);
 
         // Same two-place treatment for the instance label (WBS-3.1.6.2). The context property is
-        // load-bearing rather than a nicety here: logback 1.5's MDC is a plain ThreadLocal, so the
-        // subprocess capture threads in ProcessOutputLogger and the adapter's reader thread never
-        // see the value put above, and those are exactly the lines a multi-instance harness needs
-        // to attribute.
+        // load-bearing rather than a nicety here: logback 1.5's MDC is a plain ThreadLocal, so any
+        // thread not explicitly given the label (see InstanceLabel, WBS-4.3.3) never sees the
+        // value put above, and without this fallback those would include lines a multi-instance
+        // harness needs to attribute.
         if (!instanceName.isEmpty()) {
             MDC.put(INSTANCE_MDC_KEY, instanceName);
             context.putProperty(INSTANCE_MDC_KEY, instanceName);

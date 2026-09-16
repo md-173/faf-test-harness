@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
@@ -109,6 +110,13 @@ public class IceAdapterLauncher {
     private final IceAdapterSettings settings;
 
     /**
+     * The constructing thread's instance label (WBS-4.3.3), applied while the adapter is started so
+     * its captured output is attributed to this launcher's instance whichever thread launches it.
+     * The adapter itself is third-party and gets no {@code INSTANCE_NAME}.
+     */
+    private final InstanceLabel label;
+
+    /**
      * Creates a launcher bound to {@code config}. The session path: everything the launcher needs
      * is narrowed out of the full configuration by {@link
      * IceAdapterSettings#from(MockClientConfig)}.
@@ -128,6 +136,7 @@ public class IceAdapterLauncher {
      */
     public IceAdapterLauncher(final IceAdapterSettings settings) {
         this.settings = Objects.requireNonNull(settings, "settings");
+        this.label = InstanceLabel.capture();
     }
 
     /**
@@ -177,7 +186,7 @@ public class IceAdapterLauncher {
         }
 
         LOG.info("Launching ICE adapter: {}", String.join(" ", argv));
-        try {
+        try (InstanceLabel.Scope ignored = label.apply()) {
             SubprocessManager manager = SubprocessManager.start(pb, COMPONENT_TAG, TERMINATE_GRACE);
             LOG.info("ICE adapter started, pid={}", manager.pid());
             return manager;

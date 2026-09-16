@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Unit tests for {@link MockGameLauncher}. The real {@code mock-game} binary is not built in CI, so
@@ -61,6 +62,7 @@ final class MockGameLauncherTest {
 
     @AfterEach
     void detachAppender() {
+        MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
         if (appender != null) {
             appender.stop();
             root.detachAppender(appender);
@@ -264,6 +266,59 @@ final class MockGameLauncherTest {
         int code = game.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertFalse(game.isAlive(), "mock-game should be dead after terminate()");
         assertEquals(128 + 15, code, "a SIGTERM-ed process exits with 143");
+    }
+
+    @Test
+    void labelledLauncherPassesItsInstanceToTheGameAndItsCapturedOutput() throws Exception {
+        Path binary =
+                createStub(
+                        "mock-game",
+                        "#!/bin/sh\n"
+                                + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
+                                + "while true; do echo heartbeat; sleep 1; done\n");
+
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "B");
+        MockGameLauncher launcher = new MockGameLauncher(configWithBinary(binary));
+        // Off the test thread before starting, as on the live path where a lobby thread launches:
+        // both the env var and the captured output's label must come from construction.
+        MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        SubprocessManager game = launcher.start();
+        try {
+            awaitLog(
+                    e ->
+                            "instance=B".equals(e.getMessage())
+                                    && "B"
+                                            .equals(
+                                                    e.getMDCPropertyMap()
+                                                            .get(LoggingSetup.INSTANCE_MDC_KEY)));
+        } finally {
+            game.terminate();
+        }
+    }
+
+    @Test
+    void unlabelledLauncherLeavesTheGameUnlabelled() throws Exception {
+        Path binary =
+                createStub(
+                        "mock-game",
+                        "#!/bin/sh\n"
+                                + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
+                                + "while true; do echo heartbeat; sleep 1; done\n");
+
+        // The child inherits this JVM's environment, so an INSTANCE_NAME exported in the shell
+        // running the build is expected to reach it; the launcher itself must add nothing.
+        String inherited = System.getenv(LoggingSetup.INSTANCE_NAME_ENV);
+        String expected = "instance=" + (inherited == null ? "none" : inherited);
+        SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
+        try {
+            awaitLog(
+                    e ->
+                            expected.equals(e.getMessage())
+                                    && !e.getMDCPropertyMap()
+                                            .containsKey(LoggingSetup.INSTANCE_MDC_KEY));
+        } finally {
+            game.terminate();
+        }
     }
 
     @Test

@@ -178,7 +178,7 @@ conditions are recorded in the matrix and in the linked docs, and are not faked 
   headless; the source of truth for rows 2 (live), 3 (live), and 4 (live).
 - [`demos/README.md`](../demos/README.md) — the captured demo transcripts, including
   `client-game-lifecycle` (3.1.2.7), which is row 7's evidence, and the `lobby-connect-idle` and
-  `two-peer-session` live demos.
+  `multi-peer-session` live demos.
 - [`research/json-rpc-spec.md`](../research/json-rpc-spec.md),
   [`research/gpgnet-format-spec.md`](../research/gpgnet-format-spec.md),
   [`research/lobby-protocol-spec.md`](../research/lobby-protocol-spec.md) — the wire protocols the

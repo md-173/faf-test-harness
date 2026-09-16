@@ -8,53 +8,66 @@ a real environment, captured by hand and committed here.
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
 | `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
-| `two-peer-session` | 4.3.1 | two clients host and join the same game through the live lobby, ICE candidates relay across it, and both adapters report the peer link established | ▶️ live test, run on demand — verified 2026-08-25, three consecutive passes (`test` ↔ `Foo` against `ws.faforever.xyz`); see below |
+| `multi-peer-session` | 4.3.1, 4.3.2, 4.3.3 | two, three and four clients host and join the same game through the live lobby, ICE candidates relay across it, every adapter reports a link to every other peer, and every line is attributable to its instance | ▶️ live test, run on demand. 4.3.1 verified 2026-08-25 (`test` ↔ `Foo`); 3 and 4 peers verified 2026-09-15, three passes (`test`, `Foo`, `Tagada`, `Paralon` against `ws.faforever.xyz`); see below |
 
 ---
 
-## `two-peer-session` — host, join, peers connected (WBS-4.3.1)
+## `multi-peer-session`: host, join, full mesh (WBS-4.3.1, 4.3.3)
 
-Two Mock Clients on one machine, each with its own lobby account, port set, ICE
-adapter and mock game, complete a host/join **through the live lobby** and both
-adapters report the peer link up. The whole exchange between them — `game_host`
-/ `game_join`, `JoinGame`, `ConnectToPeer`, and every ICE candidate — crosses
-the real server; the only value passed in-process is A's game uid, which is
-what an operator would read off A's `game launch:` line.
+Two to four Mock Clients on one machine, each with its own lobby account, port
+set, ICE adapter and mock game, complete a host/join **through the live lobby**
+and every adapter reports a link to every other peer: one connection at two
+players, three at three, six at four. The whole exchange (`game_host` /
+`game_join`, `JoinGame`, `ConnectToPeer`, and every ICE candidate) crosses the
+real server; the only value passed in-process is A's game uid, which is what an
+operator would read off A's `game launch:` line.
 
-No game traffic is sent or asserted. That is 4.3.2.
+`MultiPeerSessionLiveTest` runs three cases back to back: one, two and three
+joiners. Three players are where faf-server's peer-to-peer path starts. The host
+is told `offer=true` for every joiner (`connect_to_host`), a joiner is told
+`offer=true` for every earlier joiner, and each earlier joiner `offer=false` for
+it (`connect_to_peer`). The test asserts exactly that set per peer. The host
+advertises the game as `friends` visibility; joining by uid is unaffected,
+because `command_game_join` never checks visibility.
 
 ### Prerequisites
 
 Everything the 3.1.2.7 demo needs (adapter jar, mock-game distribution), plus:
 
-3. **The `faf-uid` binary** at `./faf-uid` — the lobby's policy server rejects a
+3. **The `faf-uid` binary** at `./faf-uid`. The lobby's policy server rejects a
    placeholder `unique_id`. Same download as the `lobby-connect-idle` demo
    below. Override with `FAF_UID_BINARY=/path/to/faf-uid`.
-4. **Two seeded accounts, with a refresh token each**, at
-   `.secrets/refresh_token.txt` (hosts) and `.secrets/refresh_token_b.txt`
-   (joins). Override with `FAF_REFRESH_TOKEN_A` / `FAF_REFRESH_TOKEN_B`. One
-   account cannot host and join its own game, so the second is not optional;
-   bootstrap it exactly as the first (see `lobby-protocol-spec.md` §2 and the
-   `lobby-connect-idle` prerequisites below), logging in as the *second* test
-   user. **Both files are rewritten on every run** — Hydra rotates the refresh
-   token on use.
+4. **One seeded account per peer, with a refresh token each**, at
+   `.secrets/refresh_token.txt` (A, hosts), `_b.txt`, `_c.txt` and `_d.txt`
+   (joiners B to D). Override with `FAF_REFRESH_TOKEN_A` to `FAF_REFRESH_TOKEN_D`.
+   A case skips when a joiner it needs has no token. One account cannot host
+   and join its own game, and one account in two peers signs the first out, so
+   every account must be distinct; bootstrap each exactly as the first (see
+   `lobby-protocol-spec.md` §2 and the `lobby-connect-idle` prerequisites below).
+   **Every file used is rewritten on every run**, because Hydra rotates the
+   refresh token on use. Never run two sessions on the same accounts at once.
 
-The endpoint defaults to `wss://ws.faforever.xyz`; set `FAF_LOBBY_URL` to point
-elsewhere. Confirm it is reachable first — the test self-skips when it is not:
+The endpoint defaults to `wss://ws.faforever.xyz`, the FAF test lobby, which is
+public: no VPN or allowlist is needed. Set `FAF_LOBBY_URL` to point elsewhere,
+and `FAF_ICE_ADAPTER_JAR`, `FAF_MOCK_GAME_BINARY` and `FAF_UID_BINARY` to use
+binaries outside the repository. The test skips when the lobby does not accept a
+TCP connection within 3 s; to check by hand:
 
 ```bash
 timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
   && echo REACHABLE || echo UNREACHABLE
 ```
 
-Any missing prerequisite **skips** the test rather than failing it, printing
-each one it wanted. A skip is not a pass — check for a `[4.3.1] skipping` line
-before believing a green run.
+Any missing prerequisite **skips** the case rather than failing it, and one
+line lists everything it wanted. A skip is not a pass: check for a
+`[4.3.1] skipping` line before believing a green run. All prerequisite probing is
+in `missingPrerequisites`, the one place a CI run would turn skips into
+failures.
 
 ### Run
 
 ```bash
-./gradlew :mock-client:integrationTest --tests '*TwoPeerSessionLiveTest*' --rerun
+./gradlew :mock-client:integrationTest --tests '*MultiPeerSessionLiveTest*' --rerun
 ```
 
 `--rerun` is not optional, for the reason given under 3.1.2.7. The acceptance
@@ -62,14 +75,17 @@ bar is three consecutive passes:
 
 ```bash
 for i in 1 2 3; do
-  ./gradlew :mock-client:integrationTest --tests '*TwoPeerSessionLiveTest*' --rerun \
+  ./gradlew :mock-client:integrationTest --tests '*MultiPeerSessionLiveTest*' --rerun \
     || { echo "run $i FAILED"; break; }
 done
 ```
 
-Neither game auto-launches its match (`--mock-game-launch-delay-seconds=-1`),
-so the run costs roughly the two sessions' setup rather than a simulated match:
-**14–30 seconds**, against the 3.1.2.7 test's ~25.
+No game auto-launches its match (`--mock-game-launch-delay-seconds=-1`), so a
+case costs roughly its sessions' setup rather than a simulated match: about
+20-40 seconds per case, and under two minutes for all three. Every wait is also
+bound by a 420 s per-case deadline and fails naming the peer and stage; the
+600 s JUnit timeout per case only covers a hung teardown, so all three cases
+take at most 30 minutes.
 That flag is load-bearing: faf-server accepts a `game_join` only while the game
 is in `GameState.LOBBY` and drops it out of that state as soon as the host
 reports `GameState Launching`, so a host on the default 5 s timer makes itself
@@ -77,8 +93,18 @@ unjoinable while the joiner is still booting two JVMs.
 
 ### What to look for in the logs
 
-Both clients run in one JVM, so their lines interleave. The order below is the
-one to read for; `A` is the host, `B` the joiner.
+All clients run in one JVM, so their lines interleave. Each is labelled with its
+instance, `A` (the host) to `D`, on the console as a segment after the
+component, `[2026-09-14 20:28:30.899] [Unknown] [A] [INFO ] state entry: CONNECTING`,
+and as the `instance` field in JSONL. The label covers the client's own lines on
+every thread it owns and its captured adapter and game output; each game also
+writes its own `logs/mockgame-<label>.jsonl`. Filter on one label to read one
+peer. The JSONL lands under `mock-client/logs/`: `test-harness.jsonl` for the
+clients with their captured adapter and game output, and `mockgame-A.jsonl` to
+`mockgame-D.jsonl` from the games themselves. Repeated cases append to the same
+files; each case starts with a `case: N peers, run <uuid>` line, and the uuid is
+also in the hosted game's title. The order below is the one to read for, shown
+for A and a joiner B; C and D repeat B's rows.
 
 | Stage | Log line | Source |
 |-------|----------|--------|
@@ -91,10 +117,11 @@ one to read for; `A` is the host, `B` the joiner.
 | B joins | `Sending game_join for uid=<uid>`, then `game launch: uid=<uid> …` | `MockClientLifecycle` |
 | B is joining | `state entry: JOINING` | `MockClientLifecycle` |
 | A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
+| C told about B, B about C (3+ players) | on C: `peer connect: login=<loginB> id=<idB> offer=true`; on B: `peer connect: login=<loginC> id=<idC> offer=false` | `MockClientLifecycle` |
 | Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
 | Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
-| **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
-| Teardown | `state entry: TERMINATED` → `session teardown complete`, twice | `MockClientLifecycle` |
+| **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B; one pair per link, so 2, 6 or 12 lines at two, three or four players | `IceEventLogger` |
+| Teardown | `state entry: TERMINATED` → `session teardown complete`, once per peer | `MockClientLifecycle` |
 
 `offer=true` on A is the server's doing, not ours: `connect_to_host` in
 faf-server's `gameconnection.py` makes the side already in the lobby the ICE
@@ -117,14 +144,25 @@ the adapter's EOF-at-shutdown ERROR) apply here too, once per client.
 
 ### Acceptance criteria → evidence
 
-- Both adapters report `onConnected` true for the two lobby-assigned ids, through
-  the live lobby, with the empty ICE server list, on one machine → the test's two
-  `awaitPeerConnected` checkpoints, which assert the id pair on each side and not
-  merely that something connected.
-- Both sessions tear down on request and nothing survives → the shutdown of each
-  lifecycle, then the descendant-process sweep for a surviving adapter or game.
-- No game traffic sent or asserted → neither game ever leaves the lobby phase;
-  there is no `GameState Launching` in a passing run.
+- Every adapter reports `onConnected` true for every other lobby-assigned id,
+  through the live lobby, with the empty ICE server list, on one machine → the
+  `awaitFullMesh` checkpoint, which asserts each adapter's own id and waits for
+  the latest verdict per remote peer under one deadline.
+- The same mesh is visible from log output alone, and every line is
+  attributable → `assertInstanceLabels`: every adapter and game line carries a
+  label, each peer has labelled client, adapter and game lines, no labelled line
+  names another peer's id as its own, and each peer's labelled `peer connected`
+  lines name every other peer.
+- Both offer directions → `assertOfferDirections`, the exact per-peer set of
+  `ConnectToPeer` offers faf-server's protocol predicts.
+- No port collision → `assertDistinctPorts` per case, and repeated runs.
+- Game traffic both ways on every pair (4.3.2) → `awaitPeerTraffic`.
+- Every session tears down and nothing survives → the shutdown of each
+  lifecycle, then the descendant-process sweep, which runs after a failed case
+  too so its survivors are never blamed on the next case.
+- A four-player game has exactly two teams and reports one `GameResult` per army
+  → not observable here, since no match launches and faf-server validates teams
+  only in `Game.launch()`; covered by mock-game's `LifecycleSetupTest`.
 - Repeatable → three consecutive passes with the loop above.
 
 ---

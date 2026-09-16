@@ -645,7 +645,7 @@ avoided here:
    individual demo — its captured transcript, its acceptance-criteria mapping,
    and how to capture a fresh recording. It covers `lobby-connect-idle` (whose
    captured log §6 links directly), `client-game-lifecycle` (linked from §2),
-   and `two-peer-session`, whose subject is out of scope here (see §9). Both
+   and `multi-peer-session`, whose subject is out of scope here (see §9). Both
    files now say this explicitly, so a reader is never following two versions
    of the same setup path.
 
