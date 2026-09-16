@@ -43,13 +43,16 @@ OAuth options, which is what the runbook's
 `--oauth-refresh-token-file=dummy-unused-by-launch-ice` was.
 
 `session` (WBS-4.2.1) runs a multi-peer session and passes or fails on its own:
-one host and `--peers - 1` joiners (default 2 peers, up to 26), each with its own
-account, adapter and game, join one game through the live lobby, and the command
-exits `0` once every adapter reports every other peer connected and every game
-has received every other game's datagrams with an advancing sequence, so an
-adapter that connects but does not forward game packets fails the run (stage
-`traffic`). That evidence is each game's INFO progress line, so `session` needs
-`--log-level` INFO or finer. Give one
+one host and `--peers - 1` joiners (default 2 peers; the flag accepts up to 26),
+each with its own account, adapter and game, join one game through the live lobby,
+and the command exits `0` once every adapter reports every other peer connected
+and every game has received every other game's datagrams with an advancing
+sequence, so an adapter that connects but does not forward game packets fails the
+run (stage `traffic`). That evidence is each game's INFO progress line, so
+`session` needs `--log-level` INFO or finer. Runs have been verified at 2 to 4
+peers. The 420 s session deadline does not yet grow with `--peers`, so a larger
+session can hit it before its own checkpoints do, after every peer has logged in;
+the ceiling step (#87) measures that limit and sizes the deadline. Give one
 refresh-token file per peer with `--peer-refresh-token-file`, host first, repeated
 or comma-separated. A failed checkpoint logs `session: FAIL <peer>: <stage>:
 <detail>`. The clients share one JVM, so anything that kills it ends every peer;
@@ -58,9 +61,9 @@ teardown are killed and fail the run. The session sets each peer's adapter ports
 launch delay and host or join intent, so those options are not used, though they
 are still validated. Missing adapter, game or `faf-uid` binaries are refused
 before any login. In a `--config` file the token files go under
-`peerRefreshTokenFiles` as one comma-separated string, not a JSON array. Evidence lands
-in the working directory: `logs/mockclient.jsonl` (or `--log-file`) holds every
-client line with the captured adapter and game output, each tagged with the
+`peerRefreshTokenFiles` as one comma-separated string, not a JSON array. Evidence
+lands in the working directory: `logs/mockclient.jsonl` (or `--log-file`) holds
+every client line with the captured adapter and game output, each tagged with the
 peer's `instance` label A, B, ..., and each game also writes
 `logs/mockgame-<label>.jsonl`. Do not set `INSTANCE_NAME`; `session` refuses it.
 

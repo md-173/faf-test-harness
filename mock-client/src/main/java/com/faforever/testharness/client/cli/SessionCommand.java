@@ -69,7 +69,11 @@ public final class SessionCommand implements Callable<Integer> {
     /** Picocli auto-injects the active {@link CommandSpec} for scoped error reporting. */
     @Spec private CommandSpec spec;
 
-    /** Number of peers, host included. */
+    /**
+     * Number of peers, host included. The upper bound is the instance labels A to Z, not a tested
+     * limit: runs are verified at 2 to 4 peers, and {@code MultiPeerSession}'s fixed session
+     * deadline is sized by #87's ceiling step.
+     */
     @Option(
             names = "--peers",
             defaultValue = "" + MultiPeerSession.MIN_PEERS,
@@ -78,7 +82,9 @@ public final class SessionCommand implements Callable<Integer> {
                             + MultiPeerSession.MIN_PEERS
                             + ".."
                             + MultiPeerSession.MAX_PEERS
-                            + " (default: ${DEFAULT-VALUE}).")
+                            + " (default: ${DEFAULT-VALUE}). Verified at 2 to 4 peers; the 420 s "
+                            + "session deadline does not yet grow with this, so a larger session "
+                            + "can time out on it.")
     private int peers;
 
     /** One refresh-token file per peer, host first; extras are unused. */
