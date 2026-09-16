@@ -158,9 +158,11 @@ jobs:
       # RSA-encrypted unique_id the lobby's policy server requires; a placeholder is rejected.
       FAF_UID_VERSION: v4.0.7
       FAF_UID_SHA256: 1136d0e1cd7e61682ad375043fdac4bae690bf63d7fdd98a7a3a1fb9ccac61da
-      FAF_UID_BINARY: ${{ runner.temp }}/bin/faf-uid
-      # Under RUNNER_TEMP, so no upload path and no checked-out directory can reach the tokens.
-      TOKENS: ${{ runner.temp }}/faf-tokens
+      # FAF_UID_BINARY and TOKENS belong here too, but both live under RUNNER_TEMP and the runner
+      # context is not available in a job's env (github, needs, strategy, matrix, vars, secrets and
+      # inputs are). Each is exported to GITHUB_ENV by the step that first needs it, from the
+      # RUNNER_TEMP variable the runner sets in the shell.
+      #
       # The session's working directory: its logs land in session-run/logs/, which is what the
       # failure upload collects.
       WORK: ${{ github.workspace }}/session-run
@@ -179,6 +181,9 @@ jobs:
           PEER_D: ${{ secrets.FAF_CI_REFRESH_TOKEN_D }}
         run: |
           umask 077
+          # Outside the workspace, so no upload path and no checked-out directory can reach them.
+          TOKENS="$RUNNER_TEMP/faf-tokens"
+          echo "TOKENS=$TOKENS" >> "$GITHUB_ENV"
           mkdir -p "$TOKENS"
           missing=""
           [ -n "$PEER_C" ] || missing="$missing FAF_CI_REFRESH_TOKEN_C"
@@ -216,6 +221,8 @@ jobs:
       - name: Download and verify faf-uid
         timeout-minutes: 3
         run: |
+          FAF_UID_BINARY="$RUNNER_TEMP/bin/faf-uid"
+          echo "FAF_UID_BINARY=$FAF_UID_BINARY" >> "$GITHUB_ENV"
           mkdir -p "$(dirname "$FAF_UID_BINARY")"
           curl -fsSL --retry 3 --retry-all-errors -o "$FAF_UID_BINARY" \
             "https://github.com/FAForever/uid/releases/download/${FAF_UID_VERSION}/faf-uid"
