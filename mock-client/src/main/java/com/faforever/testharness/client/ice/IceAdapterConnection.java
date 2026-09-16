@@ -412,6 +412,10 @@ public class IceAdapterConnection {
                 }
             }
         }
+        // The last failure is named in the message, not just chained as the cause: runConnection
+        // logs getMessage() alone, and a SocketTimeoutException (the port dropped the connect, so
+        // the window was the long one) means something quite different to an operator than a
+        // ConnectException (the port refused, so nothing ever bound it).
         throw new IOException(
                 "ICE adapter not reachable at "
                         + LOOPBACK
@@ -419,7 +423,8 @@ public class IceAdapterConnection {
                         + port
                         + " after "
                         + connectAttempts
-                        + " attempts",
+                        + " attempts; last failure: "
+                        + last,
                 last);
     }
 

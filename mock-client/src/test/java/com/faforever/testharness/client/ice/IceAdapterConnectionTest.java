@@ -221,9 +221,10 @@ final class IceAdapterConnectionTest {
             if (!fillAcceptQueue(listener, queued)) {
                 assertFalse(
                         OS.LINUX.isCurrentOs(),
-                        "Linux should drop connects to a full accept queue; without that this test"
-                                + " has nothing to measure");
-                assumeTrue(false, "this OS refuses connects to a full accept queue");
+                        "the probe never reached a dropping state, so this test has nothing to"
+                                + " measure. On Linux that is the fixture being wrong rather than"
+                                + " the kernel: a full accept queue always drops there");
+                assumeTrue(false, "this OS does not drop connects to a full accept queue");
             }
             IceAdapterConnection c =
                     new IceAdapterConnection(
