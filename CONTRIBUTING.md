@@ -110,6 +110,18 @@ Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically 
 
 Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
 
+### The live integration workflow (manual, advisory)
+
+`.github/workflows/live-integration.yml` runs what `build` excludes: the `integration`-tagged tests that hit the live FAF test environment and launch the real `faf-ice-adapter`. It runs **only on manual dispatch** (`gh workflow run "Live integration (advisory)"`) and is **never a required check**, because the shared test lobby's availability is outside our control, so a failure there is a finding rather than a merge blocker. It is also the job a consumer (first: the java-ice-adapter maintainer) copies into their own CI.
+
+- **`live-tests`** provisions the pinned adapter jar and runs the live tests that need no FAF account: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest`, `LobbyConnectionLiveSmokeTest.connectSucceeds` and mock-game's `GpgNetConnectionLiveSmokeTest`. It then checks the JUnit XML, because Gradle fails a `--tests` filter only when *no* pattern matched anything, so a renamed class would otherwise be skipped silently.
+- **`session`** runs `mock-client session --peers=2` from the release jars, one CI-only account per peer: the whole client, adapter and game path in a single verdict.
+
+Two things are worth knowing before you touch it:
+
+- **`FAF_LIVE_REQUIRED=true` turns a self-skip into a failure.** The live tests skip when a binary or credential is missing, which would let a misprovisioned CI run pass having tested nothing; under that variable each one fails instead, naming what it lacks. The workflow sets it. Leave it unset locally and `./gradlew integrationTest` keeps skipping exactly as before.
+- **Credentials are per-peer and CI-only.** CI's accounts are never used by a local live run, because a second login as the same account signs the first out, fatally; the `concurrency` group is keyed on those accounts rather than on the branch for the same reason. Mint each secret right before a dispatch with `scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name>`, whose `--dry-run` prints the token's subject, scopes and expiry without setting anything. An access token lasts about an hour, so a dispatch that waits in the queue may need a fresh one. A *refresh* token given to a runner is spent there, since Hydra rotates it on use and the rotated value dies with the runner: delete the secret afterwards and re-bootstrap that account per [`harness-runbook.md`](documentation/operations/harness-runbook.md) §3.
+
 ## 4. Pull Requests
 
 1. Push your branch: `git push -u origin <branch-name>`.
