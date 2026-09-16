@@ -272,7 +272,11 @@ public final class GpgNetConnection implements GpgNetFrameSink {
         }
         this.socket = opened;
         if (closeRequested.get()) {
-            // close() landed after the last in-loop check but before the socket was published.
+            // close() was requested after the last in-loop check. Whether the disconnect has
+            // already fired depends on which side of the publish above it read the socket on: it
+            // fires LOCAL_CLOSE itself when it saw null, and otherwise defers to a read loop this
+            // return means we never enter, so nothing fires at all. That gap is #330, not this
+            // card; returning here is unchanged by it.
             try {
                 opened.close();
             } catch (IOException ignored) {
