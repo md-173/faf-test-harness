@@ -95,7 +95,7 @@ From the repository root, run:
 What this does:
 
 - `spotlessApply` — rewrites source files to Google Java Format (AOSP).
-- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, and `spotlessCheck`.
+- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, `spotlessCheck`, and the release asset-name assertion (see [Section 8](#8-releases)).
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
@@ -304,6 +304,80 @@ spawn with `mock-client`'s own resolved level. An orchestrated run therefore com
 `mock-client`'s level in all three processes.
 
 
-## 8. When in doubt
+## 8. Releases
+
+A release is cut by hand from the `Release` workflow (`.github/workflows/release.yml`). It builds a
+shadow jar per mock, writes a `.sha256` beside each, and opens a **draft** release carrying all four
+assets.
+
+### Cutting one
+
+1. **Run the workflow from `main`.** Actions → Release → Run workflow, with "Use workflow from" set
+   to `main`. Give the version with no leading `v` (`0.3.0`, not `v0.3.0`), and leave `prerelease`
+   unticked unless the release is genuinely one. The input is not validated: whatever is typed
+   becomes the tag and the version segment of both jar names.
+   Releasing from a branch is a convention, not an enforced rule, and it cannot be enforced in this
+   file: `workflow_dispatch` runs the copy of `release.yml` on the branch selected, so a branch whose
+   copy predates a change simply runs the older workflow, gate and all.
+2. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
+   -Pversion=<version> check`, the verification `ci.yml` applies to every pull request (`check` is
+   the verification half of ci's `build`), because a release is dispatched at an arbitrary commit and
+   nothing else guarantees CI ran green on it. If it fails, no draft and no assets are created, so
+   re-running the failed job is safe: nothing was tagged or published.
+   A red gate is not to be worked around. If it is a known flake rather than a real failure (the
+   lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
+   its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.
+3. **Check the draft before publishing.** It must carry exactly four assets:
+   `mock-client-<version>-all.jar`, `mock-game-<version>-all.jar`, and a `.sha256` for each. Download
+   them and confirm the checksums:
+
+   ```bash
+   gh release download <version> --dir /tmp/release-check --clobber
+   ( cd /tmp/release-check && sha256sum -c ./*.sha256 )
+   ```
+
+   If the workflow has to be re-run after a run that *succeeded*, delete the draft first. The release
+   step does not pass `allowUpdates`, so it fails while a release already exists for the tag.
+
+4. **Publish the draft.** `GET /releases/latest` skips drafts and prereleases alike, so until someone
+   opens the draft and clicks Publish, a consumer following that route keeps getting the previous
+   release. Publishing is the last step of every release, not an optional one.
+5. **Bump the version in the docs** if the release is referenced by number: `README.md` names the jar
+   files by version in its examples.
+
+### The asset names are a contract
+
+`mock-client-<version>-all.jar` and `mock-game-<version>-all.jar` are what a downstream pipeline
+greps for after pulling `releases/latest` (`documentation/operations/harness-runbook.md` § 2a).
+Renaming either breaks that build with no commit on the consumer's side, so `check` asserts both
+names through `verifyReleaseAssetName` in the root `build.gradle`, and a rename fails the pull
+request that makes it. Changing the names is a decision to take with the consumer first, and it then
+has to be applied to that task, the globs in `release.yml`, and the runbook together.
+
+### Checksums on earlier releases
+
+0.1.0 and 0.2.0 carry no `.sha256` files, and they are deliberately not being backfilled (this
+supersedes that item in #317). The documented consumer route pulls `releases/latest` unpinned and
+never names a version, so the checksums matter for whichever release is current, not for older ones.
+A checksum generated after the fact from an already-published asset also proves nothing the GitHub
+API's own per-asset `digest` does not. Releases from 0.3.0 onward ship them.
+
+### Pinning workflow actions
+
+- GitHub's own `actions/*` float on major tags (`actions/checkout@v7`). They are first-party, and the
+  majors are bumped deliberately rather than automatically, as in #346.
+- Every third-party action is pinned to a full commit SHA with the version in a trailing comment:
+
+  ```yaml
+  uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+  ```
+
+  A tag can be moved by whoever owns the action, and the release job holds `contents: write`, so a
+  moved tag there would run unreviewed code with permission to write releases and tags. The SHA is
+  what is verified; the comment is what makes the line readable. Bumping one is a normal pull
+  request: update both the SHA and the comment, and say why in the body, as #346 did when it held
+  `gradle/actions` at v5.
+
+## 9. When in doubt
 
 Ask in the team channel before inventing a new convention. Amendments to this document go through a normal PR and must be approved by the team lead.
