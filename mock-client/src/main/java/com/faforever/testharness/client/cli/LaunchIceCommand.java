@@ -2,8 +2,8 @@ package com.faforever.testharness.client.cli;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientCli;
-import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.config.VersionProvider;
+import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.process.IceAdapterLaunchException;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.shared.logging.LoggingSetup;
