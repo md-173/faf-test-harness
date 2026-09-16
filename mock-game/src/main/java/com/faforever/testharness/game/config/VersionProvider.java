@@ -12,9 +12,10 @@ import picocli.CommandLine.IVersionProvider;
  * <p>{@link Package#getImplementationVersion()} reads the manifest of the jar this class was loaded
  * from, never another jar on the classpath. It returns {@code null} when there is no jar: {@code
  * ./gradlew run}, the IDE, and unit tests run from class directories. That route prints {@link
- * #DEVELOPMENT_BUILD} rather than throwing. The Mock Client has its own copy of this class rather
- * than sharing one from {@code shared}: the lookup has to anchor on a class inside the
- * application's own jar, and {@code shared} is a separate jar on the {@code installDist} classpath.
+ * #DEVELOPMENT_BUILD} rather than throwing. The Mock Client has its own copy of this class: the
+ * lookup has to anchor on a class inside the application's own jar, since {@code shared} is a
+ * separate jar with its own manifest on the {@code installDist} classpath, so a common helper would
+ * have to take the anchor class as an argument. Six duplicated lines are cheaper than that.
  */
 public final class VersionProvider implements IVersionProvider {
 

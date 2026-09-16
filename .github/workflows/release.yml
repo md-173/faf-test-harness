@@ -100,7 +100,12 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
         run: |
           for name in mock-client mock-game; do
-            reported=$(java -jar "${name}/build/libs/${name}-${VERSION}-all.jar" --version)
+            # Without the guard, the default `bash -e` would kill the step on a failed jar before
+            # the annotation below could say which jar failed and why.
+            reported=$(java -jar "${name}/build/libs/${name}-${VERSION}-all.jar" --version) || {
+              echo "::error::${name} could not be run to report its version"
+              exit 1
+            }
             echo "${name} reports: ${reported}"
             if [ "${reported}" != "${name} ${VERSION}" ]; then
               echo "::error::${name} reports '${reported}', expected '${name} ${VERSION}'"
