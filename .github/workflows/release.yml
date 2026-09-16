@@ -89,6 +89,25 @@ jobs:
       - name: Create mock game shadow jars
         run: ./gradlew -Pversion="$VERSION" --stacktrace :mock-game:shadowJar
 
+      # Both jars read their --version out of their own manifest, which is written from
+      # project.version, so -Pversion above is what they report (WBS-3.1.5.2, #383). This is the
+      # only check that ever sees a real release version: the jar tests in CI run against the
+      # development default in gradle.properties. Before that manifest existed, 0.2.0 shipped
+      # reporting "mock-client 1.0-SNAPSHOT", which is the string a consumer records in CI to say
+      # which build they ran.
+      - name: Verify each jar reports the released version
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          for name in mock-client mock-game; do
+            reported=$(java -jar "${name}/build/libs/${name}-${VERSION}-all.jar" --version)
+            echo "${name} reports: ${reported}"
+            if [ "${reported}" != "${name} ${VERSION}" ]; then
+              echo "::error::${name} reports '${reported}', expected '${name} ${VERSION}'"
+              exit 1
+            fi
+          done
+
       # An integrity check for the consumer, not a reproducibility one: they pull the *latest*
       # release rather than pinning a version, and a checksum cannot be pinned to a moving target.
       # Written beside each jar so the release-action glob picks them up.
