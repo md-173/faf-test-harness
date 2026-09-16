@@ -43,7 +43,8 @@ import org.slf4j.LoggerFactory;
  * will not parse, and a send that fails are all logged and dropped: the game's GPGNet duties are
  * unaffected by having no peer traffic, and a mock that exits over a busy UDP port would take
  * unrelated tests with it. A run that exchanged nothing says so in the log rather than in an exit
- * code.
+ * code. The one throw is the constructor's, which rejects a drop percentage outside 0 to 100 before
+ * anything is bound; the CLI rejects the same value first, so a real run never reaches it.
  *
  * <p>Threading: {@link #registerPeer} arrives on the GPGNet reader thread, {@link #close()} on the
  * FSM thread, that same reader thread (a remote close drives the FSM to ENDED) or the JVM shutdown
@@ -78,8 +79,17 @@ public final class GameTrafficSession implements AutoCloseable {
      */
     private static final Duration RECEIVER_STOP_TIMEOUT = Duration.ofMillis(500);
 
+    /** Upper bound of {@link #dropPercent}; a percentage cannot exceed this. */
+    private static final int MAX_DROP_PERCENT = 100;
+
     /** This game's FAF player id: stamped into every datagram, and named in the progress line. */
     private final int playerId;
+
+    /**
+     * Percentage of outbound datagrams the sender suppresses (WBS-5.1), handed to the sender when
+     * {@link #bind(int)} builds it. {@code 0} sends everything.
+     */
+    private final int dropPercent;
 
     /** Delay between send rounds; {@link #CADENCE} outside tests. */
     private final Duration cadence;
@@ -119,22 +129,41 @@ public final class GameTrafficSession implements AutoCloseable {
     /**
      * Creates a session for the game's own player id, with the production cadence.
      *
+     * <p>There is deliberately no overload without {@code dropPercent}. One that defaulted it to
+     * zero is how the WBS-5.1 flag was once parsed, validated and then silently discarded (#353).
+     *
      * @param playerId this game's FAF player id, as the lobby assigned it
+     * @param dropPercent percentage of outbound datagrams to suppress, {@code 0} to {@code 100}
+     * @throws IllegalArgumentException if {@code dropPercent} is outside {@code 0} to {@code 100}
      */
-    public GameTrafficSession(final int playerId) {
-        this(playerId, CADENCE, PROGRESS_INTERVAL);
+    public GameTrafficSession(final int playerId, final int dropPercent) {
+        this(playerId, dropPercent, CADENCE, PROGRESS_INTERVAL);
     }
 
     /**
      * Creates a session with explicit timings, so a test does not wait on the production ones.
      *
+     * <p>{@code dropPercent} is checked here rather than left to the sender. The sender is only
+     * built in {@link #bind(int)}, on {@code CreateLobby}, and an invalid value failing there would
+     * escape into the state machine's transition after the socket had already bound.
+     *
      * @param playerId this game's FAF player id
+     * @param dropPercent percentage of outbound datagrams to suppress, {@code 0} to {@code 100}
      * @param cadence delay between send rounds; must be positive
      * @param progressInterval how often the receiver's counters are sampled; must be positive
+     * @throws IllegalArgumentException if {@code dropPercent} is outside {@code 0} to {@code 100}
      */
     GameTrafficSession(
-            final int playerId, final Duration cadence, final Duration progressInterval) {
+            final int playerId,
+            final int dropPercent,
+            final Duration cadence,
+            final Duration progressInterval) {
+        if (dropPercent < 0 || dropPercent > MAX_DROP_PERCENT) {
+            throw new IllegalArgumentException(
+                    "dropPercent must be between 0 and 100: " + dropPercent);
+        }
         this.playerId = playerId;
+        this.dropPercent = dropPercent;
         this.cadence = cadence;
         this.progressInterval = progressInterval;
     }
@@ -165,7 +194,7 @@ public final class GameTrafficSession implements AutoCloseable {
             return;
         }
         bindFailed = false;
-        sender = new GameUdpSender(playerId, socket, cadence);
+        sender = new GameUdpSender(playerId, socket, cadence, dropPercent);
         receiver = new GameUdpReceiver(socket);
         progress = GameTicker.realTime(progressInterval, () -> logProgress(false));
         receiver.start();
@@ -227,7 +256,11 @@ public final class GameTrafficSession implements AutoCloseable {
         if (!sending) {
             sending = true;
             sender.start();
-            LOG.info("peer traffic started: one datagram per peer every {} ms", cadence.toMillis());
+            // The drop percentage is stated at INFO so a run at the default level shows whether the
+            // fault is on; its per-datagram evidence is DEBUG only (#353).
+            LOG.info(
+                    "peer traffic started: one datagram per peer every {} ms, dropping {}%",
+                    cadence.toMillis(), dropPercent);
         }
         LOG.info("sending peer traffic to player {} at {}", peerId, netAddress);
     }

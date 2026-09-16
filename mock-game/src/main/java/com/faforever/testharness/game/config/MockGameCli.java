@@ -132,8 +132,9 @@ public final class MockGameCli {
             description =
                     "Percentage of outbound peer datagrams to drop, simulating a lossy link "
                             + "(default: ${DEFAULT-VALUE}). The sequence number is still "
-                            + "advanced, so the loss is visible as a gap in the receiving "
-                            + "peer's per-sender counters.")
+                            + "advanced, so the receiving peer sees the loss as its received "
+                            + "count falling behind the highest sequence; its gap count does "
+                            + "not measure loss.")
     private int udpDropPercent;
 
     /** Instantiated only by {@link #parse(String[])}. */
@@ -221,8 +222,8 @@ public final class MockGameCli {
             throw new ParameterException(
                     commandLine, "--game-uid must not be negative: " + gameUid);
         }
-        // A percentage outside 0-100 is always a typo, and the sender would reject it later with an
-        // IllegalArgumentException from deep inside the FSM rather than a usage error here.
+        // A percentage outside 0-100 is always a typo. Caught here it is a usage error; left to
+        // GameTrafficSession it would be an IllegalArgumentException while the lifecycle is built.
         if (udpDropPercent < 0 || udpDropPercent > MAX_PERCENT) {
             throw new ParameterException(
                     commandLine, "--udp-drop-percent must be between 0 and 100: " + udpDropPercent);
