@@ -43,7 +43,8 @@ import org.slf4j.LoggerFactory;
  * will not parse, and a send that fails are all logged and dropped: the game's GPGNet duties are
  * unaffected by having no peer traffic, and a mock that exits over a busy UDP port would take
  * unrelated tests with it. A run that exchanged nothing says so in the log rather than in an exit
- * code.
+ * code. The one throw is the constructor's, which rejects a drop percentage outside 0 to 100 before
+ * anything is bound; the CLI rejects the same value first, so a real run never reaches it.
  *
  * <p>Threading: {@link #registerPeer} arrives on the GPGNet reader thread, {@link #close()} on the
  * FSM thread, that same reader thread (a remote close drives the FSM to ENDED) or the JVM shutdown
