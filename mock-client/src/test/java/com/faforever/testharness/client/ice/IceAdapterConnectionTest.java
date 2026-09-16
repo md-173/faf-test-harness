@@ -124,10 +124,14 @@ final class IceAdapterConnectionTest {
      *
      * <p>This pins intent; it does not reproduce the race it guards. With a 100 ms retry delay and
      * a 250 ms sleep, {@code close()} beats the sleeping connect thread every time, so the listener
-     * fires from {@code close()}'s own {@code socket == null} path. The interleaving where the
-     * connect thread reports first is a few instructions wide and not reachable from a test — but a
-     * regression that hardcodes {@code CONNECT_FAILED} in that path would still be caught the
-     * moment it ever won.
+     * fires from {@code close()}'s own {@code socket == null} path.
+     *
+     * <p>The interleaving where the connect thread reports first <em>is</em> reachable now: the
+     * {@code socketPublished()} seam added by WBS-3.1.4.1-fix lets a test stop the connect thread
+     * between publishing the socket and re-reading the close flag, and {@code
+     * IceAdapterConnectionCloseRaceTest} drives exactly that. This javadoc used to say it was "a
+     * few instructions wide and not reachable from a test", which is no longer true and would lead
+     * the next reader to skip covering it.
      */
     @Test
     void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {

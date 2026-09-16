@@ -91,10 +91,18 @@ final class IceAdapterConnectionCloseRaceTest {
                 ExecutionException.class,
                 () -> connected.get(5, TimeUnit.SECONDS),
                 "the connect was abandoned, so its future must not complete successfully");
+        // Awaited, not read straight after the future. runConnection calls completeExceptionally
+        // before fireDisconnect, so connected.get() can return while fired is still empty —
+        // measured at roughly 1 failure in 100 on an idle machine, and every time with a delay
+        // injected between the two production lines. A CI flake there would read "must fire
+        // exactly one disconnect, not none: []", which looks exactly like the fix regressing.
+        assertTrue(
+                waitFor(() -> !fired.isEmpty()),
+                "a close in this window must fire a disconnect, not none");
         assertEquals(
                 1,
                 fired.size(),
-                "a close in this window must fire exactly one disconnect, not none: " + fired);
+                "a close in this window must fire exactly one disconnect: " + fired);
         assertEquals(DisconnectReason.LOCAL_CLOSE, fired.get(0).reason());
         assertFalse(racing.isOpen(), "a closed connection must never report itself open");
     }
@@ -149,15 +157,24 @@ final class IceAdapterConnectionCloseRaceTest {
     @Test
     void aCloseBeforeTheSocketExistsFiresLocalCloseExactlyOnce() throws Exception {
         List<DisconnectEvent> fired = new CopyOnWriteArrayList<>();
-        // A port with no listener, so the connect is still retrying when close lands. Port 1 is
-        // below every platform's ephemeral range, so no bind(0) in this JVM can be handed it.
-        conn = new IceAdapterConnection(1, ATTEMPTS, Duration.ofMillis(100), CALL_TIMEOUT);
+        // A port with no listener, so the connect is still retrying when close lands. Freeing the
+        // fixture's own port is the idiom the sibling file uses three times, and is sturdier than
+        // a hardcoded low port: port 1 relies on the environment answering with a fast
+        // ECONNREFUSED, and one that DROPs instead would block new Socket() until the OS connect
+        // timeout and blow this class's 30s @Timeout.
+        int deadPort = server.port();
+        server.stop();
+        conn = new IceAdapterConnection(deadPort, ATTEMPTS, Duration.ofMillis(100), CALL_TIMEOUT);
         conn.onDisconnect(fired::add);
 
         CompletableFuture<Void> connected = conn.connect();
         conn.close();
 
         assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+        // close() fires on this thread only if it wins disconnectFired's CAS; if the connect
+        // thread wins via the ConnectAbandonedException path, the winner may still be between the
+        // CAS and the listener call when we get here.
+        assertTrue(waitFor(() -> !fired.isEmpty()), "a disconnect must fire, whoever fires it");
         assertEquals(1, fired.size(), "exactly one disconnect, whoever fired it: " + fired);
         assertEquals(DisconnectReason.LOCAL_CLOSE, fired.get(0).reason());
     }
