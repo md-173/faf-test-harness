@@ -44,6 +44,9 @@ final class IceSmokeLiveTest {
     /** Environment override for the adapter jar, consistent with R74's documented setup. */
     private static final String ADAPTER_JAR_ENV = "FAF_ICE_ADAPTER_JAR";
 
+    /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     /**
      * Budget handed to the command. Comfortably above the ~2 s a healthy adapter needs, and far
      * enough below the class timeout that a blown budget still reports as a verdict.
@@ -83,16 +86,26 @@ final class IceSmokeLiveTest {
         return cmd.execute(args);
     }
 
-    /** {@code @EnabledIf} probe — skips cleanly (not fails) when no real adapter jar is present. */
+    /**
+     * {@code @EnabledIf} probe — skips cleanly (not fails) when no real adapter jar is present,
+     * unless {@value #LIVE_REQUIRED_ENV} is {@code true}, which turns the skip into a failure
+     * naming what is missing (WBS-2.3.3.1). A CI job that provisions the binaries sets it, so a
+     * misprovisioned run cannot go green having tested nothing; a local run leaves it unset and
+     * still self-skips.
+     */
     @SuppressWarnings("unused")
     static boolean adapterJarAvailable() {
         Path binary = findAdapterBinary();
         if (binary == null) {
-            System.out.println(
-                    "[live] skipping ice-smoke live test: no real faf-ice-adapter jar found (set "
+            String reason =
+                    "no real faf-ice-adapter jar found (set "
                             + ADAPTER_JAR_ENV
                             + " or run ./gradlew downloadIceAdapter; see "
-                            + "documentation/operations/ice-adapter-setup.md).");
+                            + "documentation/operations/ice-adapter-setup.md).";
+            if ("true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+                throw new IllegalStateException(LIVE_REQUIRED_ENV + "=true but " + reason);
+            }
+            System.out.println("[live] skipping ice-smoke live test: " + reason);
         }
         return binary != null;
     }

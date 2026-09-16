@@ -122,6 +122,9 @@ final class GpgNetConnectionLiveSmokeTest {
     /** Environment override for the adapter jar, consistent with R74's documented setup. */
     private static final String ADAPTER_JAR_ENV = "FAF_ICE_ADAPTER_JAR";
 
+    /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
+    private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
     /**
      * Launch identity, echoed back to us inside {@code CreateLobby}. Deliberately not the adapter's
      * or the harness's defaults, so the assertions prove the values travelled rather than
@@ -370,17 +373,25 @@ final class GpgNetConnectionLiveSmokeTest {
                 .orElse(System.getProperty("java.home") + "/bin/java");
     }
 
-    /** {@code @EnabledIf} probe — skips cleanly (not fails) when no adapter jar is present. */
+    /**
+     * {@code @EnabledIf} probe — skips cleanly (not fails) when no adapter jar is present, unless
+     * {@value #LIVE_REQUIRED_ENV} is {@code true}, which turns the skip into a failure naming what
+     * is missing (WBS-2.3.3.1). A CI job that provisions the binaries sets it, so a misprovisioned
+     * run cannot go green having tested nothing; a local run leaves it unset and still self-skips.
+     */
     @SuppressWarnings("unused")
     static boolean adapterJarAvailable() {
         Path binary = findAdapterBinary();
         if (binary == null) {
-            System.out.println(
-                    "[live smoke] skipping GPGNet live smoke test: no faf-ice-adapter jar found "
-                            + "(set "
+            String reason =
+                    "no faf-ice-adapter jar found (set "
                             + ADAPTER_JAR_ENV
                             + " or run ./gradlew downloadIceAdapter; see "
-                            + "documentation/operations/ice-adapter-setup.md).");
+                            + "documentation/operations/ice-adapter-setup.md).";
+            if ("true".equals(System.getenv(LIVE_REQUIRED_ENV))) {
+                throw new IllegalStateException(LIVE_REQUIRED_ENV + "=true but " + reason);
+            }
+            System.out.println("[live smoke] skipping GPGNet live smoke test: " + reason);
         }
         return binary != null;
     }
