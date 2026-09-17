@@ -242,6 +242,75 @@ final class GameExitClassificationTest {
         assertFalse(lifecycle.gameCrashed(), "a running game has not crashed");
     }
 
+    /**
+     * mock-game's own {@code ADAPTER_LOST} is carved out of the crash reading (#357 review).
+     *
+     * <p>The game diagnosed its own end and named the cause, which an arbitrary non-zero exit does
+     * not. Reporting it as a crash was also non-deterministic: the adapter's death drives
+     * TERMINATED and so teardown, racing this classification, and whichever won decided between
+     * exit {@code 71} and exit {@code 0} for one scenario. Keyed on the code the game reported,
+     * which does not race.
+     */
+    @Test
+    void anAdapterLostExitIsReportedAsAdapterLossRatherThanACrash() {
+        ILoggingEvent event = classify(69, false, true);
+
+        assertFalse(
+                lifecycle.gameCrashed(), "a diagnosed adapter loss is not an unexplained death");
+        assertTrue(lifecycle.gameAdapterLost(), "it must drive the adapter-lost exit code instead");
+        assertTrue(
+                event.getFormattedMessage().contains("losing its GPGNet link"),
+                "the log line must name the cause: " + event.getFormattedMessage());
+    }
+
+    /**
+     * The determinism this carve-out exists for, pinned.
+     *
+     * <p>An adapter dying mid-session drives TERMINATED and so teardown, which races the game's own
+     * exit classification. Reading {@code teardown.hasRun()} here therefore answered differently
+     * run to run, and the same scenario reported two different exit codes. The verdict must not
+     * move when teardown has already run for a reason nobody signalled.
+     */
+    @Test
+    void anAdapterLostExitIsStillAdapterLostWhenAnUnsignalledTeardownWonTheRace() {
+        teardown.run();
+        classify(69, false, true);
+
+        assertTrue(
+                lifecycle.gameAdapterLost(),
+                "the verdict must not depend on which of teardown and classification ran first");
+    }
+
+    /** A signalled teardown does explain it: the operator stopped the run. */
+    @Test
+    void anAdapterLostExitAfterASignalIsNeitherVerdict() {
+        teardown.markSignalled();
+        teardown.run();
+        ILoggingEvent event = classify(69, false, true);
+
+        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.gameAdapterLost(), "the harness asked for this one");
+        assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
+    }
+
+    /**
+     * A confirmed clean end outranks the code: the session delivered its closing frames and the
+     * process died afterwards, which the branch above this one already reported as unremarkable.
+     */
+    @Test
+    void anAdapterLostExitAfterACleanEndIsNeitherVerdict() {
+        classify(69, true, true);
+
+        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.gameAdapterLost());
+    }
+
+    /** Neither verdict is reported until the game has actually exited. */
+    @Test
+    void noVerdictIsReportedBeforeTheGameHasExited() {
+        assertFalse(lifecycle.gameAdapterLost(), "a running game has not lost its adapter");
+    }
+
     /** The crash proper: a non-zero exit, nothing observed, no teardown to explain it. */
     @Test
     void anAbnormalExitIsReportedAsACrash() {
