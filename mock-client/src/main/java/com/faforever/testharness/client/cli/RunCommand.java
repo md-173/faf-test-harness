@@ -201,9 +201,6 @@ public final class RunCommand implements Callable<Integer> {
         if (!session.isDisconnected()) {
             log.info("shutdown signal received; tearing down session");
         }
-        // Marked before the teardown runs, so a game that dies because teardown quit the adapter is
-        // never mistaken for one that died on its own (WBS-5.2, #357 review).
-        teardown.markSignalled();
         teardown.run();
     }
 }

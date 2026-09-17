@@ -29,13 +29,15 @@ public final class ExitCodes {
 
     /**
      * The session ran, but its game reported that the GPGNet link to the ICE adapter went down
-     * underneath it: mock-game exited with its own {@code ADAPTER_LOST}, and no shutdown signal
-     * explains it (WBS-5.2).
+     * underneath it: mock-game exited with its own {@code ADAPTER_LOST} (WBS-5.2).
      *
-     * <p>Keyed on a signal rather than on teardown having run, because teardown is what made the
-     * old behaviour non-deterministic: an adapter dying drives TERMINATED and so teardown, racing
-     * the game's exit classification. A Ctrl-C is marked before teardown quits the adapter, so a
-     * game that dies of that is excluded without consulting anything that races.
+     * <p>Decided from the code the game reported, not from whether teardown has run, because
+     * teardown is what made the old behaviour non-deterministic: an adapter dying drives TERMINATED
+     * and so teardown, racing the game's exit classification. A harness teardown cannot itself
+     * produce this code, since it terminates the game and waits for it to exit before it touches
+     * the adapter. A Ctrl-C can, but only through a race in which the signal reaches the adapter
+     * first, and on that path the process exits with the signal's own code whatever the harness
+     * computed.
      *
      * <p>Deliberately the same number as mock-game's {@code ExitCodes.ADAPTER_LOST}, unlike {@link
      * #GAME_CRASHED}, because here the two codes report the same event seen from two sides rather
