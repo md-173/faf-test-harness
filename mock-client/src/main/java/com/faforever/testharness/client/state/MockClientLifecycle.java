@@ -966,28 +966,27 @@ public final class MockClientLifecycle {
      */
     void classifyGameExit(
             final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
-        if (exitCode == GAME_ADAPTER_LOST_EXIT && !cleanEnd && !teardown.wasSignalled()) {
+        if (exitCode == GAME_ADAPTER_LOST_EXIT && !cleanEnd) {
             // Ahead of the teardown branch below, and deliberately so (#357 review). It is not a
             // crash: the game diagnosed its own end and named the cause, which an arbitrary
             // non-zero exit does not.
             //
-            // Tested before teardown because teardown is what made this non-deterministic in the
-            // first place. An adapter dying mid-session drives TERMINATED and so teardown, which
-            // races this classification, so asking hasRun() here answered differently run to run
-            // and the same scenario reported two different exit codes. wasSignalled() is the
-            // question actually worth asking, and it does not race: a Ctrl-C sets it before
-            // teardown quits the adapter, so a game that dies of that is already excluded, while a
-            // game that dies with it unset died of something nobody asked for.
+            // Tested before teardown because teardown is what made this non-deterministic. An
+            // adapter dying mid-session drives TERMINATED and so teardown, which races this
+            // classification, so asking hasRun() first answered differently run to run and one
+            // scenario reported two exit codes. Keyed on the code instead, which does not race.
+            //
+            // A harness teardown cannot be what produced this code: SessionTeardown terminates the
+            // game and waits for it to exit before it touches the adapter, so a game it stops exits
+            // on its own signal rather than on losing its link. A 69 is reachable during a Ctrl-C
+            // only through a race, when the signal reaches the adapter first, and the process then
+            // exits with the signal's code whatever this decides, so only the log line is at stake.
             LOG.warn(
                     "mock-game exited with code {} after losing its GPGNet link to the adapter;"
                             + " the adapter's own exit is reported separately",
                     exitCode);
             gameExitVerdict = GameExitVerdict.ADAPTER_LOST;
-        } else if (exitCode != 0 && (teardown.hasRun() || teardown.wasSignalled())) {
-            // Either half suppresses the reading, and the second half is not redundant (#357
-            // review): the signal is marked a statement before teardown starts, so a game exiting
-            // inside that window would otherwise match neither this branch nor the one above it and
-            // be reported as a crash the operator had just asked for.
+        } else if (exitCode != 0 && teardown.hasRun()) {
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);

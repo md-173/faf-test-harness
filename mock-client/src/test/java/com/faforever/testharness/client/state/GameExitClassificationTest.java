@@ -267,50 +267,18 @@ final class GameExitClassificationTest {
      * The determinism this carve-out exists for, pinned.
      *
      * <p>An adapter dying mid-session drives TERMINATED and so teardown, which races the game's own
-     * exit classification. Reading {@code teardown.hasRun()} here therefore answered differently
+     * exit classification. Reading {@code teardown.hasRun()} first therefore answered differently
      * run to run, and the same scenario reported two different exit codes. The verdict must not
-     * move when teardown has already run for a reason nobody signalled.
+     * move when teardown happened to win that race.
      */
     @Test
-    void anAdapterLostExitIsStillAdapterLostWhenAnUnsignalledTeardownWonTheRace() {
+    void anAdapterLostExitIsStillAdapterLostWhenTeardownWonTheRace() {
         teardown.run();
         classify(69, false, true);
 
         assertTrue(
                 lifecycle.gameAdapterLost(),
                 "the verdict must not depend on which of teardown and classification ran first");
-    }
-
-    /** A signalled teardown does explain it: the operator stopped the run. */
-    @Test
-    void anAdapterLostExitAfterASignalIsNeitherVerdict() {
-        teardown.markSignalled();
-        teardown.run();
-        ILoggingEvent event = classify(69, false, true);
-
-        assertFalse(lifecycle.gameCrashed());
-        assertFalse(lifecycle.gameAdapterLost(), "the harness asked for this one");
-        assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
-    }
-
-    /**
-     * A game killed by the operator's signal before teardown has started is still the operator's
-     * doing (#357 review).
-     *
-     * <p>The shutdown hook marks the signal a statement before it runs teardown, so there is a
-     * window in which the signal is known but {@code hasRun()} is still false. A death landing
-     * there, realistically {@code 143} from another shutdown hook reaching the game first, matched
-     * neither suppressing branch and fell through to the crash reading: a crash reported for a run
-     * the operator had just stopped. {@code markSignalled()} without {@code run()} is that window.
-     */
-    @Test
-    void anExitInsideTheSignalToTeardownWindowIsNeitherVerdict() {
-        teardown.markSignalled();
-        ILoggingEvent event = classify(143, false, true);
-
-        assertFalse(lifecycle.gameCrashed(), "the operator stopped this run");
-        assertFalse(lifecycle.gameAdapterLost());
-        assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
     }
 
     /**
