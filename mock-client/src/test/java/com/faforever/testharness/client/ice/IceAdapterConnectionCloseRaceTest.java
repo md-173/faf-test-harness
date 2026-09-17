@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -225,6 +226,10 @@ final class IceAdapterConnectionCloseRaceTest {
      * A close that stops the retrying is reported by the connect thread as {@code LOCAL_CLOSE}. The
      * 20 s budget (200 x 100 ms) leaves the retrying under way when the close lands, so its next
      * in-loop check abandons it; the close is held in the seam until that report is out.
+     *
+     * <p>The general failure catch would also report {@code LOCAL_CLOSE} here, since it reads the
+     * flag too, so the reason alone does not show the abandon path ran. What that path adds is
+     * asserted instead: no connect error attached, and its own DEBUG line.
      */
     @Test
     void aCloseThatStopsTheRetryingIsReportedByTheConnectThreadAsLocalClose() throws Exception {
@@ -248,16 +253,26 @@ final class IceAdapterConnectionCloseRaceTest {
                     disconnected.countDown();
                 });
 
-        CompletableFuture<Void> connected = racing.connect();
-        racing.close();
+        try (LogCapture log = new LogCapture(IceAdapterConnection.class)) {
+            CompletableFuture<Void> connected = racing.connect();
+            racing.close();
 
-        assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the disconnect listener must fire");
-        assertNotSame(closer, firedOn.get(), "the connect thread must have reported, not close()");
-        assertEquals(
-                DisconnectReason.LOCAL_CLOSE,
-                event.get().reason(),
-                "a close that stopped the retrying is a local close");
-        assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertNotSame(closer, firedOn.get(), "the connect thread must report, not close()");
+            assertEquals(
+                    DisconnectReason.LOCAL_CLOSE,
+                    event.get().reason(),
+                    "a close that stopped the retrying is a local close");
+            assertNull(
+                    event.get().error(),
+                    "the abandon path reports no connect error: " + event.get().error());
+            assertTrue(
+                    log.contains(
+                            Level.DEBUG,
+                            "ICE adapter connect abandoned: close requested while retrying"),
+                    "the abandon path should log its own DEBUG line: " + log.events());
+            assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+        }
     }
 
     /**
