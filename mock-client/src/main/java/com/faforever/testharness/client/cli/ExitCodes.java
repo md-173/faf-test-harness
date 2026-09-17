@@ -28,42 +28,6 @@ public final class ExitCodes {
     public static final int RUNTIME = 70;
 
     /**
-     * The session ran, but its game reported that the GPGNet link to the ICE adapter went down
-     * underneath it: mock-game exited with its own {@code ADAPTER_LOST} (WBS-5.2).
-     *
-     * <p>Decided from the code the game reported, not from whether teardown has run, because
-     * teardown is what made the old behaviour non-deterministic: an adapter dying drives TERMINATED
-     * and so teardown, racing the game's exit classification. A harness teardown cannot itself
-     * produce this code, since it terminates the game and waits for it to exit before it touches
-     * the adapter. A Ctrl-C can, but only through a race in which the signal reaches the adapter
-     * first, and on that path the process exits with the signal's own code whatever the harness
-     * computed.
-     *
-     * <p>Deliberately the same number as mock-game's {@code ExitCodes.ADAPTER_LOST}, unlike {@link
-     * #GAME_CRASHED}, because here the two codes report the same event seen from two sides rather
-     * than two different findings. {@code 69} is sysexits' {@code EX_UNAVAILABLE}, which fits both.
-     *
-     * <p>Separate from {@link #GAME_CRASHED} because the game's death is <em>accounted for</em>: it
-     * said why it ended. Reporting it as a crash was also non-deterministic, since whether the
-     * adapter's death drove teardown before the game's exit was classified decided between two exit
-     * codes for one scenario.
-     *
-     * <p>One race remains, narrower than the one this replaced. If the adapter dies, the game is in
-     * a footrace between noticing its own socket close and being terminated by the teardown that
-     * the adapter's death triggers: winning reports this code, losing reports {@code 143} after
-     * teardown and exits {@code OK}. The game is reacting to an EOF on a socket it is already
-     * blocked reading, so it wins in practice, and closing the gap entirely would mean teardown
-     * waiting on a process it is about to kill. What is gone is the previous coin flip between two
-     * in-process callbacks, which no ordering of the harness's own work could decide.
-     *
-     * <p>Narrower than "the adapter died". It is reported only when the game noticed and said so.
-     * An adapter that exits while the game is already being torn down still produces only the
-     * {@code ICE adapter exited abnormally} warning; giving that its own exit status belongs to
-     * adapter crash recovery (WBS-3.1.2.8) rather than here.
-     */
-    public static final int ADAPTER_LOST = 69;
-
-    /**
      * The session ran, but the game process died in a way nobody asked for: a non-zero exit with no
      * {@code GameEnded} frame observed and no harness-initiated teardown (WBS-5.2).
      *
@@ -78,13 +42,17 @@ public final class ExitCodes {
      * crash recovery"), and the real client's {@code GameRunner.handleTermination} routes any
      * non-zero exit to {@code alertOnBadExit} in the same way.
      *
-     * <p>One exit is carved out of that width: a game reporting {@link #ADAPTER_LOST} told us why
-     * it ended, so it is reported as that instead. See there for why.
+     * <p>One exit is carved out of that width: mock-game's own {@code ADAPTER_LOST} ({@code 69}).
+     * The game told us why it ended, and an adapter dying underneath a healthy game is not the
+     * game's doing, so it is logged as a lost link and the run exits {@link #OK}. A client exit
+     * code for adapter death is #406, which keys it on the adapter's own exit: this one is
+     * classified asynchronously, after the adapter's death may already have released {@code
+     * RunCommand}, so a code read from it would differ run to run.
      *
      * <p>Only that one, although mock-game also names its cause when it exits {@code LOBBY_TIMEOUT}
      * or {@code USAGE}. Those two stay here deliberately: a game that was never driven into a role,
      * or launched with an argument it rejected, is a failure of the harness run itself and worth
-     * surfacing, whereas an adapter dying underneath a healthy game is not the game's doing.
+     * surfacing.
      *
      * <p>Distinct from {@link #RUNTIME} because that code already means four other things here: a
      * failed token exchange, a lobby handshake timeout, a setup failure, an abrupt lobby close. So
