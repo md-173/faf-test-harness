@@ -156,11 +156,12 @@ public class IceAdapterConnection {
      * Thrown by {@link #connectWithRetry()} when {@link #close()} cut the retry window short, as
      * distinct from the window genuinely running out.
      *
-     * <p>Exists so {@link #runConnection} can tell the two apart. Both exits from the retry loop
-     * are {@code IOException}s, and re-reading {@code closeRequested} in the catch would not
-     * discriminate them: a {@code close()} arriving while a genuinely exhausted budget was
-     * unwinding would then be reported as a local close, mislabelling a real never-bound adapter.
-     * The exception's identity is the only thing that distinguishes the two at that point.
+     * <p>Exists so {@link #runConnection} can report a close that stopped the retrying as what it
+     * is, at DEBUG and with no error attached, rather than as a failed connect. It does not decide
+     * the disconnect reason alone: a close that lands after the last in-loop check reaches the
+     * general catch instead, which reads {@code closeRequested} to choose its reason and its log
+     * level, as the read loop reads it for its reason (WBS-3.2.2.1-fix, #404). Mock-game's {@code
+     * GpgNetConnection} has the same exception and the same catch.
      */
     private static final class ConnectAbandonedException extends IOException {
 
@@ -273,9 +274,10 @@ public class IceAdapterConnection {
 
     /**
      * Open the socket (retrying while the adapter binds) and start the reader. The returned future
-     * completes once the socket is open and the read loop is running; if every attempt fails it
-     * completes exceptionally <em>and</em> the disconnect listener fires with {@link
-     * DisconnectReason#CONNECT_FAILED}.
+     * completes once the socket is open and the read loop is running. If every attempt fails, the
+     * disconnect listener fires with {@link DisconnectReason#CONNECT_FAILED}, or with {@link
+     * DisconnectReason#LOCAL_CLOSE} if {@link #close()} had already been requested by then, and
+     * only then does the future complete exceptionally.
      *
      * @return future that completes once connected
      * @throws IllegalStateException if called more than once
@@ -297,28 +299,42 @@ public class IceAdapterConnection {
             opened = connectWithRetry();
             this.out = opened.getOutputStream();
         } catch (ConnectAbandonedException e) {
-            // Our own close(), not an unreachable adapter — report it as such. Discriminating on
-            // the
-            // exception type rather than re-reading closeRequested is deliberate: this catch cannot
-            // otherwise tell an abandoned connect from a genuinely exhausted retry budget, and a
-            // close() arriving during the unwind of the latter would mislabel a real never-bound
-            // adapter as a local close.
-            //
-            // Usually redundant: close() with no socket yet fires LOCAL_CLOSE itself, and
-            // fireDisconnect is one-shot, so this loses the race and is suppressed. It earns its
-            // place in the interleaving where the connect thread gets here first.
+            // Our own close(), not an unreachable adapter, so report it as such. Usually
+            // redundant: close() with no socket yet fires LOCAL_CLOSE itself, and fireDisconnect is
+            // one-shot, so this loses the race and is suppressed. It earns its place in the
+            // interleaving where the connect thread gets here first.
             LOG.debug("ICE adapter connect abandoned: close requested while retrying");
             connected.completeExceptionally(e);
             fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
             return;
         } catch (IOException e) {
-            LOG.warn(
-                    "could not connect to ICE adapter at {}:{}: {}",
-                    LOOPBACK,
-                    port,
-                    e.getMessage());
+            connectFailed();
+            // A close() landing after the last in-loop check still ends up here once the final
+            // attempt fails. With no socket published, close() fires LOCAL_CLOSE itself, so if this
+            // thread fires first it has to agree, and since it is our own teardown it gets no WARN
+            // claiming the adapter was never reachable (WBS-3.2.2.1-fix, #404). Reading the flag as
+            // the read loop does makes both sides report the same reason. No call can be pending to
+            // fail here: `out` is only assigned once a connect has succeeded.
+            //
+            // All of that happens before the future is failed: LaunchIceCommand and
+            // IceReachabilityCheck close because the connect failed, and would otherwise set the
+            // flag first and turn a genuine failure into a quiet local close.
+            boolean closing = closeRequested.get();
+            if (closing) {
+                LOG.debug(
+                        "ICE adapter connect abandoned: close landed in the last attempt ({})",
+                        e.getMessage());
+            } else {
+                LOG.warn(
+                        "could not connect to ICE adapter at {}:{}: {}",
+                        LOOPBACK,
+                        port,
+                        e.getMessage());
+            }
+            DisconnectReason reason =
+                    closing ? DisconnectReason.LOCAL_CLOSE : DisconnectReason.CONNECT_FAILED;
+            fireDisconnect(new DisconnectEvent(reason, e));
             connected.completeExceptionally(e);
-            fireDisconnect(new DisconnectEvent(DisconnectReason.CONNECT_FAILED, e));
             return;
         }
         this.socket = opened;
@@ -362,6 +378,32 @@ public class IceAdapterConnection {
      * which is the interleaving rather than an approximation of it (WBS-3.1.4.1-fix, #278).
      */
     void socketPublished() {
+        // Production does nothing here; see the javadoc for why the method exists at all.
+    }
+
+    /**
+     * Called on the connect thread when the connect has failed for any reason other than a close
+     * that stopped the retrying, before the close flag is read and before anything is logged, fired
+     * or completed. A no-op in production.
+     *
+     * <p>A seam like {@link #socketPublished()}, used with {@link #closeFlagSet()}. Together they
+     * let a test set the close flag after the last in-loop check and hold that {@link #close()}
+     * short of its own fire, so the reason this thread reports is the one the test observes. Held
+     * on its own, it lets a test register a reaction to the connect future before that future fails
+     * (WBS-3.2.2.1-fix, #404).
+     */
+    void connectFailed() {
+        // Production does nothing here; see the javadoc for why the method exists at all.
+    }
+
+    /**
+     * Called by {@link #close()}, on the calling thread, after it sets the close flag and before it
+     * reads the socket. A no-op in production.
+     *
+     * <p>A seam: overriding it holds a close between those two steps, the only way to let the
+     * connect thread fire first while the flag is already set. See {@link #connectFailed()}.
+     */
+    void closeFlagSet() {
         // Production does nothing here; see the javadoc for why the method exists at all.
     }
 
@@ -595,12 +637,19 @@ public class IceAdapterConnection {
     }
 
     /**
-     * Close the socket from this side. The reader thread observes the close, fires the disconnect
-     * listener with {@link DisconnectReason#LOCAL_CLOSE}, and fails any in-flight {@link #call}
-     * futures.
+     * Close the socket from this side. The disconnect listener fires once with {@link
+     * DisconnectReason#LOCAL_CLOSE}, unless a disconnect was already reported, in which case
+     * nothing more fires. With no socket published yet it fires from this method, or from the
+     * connect thread if that thread reports first: as the connect stops retrying, fails, or
+     * publishes the socket and then reads the close flag. With a published socket it always fires
+     * from the connect thread: in the read loop, or, when the close lands before the connect reads
+     * the close flag, as the connect abandons the socket. In-flight {@link #call} futures are
+     * failed on the connect thread in both of those, which covers every one: a call can only be
+     * pending once a connect has succeeded and the output stream exists.
      */
     public void close() {
         closeRequested.set(true);
+        closeFlagSet();
         Socket current = socket;
         if (current == null) {
             // connect() never succeeded (or wasn't called) — surface a local close directly.

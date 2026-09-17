@@ -115,6 +115,11 @@ final class IceAdapterConnectionTest {
         assertEquals("C", seen.get(2, TimeUnit.SECONDS));
     }
 
+    /**
+     * Every attempt failing with no close requested is a genuine failure: {@code CONNECT_FAILED},
+     * logged at WARN. The WARN is asserted because a close during the last attempt is now logged at
+     * DEBUG instead (#404), and nothing else would notice a genuine failure going quiet too.
+     */
     @Test
     void connectFailsAfterRetriesWhenNothingListens() throws Exception {
         IceAdapterConnection c =
@@ -128,11 +133,16 @@ final class IceAdapterConnectionTest {
                     disconnected.countDown();
                 });
 
-        CompletableFuture<Void> connectFuture = c.connect();
+        try (LogCapture log = new LogCapture(IceAdapterConnection.class)) {
+            CompletableFuture<Void> connectFuture = c.connect();
 
-        assertThrows(ExecutionException.class, () -> connectFuture.get(5, TimeUnit.SECONDS));
-        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
-        assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
+            assertThrows(ExecutionException.class, () -> connectFuture.get(5, TimeUnit.SECONDS));
+            assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+            assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
+            assertTrue(
+                    log.contains(Level.WARN, event.get().error().getMessage()),
+                    "a genuine connect failure should be logged at WARN: " + log.events());
+        }
     }
 
     /**
@@ -171,11 +181,12 @@ final class IceAdapterConnectionTest {
      * fires from {@code close()}'s own {@code socket == null} path.
      *
      * <p>The interleaving where the connect thread reports first <em>is</em> reachable now: the
-     * {@code socketPublished()} seam added by WBS-3.1.4.1-fix lets a test stop the connect thread
-     * between publishing the socket and re-reading the close flag, and {@code
-     * IceAdapterConnectionCloseRaceTest} drives exactly that. This javadoc used to say it was "a
-     * few instructions wide and not reachable from a test", which is no longer true and would lead
-     * the next reader to skip covering it.
+     * {@code closeFlagSet()} seam (WBS-3.2.2.1-fix, #404) holds {@code close()} after it sets the
+     * flag and short of its own fire, so the connect thread's next in-loop check reports instead,
+     * and {@code IceAdapterConnectionCloseRaceTest}'s {@code
+     * aCloseThatStopsTheRetryingIsReportedByTheConnectThreadAsLocalClose} drives exactly that. This
+     * javadoc used to say it was "a few instructions wide and not reachable from a test", which is
+     * no longer true and would lead the next reader to skip covering it.
      */
     @Test
     void closeDuringRetryReportsLocalCloseNotConnectFailure() throws Exception {
