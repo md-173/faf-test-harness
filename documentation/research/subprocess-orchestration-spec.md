@@ -48,9 +48,10 @@ workspace no longer hold:
 2. **Orphan prevention does not rely on an init process.** The harness JVM is
    not PID 1, and `SubprocessRegistry`'s shutdown hook is the safety net. §7.3
    records what that hook does not cover.
-3. **Multi-peer runs on one host.** Several Mock Clients share a host, each
-   configured with its own `--ice-adapter-*-port` values. §9 records the
-   decision.
+3. **Multi-peer runs on one host.** `mock-client session` runs every peer's
+   client in one JVM and allocates each peer's ports itself; clients started as
+   separate `run` processes each need their own `--ice-adapter-*-port` values.
+   §9 records the decision.
 
 Implementation note: the Subprocess Execution Controller must not bake
 container-specific paths or network assumptions into the Java code. Anyone who
@@ -576,22 +577,37 @@ resulting child is the leader of a new session, so `kill -- -<pgid>` delivers
 SIGTERM to every descendant in one syscall.
 
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
-`System.exit`) terminates both children through layer 1. A `SIGKILL` or OOM
+`System.exit`) terminates its children through layer 1. A `SIGKILL` or OOM
 kill of that JVM runs no hook, and nothing else in the harness terminates the
 children, so they are left running. The adapter does not close that gap on its
-own. faf-ice-adapter 3.3.14 deliberately stays up when its JSON-RPC client
-disconnects while the game is `LAUNCHING` (`RPCService.init`). In any other
-state its stop path throws before reaching `System.exit`: a
-`NullPointerException` if no game has connected yet, otherwise the unguarded
-`TrayIcon.close()` on a headless host, which `SessionTeardown` already works
-around. Either way, on a headless host a Mock Client killed with `SIGKILL`
-leaves its adapter running. Both cases were observed against 3.3.14 on a
-headless host, with the client killed in `HOSTING` and in `PLAYING`.
+own, because it normally never notices. faf-ice-adapter 3.3.14's JSON-RPC
+library runs the connection-loss handler only when a read on the socket throws
+(JJsonRpc `JJsonPeer.run`). A killed client's socket closes in an orderly way
+unless it had unread data, and an orderly close just ends that read loop, so
+the adapter carries on as if nothing happened, its GPGNet server still serving
+the game. If a read does throw, for example on a reset, the handler in
+`RPCService.init` still leaves the process up on a headless host: it
+deliberately stays up while the game is `LAUNCHING`, and in any other state it
+throws before reaching `System.exit`, with a `NullPointerException` if no game
+has connected yet, otherwise at the unguarded `TrayIcon.close()` that
+`SessionTeardown` already works around, after its stop path has closed the
+game's connection. Observed against 3.3.14 on a headless host: live, with the
+client killed in `HOSTING` and in `PLAYING`, and locally, with a stand-in
+JSON-RPC client killed before the game connected, with the game in `LOBBY`, and
+after `HostGame`. The adapter logged no connection loss in any of the local
+runs.
 
-mock-game ends on its own when its launch and match timers finish, or after
-30 s if its GPGNet connection never comes up. It stays up indefinitely only
-while connected with auto-launch disabled (a negative
-`--mock-game-launch-delay-seconds`).
+mock-game keeps running too, and while the adapter holds its connection only
+its own timers can end it. In `LOBBY` it has none: the launch timer is armed
+only by `HostGame` or `JoinGame`, which the adapter sends only when its client
+asks, and `--lobby-timeout-seconds`, which `MockGameLauncher` does not pass,
+defaults to waiting indefinitely. A Mock Client killed before it gives the game
+a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
+delay; the adapter still moves it out of `IDLE` by sending `CreateLobby` itself.
+Once hosting or joining, mock-game ends when its launch and match timers finish,
+unless auto-launch is disabled (a negative `--mock-game-launch-delay-seconds`),
+in which case it also waits indefinitely. It ends at once if the adapter closes
+its connection, and after 30 s if the connection never comes up.
 
 ### 7.4 Process tracking
 
@@ -655,6 +671,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 - [`shared/.../logging/ProcessOutputLogger.java`](../../shared/src/main/java/com/faforever/testharness/shared/logging/ProcessOutputLogger.java) — output capture implementation
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
 - [java-ice-adapter 3.3.14 `RPCService.java`](https://github.com/FAForever/java-ice-adapter/blob/3.3.14/ice-adapter/src/main/java/com/faforever/iceadapter/rpc/RPCService.java): adapter behaviour on losing its JSON-RPC client
+- [JJsonRpc `JJsonPeer.java` at `37669e0`](https://github.com/FAForever/JJsonRpc/blob/37669e0fed05937b733bbb64155bcb874ed07c35/src/main/java/com/nbarraille/jjsonrpc/JJsonPeer.java): the read loop that decides whether faf-ice-adapter 3.3.14 notices a lost JSON-RPC client
 
 ## 11. Sequence diagram — one-session lifecycle
 
