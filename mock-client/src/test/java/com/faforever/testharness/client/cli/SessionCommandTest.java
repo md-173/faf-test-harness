@@ -8,9 +8,11 @@ import com.faforever.testharness.client.config.ConfigLoader;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -194,7 +196,11 @@ final class SessionCommandTest {
         Path config =
                 Files.writeString(
                         dir.resolve("mock-client.json"),
-                        "{\"peerAccessTokenFiles\": \"" + token("c") + "," + token("d") + "\"}");
+                        "{\"peerAccessTokenFiles\": \""
+                                + json(token("c"))
+                                + ","
+                                + json(token("d"))
+                                + "\"}");
 
         Outcome outcome = execute(Map.of(), "--config=" + config);
 
@@ -215,6 +221,71 @@ final class SessionCommandTest {
         assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
     }
 
+    @Test
+    void bothPeerListsInTheConfigFileIsUsageNamingTheLayer() throws IOException {
+        Path config =
+                Files.writeString(
+                        dir.resolve("both.json"),
+                        "{\"peerRefreshTokenFiles\": \""
+                                + json(token("a"))
+                                + ","
+                                + json(token("b"))
+                                + "\", \"peerAccessTokenFiles\": \""
+                                + json(token("c"))
+                                + ","
+                                + json(token("d"))
+                                + "\"}");
+
+        Outcome outcome = execute(Map.of(), "--config=" + config);
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("are both set in the config file"), outcome.err());
+    }
+
+    @Test
+    void aBlankRefreshTokenFileIsUsageBeforeAnyLogin() throws IOException {
+        Path blank = Files.writeString(dir.resolve("blank.txt"), "\n");
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a"),
+                        "--peer-refresh-token-file=" + blank);
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(
+                outcome.err().contains("peer B: OAuth refresh-token file is empty"), outcome.err());
+    }
+
+    @Test
+    void twoAccessTokensForOneAccountIsUsage() throws IOException {
+        Path first = Files.writeString(dir.resolve("first.jwt"), jwtFor("7982"));
+        Path second = Files.writeString(dir.resolve("second.jwt"), jwtFor("7982"));
+        Outcome outcome = execute(Map.of(), "--peer-access-token-file=" + first + "," + second);
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("the same account as peer A"), outcome.err());
+    }
+
+    @Test
+    void theAccessTokenCommandLineCiWillUseNeedsNoRefreshSettings() throws IOException {
+        // What the live workflow's session step becomes once it switches (#364 follow-up): no
+        // --oauth-token-url, no --oauth-client-id, nothing but the lobby, identity and binaries.
+        String[] argv = {
+            "--lobby-websocket-url=wss://ws.faforever.xyz",
+            "--unique-id=00000000-0000-0000-0000-000000000000",
+            "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar"),
+            "--mock-game-binary-path=" + dir.resolve("no-such-game.jar"),
+            "session",
+            "--peers=2",
+            "--peer-access-token-file=" + token("c") + "," + token("d")
+        };
+
+        Outcome outcome = run(argv, Map.of());
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
     /**
      * An exit code and what picocli wrote to its error stream.
      *
@@ -230,13 +301,41 @@ final class SessionCommandTest {
                                 CliTestFixtures.withSubcommandAndIceBinary(
                                         "session", dir.resolve("no-such-adapter.jar").toString())));
         args.addAll(List.of(sessionArgs));
-        String[] argv = args.toArray(new String[0]);
+        return run(args.toArray(new String[0]), env);
+    }
+
+    private static Outcome run(final String[] argv, final Map<String, String> env) {
         CommandLine cmd = ConfigLoader.newCommandLine(argv, env);
         StringWriter err = new StringWriter();
         cmd.setOut(new PrintWriter(new StringWriter()));
         cmd.setErr(new PrintWriter(err));
         int exitCode = cmd.execute(argv);
         return new Outcome(exitCode, err.toString());
+    }
+
+    /**
+     * A path as a JSON string's contents, so a Windows backslash does not break the config file.
+     *
+     * @param path the path
+     * @return its text with backslashes escaped
+     */
+    private static String json(final Path path) {
+        return path.toString().replace("\\", "\\\\");
+    }
+
+    /**
+     * An unsigned JWT for one account, enough for the session's shared-account check.
+     *
+     * @param sub the numeric account id
+     * @return the token
+     */
+    private static String jwtFor(final String sub) {
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return encoder.encodeToString("{\"alg\":\"none\"}".getBytes(StandardCharsets.UTF_8))
+                + "."
+                + encoder.encodeToString(
+                        ("{\"sub\":\"" + sub + "\"}").getBytes(StandardCharsets.UTF_8))
+                + ".signature";
     }
 
     private Path token(final String name) throws IOException {

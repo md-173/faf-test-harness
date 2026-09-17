@@ -237,8 +237,9 @@ final class MultiPeerSessionLiveTest {
 
     /**
      * A peer's account credential, which is all that differs between peers' lobby login settings.
-     * Today it is a refresh-token file exchanged at Hydra. The pre-signed access-token file (#340)
-     * becomes a second implementation with its own {@link #args()}, and nothing else changes.
+     * Here it is always a refresh-token file exchanged at Hydra, which is what the local accounts
+     * hold. {@code session} also accepts one pre-signed access-token file per peer, which this test
+     * does not need.
      *
      * @param slot the peer this credential belongs to
      * @param refreshTokenFile the account's refresh-token file, rewritten in place on every use
@@ -267,8 +268,8 @@ final class MultiPeerSessionLiveTest {
         // The one prerequisite gate. A machine without the live environment skips here; under
         // FAF_LIVE_REQUIRED (WBS-2.3.3.1) the same list fails the case instead, so a job that
         // means to run this cannot go green having run nothing. No CI job runs this test today:
-        // every peer needs its own refresh token, which rotates on use and so cannot be a CI
-        // secret until #340's access-token files land.
+        // every peer needs its own refresh token, which rotates on use, so a CI job runs the
+        // session command on access-token files instead (the #364 follow-up).
         List<String> missing = missingPrerequisites(joinerAmount + 1);
         if (!missing.isEmpty()) {
             if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {

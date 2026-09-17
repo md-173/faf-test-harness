@@ -59,22 +59,24 @@ failed checkpoint logs `session: FAIL <peer>: <stage>: <detail>`. The clients
 share one JVM, so anything that kills it ends every peer; their adapters and games
 are separate processes, and any still running after teardown are killed and fail
 the run. The session sets each peer's credential, adapter ports, launch delay and
-host or join intent, so those options, the root `--oauth-refresh-token-file` and
-`--oauth-access-token-file` included, are not used, though they are still
-validated. Missing adapter, game or `faf-uid` binaries are refused before any
-login. Evidence lands in the working directory: `logs/mockclient.jsonl` (or
-`--log-file`) holds every client line with the captured adapter and game output,
-each tagged with the peer's `instance` label A, B, ..., and each game also writes
-`logs/mockgame-<label>.jsonl`. Do not set `INSTANCE_NAME`; `session` refuses it.
+host or join intent, so the root `--oauth-refresh-token-file` and
+`--oauth-access-token-file` are ignored entirely, and the other options it sets
+are not used, though they are still validated. Missing adapter, game or `faf-uid`
+binaries are refused before any login. Evidence lands in the working directory:
+`logs/mockclient.jsonl` (or `--log-file`) holds every client line with the
+captured adapter and game output, each tagged with the peer's `instance` label A,
+B, ..., and each game also writes `logs/mockgame-<label>.jsonl`. Do not set
+`INSTANCE_NAME`; `session` refuses it.
 
 `session` takes one credential file per peer, host first, on one of two channels.
 `--peer-refresh-token-file` takes refresh-token files, which the session exchanges
 at Hydra and rewrites in place on every run, so point it at the real files, never
-copies. `--peer-access-token-file` takes pre-signed access tokens, the channel
-`--oauth-access-token-file` uses (WBS-3.1.6.4): each is sent as-is, never renewed
-or rewritten, and needs no `--oauth-token-url` or `--oauth-client-id`. Nothing in
-the harness checks a token's expiry, so an expired one fails at the `welcome`
-stage with the lobby's own rejection; see [`harness-runbook.md`
+copies or a process substitution. `--peer-access-token-file` takes pre-signed
+access tokens, the channel `--oauth-access-token-file` uses (WBS-3.1.6.4): each is
+sent as-is, never renewed or rewritten, and needs no `--oauth-token-url` or
+`--oauth-client-id`. Nothing in the harness checks a token's expiry, so an expired
+one fails at the `welcome` stage with the lobby's own rejection; see
+[`harness-runbook.md`
 §3](../documentation/operations/harness-runbook.md#the-other-credential-channel-a-pre-signed-access-token)
 for what a token must carry and what a rejection looks like. Either flag can be
 repeated or given comma-separated paths. From the environment they are
@@ -84,8 +86,12 @@ repeated or given comma-separated paths. From the environment they are
 string rather than a JSON array. If both channels are configured, the one at the
 higher layer wins (command line, then environment, then config file), and lists
 never merge across layers; both at the same layer is refused. Files beyond
-`--peers` are unused. A shared file, an unreadable or empty one, or fewer files
-than peers is refused before any login.
+`--peers` are unused. A shared file, an unreadable or empty one, a refresh-token
+path that is not a regular file, two access tokens for one account (read from the
+token's `sub` claim), or fewer files than peers is refused before any login; two
+refresh tokens for one account are caught at the joiner's `welcome` stage. The run
+logs which list it used and where it came from, as `session: credentials from
+<flag> (<layer>)`.
 
 Invocation shape:
 
@@ -110,7 +116,7 @@ is no manifest, and it prints `mock-client (development build)` instead.
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running. |
-| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, or `INSTANCE_NAME` set, all refused before any process starts. |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file or (on access tokens) one account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, or `INSTANCE_NAME` set, all refused before any process starts. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed (including no two-way game traffic) or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.

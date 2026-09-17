@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.session;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -222,6 +224,58 @@ final class MultiPeerSessionTest {
     }
 
     @Test
+    void refusesTwoAccessTokensForOneAccount() throws IOException {
+        Path first = Files.writeString(dir.resolve("first.jwt"), jwt("\"7982\""));
+        Path second = Files.writeString(dir.resolve("second.jwt"), jwt("\"7982\""));
+        List<MockClientConfig> bases = List.of(accessBase(first), accessBase(second));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(
+                e.getMessage()
+                        .startsWith(
+                                "peer B: access token is for account 7982, the same account as"
+                                        + " peer A"),
+                e.getMessage());
+    }
+
+    @Test
+    void acceptsAccessTokensForDifferentAccounts() throws IOException {
+        Path first = Files.writeString(dir.resolve("first.jwt"), jwt("\"7982\""));
+        Path second = Files.writeString(dir.resolve("second.jwt"), jwt("330072"));
+        List<MockClientConfig> bases = List.of(accessBase(first), accessBase(second));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
+    }
+
+    @Test
+    void readsTheAccountOnlyFromANumericSubClaim() {
+        assertEquals(Optional.of("7982"), MultiPeerSession.accountOf(jwt("\"7982\"")));
+        assertEquals(Optional.of("7982"), MultiPeerSession.accountOf(jwt("7982")));
+        assertEquals(Optional.empty(), MultiPeerSession.accountOf(jwt("\"test\"")));
+        assertEquals(Optional.empty(), MultiPeerSession.accountOf(jwt("null")));
+        assertEquals(Optional.empty(), MultiPeerSession.accountOf("not-a-jwt"));
+        assertEquals(Optional.empty(), MultiPeerSession.accountOf("a.!!!.c"));
+    }
+
+    @Test
+    void refusesABlankRefreshTokenFileBeforeAnyLogin() throws IOException {
+        Path blank = Files.writeString(dir.resolve("blank_refresh.txt"), " \n");
+        List<MockClientConfig> bases = List.of(base(token("a")), base(blank));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(
+                e.getMessage().startsWith("peer B: OAuth refresh-token file is empty"),
+                e.getMessage());
+    }
+
+    @Test
     void refusesALogLevelThatHidesGameTraffic() throws IOException {
         List<MockClientConfig> bases =
                 List.of(base(token("a"), "--log-level=WARN"), base(token("b"), "--log-level=WARN"));
@@ -337,17 +391,33 @@ final class MultiPeerSessionTest {
     }
 
     /**
+     * An unsigned JWT with the given {@code sub} claim: enough for {@link
+     * MultiPeerSession#accountOf(String)}, which never checks a signature.
+     *
+     * @param sub the claim's JSON value, e.g. {@code "7982"} or {@code 7982}
+     * @return the token
+     */
+    private static String jwt(final String sub) {
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        String header = encoder.encodeToString("{\"alg\":\"none\"}".getBytes(UTF_8));
+        String payload = encoder.encodeToString(("{\"sub\":" + sub + "}").getBytes(UTF_8));
+        return header + "." + payload + ".signature";
+    }
+
+    /**
      * A base on the access-token channel with nothing else credential-related, which also shows
      * that channel needs no token URL and no client id.
      *
      * @param accessTokenFile the access-token file
      * @return the config
      */
-    private static MockClientConfig accessBase(final Path accessTokenFile) {
+    private MockClientConfig accessBase(final Path accessTokenFile) {
         String[] args = {
             "--lobby-websocket-url=wss://ws.faforever.xyz",
             "--oauth-access-token-file=" + accessTokenFile,
-            "--unique-id=00000000-0000-0000-0000-000000000000"
+            "--unique-id=00000000-0000-0000-0000-000000000000",
+            // A path that cannot exist, so the binary refusal after the credentials is certain.
+            "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar")
         };
         return ConfigLoader.load(args, Map.of()).orElseThrow();
     }

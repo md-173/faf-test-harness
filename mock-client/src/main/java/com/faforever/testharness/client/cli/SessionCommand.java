@@ -41,18 +41,21 @@ import picocli.CommandLine.Spec;
  *
  * <p>The inherited options supply what every peer shares (lobby, OAuth endpoints, {@code faf-uid},
  * adapter and game binaries, log level). The session sets each peer's credential, adapter ports,
- * auto-launch off, and the host or join intent itself, so {@code --oauth-refresh-token-file},
- * {@code --oauth-access-token-file}, {@code --ice-adapter-*-port}, {@code
- * --mock-game-launch-delay-seconds}, {@code --host-*}, {@code --target-game-id}, {@code
- * --game-join-password} and {@code --queue-*} are not used, though they are still validated.
+ * auto-launch off, and the host or join intent itself. The root {@code --oauth-refresh-token-file}
+ * and {@code --oauth-access-token-file} are therefore ignored entirely, and {@code
+ * --ice-adapter-*-port}, {@code --mock-game-launch-delay-seconds}, {@code --host-*}, {@code
+ * --target-game-id}, {@code --game-join-password} and {@code --queue-*} are not used, though they
+ * are still validated. The run logs which credential list it used and where that came from, so a CI
+ * that set both can see which one won.
  *
  * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
  * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including no
  * credential list, both lists at one layer, fewer credential files than peers, two peers on one
- * file, an unreadable or empty file, a missing binary or a {@code --log-level} above INFO (the
- * traffic check reads INFO lines), all refused before any process starts; {@link ExitCodes#RUNTIME}
- * when a checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a
- * subprocess survives teardown, which is then killed.
+ * file or (on access tokens) one account, a refresh-token path that is not a regular file, an
+ * unreadable or empty file, a missing binary or a {@code --log-level} above INFO (the traffic check
+ * reads INFO lines), all refused before any process starts; {@link ExitCodes#RUNTIME} when a
+ * checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a subprocess
+ * survives teardown, which is then killed.
  */
 @Command(
         name = "session",
@@ -66,11 +69,11 @@ import picocli.CommandLine.Spec;
                         + "received every other game's traffic; needs --log-level INFO or finer. "
                         + "Give each peer one credential file with --peer-refresh-token-file or "
                         + "--peer-access-token-file. Sets each peer's credential, adapter ports, "
-                        + "launch delay and host or join intent itself, so the "
-                        + "--oauth-refresh-token-file, --oauth-access-token-file, "
-                        + "--ice-adapter-*-port, --mock-game-launch-delay-seconds, --host-*, "
-                        + "--target-game-id, --game-join-password and --queue-* options are not "
-                        + "used, though they are still validated.")
+                        + "launch delay and host or join intent itself: the root "
+                        + "--oauth-refresh-token-file and --oauth-access-token-file are ignored, "
+                        + "and the --ice-adapter-*-port, --mock-game-launch-delay-seconds, "
+                        + "--host-*, --target-game-id, --game-join-password and --queue-* options "
+                        + "are not used, though they are still validated.")
 public final class SessionCommand implements Callable<Integer> {
 
     /** The refresh-token channel's option, shared with the layer lookup so a typo cannot pass. */
@@ -188,6 +191,13 @@ public final class SessionCommand implements Callable<Integer> {
         }
 
         Logger log = LoggerFactory.getLogger(SessionCommand.class);
+        // Which list won matters to a CI mid-switch: the other one may hold secrets it thinks are
+        // in
+        // use, and a refresh run spends its tokens while passing.
+        log.info(
+                "session: credentials from {} ({})",
+                flag,
+                MockClientCli.layerDescription(spec, flag));
         // Ctrl-C or SIGTERM: tear every peer down before the JVM exits. close() is idempotent and
         // synchronized, so this and the teardown below never both run a peer's teardown.
         Runtime.getRuntime().addShutdownHook(new Thread(session::close, "mc-session-shutdown"));

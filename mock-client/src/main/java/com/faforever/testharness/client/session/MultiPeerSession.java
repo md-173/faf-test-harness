@@ -10,13 +10,17 @@ import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.state.ClientState;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -166,6 +170,12 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     private static final Duration NO_ORPHANS_TIMEOUT = Duration.ofSeconds(20);
 
+    /** Dot-separated segments of a JWT: header, payload, signature. */
+    private static final int JWT_PARTS = 3;
+
+    /** Reads an access token's payload for {@link #accountOf(String)}. */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     /** Poll slice for every bounded wait built on a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
 
@@ -233,6 +243,7 @@ public final class MultiPeerSession implements AutoCloseable {
         this.hostTitle = hostTitle;
         List<TokenSource> resolved = new ArrayList<>();
         Map<Path, String> owners = new HashMap<>();
+        Map<String, String> accounts = new HashMap<>();
         for (int i = 0; i < bases.size(); i++) {
             String label = labelFor(i);
             MockClientConfig base = bases.get(i);
@@ -240,12 +251,23 @@ public final class MultiPeerSession implements AutoCloseable {
             boolean accessToken = base.oauthAccessTokenFile().isPresent();
             Path file = base.oauthAccessTokenFile().orElse(base.oauthRefreshTokenFile());
             String channel = accessToken ? "access-token file" : "refresh-token file";
+            TokenSource source;
             try {
                 // Reads, and for an access token checks, the file now: before anything starts.
-                resolved.add(TokenSources.fromConfig(base));
+                source = TokenSources.fromConfig(base);
             } catch (AuthenticationException e) {
-                // The source's own message names the file and the reason, such as an empty file.
-                throw new IllegalArgumentException("peer " + label + ": " + e.getMessage(), e);
+                // The source's message names the file; picocli prints only the message, so the
+                // cause's type is added to tell a missing file from a directory or a denied one.
+                String reason =
+                        e.getCause() == null
+                                ? ""
+                                : " (" + e.getCause().getClass().getSimpleName() + ")";
+                throw new IllegalArgumentException(
+                        "peer " + label + ": " + e.getMessage() + reason, e);
+            }
+            resolved.add(source);
+            if (!accessToken) {
+                requireUsableRefreshTokenFile(label, file);
             }
             Path key = canonical(file);
             String previous = owners.putIfAbsent(key, label);
@@ -260,6 +282,22 @@ public final class MultiPeerSession implements AutoCloseable {
                                 + " is also peer "
                                 + previous
                                 + "'s; every peer needs its own account");
+            }
+            if (accessToken) {
+                // A refresh token is opaque, so only the access channel can be checked here; a
+                // shared account on either channel is still refused at the joiner's welcome.
+                String account = accountOf(source.obtain().join().token()).orElse(null);
+                String sameAccount = account == null ? null : accounts.putIfAbsent(account, label);
+                if (sameAccount != null) {
+                    throw new IllegalArgumentException(
+                            "peer "
+                                    + label
+                                    + ": access token is for account "
+                                    + account
+                                    + ", the same account as peer "
+                                    + sameAccount
+                                    + "; every peer needs its own account");
+                }
             }
         }
         this.tokens = List.copyOf(resolved);
@@ -837,9 +875,10 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * The path two peers' credential files are compared by. Canonical where the file system can
-     * say, so a symlink or a relative path cannot hide a shared file. A file that was readable but
-     * has no real path, such as a process substitution ({@code <(printf %s "$TOKEN")}), which
-     * {@code run} accepts, falls back to its normalised absolute path.
+     * say, so a symlink or a relative path cannot hide a shared file. Only an access-token file can
+     * reach the fallback: one that was readable but has no real path, such as a process
+     * substitution ({@code <(printf %s "$TOKEN")}), which {@code run} accepts, is compared by its
+     * normalised absolute path. A refresh-token file is a regular file by then.
      *
      * @param file a credential file that has already been read
      * @return the path to compare by
@@ -849,6 +888,61 @@ public final class MultiPeerSession implements AutoCloseable {
             return file.toRealPath();
         } catch (IOException e) {
             return file.toAbsolutePath().normalize();
+        }
+    }
+
+    /**
+     * Refuses a refresh-token file the session could read but should not use, before any peer logs
+     * in. The rotated token is written back to this path after the exchange, so a path that is not
+     * a regular file (a process substitution, say) would lose it and spend the account. A blank
+     * file would only fail at Hydra, after earlier peers had logged in and spent their tokens.
+     *
+     * @param label the peer's label
+     * @param file the refresh-token file, already read once
+     * @throws IllegalArgumentException if it is not a regular file or is blank
+     */
+    private static void requireUsableRefreshTokenFile(final String label, final Path file) {
+        if (!Files.isRegularFile(file)) {
+            throw new IllegalArgumentException(
+                    "peer "
+                            + label
+                            + ": refresh-token file "
+                            + file
+                            + " must be a regular file, since the rotated token is written back to"
+                            + " it");
+        }
+        try {
+            if (Files.readString(file).isBlank()) {
+                throw new IllegalArgumentException(
+                        "peer " + label + ": OAuth refresh-token file is empty: " + file);
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "peer " + label + ": could not read OAuth refresh-token file: " + file, e);
+        }
+    }
+
+    /**
+     * The account an access token is for: its numeric {@code sub} claim, which the lobby takes as
+     * the player id (harness-runbook.md §3). The payload is decoded without checking the signature,
+     * so this is only ever used to refuse two peers on one account, never to trust a token. A token
+     * that does not decode, or has no numeric {@code sub}, gives nothing, and the lobby judges it.
+     *
+     * @param token the access token as sent to the lobby
+     * @return the player id, or empty
+     */
+    static Optional<String> accountOf(final String token) {
+        String[] parts = token.split("\\.");
+        if (parts.length != JWT_PARTS) {
+            return Optional.empty();
+        }
+        try {
+            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
+            JsonNode sub = JSON.readTree(new String(payload, StandardCharsets.UTF_8)).path("sub");
+            String value = sub.isNumber() ? sub.asText() : sub.textValue();
+            return value != null && value.matches("\\d+") ? Optional.of(value) : Optional.empty();
+        } catch (IllegalArgumentException | IOException e) {
+            return Optional.empty();
         }
     }
 
