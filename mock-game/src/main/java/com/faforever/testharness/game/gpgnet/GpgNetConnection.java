@@ -93,10 +93,11 @@ public class GpgNetConnection implements GpgNetFrameSink {
      *
      * <p>Exists so {@link #runConnection} can report a close that stopped the retrying as what it
      * is, at DEBUG and with no error attached, rather than as a failed connect. It does not decide
-     * the disconnect reason alone: a close that lands after the last in-loop check reaches the
-     * general catch instead, which reads {@code closeRequested} to choose its reason and its log
-     * level, as the read loop reads it for its reason (WBS-3.2.2.1-fix, #330, #404). The exception
-     * mirrors the mock client's {@code IceAdapterConnection}.
+     * the disconnect reason alone: a close that lands after the last in-loop check, while that
+     * attempt fails, reaches the general catch instead, which reads {@code closeRequested} to
+     * choose its reason and its log level, as the read loop reads it for its reason
+     * (WBS-3.2.2.1-fix, #330, #404). The exception mirrors the mock client's {@code
+     * IceAdapterConnection}.
      */
     private static final class ConnectAbandonedException extends IOException {
 
@@ -230,13 +231,14 @@ public class GpgNetConnection implements GpgNetFrameSink {
     }
 
     /**
-     * Close the socket from this side. The disconnect listener fires once with {@link
-     * DisconnectReason#LOCAL_CLOSE}, unless a disconnect was already reported, in which case
-     * nothing more fires. With no socket published yet it fires from this method, or from the
-     * reader thread if that thread reports first: as the connect stops retrying, fails, or
-     * publishes the socket and then reads the close flag. With a published socket it always fires
-     * from the reader thread: in the read loop, or, when the close lands before the connect reads
-     * the close flag, as the connect abandons the socket.
+     * Close the socket from this side. The disconnect listener fires once in all. It reports {@link
+     * DisconnectReason#LOCAL_CLOSE} unless the connection had already failed or gone down on its
+     * own before this call, in which case it may report that reason instead: a site that read the
+     * close flag before it was set keeps the reason it found. With no socket published yet it fires
+     * from this method, or from the reader thread if that thread reports first: as the connect
+     * stops retrying, fails, or publishes the socket and then reads the close flag. With a
+     * published socket it always fires from the reader thread: in the read loop, or, when the close
+     * lands before the connect reads the close flag, as the connect abandons the socket.
      */
     public final void close() {
         closeRequested.set(true);

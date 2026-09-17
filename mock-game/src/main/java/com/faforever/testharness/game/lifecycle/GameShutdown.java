@@ -54,9 +54,9 @@ import org.slf4j.LoggerFactory;
  * FSM.</b> The risk is confined to the one place {@link GpgNetConnection} can deliver a disconnect
  * on the calling thread. Every other site delivers it on the connection's reader thread (the read
  * loop, and each branch where the connect gives up), which cannot hold up teardown whatever it
- * does, and each of those reads the close flag, so once this step has requested the close they
- * report {@code LOCAL_CLOSE} too. But on a connection that never opened its socket, {@code close()}
- * can fire the listener <em>synchronously on the calling thread</em>. {@code
+ * does, and each of those reads the close flag, so one that reads it after this step has requested
+ * the close reports {@code LOCAL_CLOSE} too. But on a connection that never opened its socket,
+ * {@code close()} can fire the listener <em>synchronously on the calling thread</em>. {@code
  * MockGameLifecycle.setupStateMachine} filters {@code LOCAL_CLOSE} at the source rather than
  * posting it, so that synchronous call returns without touching the FSM. Were it ever to post an
  * event instead, this step would take the StateMachine monitor and block behind the very stall it
