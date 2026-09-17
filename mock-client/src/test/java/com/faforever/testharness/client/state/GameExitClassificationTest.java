@@ -246,57 +246,51 @@ final class GameExitClassificationTest {
      * mock-game's own {@code ADAPTER_LOST} is carved out of the crash reading (#357 review).
      *
      * <p>The game diagnosed its own end and named the cause, which an arbitrary non-zero exit does
-     * not. Reporting it as a crash was also non-deterministic: the adapter's death drives
-     * TERMINATED and so teardown, racing this classification, and whichever won decided between
-     * exit {@code 71} and exit {@code 0} for one scenario. Keyed on the code the game reported,
-     * which does not race.
+     * not, so it is logged as a lost link and the run exits {@code 0}. It gets no exit code of its
+     * own here: this classification is asynchronous, and the adapter's death can release {@code
+     * RunCommand} before it runs. #406 gives adapter death a code keyed on the adapter's own exit.
      */
     @Test
-    void anAdapterLostExitIsReportedAsAdapterLossRatherThanACrash() {
+    void anAdapterLostExitIsLoggedAsALostLinkRatherThanACrash() {
         ILoggingEvent event = classify(69, false, true);
 
         assertFalse(
                 lifecycle.gameCrashed(), "a diagnosed adapter loss is not an unexplained death");
-        assertTrue(lifecycle.gameAdapterLost(), "it must drive the adapter-lost exit code instead");
+        assertEquals(Level.WARN, event.getLevel());
         assertTrue(
                 event.getFormattedMessage().contains("losing its GPGNet link"),
                 "the log line must name the cause: " + event.getFormattedMessage());
     }
 
     /**
-     * The determinism this carve-out exists for, pinned.
-     *
-     * <p>An adapter dying mid-session drives TERMINATED and so teardown, which races the game's own
-     * exit classification. Reading {@code teardown.hasRun()} first therefore answered differently
-     * run to run, and the same scenario reported two different exit codes. The verdict must not
-     * move when teardown happened to win that race.
+     * The log line must not depend on a race. An adapter dying mid-session drives TERMINATED and so
+     * teardown, which races this classification, so a carve-out behind the teardown branch would
+     * name the cause on some runs and call it the harness's own SIGTERM on others.
      */
     @Test
-    void anAdapterLostExitIsStillAdapterLostWhenTeardownWonTheRace() {
+    void anAdapterLostExitIsLoggedTheSameWhenTeardownWonTheRace() {
         teardown.run();
-        classify(69, false, true);
 
+        ILoggingEvent event = classify(69, false, true);
+
+        assertFalse(lifecycle.gameCrashed());
         assertTrue(
-                lifecycle.gameAdapterLost(),
-                "the verdict must not depend on which of teardown and classification ran first");
+                event.getFormattedMessage().contains("losing its GPGNet link"),
+                "teardown having run first must not change the reading: "
+                        + event.getFormattedMessage());
     }
 
     /**
      * A confirmed clean end outranks the code: the session delivered its closing frames and the
-     * process died afterwards, which the branch above this one already reported as unremarkable.
+     * process died afterwards, which is reported as unremarkable like any other non-zero code.
      */
     @Test
-    void anAdapterLostExitAfterACleanEndIsNeitherVerdict() {
-        classify(69, true, true);
+    void anAdapterLostExitAfterACleanEndIsReportedAsACleanEnd() {
+        ILoggingEvent event = classify(69, true, true);
 
         assertFalse(lifecycle.gameCrashed());
-        assertFalse(lifecycle.gameAdapterLost());
-    }
-
-    /** Neither verdict is reported until the game has actually exited. */
-    @Test
-    void noVerdictIsReportedBeforeTheGameHasExited() {
-        assertFalse(lifecycle.gameAdapterLost(), "a running game has not lost its adapter");
+        assertEquals(Level.INFO, event.getLevel());
+        assertTrue(event.getFormattedMessage().contains("clean game end"));
     }
 
     /** The crash proper: a non-zero exit, nothing observed, no teardown to explain it. */
