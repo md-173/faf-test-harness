@@ -171,7 +171,7 @@ public class GpgNetConnection implements GpgNetFrameSink {
      *
      * @param consumer receives each decoded frame; {@code null} installs a no-op
      */
-    public void onFrame(final Consumer<GpgNetFrame> consumer) {
+    public final void onFrame(final Consumer<GpgNetFrame> consumer) {
         this.frameConsumer = consumer == null ? NOOP_CONSUMER : consumer;
     }
 
@@ -181,7 +181,7 @@ public class GpgNetConnection implements GpgNetFrameSink {
      *
      * @param listener receives the disconnect event; {@code null} installs a no-op
      */
-    public void onDisconnect(final Consumer<DisconnectEvent> listener) {
+    public final void onDisconnect(final Consumer<DisconnectEvent> listener) {
         this.disconnectListener = listener == null ? NOOP_LISTENER : listener;
     }
 
@@ -195,7 +195,7 @@ public class GpgNetConnection implements GpgNetFrameSink {
      * @return future that completes once connected
      * @throws IllegalStateException if called more than once
      */
-    public CompletableFuture<Void> connect() {
+    public final CompletableFuture<Void> connect() {
         if (!started.compareAndSet(false, true)) {
             throw new IllegalStateException("connect() may only be called once");
         }
@@ -216,7 +216,7 @@ public class GpgNetConnection implements GpgNetFrameSink {
      * @throws IllegalArgumentException if the frame exceeds the codec's chunk cap
      */
     @Override
-    public void send(final GpgNetFrame frame) throws IOException {
+    public final void send(final GpgNetFrame frame) throws IOException {
         byte[] bytes = GpgNetCodec.encode(frame);
         OutputStream stream = out;
         if (stream == null) {
@@ -238,7 +238,7 @@ public class GpgNetConnection implements GpgNetFrameSink {
      * from the reader thread: in the read loop, or, when the close lands before the connect reads
      * the close flag, as the connect abandons the socket.
      */
-    public void close() {
+    public final void close() {
         closeRequested.set(true);
         closeFlagSet();
         Socket current = socket;
@@ -409,11 +409,13 @@ public class GpgNetConnection implements GpgNetFrameSink {
      * read. A no-op in production.
      *
      * <p>This exists as a test seam. It and the two seams below are the only reason the class is
-     * not final, and being package-private, none of them can be overridden from outside this
-     * package. The window this one marks is two instructions wide, and a {@link #close()} landing
-     * inside it used to fire no disconnect at all; nothing outside the class can schedule a close
-     * into that gap. A test in this package overrides it to call {@code close()} exactly here,
-     * which is the interleaving itself rather than an approximation of it (WBS-3.2.2.1-fix, #330).
+     * not final. Being package-private, none of them can be overridden from outside this package,
+     * and every public method is final, so a subclass can change nothing but these no-ops and the
+     * guarantees the public methods make still hold. The window this one marks is two instructions
+     * wide, and a {@link #close()} landing inside it used to fire no disconnect at all; nothing
+     * outside the class can schedule a close into that gap. A test in this package overrides it to
+     * call {@code close()} exactly here, which is the interleaving itself rather than an
+     * approximation of it (WBS-3.2.2.1-fix, #330).
      */
     void socketPublished() {
         // Production does nothing here; see the javadoc for why the method exists at all.
