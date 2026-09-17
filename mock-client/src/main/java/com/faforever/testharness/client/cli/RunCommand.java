@@ -80,7 +80,8 @@ public final class RunCommand implements Callable<Integer> {
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
      *     could not be established or the connection dropped unexpectedly; {@link
-     *     ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted for.
+     *     ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted for;
+     *     {@link ExitCodes#ADAPTER_LOST} if the game reported losing its GPGNet link instead.
      *     Superseded by the signal's own exit code whenever a signal is what ended the run.
      */
     @Override
@@ -177,6 +178,11 @@ public final class RunCommand implements Callable<Integer> {
             log.warn("the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
         }
+        // Mutually exclusive with the crash above, so the order of the two is not load-bearing.
+        if (lifecycle.gameAdapterLost()) {
+            log.warn("the game lost its adapter link; reporting it in this run's exit code");
+            return ExitCodes.ADAPTER_LOST;
+        }
         return ExitCodes.OK;
     }
 
@@ -195,6 +201,9 @@ public final class RunCommand implements Callable<Integer> {
         if (!session.isDisconnected()) {
             log.info("shutdown signal received; tearing down session");
         }
+        // Marked before the teardown runs, so a game that dies because teardown quit the adapter is
+        // never mistaken for one that died on its own (WBS-5.2, #357 review).
+        teardown.markSignalled();
         teardown.run();
     }
 }

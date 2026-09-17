@@ -64,6 +64,15 @@ public final class MockClientLifecycle {
      */
     private static final Duration GAME_END_SAFETY_NET_WINDOW = Duration.ofSeconds(30);
 
+    /**
+     * mock-game's {@code ExitCodes.ADAPTER_LOST}, mirrored because it cannot be imported: this
+     * module depends on {@code shared} and picocli only, never on mock-game. The value is part of
+     * the documented argv-and-exit-code contract between the two (see mock-game's {@code ExitCodes}
+     * javadoc, which names this client as its consumer), so mirroring it is reading that contract
+     * rather than guessing at it.
+     */
+    private static final int GAME_ADAPTER_LOST_EXIT = 69;
+
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
 
@@ -158,9 +167,13 @@ public final class MockClientLifecycle {
             label.wrap(new CompletableFuture<Void>().defaultExecutor());
 
     /**
-     * Whether the game process died in a way nobody asked for (WBS-5.2), as decided by {@link
-     * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
-     * code; see {@link #gameCrashed()}.
+     * What {@link #classifyGameExit} made of the game's exit (WBS-5.2). Read by {@code RunCommand}
+     * to pick the harness's own exit code; see {@link #gameCrashed()} and {@link
+     * #gameAdapterLost()}.
+     *
+     * <p>One field rather than a flag per verdict, so the two cannot both be true: they are decided
+     * by mutually exclusive branches of one {@code if}, and a second flag would let a later branch
+     * quietly set both.
      *
      * <p>Written on the {@link #gameExit} completion handler and read on the main thread, so the
      * two sides need an ordering. On the {@code GameExited} route they have one independently of
@@ -179,7 +192,17 @@ public final class MockClientLifecycle {
      * the client, reports {@code Disconnected} over RPC and keeps accepting. So a crashed game
      * reaches TERMINATED through {@code GameExited} and nothing else.
      */
-    private volatile boolean gameCrashed;
+    private volatile GameExitVerdict gameExitVerdict = GameExitVerdict.UNREMARKABLE;
+
+    /** What the game's exit was judged to be; see {@link #gameExitVerdict}. */
+    private enum GameExitVerdict {
+        /** Nothing to report: a clean end, or a non-zero exit the harness itself asked for. */
+        UNREMARKABLE,
+        /** The game died unaccounted for; the run exits {@code GAME_CRASHED}. */
+        CRASHED,
+        /** The game reported losing its GPGNet link; the run exits {@code ADAPTER_LOST}. */
+        ADAPTER_LOST
+    }
 
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
@@ -755,7 +778,21 @@ public final class MockClientLifecycle {
      * @return {@code true} if the game exit was classified as abnormal
      */
     public boolean gameCrashed() {
-        return gameCrashed;
+        return gameExitVerdict == GameExitVerdict.CRASHED;
+    }
+
+    /**
+     * Whether this session's game reported that its GPGNet link to the adapter went down, rather
+     * than dying unaccounted for (WBS-5.2).
+     *
+     * <p>Mutually exclusive with {@link #gameCrashed()} by construction, and false until the game
+     * has exited, for the same reasons given there.
+     *
+     * @return {@code true} if the game exited with mock-game's {@code ADAPTER_LOST}, outside
+     *     harness-initiated teardown
+     */
+    public boolean gameAdapterLost() {
+        return gameExitVerdict == GameExitVerdict.ADAPTER_LOST;
     }
 
     /**
@@ -929,7 +966,28 @@ public final class MockClientLifecycle {
      */
     void classifyGameExit(
             final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
-        if (exitCode != 0 && teardown.hasRun()) {
+        if (exitCode == GAME_ADAPTER_LOST_EXIT && !cleanEnd && !teardown.wasSignalled()) {
+            // Ahead of the teardown branch below, and deliberately so (#357 review). It is not a
+            // crash: the game diagnosed its own end and named the cause, which an arbitrary
+            // non-zero exit does not.
+            //
+            // Tested before teardown because teardown is what made this non-deterministic in the
+            // first place. An adapter dying mid-session drives TERMINATED and so teardown, which
+            // races this classification, so asking hasRun() here answered differently run to run
+            // and the same scenario reported two different exit codes. wasSignalled() is the
+            // question actually worth asking, and it does not race: a Ctrl-C sets it before
+            // teardown quits the adapter, so a game that dies of that is already excluded, while a
+            // game that dies with it unset died of something nobody asked for.
+            LOG.warn(
+                    "mock-game exited with code {} after losing its GPGNet link to the adapter;"
+                            + " the adapter's own exit is reported separately",
+                    exitCode);
+            gameExitVerdict = GameExitVerdict.ADAPTER_LOST;
+        } else if (exitCode != 0 && (teardown.hasRun() || teardown.wasSignalled())) {
+            // Either half suppresses the reading, and the second half is not redundant (#357
+            // review): the signal is marked a statement before teardown starts, so a game exiting
+            // inside that window would otherwise match neither this branch nor the one above it and
+            // be reported as a crash the operator had just asked for.
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);
@@ -956,7 +1014,7 @@ public final class MockClientLifecycle {
             // that already decided this exit was unaccounted for, rather than re-derived by the
             // caller: one predicate, so the warning above and the exit code cannot disagree about
             // whether the game crashed.
-            gameCrashed = true;
+            gameExitVerdict = GameExitVerdict.CRASHED;
         }
     }
 

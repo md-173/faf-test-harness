@@ -826,10 +826,6 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // As in joinGame: the first peer to arrive starts the crash timer (WBS-5.2). Later peers
-        // are absorbed by armCrash's own guard rather than tested for here.
-        armCrash();
-
         if (getState() == GameState.HOSTING) {
             try {
                 sendPlayerOptions(peer.playerId());
@@ -837,6 +833,19 @@ public final class MockGameLifecycle {
                 throw recordSendFailure(e);
             }
         }
+
+        // As in joinGame: the first peer to arrive starts the crash timer (WBS-5.2). Later peers
+        // are absorbed by armCrash's own guard rather than tested for here.
+        //
+        // Armed after this action's own I/O, not before it (#357 review). With
+        // --crash-after-seconds=0 the scheduler can halt the JVM the instant the timer is armed, so
+        // arming first left a host able to die midway through the peer's PlayerOption frames, with
+        // the peer registered for traffic but never configured and a half-written frame on the
+        // socket. Arming last gives a zero-delay crash a defined landing point, and matches
+        // joinGame, which already armed after its own work. A send failure above now throws past
+        // this line rather than through it, which is the right way round: that throw goes to ENDED,
+        // whose shutdown cancels the schedule anyway.
+        armCrash();
     }
 
     /* Transition action for LIVE -> ENDED. */

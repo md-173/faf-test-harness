@@ -51,6 +51,13 @@ final class CrashInjectionTest {
     /** A crash delay long enough that a test can cancel it before it fires. */
     private static final int CANCELLABLE_CRASH_SECONDS = 2;
 
+    /**
+     * Crash delay for the cases that sample the FSM state at the moment of the halt. One second is
+     * far longer than the few instructions between a transition action returning and the state
+     * being published, so the sample is never taken mid-transition.
+     */
+    private static final int SETTLED_CRASH_SECONDS = 1;
+
     /** PlayerOption frames the host emits per player it configures: Army through Color. */
     private static final int PLAYER_OPTION_FRAMES = 5;
 
@@ -152,10 +159,17 @@ final class CrashInjectionTest {
     /**
      * The single-game case, and the one the card described: no peer ever connects, the game reaches
      * LIVE on its own launch timer, and the crash fires from there.
+     *
+     * <p>The crash delay is {@link #SETTLED_CRASH_SECONDS} rather than zero so {@link #stateAtHalt}
+     * means what it claims (#357 review). {@code armCrash()} runs inside the transition action, and
+     * {@code StateMachine.commitTransition} publishes the new state only after that action returns,
+     * so a zero-delay crash can sample the state the game is leaving rather than the one it is
+     * entering. A delay the FSM cannot lose gives the sample a defined answer; the arming rule
+     * itself is pinned by the zero-delay cases below.
      */
     @Test
     void armsOnEntryToLive() throws Exception {
-        MockGameLifecycle lifecycle = lifecycleWith(0, Duration.ZERO, null);
+        MockGameLifecycle lifecycle = lifecycleWith(SETTLED_CRASH_SECONDS, Duration.ZERO, null);
         driveToLobby(lifecycle);
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
@@ -176,10 +190,17 @@ final class CrashInjectionTest {
      * ever posts {@code LaunchMatch}, since {@code launchMatch()} is called from no production
      * code, so the game never enters LIVE at all. Anchored there, the fault would have been
      * silently inert in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
+     *
+     * <p>The crash delay is {@link #SETTLED_CRASH_SECONDS} rather than zero so {@link #stateAtHalt}
+     * means what it claims (#357 review). {@code armCrash()} runs inside the transition action, and
+     * {@code StateMachine.commitTransition} publishes the new state only after that action returns,
+     * so a zero-delay crash can sample the state the game is leaving rather than the one it is
+     * entering. A delay the FSM cannot lose gives the sample a defined answer; the arming rule
+     * itself is pinned by the zero-delay cases below.
      */
     @Test
     void armsOnFirstPeerWhenAutoLaunchIsDisabled() throws Exception {
-        MockGameLifecycle lifecycle = lifecycleWith(0, null, null);
+        MockGameLifecycle lifecycle = lifecycleWith(SETTLED_CRASH_SECONDS, null, null);
         driveToLobby(lifecycle);
 
         gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", 2)));
@@ -287,6 +308,44 @@ final class CrashInjectionTest {
                 GameState.HOSTING,
                 lifecycle.getState(),
                 "the host must still be in HOSTING after configuring peer " + expected);
+    }
+
+    /**
+     * A zero-delay crash armed by a peer connecting fires, and the peer's frames all arrive.
+     *
+     * <p>This is the only case that exercises a zero-second delay actually firing: the cases that
+     * sample the FSM state need a settled delay, so without this one nothing would cover the
+     * shortest fault the flag can express.
+     *
+     * <p><b>It does not prove the ordering it was written for, and should not be read as doing
+     * so.</b> {@code peerConnectionRequest} arms after sending the peer's {@code PlayerOption}
+     * frames rather than before (#357 review), so a halt cannot land midway through them. Moving
+     * the call back above the sends leaves this test passing, which was checked: five writes to a
+     * loopback socket finish long before the scheduler thread wakes. Proving that ordering would
+     * need a delay injected into the send path, and the fix rests on the argument in {@code
+     * peerConnectionRequest} instead, which is that arming last gives a zero-delay crash a defined
+     * landing point and matches {@code joinGame}.
+     */
+    @Test
+    void aZeroDelayCrashOnAHostStillDeliversThePeersFrames() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(0, null, null);
+        driveToLobby(lifecycle);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
+
+        assertTrue(
+                halted.await(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "a peer connecting must arm and fire the crash");
+        // Every frame the peer is owed arrived, and arrived before the halt: the poll budget is
+        // spent on frames already queued, and the halt has provably happened by now.
+        for (int i = 0; i < PLAYER_OPTION_FRAMES; i++) {
+            assertEquals(
+                    "PlayerOption",
+                    gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS).command(),
+                    "every frame the peer is owed must still arrive");
+        }
     }
 
     /**

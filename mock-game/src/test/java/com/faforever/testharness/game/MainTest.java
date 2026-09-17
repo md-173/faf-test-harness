@@ -103,6 +103,26 @@ final class MainTest {
     private ListAppender<ILoggingEvent> capture;
 
     /**
+     * Whether the crash-delay warning itself is among {@code events}.
+     *
+     * <p>Matched on its own message rather than on {@link Level#WARN} alone (#357 review). The
+     * capture is attached to the <em>root</em> logger, so any background WARN from a scheduler,
+     * reader or a previous test's teardown would otherwise answer for a test about one pure static
+     * function: failing the negative cases and passing the positive ones for the wrong reason.
+     *
+     * @param events the captured records
+     * @return {@code true} if {@code warnIfCrashOutlivesMatch} warned
+     */
+    private static boolean warnedAboutCrashDelay(final List<ILoggingEvent> events) {
+        return events.stream()
+                .anyMatch(
+                        e ->
+                                e.getLevel() == Level.WARN
+                                        && e.getFormattedMessage()
+                                                .contains("no fault will be injected"));
+    }
+
+    /**
      * With auto-launch off there is no match-end timer, so a long crash delay is not wasted and
      * must not be warned about.
      *
@@ -118,8 +138,8 @@ final class MainTest {
             Main.warnIfCrashOutlivesMatch(
                     Duration.ofSeconds(30), Duration.ofSeconds(10), Optional.empty());
 
-            assertTrue(
-                    events.stream().noneMatch(e -> e.getLevel() == Level.WARN),
+            assertFalse(
+                    warnedAboutCrashDelay(events),
                     "nothing ends the match, so nothing cancels the crash. captured: " + events);
         } finally {
             detachCapture();
@@ -443,12 +463,7 @@ final class MainTest {
                     Optional.of(Duration.ofSeconds(5)));
 
             assertTrue(
-                    events.stream()
-                            .anyMatch(
-                                    e ->
-                                            e.getLevel() == Level.WARN
-                                                    && e.getFormattedMessage()
-                                                            .contains("no fault will be injected")),
+                    warnedAboutCrashDelay(events),
                     "a crash delay past the match duration must warn. captured: " + events);
         } finally {
             detachCapture();
@@ -466,7 +481,7 @@ final class MainTest {
                     Optional.of(Duration.ofSeconds(5)));
 
             assertTrue(
-                    events.stream().anyMatch(e -> e.getLevel() == Level.WARN),
+                    warnedAboutCrashDelay(events),
                     "an equal delay is cancelled by the match ending first. captured: " + events);
         } finally {
             detachCapture();
@@ -485,8 +500,8 @@ final class MainTest {
             Main.warnIfCrashOutlivesMatch(
                     null, Duration.ofSeconds(10), Optional.of(Duration.ofSeconds(5)));
 
-            assertTrue(
-                    events.stream().noneMatch(e -> e.getLevel() == Level.WARN),
+            assertFalse(
+                    warnedAboutCrashDelay(events),
                     "neither case is a mistake. captured: " + events);
         } finally {
             detachCapture();

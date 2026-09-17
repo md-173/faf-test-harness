@@ -82,6 +82,30 @@ public final class SessionTeardown {
     private volatile boolean done;
 
     /**
+     * Whether this teardown was started by a shutdown signal rather than by the session ending on
+     * its own (WBS-5.2, #357 review).
+     *
+     * <p>{@link #hasRun()} cannot answer that, and the difference decides whether a game's death is
+     * a finding. Both a Ctrl-C and an adapter dying mid-session end with teardown having run, but
+     * only the first is something the operator asked for. Worse, {@code hasRun()} races the game's
+     * own exit classification, so reading it there made the same scenario report two different
+     * outcomes depending on which won.
+     *
+     * <p>For the teardown this class performs, the flag is ordered ahead of the death it causes:
+     * the signal hook marks it, then teardown quits the adapter, and only then can the game notice
+     * its GPGNet link has gone.
+     *
+     * <p>It is not a claim that every signal reaches the game through here, and two paths do not.
+     * {@code SubprocessRegistry} installs its own JVM shutdown hook, and hooks run concurrently, so
+     * it can terminate the game before this is marked; and a Ctrl-C at a terminal goes to the whole
+     * process group, reaching the game directly. Neither can be mistaken for an adapter loss,
+     * because a signalled mock-game closes its own GPGNet socket and reports {@code LOCAL_CLOSE}
+     * rather than the remote close that produces its {@code ADAPTER_LOST} exit, so they land on the
+     * existing crash reading instead. What this flag buys is the case that does come through here.
+     */
+    private volatile boolean signalled;
+
+    /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
      * are registered later, as they come into existence.
      *
@@ -145,6 +169,26 @@ public final class SessionTeardown {
      */
     public boolean hasRun() {
         return done;
+    }
+
+    /**
+     * Records that this teardown is being started by a shutdown signal. Call before {@link #run()}.
+     *
+     * <p>Separate from {@code run()} rather than a parameter on it, so the flag is set before any
+     * of the teardown steps that can kill a child, which is what makes it causally ordered ahead of
+     * anything those steps cause; see {@link #signalled}.
+     */
+    public void markSignalled() {
+        signalled = true;
+    }
+
+    /**
+     * Whether a shutdown signal started this teardown.
+     *
+     * @return {@code true} once {@link #markSignalled()} has been called
+     */
+    public boolean wasSignalled() {
+        return signalled;
     }
 
     /**
