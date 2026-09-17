@@ -1368,10 +1368,19 @@ lobby on the game's behalf, reaches TERMINATED, and exits `71`
 
 **Two ways to get nothing.**
 
-The first applies only when auto-launch is on: a delay at or past the match
-duration. The crash and the match-end timer share one scheduler, and the end of
-the match tears that scheduler down, so the crash is cancelled and the run exits
-`0`. `Main` compares the two before the game starts and warns.
+The first applies only when auto-launch is on: a crash due after the match
+ends. The crash and the match-end timer share one scheduler, and the end of the
+match tears that scheduler down, so the crash is cancelled and the run exits
+`0`. The game warns when it arms the timer, right after the `injected crash
+armed` line, for example `injected crash is due in 20s but the match is due
+to end in 14998ms`.
+
+When the match is due to end depends on where the timer started. Armed on
+entry to LIVE, the match ends one match length later. Armed by a peer
+connecting, the launch timer has not fired yet, so the match ends the rest of
+the launch delay plus a match length later. That is why the check runs at arm
+time and not at startup: a joiner with a 5 s launch delay and a 10 s match
+really does crash at 12 s.
 
 It is deliberately not warned about when auto-launch is off, because there the
 match-end timer is never armed at all. Nothing ends the match, so nothing
