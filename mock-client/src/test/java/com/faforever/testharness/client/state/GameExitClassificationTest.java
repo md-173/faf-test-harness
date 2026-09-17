@@ -294,6 +294,26 @@ final class GameExitClassificationTest {
     }
 
     /**
+     * A game killed by the operator's signal before teardown has started is still the operator's
+     * doing (#357 review).
+     *
+     * <p>The shutdown hook marks the signal a statement before it runs teardown, so there is a
+     * window in which the signal is known but {@code hasRun()} is still false. A death landing
+     * there, realistically {@code 143} from another shutdown hook reaching the game first, matched
+     * neither suppressing branch and fell through to the crash reading: a crash reported for a run
+     * the operator had just stopped. {@code markSignalled()} without {@code run()} is that window.
+     */
+    @Test
+    void anExitInsideTheSignalToTeardownWindowIsNeitherVerdict() {
+        teardown.markSignalled();
+        ILoggingEvent event = classify(143, false, true);
+
+        assertFalse(lifecycle.gameCrashed(), "the operator stopped this run");
+        assertFalse(lifecycle.gameAdapterLost());
+        assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
+    }
+
+    /**
      * A confirmed clean end outranks the code: the session delivered its closing frames and the
      * process died afterwards, which the branch above this one already reported as unremarkable.
      */
