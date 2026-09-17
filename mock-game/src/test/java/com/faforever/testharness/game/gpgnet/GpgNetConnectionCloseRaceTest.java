@@ -1,11 +1,13 @@
 package com.faforever.testharness.game.gpgnet;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import java.time.Duration;
@@ -42,7 +44,13 @@ import org.junit.jupiter.api.Timeout;
  * The {@code closeFlagSet()} seam holds the close after it sets the flag and short of its own fire,
  * so the connect thread reports first. Its report must be {@code LOCAL_CLOSE} too, whether the
  * close stopped the retrying or landed after the last in-loop check; before this fix the second
- * reported {@code CONNECT_FAILED}, which the lifecycle posts to its FSM in the middle of teardown.
+ * reported {@code CONNECT_FAILED}, which the lifecycle posts to its FSM in the middle of teardown,
+ * and logged a WARN claiming the adapter was never reachable (#404).
+ *
+ * <p><b>A close made because the connect failed.</b> The failure catch logs and reports before it
+ * fails the future, so a caller that closes in reaction, as mock-client's {@code LaunchIceCommand}
+ * does, cannot turn a genuine failure into a quiet local close. The {@code connectFailed()} seam
+ * holds the connect thread until that reaction is registered.
  */
 @Timeout(30)
 final class GpgNetConnectionCloseRaceTest {
@@ -155,14 +163,15 @@ final class GpgNetConnectionCloseRaceTest {
 
     /**
      * A close that lands after the last in-loop check, while the final attempt fails, is reported
-     * by the connect thread as {@code LOCAL_CLOSE}, not {@code CONNECT_FAILED}. The failed future
-     * shows that thread is already in its failure catch, past the one in-loop check a single
-     * attempt makes, so the close cannot stop the retrying instead; {@code connectFailed()} then
-     * holds it until the flag is set.
+     * by the connect thread as {@code LOCAL_CLOSE}, not {@code CONNECT_FAILED}, and logged at DEBUG
+     * rather than as an unreachable adapter. {@code connectFailed()} signals that the connect
+     * thread is in its failure catch, past the one in-loop check a single attempt makes, so the
+     * close cannot stop the retrying instead; it then holds that thread until the flag is set.
      */
     @Test
-    void aCloseRacingTheFinalFailedAttemptIsReportedAsLocalClose() throws Exception {
+    void aCloseRacingTheFinalFailedAttemptIsReportedAsAQuietLocalClose() throws Exception {
         Thread closer = Thread.currentThread();
+        CountDownLatch inFailureCatch = new CountDownLatch(1);
         CountDownLatch flagSet = new CountDownLatch(1);
         CountDownLatch disconnected = new CountDownLatch(1);
         AtomicReference<DisconnectEvent> event = new AtomicReference<>();
@@ -180,6 +189,7 @@ final class GpgNetConnectionCloseRaceTest {
                     @Override
                     void connectFailed() {
                         // On the connect thread, before it reads the flag.
+                        inFailureCatch.countDown();
                         awaitQuietly(flagSet);
                     }
                 };
@@ -191,19 +201,77 @@ final class GpgNetConnectionCloseRaceTest {
                     disconnected.countDown();
                 });
 
-        CompletableFuture<Void> connected = racing.connect();
-        assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
-        racing.close();
+        try (LogCapture log = new LogCapture(GpgNetConnection.class)) {
+            CompletableFuture<Void> connected = racing.connect();
+            assertTrue(inFailureCatch.await(5, TimeUnit.SECONDS), "the single attempt must fail");
+            racing.close();
 
-        assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the disconnect listener must fire");
-        assertNotSame(closer, firedOn.get(), "the connect thread must have reported, not close()");
-        assertNotNull(
-                event.get().error(),
-                "the report must come from the failure catch, which carries the connect error");
-        assertEquals(
-                DisconnectReason.LOCAL_CLOSE,
-                event.get().reason(),
-                "a close requested before the failure was reported is a local close");
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+            assertNotSame(closer, firedOn.get(), "the connect thread must report, not close()");
+            assertNotNull(
+                    event.get().error(),
+                    "the report must come from the failure catch, which carries the connect error");
+            assertEquals(
+                    DisconnectReason.LOCAL_CLOSE,
+                    event.get().reason(),
+                    "a close requested before the failure was reported is a local close");
+            String failure = event.get().error().getMessage();
+            assertFalse(
+                    log.contains(Level.WARN, failure),
+                    "our own close is not an unreachable adapter: " + log.events());
+            assertTrue(
+                    log.contains(Level.DEBUG, "close landed in the last attempt (" + failure + ")"),
+                    "the close should be logged at DEBUG instead: " + log.events());
+        }
+    }
+
+    /**
+     * A caller that closes because the connect failed must not relabel a genuine failure. The
+     * failure is logged at WARN and reported as {@code CONNECT_FAILED} before the future fails, so
+     * a close made in reaction comes too late to change either. {@code connectFailed()} holds the
+     * connect thread until the reaction is registered, so the reaction runs as the future fails.
+     * Two attempts rather than one keep this failure's message distinct from the case above.
+     */
+    @Test
+    void aCloseMadeBecauseTheConnectFailedLeavesItAConnectFailure() throws Exception {
+        CountDownLatch inFailureCatch = new CountDownLatch(1);
+        CountDownLatch reactionRegistered = new CountDownLatch(1);
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        GpgNetConnection failing =
+                new GpgNetConnection(UNBOUND_PORT, 2, Duration.ofMillis(20)) {
+                    @Override
+                    void connectFailed() {
+                        inFailureCatch.countDown();
+                        awaitQuietly(reactionRegistered);
+                    }
+                };
+        conn = failing;
+        failing.onDisconnect(
+                e -> {
+                    event.set(e);
+                    disconnected.countDown();
+                });
+
+        try (LogCapture log = new LogCapture(GpgNetConnection.class)) {
+            CompletableFuture<Void> connected = failing.connect();
+            assertTrue(inFailureCatch.await(5, TimeUnit.SECONDS), "both attempts must fail");
+            CompletableFuture<Void> reaction =
+                    connected.whenComplete((ignored, error) -> failing.close());
+            reactionRegistered.countDown();
+
+            // The reaction's own future completes only once close() has run.
+            assertThrows(ExecutionException.class, () -> reaction.get(5, TimeUnit.SECONDS));
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertEquals(
+                    DisconnectReason.CONNECT_FAILED,
+                    event.get().reason(),
+                    "a close made after the failure must not relabel it");
+            assertTrue(
+                    log.contains(Level.WARN, event.get().error().getMessage()),
+                    "a genuine failure must still be logged at WARN: " + log.events());
+        }
     }
 
     /**

@@ -94,9 +94,9 @@ public class GpgNetConnection implements GpgNetFrameSink {
      * <p>Exists so {@link #runConnection} can report a close that stopped the retrying as what it
      * is, at DEBUG and with no error attached, rather than as a failed connect. It does not decide
      * the disconnect reason alone: a close that lands after the last in-loop check reaches the
-     * general catch instead, which reads {@code closeRequested} for its reason just as the read
-     * loop does (WBS-3.2.2.1-fix, #330). The exception mirrors the mock client's {@code
-     * IceAdapterConnection}.
+     * general catch instead, which reads {@code closeRequested} to choose its reason and its log
+     * level, as the read loop reads it for its reason (WBS-3.2.2.1-fix, #330, #404). The exception
+     * mirrors the mock client's {@code IceAdapterConnection}.
      */
     private static final class ConnectAbandonedException extends IOException {
 
@@ -187,10 +187,10 @@ public class GpgNetConnection implements GpgNetFrameSink {
 
     /**
      * Open the socket (retrying while the adapter binds) and start the reader. The returned future
-     * completes once the socket is open and the read loop is running; if every attempt fails it
-     * completes exceptionally <em>and</em> the disconnect listener fires with {@link
-     * DisconnectReason#CONNECT_FAILED}, or with {@link DisconnectReason#LOCAL_CLOSE} if {@link
-     * #close()} had already been requested by then.
+     * completes once the socket is open and the read loop is running. If every attempt fails, the
+     * disconnect listener fires with {@link DisconnectReason#CONNECT_FAILED}, or with {@link
+     * DisconnectReason#LOCAL_CLOSE} if {@link #close()} had already been requested by then, and
+     * only then does the future complete exceptionally.
      *
      * @return future that completes once connected
      * @throws IllegalStateException if called more than once
@@ -269,23 +269,33 @@ public class GpgNetConnection implements GpgNetFrameSink {
             fireDisconnect(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null));
             return;
         } catch (IOException e) {
-            LOG.warn(
-                    "could not connect to GPGNet server at {}:{}: {}",
-                    LOOPBACK,
-                    port,
-                    e.getMessage());
-            connected.completeExceptionally(e);
             connectFailed();
             // A close() landing after the last in-loop check still ends up here once the final
             // attempt fails. With no socket published, close() fires LOCAL_CLOSE itself, so if this
             // thread fires first it has to agree, or a teardown in INITIALIZING would reach the
-            // lifecycle as CONNECT_FAILED (WBS-3.2.2.1-fix, #330). Reading the flag as the read
-            // loop does makes both sides report the same reason.
+            // lifecycle as CONNECT_FAILED (WBS-3.2.2.1-fix, #330). It is our own teardown, so it
+            // gets no WARN claiming the adapter was never reachable either (#404). Reading the flag
+            // as the read loop does makes both sides report the same reason.
+            //
+            // All of that happens before the future is failed: a caller that closes because the
+            // connect failed would otherwise set the flag first and turn a genuine failure into a
+            // quiet local close.
+            boolean closing = closeRequested.get();
+            if (closing) {
+                LOG.debug(
+                        "GPGNet connect abandoned: close landed in the last attempt ({})",
+                        e.getMessage());
+            } else {
+                LOG.warn(
+                        "could not connect to GPGNet server at {}:{}: {}",
+                        LOOPBACK,
+                        port,
+                        e.getMessage());
+            }
             DisconnectReason reason =
-                    closeRequested.get()
-                            ? DisconnectReason.LOCAL_CLOSE
-                            : DisconnectReason.CONNECT_FAILED;
+                    closing ? DisconnectReason.LOCAL_CLOSE : DisconnectReason.CONNECT_FAILED;
             fireDisconnect(new DisconnectEvent(reason, e));
+            connected.completeExceptionally(e);
             return;
         }
         this.socket = opened;
@@ -423,12 +433,14 @@ public class GpgNetConnection implements GpgNetFrameSink {
 
     /**
      * Called on the reader thread when the connect has failed for any reason other than a close
-     * that stopped the retrying, after the connect future is failed and before the close flag is
-     * read. A no-op in production.
+     * that stopped the retrying, before the close flag is read and before anything is logged, fired
+     * or completed. A no-op in production.
      *
      * <p>A test seam, used with {@link #closeFlagSet()}. Together they let a test set the close
      * flag after the last in-loop check and hold that {@link #close()} short of its own fire, so
-     * the reason this thread reports is the one the test observes (WBS-3.2.2.1-fix, #330).
+     * the reason this thread reports is the one the test observes. Held on its own, it lets a test
+     * register a reaction to the connect future before that future fails (WBS-3.2.2.1-fix, #330,
+     * #404).
      */
     void connectFailed() {
         // Production does nothing here; see the javadoc for why the method exists at all.
