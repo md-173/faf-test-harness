@@ -258,12 +258,12 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > signal hook reaches `SessionTeardown` **without** going through the state
 > machine (`RunCommand` installs it as a JVM shutdown hook), so a Ctrl-C during
 > the connect window takes effect immediately rather than waiting the budget
-> out. Separately, `SubprocessManager` registers its own JVM shutdown hook, so
+> out. Separately, `SubprocessRegistry` installs its own JVM shutdown hook, so
 > on any exit that runs shutdown hooks both children die with the parent
 > whatever the FSM is doing. A `SIGKILL` skips the hook and leaves them running
-> (§7.3). What remains is that a broken adapter is noticed late and
-> `AdapterExited` sits queued for that window. Moving the bring-up off the
-> transition action is tracked as a 3.1.3.3 fix.
+> (§7.3). What remains of the connect-window cost is that a broken adapter is
+> noticed late and `AdapterExited` sits queued for that window. Moving the
+> bring-up off the transition action is tracked as a 3.1.3.3 fix.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is
@@ -554,7 +554,7 @@ plain processes, so it does not apply.
 
 | Layer | Mechanism | Covers | Provided by | Status |
 |---|---|---|---|---|
-| 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` adds a separate hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
+| 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` and `session` each add their own hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
 | 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) | Designed, not built |
 | 3. Init / PID 1 | An init (e.g. tini) at PID 1 that reaps zombies and forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | A container runtime | Not applicable: the harness runs as plain processes, so its JVM is not PID 1 |
 | 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built |
@@ -579,23 +579,19 @@ SIGTERM to every descendant in one syscall.
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
 `System.exit`) terminates its children through layer 1. A `SIGKILL` or OOM
 kill of that JVM runs no hook, and nothing else in the harness terminates the
-children, so they are left running. The adapter does not close that gap on its
-own, because it normally never notices. faf-ice-adapter 3.3.14's JSON-RPC
-library runs the connection-loss handler only when a read on the socket throws
-(JJsonRpc `JJsonPeer.run`). A killed client's socket closes in an orderly way
-unless it had unread data, and an orderly close just ends that read loop, so
-the adapter carries on as if nothing happened, its GPGNet server still serving
-the game. If a read does throw, for example on a reset, the handler in
-`RPCService.init` still leaves the process up on a headless host: it
-deliberately stays up while the game is `LAUNCHING`, and in any other state it
-throws before reaching `System.exit`, with a `NullPointerException` if no game
-has connected yet, otherwise at the unguarded `TrayIcon.close()` that
-`SessionTeardown` already works around, after its stop path has closed the
-game's connection. Observed against 3.3.14 on a headless host: live, with the
-client killed in `HOSTING` and in `PLAYING`, and locally, with a stand-in
-JSON-RPC client killed before the game connected, with the game in `LOBBY`, and
-after `HostGame`. The adapter logged no connection loss in any of the local
-runs.
+children, so they are left running. The adapter normally never notices:
+faf-ice-adapter 3.3.14's JSON-RPC library runs the connection-loss handler only
+when a read throws (JJsonRpc `JJsonPeer.run`), and a killed client's socket
+closes in an orderly way unless it had unread data, so the adapter carries on
+with its GPGNet server still serving the game. Observed against 3.3.14 on a
+headless host: live, the adapter stayed up with the client killed in `HOSTING`
+and in `PLAYING`; locally, with the adapter's only JSON-RPC client killed while
+the game was in `LOBBY` and after `HostGame`, it also logged no connection loss
+and kept the game connected. If a read does throw, for example on a reset, the
+handler in `RPCService.init` still leaves the adapter up on a headless host. It
+stays up by design while the game state is `Launching`; otherwise it throws
+before `System.exit`, with a `NullPointerException` if no game is connected, or
+at the unguarded `TrayIcon.close()` after closing the game's connection.
 
 mock-game keeps running too, and while the adapter holds its connection only
 its own timers can end it. In `LOBBY` it has none: the launch timer is armed
@@ -605,9 +601,10 @@ defaults to waiting indefinitely. A Mock Client killed before it gives the game
 a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
 delay; the adapter still moves it out of `IDLE` by sending `CreateLobby` itself.
 Once hosting or joining, mock-game ends when its launch and match timers finish,
-unless auto-launch is disabled (a negative `--mock-game-launch-delay-seconds`),
-in which case it also waits indefinitely. It ends at once if the adapter closes
-its connection, and after 30 s if the connection never comes up.
+unless auto-launch is off, as `mock-client session` sets it for every peer and a
+negative `--mock-game-launch-delay-seconds` sets it for `run`; then it also
+waits indefinitely. It ends at once if the adapter closes its connection, and
+within 30 s if the connection never comes up.
 
 ### 7.4 Process tracking
 

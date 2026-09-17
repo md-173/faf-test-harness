@@ -97,7 +97,7 @@ public class IceAdapterConnection {
      *   <li>{@link #connectWithRetry()} aborts the moment {@link #close()} is requested, and the
      *       CLI's signal hook reaches teardown without going through the FSM — so Ctrl-C still cuts
      *       the window short (WBS-3.1.2.7).
-     *   <li>{@code SubprocessManager}'s own JVM shutdown hook kills both children regardless of FSM
+     *   <li>{@code SubprocessRegistry}'s JVM shutdown hook kills both children regardless of FSM
      *       state on any exit that runs shutdown hooks. A SIGKILL skips it and leaves them running
      *       (spec §7.3).
      *   <li>The lifecycle races this connect against the adapter's process-exit future
