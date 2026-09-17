@@ -51,10 +51,12 @@ import org.slf4j.LoggerFactory;
  * property WBS-2.3.11 added below. Only {@code cancel()} had to move.
  *
  * <p><b>Closing before {@code cancel()} is only safe because a local close is not news to the
- * FSM.</b> The risk is confined to one of {@link GpgNetConnection#close()}'s two dispatch paths.
- * With a live socket the disconnect is delivered on the reader thread, which cannot hold up
- * teardown whatever it does; but on a connection that never opened its socket, {@code close()} can
- * fire the listener <em>synchronously on the calling thread</em>. {@code
+ * FSM.</b> The risk is confined to the one place {@link GpgNetConnection} can deliver a disconnect
+ * on the calling thread. Every other site delivers it on the connection's reader thread (the read
+ * loop, and each branch where the connect gives up), which cannot hold up teardown whatever it
+ * does, and each of those reads the close flag, so once this step has requested the close they
+ * report {@code LOCAL_CLOSE} too. But on a connection that never opened its socket, {@code close()}
+ * can fire the listener <em>synchronously on the calling thread</em>. {@code
  * MockGameLifecycle.setupStateMachine} filters {@code LOCAL_CLOSE} at the source rather than
  * posting it, so that synchronous call returns without touching the FSM. Were it ever to post an
  * event instead, this step would take the StateMachine monitor and block behind the very stall it
