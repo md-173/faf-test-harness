@@ -159,16 +159,12 @@ public final class Main {
                         .map(delay -> "injected " + delay.toSeconds() + "s into the session")
                         .orElse("none (fault injection disabled)"));
 
-        Duration effectiveMatch = matchDuration(matchDuration, config.launchDelay());
-        warnIfCrashOutlivesMatch(
-                config.crashDelay().orElse(null), effectiveMatch, config.launchDelay());
-
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         config,
                         new GpgNetConnection(config.gpgNetPort()),
                         config.launchDelay().orElse(null),
-                        effectiveMatch);
+                        matchDuration(matchDuration, config.launchDelay()));
         Thread hook =
                 new Thread(
                         shutdownHook(lifecycle.shutdown(), LoggingSetup::shutdown),
@@ -243,53 +239,6 @@ public final class Main {
                 launchDelay.orElse(Duration.ZERO).toSeconds(),
                 floor.toSeconds());
         return floor;
-    }
-
-    /**
-     * Warns when an injected crash is configured so late that the match will end before it fires
-     * (WBS-5.2).
-     *
-     * <p>Both timers live on the lifecycle's one scheduler, and the ENDED entry hook runs {@code
-     * GameShutdown}, whose {@code stopSchedules()} calls {@code shutdownNow()}, so a crash still
-     * queued when the match ends is cancelled and the run finishes normally. Silently: the operator
-     * asked for a fault, saw a clean exit {@code 0}, and has nothing in the log to explain why.
-     *
-     * <p>Checked here rather than in {@link MockGameCli} because the parser cannot see the match
-     * duration. It is not a session fact on the config at all; it is this class's constant,
-     * stretched by {@link #matchDuration(Duration, Optional)}, so this is the first point where
-     * both halves are known.
-     *
-     * <p><b>Only when auto-launch is on.</b> The match-end timer is armed in {@code matchBegins},
-     * on entry to LIVE, and with a negative {@code --launch-delay-seconds} nothing posts {@code
-     * LaunchMatch} at all, so no such timer is ever created and there is nothing to cancel the
-     * crash. Warning there would be exactly backwards: it would tell an operator no fault will be
-     * injected in the one configuration where a long delay is guaranteed to fire. That is also the
-     * configuration a multi-peer session and the crash process test both use.
-     *
-     * <p>A warning and not a usage error: even with auto-launch on the delay is only
-     * <em>usually</em> wasted. A crash armed by a peer connecting starts its clock earlier than one
-     * armed at LIVE, so a long delay can still land inside a match that began late. Refusing to
-     * start would block a legitimate run to prevent a recoverable mistake.
-     *
-     * @param crashDelay the configured crash delay, or {@code null} when none is configured
-     * @param effectiveMatch the match length this run will actually use
-     * @param launchDelay the configured auto-launch delay, empty when auto-launch is off
-     */
-    static void warnIfCrashOutlivesMatch(
-            final Duration crashDelay,
-            final Duration effectiveMatch,
-            final Optional<Duration> launchDelay) {
-        if (crashDelay == null || launchDelay.isEmpty()) {
-            return;
-        }
-        if (crashDelay.compareTo(effectiveMatch) < 0) {
-            return;
-        }
-        LOG.warn(
-                "crash delay {}s is at or past the effective match duration {}s; the match will"
-                        + " normally end first and cancel the crash, so no fault will be injected",
-                crashDelay.toSeconds(),
-                effectiveMatch.toSeconds());
     }
 
     /**

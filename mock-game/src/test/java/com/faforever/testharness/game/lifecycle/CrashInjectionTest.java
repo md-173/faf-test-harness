@@ -4,6 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
@@ -16,12 +20,14 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /**
  * Game crash injection (WBS-5.2): {@code --crash-after-seconds} arms a timer that halts the JVM
@@ -61,6 +67,18 @@ final class CrashInjectionTest {
     /** PlayerOption frames the host emits per player it configures: Army through Color. */
     private static final int PLAYER_OPTION_FRAMES = 5;
 
+    /** The game's own player id, as {@link #lifecycleWith} configures it. */
+    private static final int HOST_PLAYER_ID = 1;
+
+    /** A match length for the cancelled-crash warning cases; none of them runs it out. */
+    private static final Duration WARNING_MATCH = Duration.ofSeconds(10);
+
+    /** A launch delay for the same cases, long enough that no test sees the match start. */
+    private static final Duration WARNING_LAUNCH = Duration.ofSeconds(5);
+
+    /** Captures {@code MockGameLifecycle}'s own records; attached per test, detached after it. */
+    private final ListAppender<ILoggingEvent> lifecycleLog = new ListAppender<>();
+
     /** Scripted stand-in for the adapter's GPGNet server. */
     private ScriptedGpgNetServer gpgnet;
 
@@ -90,6 +108,10 @@ final class CrashInjectionTest {
     void setup() throws IOException {
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
+        // Written by the FSM and scheduler threads while the test thread reads it.
+        lifecycleLog.list = new CopyOnWriteArrayList<>();
+        lifecycleLog.start();
+        lifecycleLogger().addAppender(lifecycleLog);
     }
 
     @AfterEach
@@ -97,6 +119,13 @@ final class CrashInjectionTest {
         lifecycles.forEach(lifecycle -> lifecycle.shutdown().run());
         gpgnet.stop();
         peer.close();
+        lifecycleLogger().detachAppender(lifecycleLog);
+        lifecycleLog.stop();
+    }
+
+    /** The logger {@link MockGameLifecycle} writes to. */
+    private static Logger lifecycleLogger() {
+        return (Logger) LoggerFactory.getLogger(MockGameLifecycle.class);
     }
 
     /**
@@ -245,10 +274,9 @@ final class CrashInjectionTest {
         MockGameLifecycle lifecycle = lifecycleWith(-1, null, null);
         driveToLobby(lifecycle);
 
-        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        hostGame(lifecycle);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
-        awaitPeerCount(lifecycle, 1);
+        awaitPeerConfigured(lifecycle, 2);
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
@@ -272,14 +300,13 @@ final class CrashInjectionTest {
         MockGameLifecycle lifecycle = lifecycleWith(1, null, null);
         driveToLobby(lifecycle);
 
-        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        hostGame(lifecycle);
 
         // Two peers, then LIVE: three arming points, one timer.
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
-        awaitPeerCount(lifecycle, 1);
+        awaitPeerConfigured(lifecycle, 2);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Jones", 3)));
-        awaitPeerCount(lifecycle, 2);
+        awaitPeerConfigured(lifecycle, 3);
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
@@ -291,23 +318,46 @@ final class CrashInjectionTest {
     }
 
     /**
-     * Waits until the host has configured {@code expected} peers, by counting the {@code
-     * PlayerOption} frames it emits per peer.
+     * Sends {@code HostGame}, waits for HOSTING, and consumes the {@code PlayerOption} frames the
+     * host sends for itself on the way in.
+     *
+     * <p>Consumed here so that {@link #awaitPeerConfigured} only ever sees frames sent for a peer.
+     * Left queued, they answered the first wait for a peer before that peer's {@code ConnectToPeer}
+     * had been handled.
+     */
+    private void hostGame(final MockGameLifecycle lifecycle) throws Exception {
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        awaitPlayerOptionsFor(HOST_PLAYER_ID);
+    }
+
+    /**
+     * Waits until the host has configured the peer with {@code playerId}, by reading the {@code
+     * PlayerOption} frames it emits for that peer.
      *
      * <p>Needed so each {@code ConnectToPeer} is known to have been handled before the next frame
      * is sent. Without it the test would race its own setup and could reach fewer arming points
      * than it means to, which is precisely the defect that made an earlier version of this test
      * pass with the guard under test deleted.
      */
-    private void awaitPeerCount(final MockGameLifecycle lifecycle, final int expected)
+    private void awaitPeerConfigured(final MockGameLifecycle lifecycle, final int playerId)
             throws Exception {
-        for (int i = 0; i < PLAYER_OPTION_FRAMES; i++) {
-            gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        }
+        awaitPlayerOptionsFor(playerId);
         assertEquals(
                 GameState.HOSTING,
                 lifecycle.getState(),
-                "the host must still be in HOSTING after configuring peer " + expected);
+                "the host must still be in HOSTING after configuring player " + playerId);
+    }
+
+    /**
+     * Reads the next {@link #PLAYER_OPTION_FRAMES} frames, which must all be for {@code playerId}.
+     */
+    private void awaitPlayerOptionsFor(final int playerId) throws Exception {
+        for (int i = 0; i < PLAYER_OPTION_FRAMES; i++) {
+            GpgNetFrame frame = gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            assertEquals("PlayerOption", frame.command(), "unexpected frame: " + frame);
+            assertEquals(playerId, frame.intArg(0), "PlayerOption for the wrong player: " + frame);
+        }
     }
 
     /**
@@ -331,8 +381,8 @@ final class CrashInjectionTest {
         MockGameLifecycle lifecycle = lifecycleWith(0, null, null);
         driveToLobby(lifecycle);
 
-        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-        lifecycle.stateReached(GameState.HOSTING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // The host's frames for itself are consumed here, so the ones read below are the peer's.
+        hostGame(lifecycle);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
 
         assertTrue(
@@ -340,12 +390,7 @@ final class CrashInjectionTest {
                 "a peer connecting must arm and fire the crash");
         // Every frame the peer is owed arrived, and arrived before the halt: the poll budget is
         // spent on frames already queued, and the halt has provably happened by now.
-        for (int i = 0; i < PLAYER_OPTION_FRAMES; i++) {
-            assertEquals(
-                    "PlayerOption",
-                    gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS).command(),
-                    "every frame the peer is owed must still arrive");
-        }
+        awaitPlayerOptionsFor(2);
     }
 
     /**
@@ -366,5 +411,120 @@ final class CrashInjectionTest {
                 halted.await(CANCELLABLE_CRASH_SECONDS + QUIET_WINDOW_SECONDS, TimeUnit.SECONDS),
                 "teardown must cancel a crash that had not fired yet");
         assertEquals(0, haltCalls.get());
+    }
+
+    // A crash due after the match ends is cancelled with the rest of the schedule, so the run
+    // exits 0 with nothing to say why. armCrash warns about that where the crash's own start is
+    // known (#357 review); a startup check could compare only the crash delay with the match
+    // length, and so warned a joiner whose crash was due well inside its match.
+
+    /** A crash armed on entry to LIVE and due after the match ends is warned about. */
+    @Test
+    void aLiveCrashDueAfterTheMatchEndsIsWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(20, Duration.ZERO, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertCrashArmed(true);
+    }
+
+    /** A crash armed on entry to LIVE and due inside the match is not. */
+    @Test
+    void aLiveCrashDueInsideTheMatchIsNotWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(5, Duration.ZERO, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        lifecycle.stateReached(GameState.LIVE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertCrashArmed(false);
+    }
+
+    /**
+     * The case the startup check got wrong. A joiner arms on {@code JoinGame}, before its launch
+     * timer has fired, so its match ends a launch delay plus a match length later: 15 seconds here.
+     * A 12-second crash lands inside that, although it is longer than the match alone.
+     */
+    @Test
+    void aJoinerCrashDueBeforeLaunchPlusMatchIsNotWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(12, WARNING_LAUNCH, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        joinGame(lifecycle);
+
+        assertCrashArmed(false);
+    }
+
+    /** A joiner whose crash is due after launch delay plus match length is still warned about. */
+    @Test
+    void aJoinerCrashDueAfterLaunchPlusMatchIsWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(20, WARNING_LAUNCH, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        joinGame(lifecycle);
+
+        assertCrashArmed(true);
+    }
+
+    /**
+     * A host arms on its first peer, reading the launch timer {@code beginHosting} started rather
+     * than one {@code joinGame} did, so it is covered separately.
+     */
+    @Test
+    void aHostCrashDueAfterLaunchPlusMatchIsWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(20, WARNING_LAUNCH, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        hostGame(lifecycle);
+        gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
+        awaitPeerConfigured(lifecycle, 2);
+
+        assertCrashArmed(true);
+    }
+
+    /**
+     * With auto-launch off nothing ends the match, so nothing can cancel the crash, however long
+     * its delay. This is the configuration a multi-peer session runs in.
+     */
+    @Test
+    void aCrashWithAutoLaunchOffIsNotWarnedAbout() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(60, null, WARNING_MATCH);
+        driveToLobby(lifecycle);
+
+        joinGame(lifecycle);
+
+        assertCrashArmed(false);
+    }
+
+    /** Sends {@code JoinGame} naming the stub peer as host, and waits for JOINING. */
+    private void joinGame(final MockGameLifecycle lifecycle) throws Exception {
+        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", 2)));
+        lifecycle.stateReached(GameState.JOINING).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Asserts that the crash was armed, and whether it was warned about as due after the match.
+     *
+     * <p>Both records are written inside the transition action, which completes before the state
+     * the caller waited for is published, so they are already captured. The armed line is asserted
+     * too so that a silent case cannot pass merely because {@code armCrash} never ran.
+     */
+    private void assertCrashArmed(final boolean warned) {
+        List<ILoggingEvent> events = lifecycleLog.list;
+        assertTrue(
+                events.stream()
+                        .anyMatch(e -> e.getFormattedMessage().startsWith("injected crash armed")),
+                "the crash must have been armed. captured: " + events);
+        assertEquals(
+                warned,
+                events.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("likely inject no fault")),
+                "cancelled-crash warning. captured: " + events);
     }
 }

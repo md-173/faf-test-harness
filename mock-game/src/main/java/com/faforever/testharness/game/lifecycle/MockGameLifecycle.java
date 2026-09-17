@@ -23,9 +23,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
@@ -132,14 +132,14 @@ public final class MockGameLifecycle {
      * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
      * caller's thread reads from them.
      */
-    private volatile Future<?> launchFuture;
+    private volatile ScheduledFuture<?> launchFuture;
 
     /**
      * A future that upon completion, drives the state machine to end the match. Created by the
      * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
      * caller's thread reads from them.
      */
-    private volatile Future<?> matchEndFuture;
+    private volatile ScheduledFuture<?> matchEndFuture;
 
     /** A record of all connected peers. */
     private List<Peer> peers;
@@ -767,15 +767,17 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // A peer is connected and traffic is flowing, so there is now a session to lose (WBS-5.2).
-        armCrash();
-
         // Set up the scheduler if configured. Keeping the handle is what lets a manual
         // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
         // in a state with no matching transition and log "No matching transitions for LaunchMatch".
         if (launchDelay != null) {
             launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
         }
+
+        // A peer is connected and traffic is flowing, so there is now a session to lose (WBS-5.2).
+        // Armed after the launch timer, not before it (#357 review): armCrash reads that timer to
+        // tell whether the match will end before the crash fires.
+        armCrash();
     }
 
     /* Transition action for HOSTING/JOINING -> LIVE. */
@@ -910,12 +912,56 @@ public final class MockGameLifecycle {
         // proof that the timer started, and schedule() returns null rather than throwing when the
         // scheduler is already shut down, so announcing first would let a torn-down lifecycle claim
         // an armed crash it never armed.
-        if (schedule(this::injectCrash, crashDelay) != null) {
-            LOG.info(
-                    "injected crash armed: halting with exit code {} in {}s",
-                    ExitCodes.INJECTED_CRASH,
-                    crashDelay.toSeconds());
+        if (schedule(this::injectCrash, crashDelay) == null) {
+            return;
         }
+        LOG.info(
+                "injected crash armed: halting with exit code {} in {}s",
+                ExitCodes.INJECTED_CRASH,
+                crashDelay.toSeconds());
+        Duration untilMatchEnds = timeUntilMatchEnds();
+        if (untilMatchEnds != null && crashDelay.compareTo(untilMatchEnds) >= 0) {
+            LOG.warn(
+                    "injected crash is due in {}s but the match is due to end in {}ms; a match that"
+                            + " ends first cancels the crash, so this run will likely inject no"
+                            + " fault",
+                    crashDelay.toSeconds(),
+                    untilMatchEnds.toMillis());
+        }
+    }
+
+    /**
+     * How long until the pending match-end timer fires, as far as the schedule already says
+     * (WBS-5.2), or {@code null} when nothing is scheduled to end the match.
+     *
+     * <p>Read by {@link #armCrash()} to warn about a crash that cannot land. Both timers share the
+     * one scheduler, and the ENDED entry hook shuts that scheduler down, so a crash still queued
+     * when the match ends is cancelled and the run exits {@code 0} with nothing in the log to say
+     * why.
+     *
+     * <p>Answered here rather than at startup (#357 review), because only here is the crash's own
+     * start known. A crash armed on entry to LIVE races the match-end timer {@code matchBegins} has
+     * just scheduled. One armed by a peer connecting starts earlier, before the launch timer has
+     * fired, so its match ends a launch delay plus a match duration later. A startup check could
+     * only compare the crash delay with the match duration, which warned a joiner that no fault
+     * would be injected when its crash was due well inside the match.
+     *
+     * <p>{@code null} when auto-launch is off: nothing posts {@code LaunchMatch}, so no match-end
+     * timer is ever created and nothing can cancel the crash. That is the configuration a
+     * multi-peer session runs in.
+     *
+     * @return the time until the match is due to end, or {@code null} if it is not scheduled to
+     */
+    private Duration timeUntilMatchEnds() {
+        ScheduledFuture<?> matchEnd = matchEndFuture;
+        if (matchEnd != null && !matchEnd.isDone()) {
+            return Duration.ofMillis(matchEnd.getDelay(TimeUnit.MILLISECONDS));
+        }
+        ScheduledFuture<?> launch = launchFuture;
+        if (launch != null && !launch.isDone() && matchDuration != null) {
+            return Duration.ofMillis(launch.getDelay(TimeUnit.MILLISECONDS)).plus(matchDuration);
+        }
+        return null;
     }
 
     /**
@@ -943,7 +989,7 @@ public final class MockGameLifecycle {
 
     /* Wrapper around ScheduledExecutorService.schedule that catches RejectedExecutionExceptions
      * and logs them. */
-    private Future<?> schedule(Runnable command, Duration delay) {
+    private ScheduledFuture<?> schedule(Runnable command, Duration delay) {
         try {
             return scheduler.schedule(command, delay.toMillis(), TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException e) {
