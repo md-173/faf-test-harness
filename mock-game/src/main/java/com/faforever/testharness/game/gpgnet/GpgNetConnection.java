@@ -189,9 +189,10 @@ public class GpgNetConnection implements GpgNetFrameSink {
     /**
      * Open the socket (retrying while the adapter binds) and start the reader. The returned future
      * completes once the socket is open and the read loop is running. If every attempt fails, the
-     * disconnect listener fires with {@link DisconnectReason#CONNECT_FAILED}, or with {@link
-     * DisconnectReason#LOCAL_CLOSE} if {@link #close()} had already been requested by then, and
-     * only then does the future complete exceptionally.
+     * reader thread reports the disconnect, {@link DisconnectReason#CONNECT_FAILED}, or {@link
+     * DisconnectReason#LOCAL_CLOSE} if {@link #close()} had already been requested by then, before
+     * it completes the future exceptionally, so a caller reacting to the failed future cannot
+     * change what was reported.
      *
      * @return future that completes once connected
      * @throws IllegalStateException if called more than once
