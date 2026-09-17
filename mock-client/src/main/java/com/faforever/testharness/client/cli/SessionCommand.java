@@ -191,9 +191,8 @@ public final class SessionCommand implements Callable<Integer> {
         }
 
         Logger log = LoggerFactory.getLogger(SessionCommand.class);
-        // Which list won matters to a CI mid-switch: the other one may hold secrets it thinks are
-        // in
-        // use, and a refresh run spends its tokens while passing.
+        // Which list won matters to a CI mid-switch: the other may hold the secrets it thinks are
+        // in use, and a refresh-token run spends its tokens even when it passes.
         log.info(
                 "session: credentials from {} ({})",
                 flag,

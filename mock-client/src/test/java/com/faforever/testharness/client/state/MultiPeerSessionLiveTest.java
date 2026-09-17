@@ -268,8 +268,8 @@ final class MultiPeerSessionLiveTest {
         // The one prerequisite gate. A machine without the live environment skips here; under
         // FAF_LIVE_REQUIRED (WBS-2.3.3.1) the same list fails the case instead, so a job that
         // means to run this cannot go green having run nothing. No CI job runs this test today:
-        // every peer needs its own refresh token, which rotates on use, so a CI job runs the
-        // session command on access-token files instead (the #364 follow-up).
+        // every peer needs its own refresh token, which rotates on use, so CI will run the session
+        // command on access-token files once the workflow switches (the #364 follow-up).
         List<String> missing = missingPrerequisites(joinerAmount + 1);
         if (!missing.isEmpty()) {
             if (Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
