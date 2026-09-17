@@ -97,8 +97,8 @@ final class GpgNetConnectionTest {
      *
      * <p>The reason assertion pins intent without reproducing the race it guards: with no socket
      * yet, {@code close()} fires {@code LOCAL_CLOSE} itself and usually wins. The interleaving
-     * where the connect thread reports first is a few instructions wide and not reachable from a
-     * test.
+     * where the connect thread reports first is a few instructions wide, so {@code
+     * GpgNetConnectionCloseRaceTest} forces it through package-private seams instead.
      */
     @Test
     void closeDuringRetryAbandonsTheConnectWindowAsLocalClose() throws Exception {
