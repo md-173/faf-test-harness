@@ -115,7 +115,9 @@ final class MultiPeerSessionTest {
         IllegalArgumentException e =
                 assertThrows(
                         IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
-        assertTrue(e.getMessage().startsWith("peer B: cannot read"), e.getMessage());
+        assertTrue(
+                e.getMessage().startsWith("peer B: could not read OAuth refresh-token file"),
+                e.getMessage());
     }
 
     @Test
@@ -181,6 +183,42 @@ final class MultiPeerSessionTest {
                         .collect(Collectors.toSet());
 
         assertTrue(components.containsAll(SESSION_OWNED), components.toString());
+    }
+
+    @Test
+    void acceptsOneAccessTokenFilePerPeer() throws IOException {
+        List<MockClientConfig> bases = List.of(accessBase("a"), accessBase("b"));
+
+        // Credentials pass; the next check refuses the default adapter path, which does not exist.
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
+    }
+
+    @Test
+    void refusesTwoPeersOnOneAccessTokenFile() throws IOException {
+        MockClientConfig shared = accessBase("a");
+        List<MockClientConfig> bases = List.of(shared, shared);
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(e.getMessage().startsWith("peer B: access-token file"), e.getMessage());
+        assertTrue(e.getMessage().contains("also peer A's"), e.getMessage());
+    }
+
+    @Test
+    void refusesAnEmptyAccessTokenFileNamingTheReason() throws IOException {
+        Path empty = Files.writeString(dir.resolve("empty.jwt"), "  \n");
+        List<MockClientConfig> bases = List.of(accessBase("a"), accessBase(empty));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+        assertTrue(
+                e.getMessage().startsWith("peer B: OAuth access-token file is empty"),
+                e.getMessage());
     }
 
     @Test
@@ -292,6 +330,26 @@ final class MultiPeerSessionTest {
 
     private Path token(final String name) throws IOException {
         return Files.writeString(dir.resolve("refresh_token_" + name + ".txt"), "token-" + name);
+    }
+
+    private MockClientConfig accessBase(final String name) throws IOException {
+        return accessBase(token(name));
+    }
+
+    /**
+     * A base on the access-token channel with nothing else credential-related, which also shows
+     * that channel needs no token URL and no client id.
+     *
+     * @param accessTokenFile the access-token file
+     * @return the config
+     */
+    private static MockClientConfig accessBase(final Path accessTokenFile) {
+        String[] args = {
+            "--lobby-websocket-url=wss://ws.faforever.xyz",
+            "--oauth-access-token-file=" + accessTokenFile,
+            "--unique-id=00000000-0000-0000-0000-000000000000"
+        };
+        return ConfigLoader.load(args, Map.of()).orElseThrow();
     }
 
     private static MockClientConfig base(final Path tokenFile, final String... extra) {

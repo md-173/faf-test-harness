@@ -204,18 +204,20 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Prepares a session without starting anything: checks the peer count, that no two peers share
-     * a refresh-token file, that every token file can be read, that the adapter, game and {@code
-     * faf-uid} binaries exist, and that the log level lets game traffic be seen. A second login
-     * with the same account signs the first out, which would otherwise surface much later as an
-     * unexplained lobby disconnect.
+     * a credential file, that every credential file can be used (a refresh-token file read, an
+     * access-token file read and non-empty), that the adapter, game and {@code faf-uid} binaries
+     * exist, and that the log level lets game traffic be seen. A second login with the same account
+     * signs the first out, which would otherwise surface much later as an unexplained lobby
+     * disconnect.
      *
      * @param peerBases one validated config per peer, host first and joiners in join order. Each
-     *     supplies the peer's account and the settings every peer shares; its ports, launch delay
-     *     and host, join and queue intent are replaced by the session
+     *     supplies the peer's account, on either credential channel, and the settings every peer
+     *     shares; its ports, launch delay and host, join and queue intent are replaced by the
+     *     session
      * @param hostTitle the title the host advertises
      * @throws IllegalArgumentException if the count is outside {@value #MIN_PEERS} to {@value
-     *     #MAX_PEERS}, a token file cannot be read, two peers share one, a binary is missing, or
-     *     the log level is above INFO
+     *     #MAX_PEERS}, a credential file cannot be used, two peers share one, a binary is missing,
+     *     or the log level is above INFO
      */
     public MultiPeerSession(final List<MockClientConfig> peerBases, final String hostTitle) {
         if (peerBases.size() < MIN_PEERS || peerBases.size() > MAX_PEERS) {
@@ -234,21 +236,27 @@ public final class MultiPeerSession implements AutoCloseable {
         for (int i = 0; i < bases.size(); i++) {
             String label = labelFor(i);
             MockClientConfig base = bases.get(i);
-            Path file = base.oauthRefreshTokenFile();
+            // The record holds exactly one channel, so exactly one of these is the credential.
+            boolean accessToken = base.oauthAccessTokenFile().isPresent();
+            Path file = base.oauthAccessTokenFile().orElse(base.oauthRefreshTokenFile());
+            String channel = accessToken ? "access-token file" : "refresh-token file";
             try {
+                // Reads, and for an access token checks, the file now: before anything starts.
                 resolved.add(TokenSources.fromConfig(base));
-                file = file.toRealPath();
-            } catch (AuthenticationException | IOException e) {
-                throw new IllegalArgumentException(
-                        "peer " + label + ": cannot read refresh-token file " + file, e);
+            } catch (AuthenticationException e) {
+                // The source's own message names the file and the reason, such as an empty file.
+                throw new IllegalArgumentException("peer " + label + ": " + e.getMessage(), e);
             }
-            String previous = owners.putIfAbsent(file, label);
+            Path key = canonical(file);
+            String previous = owners.putIfAbsent(key, label);
             if (previous != null) {
                 throw new IllegalArgumentException(
                         "peer "
                                 + label
-                                + ": refresh-token file "
-                                + file
+                                + ": "
+                                + channel
+                                + " "
+                                + key
                                 + " is also peer "
                                 + previous
                                 + "'s; every peer needs its own account");
@@ -824,6 +832,23 @@ public final class MultiPeerSession implements AutoCloseable {
         long remaining = waitUntil - System.nanoTime();
         if (remaining > 0) {
             TimeUnit.NANOSECONDS.sleep(Math.min(POLL_SLICE.toNanos(), remaining));
+        }
+    }
+
+    /**
+     * The path two peers' credential files are compared by. Canonical where the file system can
+     * say, so a symlink or a relative path cannot hide a shared file. A file that was readable but
+     * has no real path, such as a process substitution ({@code <(printf %s "$TOKEN")}), which
+     * {@code run} accepts, falls back to its normalised absolute path.
+     *
+     * @param file a credential file that has already been read
+     * @return the path to compare by
+     */
+    private static Path canonical(final Path file) {
+        try {
+            return file.toRealPath();
+        } catch (IOException e) {
+            return file.toAbsolutePath().normalize();
         }
     }
 
