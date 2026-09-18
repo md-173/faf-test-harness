@@ -1520,10 +1520,10 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * <<<<<<< HEAD ======= Stay-in-state action for {@link DisconnectFromPeer} (WBS-4.3.4): issues
-     * the adapter's {@code disconnectFromPeer(remotePlayerId)} RPC (json-rpc-spec.md §4) for the
-     * player the lobby says has left, which destroys the local PeerRelay and makes the adapter emit
-     * a GPGNet {@code DisconnectFromPeer} to this side's game.
+     * Stay-in-state action for {@link DisconnectFromPeer} (WBS-4.3.4): issues the adapter's {@code
+     * disconnectFromPeer(remotePlayerId)} RPC (json-rpc-spec.md §4) for the player the lobby says
+     * has left, which destroys the local PeerRelay and makes the adapter emit a GPGNet {@code
+     * DisconnectFromPeer} to this side's game.
      *
      * <p>The generic {@link IceAdapterConnection#call} with an int id is the whole interface here:
      * no typed method exists, and upstream's {@code RPCHandler.disconnectFromPeer(long)} takes a
@@ -1624,10 +1624,9 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * >>>>>>> 2744649 (feat(mock-client): relay a lobby DisconnectFromPeer to the adapter) IDLE
-     * entry hook: sends this session's configured intent — {@code game_host}, {@code game_join},
-     * and/or the {@code game_matchmaking} start — exactly once, on the first entry into IDLE (#224
-     * review).
+     * IDLE entry hook: sends this session's configured intent — {@code game_host}, {@code
+     * game_join}, and/or the {@code game_matchmaking} start — exactly once, on the first entry into
+     * IDLE (#224 review).
      *
      * <p>Every subsequent IDLE entry sends nothing. Those come from SEARCHING, on a stop
      * confirmation or a {@code match_cancelled}, and re-sending there would mean a stopped search
