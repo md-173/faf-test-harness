@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import com.faforever.testharness.shared.process.LineWaiter;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
 import java.net.DatagramSocket;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -87,9 +89,13 @@ import org.junit.jupiter.api.io.TempDir;
  * the listener would block there on every message instead. 3.3.14 has no working telemetry off
  * switch anyway (see ice-adapter-setup.md).
  *
- * <p>This test therefore holds a plain TCP socket open on the RPC port and pauses {@link
- * #PRE_HANDSHAKE_SETTLE} before its first frame. The socket is held until after {@code
- * terminate()}, so the observed exit code comes from SIGTERM and not from the adapter's own
+ * <p>This test therefore holds a plain TCP socket open on the RPC port and, before its first
+ * frame, waits for the adapter's own {@code "GPGNetClient has connected"} log line — the last
+ * statement of the client constructor, so seeing it proves the blocking {@code getPeerOrWait()}
+ * above it has returned, and the only thing left uncovered is the {@code currentClient} write,
+ * which completes long before the line travels the pipe into this JVM. See {@link
+ * #awaitConstructorTail} for the wait itself and its fallback. The socket is held until after
+ * {@code terminate()}, so the observed exit code comes from SIGTERM and not from the adapter's own
  * first-peer-loss shutdown: dropping the RPC peer while at {@code GameState "Lobby"} makes the
  * adapter call {@code close(0)}, which reaches {@code System.exit(0)} roughly half a second later.
  * The card's "no JSON-RPC" constraint is kept at the protocol level — not one JSON-RPC byte is
@@ -169,20 +175,27 @@ final class GpgNetConnectionLiveSmokeTest {
     private static final String LOOPBACK = "127.0.0.1";
 
     /**
-     * Pause between the socket opening and the first {@code GameState}, covering the second half of
-     * the finding in the class javadoc. The window is a few statements wide, so this is orders of
-     * magnitude more than it needs to be.
-     *
-     * <p><b>Best-effort heuristic, not a guarantee.</b> Nothing asserts that the window has closed,
-     * so a long enough adapter-side stall (GC, a loaded host) reopens it silently. Raising this
-     * constant is not the fix. The deterministic replacement is the adapter's own {@code
-     * "GPGNetClient has connected"} log line: it is the last statement of the client constructor,
-     * so it proves the blocking {@code getPeerOrWait()} above it has returned, and the only thing
-     * left uncovered is the {@code currentClient} write, which completes long before the line
-     * travels the pipe into this JVM. Waiting on it needs a per-line hook on subprocess output,
-     * which {@code ProcessOutputLogger} does not have today; tracked as #225 (WBS 3.1.2.10).
+     * The adapter log line that proves the client constructor's blocking {@code getPeerOrWait()}
+     * has returned; see the class javadoc. Matched with {@link String#contains}, not equality,
+     * since the adapter's own line carries a logger prefix ahead of this text.
      */
-    private static final Duration PRE_HANDSHAKE_SETTLE = Duration.ofMillis(500);
+    private static final String CONSTRUCTOR_TAIL_MARKER = "GPGNetClient has connected";
+
+    /**
+     * Budget for {@link #CONSTRUCTOR_TAIL_MARKER} to appear after the RPC peer socket connects.
+     * The window it covers is a few statements wide (WBS 3.1.2.10 / #225), so this is generous.
+     */
+    private static final Duration CONSTRUCTOR_TAIL_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * Last-resort fallback used only if {@link #CONSTRUCTOR_TAIL_MARKER} never arrives within
+     * {@link #CONSTRUCTOR_TAIL_TIMEOUT} — the marker is an upstream INFO string with no
+     * compatibility guarantee, so a future adapter release could reword or drop it. This is the
+     * same fixed pause the test used before WBS 3.1.2.10, kept only as a safety net: a
+     * best-effort heuristic, not a guarantee, since nothing asserts the window it covers has
+     * actually closed.
+     */
+    private static final Duration CONSTRUCTOR_TAIL_FALLBACK_SETTLE = Duration.ofMillis(500);
 
     /** Budget for {@code CreateLobby} to arrive after {@code GameState "Idle"} goes out. */
     private static final Duration CREATE_LOBBY_TIMEOUT = Duration.ofSeconds(20);
@@ -212,7 +225,8 @@ final class GpgNetConnectionLiveSmokeTest {
         Path binary = resolveAdapterBinary();
         AdapterPorts ports = freeAdapterPorts();
 
-        SubprocessManager adapter = launchAdapter(binary, ports, tempDir);
+        LineWaiter adapterOutput = new LineWaiter();
+        SubprocessManager adapter = launchAdapter(binary, ports, tempDir, adapterOutput);
         GpgNetConnection conn = new GpgNetConnection(ports.gpgnet(), CONNECT_ATTEMPTS, RETRY_DELAY);
         AtomicReference<GpgNetConnection.DisconnectEvent> disconnect = new AtomicReference<>();
         conn.onDisconnect(disconnect::set);
@@ -231,7 +245,7 @@ final class GpgNetConnectionLiveSmokeTest {
             conn.connect().get(30, TimeUnit.SECONDS);
             // The adapter assigns currentClient only after its client constructor returns, which
             // can trail our connect(); sending inside that window kills its listener thread.
-            Thread.sleep(PRE_HANDSHAKE_SETTLE.toMillis());
+            awaitConstructorTail(adapterOutput);
 
             GpgNetSender sender = new GpgNetSender(conn);
             sender.gameState("Idle");
@@ -271,6 +285,30 @@ final class GpgNetConnectionLiveSmokeTest {
         assertFalse(adapter.isAlive(), "adapter should be dead after terminate()");
         assertEquals(
                 EXIT_SIGTERM, exitCode, "adapter should exit cleanly on SIGTERM within the grace");
+    }
+
+    /**
+     * Waits for {@link #CONSTRUCTOR_TAIL_MARKER} on the adapter's output, the deterministic signal
+     * that its client constructor has returned (see the class javadoc). Falls back to a fixed
+     * settle if the marker never arrives within {@link #CONSTRUCTOR_TAIL_TIMEOUT}, since it is an
+     * upstream INFO string this test does not control.
+     */
+    private static void awaitConstructorTail(final LineWaiter adapterOutput)
+            throws InterruptedException {
+        try {
+            adapterOutput.awaitLine(
+                    line -> line.contains(CONSTRUCTOR_TAIL_MARKER), CONSTRUCTOR_TAIL_TIMEOUT);
+        } catch (TimeoutException e) {
+            System.out.println(
+                    "[live smoke] \""
+                            + CONSTRUCTOR_TAIL_MARKER
+                            + "\" not seen within "
+                            + CONSTRUCTOR_TAIL_TIMEOUT
+                            + "; falling back to a "
+                            + CONSTRUCTOR_TAIL_FALLBACK_SETTLE.toMillis()
+                            + "ms settle");
+            Thread.sleep(CONSTRUCTOR_TAIL_FALLBACK_SETTLE.toMillis());
+        }
     }
 
     /**
@@ -338,9 +376,16 @@ final class GpgNetConnectionLiveSmokeTest {
     /**
      * Launch the adapter on {@code ports}, headless. Only the jar form is handled — R74 provisions
      * the pinned {@code -nojfx} jar, and the env override is named for it.
+     *
+     * @param adapterOutput observes every line of the adapter's stdout/stderr, in addition to the
+     *     normal SLF4J routing; see {@link #awaitConstructorTail}
      */
     private static SubprocessManager launchAdapter(
-            final Path binary, final AdapterPorts ports, final Path tempDir) throws IOException {
+            final Path binary,
+            final AdapterPorts ports,
+            final Path tempDir,
+            final LineWaiter adapterOutput)
+            throws IOException {
         Path logbackConfig = tempDir.resolve("logback-headless.xml");
         Files.writeString(logbackConfig, HEADLESS_LOGBACK_XML);
         List<String> argv =
@@ -362,7 +407,8 @@ final class GpgNetConnectionLiveSmokeTest {
                         "--lobby-port",
                         Integer.toString(ports.lobby()));
         System.out.println("[live smoke] launching adapter: " + String.join(" ", argv));
-        return SubprocessManager.start(new ProcessBuilder(argv), "ICEAdapter", TERMINATE_GRACE);
+        return SubprocessManager.start(
+                new ProcessBuilder(argv), "ICEAdapter", TERMINATE_GRACE, adapterOutput);
     }
 
     /** The JRE running this test, falling back to {@code java.home} when the OS withholds it. */
