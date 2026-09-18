@@ -199,6 +199,87 @@ jobs:
             echo "::error::token secret not set:$missing - mint it with scripts/ci/mint-access-token.sh, one seeded account per peer"
             exit 1
           fi
+          # Then the one thing about a pre-signed token that is already knowable here. The session
+          # does not log in until after the build, and a dispatch can queue behind a running one
+          # before that, so a token minted before the dispatch can be dead by the time it is used.
+          # Without this the run spends twenty minutes to report an ordinary-looking login failure.
+          # Same reasoning as the faf-uid probe below, and the same shape: a prerequisite this job
+          # provisions is checked before the job depends on it.
+          #
+          # This does not contradict StaticTokenSource, which reads no expiry on purpose so that
+          # the lobby's precise rejection is never flattened into a local guess. That rule is about
+          # the harness at runtime. This is CI pre-flight, it refuses only a token that cannot
+          # possibly work, and every other verdict is still the lobby's. The decoder is the
+          # inspector from harness-runbook.md section 3, trimmed to the single claim this needs.
+          #
+          # Tokens are read from the environment, never from argv, so none reaches the process
+          # table. Only exp is read and only exp is printed.
+          python3 - <<'PY'
+          import base64, json, os, string, sys, time
+
+          B64URL = set(string.ascii_letters + string.digits + "-_")
+          WARN_BELOW = 15 * 60
+
+
+          def expiry_of(token):
+              """The token's exp as (seconds, formatted), or None if no usable exp can be read."""
+              parts = token.strip().split(".")
+              if len(parts) != 3:
+                  return None
+              segment = parts[1]
+              if not segment or set(segment) - B64URL or len(segment) % 4 == 1:
+                  return None
+              try:
+                  claims = json.loads(
+                      base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+              except ValueError:
+                  return None
+              if not isinstance(claims, dict):
+                  return None
+              exp = claims.get("exp")
+              # bool is an int subclass and json turns `true` into one; it is not an expiry.
+              if isinstance(exp, bool) or not isinstance(exp, int):
+                  return None
+              try:
+                  return exp, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))
+              except (OverflowError, OSError, ValueError):
+                  # A number, but not one this platform can express as a time. Unusable, so say
+                  # so rather than reporting a nonsense span against it.
+                  return None
+
+
+          def span(seconds):
+              return "less than a minute" if seconds < 60 else "%d minutes" % (seconds // 60)
+
+
+          now = time.time()
+          expired = []
+          # Both are checked before either can end the run, so one dispatch reports both faults.
+          for name in ("FAF_CI_ACCESS_TOKEN_C", "FAF_CI_ACCESS_TOKEN_D"):
+              found = expiry_of(os.environ.get(name, ""))
+              if found is None:
+                  # An opaque token carries no readable claims and may still be valid, so the
+                  # lobby decides. Being stricter here than the thing being pre-flighted is how a
+                  # pre-flight starts failing good runs.
+                  print("::warning::%s carries no usable exp claim; it is sent unchecked "
+                        "and the lobby decides" % name)
+                  continue
+              exp, when = found
+              left = exp - now
+              if left <= 0:
+                  print("::error::%s expired %s ago, at %s; mint a fresh one with "
+                        "scripts/ci/mint-access-token.sh and dispatch again"
+                        % (name, span(-left), when))
+                  expired.append(name)
+              elif left < WARN_BELOW:
+                  print("::warning::%s has %s left (expires %s); the session logs in after the "
+                        "build, so it may expire mid-run" % (name, span(left), when))
+              else:
+                  print("%s is valid for %s (expires %s)" % (name, span(left), when))
+          if expired:
+              sys.exit(1)
+          PY
+
           printf '%s' "$FAF_CI_ACCESS_TOKEN_C" > "$TOKENS/c.txt"
           printf '%s' "$FAF_CI_ACCESS_TOKEN_D" > "$TOKENS/d.txt"
           echo "wrote one token file per peer, owner-readable only"
