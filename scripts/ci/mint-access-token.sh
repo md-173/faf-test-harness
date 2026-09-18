@@ -8,11 +8,6 @@
 # access token does not rotate, lasts about an hour, and is exactly what the lobby validates, so it
 # is what CI gets, minted right before a dispatch.
 #
-# NOT YET WIRED UP. `session` accepts one access-token file per peer (--peer-access-token-file,
-# #87), but the workflow still passes --peer-refresh-token-file and reads FAF_CI_REFRESH_TOKEN_C and
-# _D, so those runs spend the tokens. This script starts being used when the workflow switches (the
-# #364 follow-up), which is when FAF_CI_ACCESS_TOKEN_C and _D start being read.
-#
 # Usage:
 #   scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name> [--dry-run]
 #
