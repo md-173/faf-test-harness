@@ -501,20 +501,24 @@ public final class MockClientCli implements Callable<Integer> {
      *     {@link MockClientConfig} compact constructor)
      */
     public MockClientConfig toConfig() {
-        return toConfig(oauthRefreshTokenFile);
+        return toConfig(oauthRefreshTokenFile, Optional.ofNullable(oauthAccessTokenFile));
     }
 
     /**
-     * {@link #toConfig()} with the refresh-token file supplied by the caller instead of {@code
-     * --oauth-refresh-token-file}: the {@code session} command builds one config per peer this way,
-     * each with its own account.
+     * {@link #toConfig()} with the credential supplied by the caller instead of the two {@code
+     * --oauth-*-token-file} options: the {@code session} command builds one config per peer this
+     * way, each with its own account.
      *
-     * @param refreshTokenFile the refresh-token file this config authenticates with
+     * @param refreshTokenFile the refresh-token file this config authenticates with, or {@code
+     *     null} on the access-token channel
+     * @param accessTokenFile the access-token file this config authenticates with, or empty on the
+     *     refresh-token channel
      * @return the validated configuration
      * @throws IllegalArgumentException if a mandatory field is missing (raised by the {@link
      *     MockClientConfig} compact constructor)
      */
-    private MockClientConfig toConfig(final Path refreshTokenFile) {
+    private MockClientConfig toConfig(
+            final Path refreshTokenFile, final Optional<Path> accessTokenFile) {
         return new MockClientConfig(
                 lobbyWebSocketUrl,
                 oauthTokenUrl,
@@ -523,7 +527,7 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthScopes,
                 oauthClientId,
                 refreshTokenFile,
-                Optional.ofNullable(oauthAccessTokenFile),
+                accessTokenFile,
                 uniqueId,
                 clientVersion,
                 userAgent,
@@ -622,10 +626,9 @@ public final class MockClientCli implements Callable<Integer> {
 
     /**
      * Same as {@link #toValidatedConfig(CommandSpec)} but authenticating with {@code
-     * refreshTokenFile} rather than {@code --oauth-refresh-token-file}, for the {@code session}
-     * command's per-peer accounts (WBS-4.2.1). It runs the same credential precedence and the same
-     * record validation, so an access-token file supplied alongside still counts: a peer config
-     * with both channels is rejected rather than silently choosing one.
+     * refreshTokenFile}, for one peer of the {@code session} command (WBS-4.2.1). The peer's file
+     * is its whole credential: the two {@code --oauth-*-token-file} options are not used, so a root
+     * access-token file cannot collide with it and there is no precedence to resolve.
      *
      * @param callerSpec the {@link CommandSpec} of the command requesting validation
      * @param refreshTokenFile the refresh-token file this config authenticates with
@@ -635,11 +638,84 @@ public final class MockClientCli implements Callable<Integer> {
     public MockClientConfig toValidatedConfig(
             final CommandSpec callerSpec, final Path refreshTokenFile) {
         try {
-            dropShadowedCredentialChannel(callerSpec);
-            return toConfig(refreshTokenFile);
+            return toConfig(refreshTokenFile, Optional.empty());
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
+    }
+
+    /**
+     * Same as {@link #toValidatedConfig(CommandSpec, Path)} but on the access-token channel: the
+     * peer authenticates with a pre-signed token read from {@code accessTokenFile}, sent as-is and
+     * never renewed (WBS-3.1.6.4). The two {@code --oauth-*-token-file} options are not used.
+     *
+     * @param callerSpec the {@link CommandSpec} of the command requesting validation
+     * @param accessTokenFile the access-token file this config authenticates with
+     * @return the validated configuration
+     * @throws CommandLine.ParameterException if a mandatory field is missing
+     */
+    public MockClientConfig toValidatedConfigWithAccessToken(
+            final CommandSpec callerSpec, final Path accessTokenFile) {
+        try {
+            return toConfig(null, Optional.of(accessTokenFile));
+        } catch (IllegalArgumentException e) {
+            throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Which of two options was configured at the higher layer: the command line, then a {@code
+     * FAF_MOCK_CLIENT_*} variable, then the config file (harness-runbook.md §3). Both options must
+     * be configured. Only the environment and the config file are recorded, so an option with no
+     * recorded layer is taken to be on the command line, which is only true when it is set at all.
+     *
+     * @param callerSpec the spec of the command asking, whose command line carries the provider
+     * @param flagA one option's long name, e.g. {@code --peer-access-token-file}
+     * @param flagB the other option's long name
+     * @return the option set at the higher layer, or empty when both were set at the same layer
+     */
+    public static Optional<String> higherLayer(
+            final CommandSpec callerSpec, final String flagA, final String flagB) {
+        LayeredDefaultProvider.Layer a = layerOf(callerSpec, flagA);
+        LayeredDefaultProvider.Layer b = layerOf(callerSpec, flagB);
+        if (a.ordinal() > b.ordinal()) {
+            return Optional.of(flagA);
+        }
+        if (b.ordinal() > a.ordinal()) {
+            return Optional.of(flagB);
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Names the layer a configured option came from, for an error message about a tie.
+     *
+     * @param callerSpec the spec of the command asking
+     * @param flag the option's long name; it must be configured
+     * @return {@code on the command line}, {@code in FAF_MOCK_CLIENT_* environment variables} or
+     *     {@code in the config file}
+     */
+    public static String layerDescription(final CommandSpec callerSpec, final String flag) {
+        return switch (layerOf(callerSpec, flag)) {
+            case FILE -> "in the config file";
+            case ENV -> "in FAF_MOCK_CLIENT_* environment variables";
+            case CLI -> "on the command line";
+        };
+    }
+
+    /**
+     * The layer a configured option came from, defaulting to the command line when the layered
+     * provider did not answer for it or is not attached.
+     *
+     * @param callerSpec the spec of the command asking
+     * @param flag the option's long name
+     * @return its layer
+     */
+    private static LayeredDefaultProvider.Layer layerOf(
+            final CommandSpec callerSpec, final String flag) {
+        return layeredProvider(callerSpec)
+                .flatMap(provider -> provider.layerFor(flag))
+                .orElse(LayeredDefaultProvider.Layer.CLI);
     }
 
     /**
@@ -665,21 +741,14 @@ public final class MockClientCli implements Callable<Integer> {
         if (oauthRefreshTokenFile == null || oauthAccessTokenFile == null) {
             return;
         }
-        Optional<LayeredDefaultProvider> provider = layeredProvider(callerSpec);
-        if (provider.isEmpty()) {
+        Optional<String> winner =
+                higherLayer(callerSpec, "--oauth-access-token-file", "--oauth-refresh-token-file");
+        if (winner.isEmpty()) {
             return;
         }
-        LayeredDefaultProvider.Layer refresh =
-                provider.get()
-                        .layerFor("--oauth-refresh-token-file")
-                        .orElse(LayeredDefaultProvider.Layer.CLI);
-        LayeredDefaultProvider.Layer access =
-                provider.get()
-                        .layerFor("--oauth-access-token-file")
-                        .orElse(LayeredDefaultProvider.Layer.CLI);
-        if (access.ordinal() > refresh.ordinal()) {
+        if (winner.get().equals("--oauth-access-token-file")) {
             oauthRefreshTokenFile = null;
-        } else if (refresh.ordinal() > access.ordinal()) {
+        } else {
             oauthAccessTokenFile = null;
         }
     }

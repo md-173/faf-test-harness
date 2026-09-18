@@ -10,13 +10,17 @@ import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.lobby.TokenSource;
 import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.state.ClientState;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -166,6 +170,12 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     private static final Duration NO_ORPHANS_TIMEOUT = Duration.ofSeconds(20);
 
+    /** Dot-separated segments of a JWT: header, payload, signature. */
+    private static final int JWT_PARTS = 3;
+
+    /** Reads an access token's payload for {@link #accountOf(String)}. */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     /** Poll slice for every bounded wait built on a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
 
@@ -204,18 +214,20 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /**
      * Prepares a session without starting anything: checks the peer count, that no two peers share
-     * a refresh-token file, that every token file can be read, that the adapter, game and {@code
-     * faf-uid} binaries exist, and that the log level lets game traffic be seen. A second login
-     * with the same account signs the first out, which would otherwise surface much later as an
-     * unexplained lobby disconnect.
+     * a credential file, that every credential file can be used (a refresh-token file read, an
+     * access-token file read and non-empty), that the adapter, game and {@code faf-uid} binaries
+     * exist, and that the log level lets game traffic be seen. A second login with the same account
+     * signs the first out, which would otherwise surface much later as an unexplained lobby
+     * disconnect.
      *
      * @param peerBases one validated config per peer, host first and joiners in join order. Each
-     *     supplies the peer's account and the settings every peer shares; its ports, launch delay
-     *     and host, join and queue intent are replaced by the session
+     *     supplies the peer's account, on either credential channel, and the settings every peer
+     *     shares; its ports, launch delay and host, join and queue intent are replaced by the
+     *     session
      * @param hostTitle the title the host advertises
      * @throws IllegalArgumentException if the count is outside {@value #MIN_PEERS} to {@value
-     *     #MAX_PEERS}, a token file cannot be read, two peers share one, a binary is missing, or
-     *     the log level is above INFO
+     *     #MAX_PEERS}, a credential file cannot be used, two peers share one, a binary is missing,
+     *     or the log level is above INFO
      */
     public MultiPeerSession(final List<MockClientConfig> peerBases, final String hostTitle) {
         if (peerBases.size() < MIN_PEERS || peerBases.size() > MAX_PEERS) {
@@ -231,27 +243,61 @@ public final class MultiPeerSession implements AutoCloseable {
         this.hostTitle = hostTitle;
         List<TokenSource> resolved = new ArrayList<>();
         Map<Path, String> owners = new HashMap<>();
+        Map<String, String> accounts = new HashMap<>();
         for (int i = 0; i < bases.size(); i++) {
             String label = labelFor(i);
             MockClientConfig base = bases.get(i);
-            Path file = base.oauthRefreshTokenFile();
+            // The record holds exactly one channel, so exactly one of these is the credential.
+            boolean accessToken = base.oauthAccessTokenFile().isPresent();
+            Path file = base.oauthAccessTokenFile().orElse(base.oauthRefreshTokenFile());
+            String channel = accessToken ? "access-token file" : "refresh-token file";
+            TokenSource source;
             try {
-                resolved.add(TokenSources.fromConfig(base));
-                file = file.toRealPath();
-            } catch (AuthenticationException | IOException e) {
+                // Reads, and for an access token checks, the file now: before anything starts.
+                source = TokenSources.fromConfig(base);
+            } catch (AuthenticationException e) {
+                // The source's message names the file; picocli prints only the message, so the
+                // cause's type is added to tell a missing file from a directory or a denied one.
+                String reason =
+                        e.getCause() == null
+                                ? ""
+                                : " (" + e.getCause().getClass().getSimpleName() + ")";
                 throw new IllegalArgumentException(
-                        "peer " + label + ": cannot read refresh-token file " + file, e);
+                        "peer " + label + ": " + e.getMessage() + reason, e);
             }
-            String previous = owners.putIfAbsent(file, label);
+            resolved.add(source);
+            if (!accessToken) {
+                requireUsableRefreshTokenFile(label, file);
+            }
+            Path key = canonical(file);
+            String previous = owners.putIfAbsent(key, label);
             if (previous != null) {
                 throw new IllegalArgumentException(
                         "peer "
                                 + label
-                                + ": refresh-token file "
-                                + file
+                                + ": "
+                                + channel
+                                + " "
+                                + key
                                 + " is also peer "
                                 + previous
                                 + "'s; every peer needs its own account");
+            }
+            if (accessToken) {
+                // A refresh token is opaque, so only the access channel can be checked here; a
+                // shared account on either channel is still refused at the joiner's welcome.
+                String account = accountOf(source.obtain().join().token()).orElse(null);
+                String sameAccount = account == null ? null : accounts.putIfAbsent(account, label);
+                if (sameAccount != null) {
+                    throw new IllegalArgumentException(
+                            "peer "
+                                    + label
+                                    + ": access token is for account "
+                                    + account
+                                    + ", the same account as peer "
+                                    + sameAccount
+                                    + "; every peer needs its own account");
+                }
             }
         }
         this.tokens = List.copyOf(resolved);
@@ -824,6 +870,79 @@ public final class MultiPeerSession implements AutoCloseable {
         long remaining = waitUntil - System.nanoTime();
         if (remaining > 0) {
             TimeUnit.NANOSECONDS.sleep(Math.min(POLL_SLICE.toNanos(), remaining));
+        }
+    }
+
+    /**
+     * The path two peers' credential files are compared by. Canonical where the file system can
+     * say, so a symlink or a relative path cannot hide a shared file. Only an access-token file can
+     * reach the fallback: one that was readable but has no real path, such as a process
+     * substitution ({@code <(printf %s "$TOKEN")}), which {@code run} accepts, is compared by its
+     * normalised absolute path. A refresh-token file is a regular file by then.
+     *
+     * @param file a credential file that has already been read
+     * @return the path to compare by
+     */
+    private static Path canonical(final Path file) {
+        try {
+            return file.toRealPath();
+        } catch (IOException e) {
+            return file.toAbsolutePath().normalize();
+        }
+    }
+
+    /**
+     * Refuses a refresh-token file the session could read but should not use, before any peer logs
+     * in. The rotated token is written back to this path after the exchange, so a path that is not
+     * a regular file (a process substitution, say) would lose it and spend the account. A blank
+     * file would only fail at Hydra, after earlier peers had logged in and spent their tokens.
+     *
+     * @param label the peer's label
+     * @param file the refresh-token file, already read once
+     * @throws IllegalArgumentException if it is not a regular file or is blank
+     */
+    private static void requireUsableRefreshTokenFile(final String label, final Path file) {
+        if (!Files.isRegularFile(file)) {
+            throw new IllegalArgumentException(
+                    "peer "
+                            + label
+                            + ": refresh-token file "
+                            + file
+                            + " must be a regular file, since the rotated token is written back to"
+                            + " it");
+        }
+        try {
+            if (Files.readString(file).isBlank()) {
+                throw new IllegalArgumentException(
+                        "peer " + label + ": OAuth refresh-token file is empty: " + file);
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "peer " + label + ": could not read OAuth refresh-token file: " + file, e);
+        }
+    }
+
+    /**
+     * The account an access token is for: its numeric {@code sub} claim, which the lobby takes as
+     * the player id (harness-runbook.md §3). The payload is decoded without checking the signature,
+     * so this is only ever used to refuse two peers on one account, never to trust a token. A token
+     * that does not decode, or has no numeric {@code sub}, gives nothing, and the lobby judges it.
+     *
+     * @param token the access token as sent to the lobby
+     * @return the player id, or empty
+     */
+    static Optional<String> accountOf(final String token) {
+        String[] parts = token.split("\\.");
+        if (parts.length != JWT_PARTS) {
+            return Optional.empty();
+        }
+        try {
+            byte[] payload = Base64.getUrlDecoder().decode(parts[1]);
+            JsonNode sub = JSON.readTree(new String(payload, StandardCharsets.UTF_8)).path("sub");
+            String value = sub.isNumber() ? sub.asText() : sub.textValue();
+            return value != null && value.matches("\\d+") ? Optional.of(value) : Optional.empty();
+        } catch (IllegalArgumentException | IOException e) {
+            return Optional.empty();
         }
     }
 

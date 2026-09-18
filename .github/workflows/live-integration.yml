@@ -178,10 +178,11 @@ jobs:
       # exactly which secret is missing.
       #
       # TEMPORARY (#364): these are refresh tokens, which Hydra rotates on every use, so each run
-      # spends them and the accounts are re-bootstrapped afterwards. #340's access-token channel has
-      # merged, so what remains is #87's step giving `session` one access-token file per peer: then
-      # these become FAF_CI_ACCESS_TOKEN_C and _D, set by scripts/ci/mint-access-token.sh, and the
-      # two marked lines in the session step change with them.
+      # spends them and the accounts are re-bootstrapped afterwards. `session` now accepts one
+      # access-token file per peer (#87), so what remains is switching this job (the #364
+      # follow-up): these become FAF_CI_ACCESS_TOKEN_C and _D, set by
+      # scripts/ci/mint-access-token.sh, and the two marked lines in the session step change with
+      # them.
       - name: Write the peer token files
         timeout-minutes: 1
         env:
@@ -284,10 +285,10 @@ jobs:
           shopt -u nullglob
 
           # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
-          # only its one-time bootstrap uses. Once #87's step gives `session` per-peer access-token
-          # files, this becomes --peer-access-token-file and the array goes away entirely.
-          CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #87
-          REFRESH_ONLY_ARGS=(                                                        # drop with #87
+          # only its one-time bootstrap uses. `session` accepts --peer-access-token-file (#87), so
+          # when this job switches, this becomes that flag and the array goes away entirely.
+          CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #364
+          REFRESH_ONLY_ARGS=(                                                        # drop with #364
             --oauth-token-url=https://hydra.faforever.xyz/oauth2/token
             --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8
             --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth

@@ -33,19 +33,29 @@ import picocli.CommandLine.Spec;
  * means sharing its fate: an OOM or a stuck lock ends every peer, and any peer failing fails the
  * session.
  *
+ * <p>Each peer's credential is one file: a refresh-token file ({@code --peer-refresh-token-file},
+ * exchanged at Hydra and rewritten on rotation) or a pre-signed access-token file ({@code
+ * --peer-access-token-file}, sent as-is and never renewed). Every peer uses the same channel. When
+ * both lists are configured, the one at the higher layer wins, as for the root credential options
+ * (harness-runbook.md §3); both at one layer is a usage error.
+ *
  * <p>The inherited options supply what every peer shares (lobby, OAuth endpoints, {@code faf-uid},
- * adapter and game binaries, log level). The session sets each peer's adapter ports, auto-launch
- * off, and the host or join intent itself, so {@code --ice-adapter-*-port}, {@code
- * --mock-game-launch-delay-seconds}, {@code --host-*}, {@code --target-game-id}, {@code
- * --game-join-password}, {@code --queue-*} and {@code --oauth-refresh-token-file} are not used,
- * though they are still validated.
+ * adapter and game binaries, log level). The session sets each peer's credential, adapter ports,
+ * auto-launch off, and the host or join intent itself. The root {@code --oauth-refresh-token-file}
+ * and {@code --oauth-access-token-file} are therefore ignored entirely, and {@code
+ * --ice-adapter-*-port}, {@code --mock-game-launch-delay-seconds}, {@code --host-*}, {@code
+ * --target-game-id}, {@code --game-join-password} and {@code --queue-*} are not used, though they
+ * are still validated. The run logs which credential list it used and where that came from, so a CI
+ * that set both can see which one won.
  *
  * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
- * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including
- * fewer token files than peers, two peers on one file, an unreadable file, a missing binary or a
- * {@code --log-level} above INFO (the traffic check reads INFO lines), all refused before any
- * process starts; {@link ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code session: FAIL
- * <peer>: <stage>: <detail>}) or a subprocess survives teardown, which is then killed.
+ * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including no
+ * credential list, both lists at one layer, fewer credential files than peers, two peers on one
+ * file or (on access tokens) one account, a refresh-token path that is not a regular file, an
+ * unreadable or empty file, a missing binary or a {@code --log-level} above INFO (the traffic check
+ * reads INFO lines), all refused before any process starts; {@link ExitCodes#RUNTIME} when a
+ * checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a subprocess
+ * survives teardown, which is then killed.
  */
 @Command(
         name = "session",
@@ -57,13 +67,20 @@ import picocli.CommandLine.Spec;
                         + "joiners, each with its own account, adapter and game. Exits 0 when "
                         + "every adapter reports every other peer connected and every game has "
                         + "received every other game's traffic; needs --log-level INFO or finer. "
-                        + "Sets each peer's "
-                        + "adapter ports, launch delay and host or join intent itself, so the "
-                        + "--ice-adapter-*-port, --mock-game-launch-delay-seconds, --host-*, "
-                        + "--target-game-id, --game-join-password, --queue-* and "
-                        + "--oauth-refresh-token-file options are not used, though they are still "
-                        + "validated.")
+                        + "Give each peer one credential file with --peer-refresh-token-file or "
+                        + "--peer-access-token-file. Sets each peer's credential, adapter ports, "
+                        + "launch delay and host or join intent itself: the root "
+                        + "--oauth-refresh-token-file and --oauth-access-token-file are ignored, "
+                        + "and the --ice-adapter-*-port, --mock-game-launch-delay-seconds, "
+                        + "--host-*, --target-game-id, --game-join-password and --queue-* options "
+                        + "are not used, though they are still validated.")
 public final class SessionCommand implements Callable<Integer> {
+
+    /** The refresh-token channel's option, shared with the layer lookup so a typo cannot pass. */
+    static final String PEER_REFRESH_TOKEN_FLAG = "--peer-refresh-token-file";
+
+    /** The access-token channel's option, shared with the layer lookup so a typo cannot pass. */
+    static final String PEER_ACCESS_TOKEN_FLAG = "--peer-access-token-file";
 
     /** Picocli auto-injects the root command so the subcommand can read the populated config. */
     @ParentCommand private MockClientCli parent;
@@ -91,7 +108,7 @@ public final class SessionCommand implements Callable<Integer> {
 
     /** One refresh-token file per peer, host first; extras are unused. */
     @Option(
-            names = "--peer-refresh-token-file",
+            names = PEER_REFRESH_TOKEN_FLAG,
             split = ",",
             description =
                     "A peer's refresh-token file, one per peer and host first. Repeat the flag "
@@ -99,6 +116,18 @@ public final class SessionCommand implements Callable<Integer> {
                             + "account and is rewritten in place when Hydra rotates the token. "
                             + "Files beyond --peers are unused.")
     private List<Path> peerRefreshTokenFiles = new ArrayList<>();
+
+    /** One access-token file per peer, host first; extras are unused. */
+    @Option(
+            names = PEER_ACCESS_TOKEN_FLAG,
+            split = ",",
+            description =
+                    "A peer's pre-signed access-token file, one per peer and host first, instead "
+                            + "of --peer-refresh-token-file. Repeat the flag or separate paths "
+                            + "with commas. Each token must belong to its own account; it is sent "
+                            + "as-is, never renewed or rewritten, and the lobby rejects it once "
+                            + "expired. Files beyond --peers are unused.")
+    private List<Path> peerAccessTokenFiles = new ArrayList<>();
 
     /**
      * Validates the invocation, runs the session, tears it down, and maps the verdict to an exit
@@ -132,18 +161,26 @@ public final class SessionCommand implements Callable<Integer> {
                             + "; got "
                             + peers);
         }
-        if (peerRefreshTokenFiles.size() < peers) {
+        boolean useAccessTokens = chooseAccessTokenChannel();
+        String flag = useAccessTokens ? PEER_ACCESS_TOKEN_FLAG : PEER_REFRESH_TOKEN_FLAG;
+        List<Path> files = useAccessTokens ? peerAccessTokenFiles : peerRefreshTokenFiles;
+        if (files.size() < peers) {
             throw new ParameterException(
                     spec.commandLine(),
                     "--peers is "
                             + peers
                             + " but "
-                            + peerRefreshTokenFiles.size()
-                            + " --peer-refresh-token-file given; every peer needs its own account");
+                            + files.size()
+                            + " "
+                            + flag
+                            + " given; every peer needs its own account");
         }
         List<MockClientConfig> bases = new ArrayList<>();
-        for (Path file : peerRefreshTokenFiles.subList(0, peers)) {
-            bases.add(parent.toValidatedConfig(spec, file));
+        for (Path file : files.subList(0, peers)) {
+            bases.add(
+                    useAccessTokens
+                            ? parent.toValidatedConfigWithAccessToken(spec, file)
+                            : parent.toValidatedConfig(spec, file));
         }
         String title = "faf-test-harness session " + UUID.randomUUID();
         MultiPeerSession session;
@@ -154,6 +191,12 @@ public final class SessionCommand implements Callable<Integer> {
         }
 
         Logger log = LoggerFactory.getLogger(SessionCommand.class);
+        // Which list won matters to a CI mid-switch: the other may hold the secrets it thinks are
+        // in use, and a refresh-token run spends its tokens even when it passes.
+        log.info(
+                "session: credentials from {} ({})",
+                flag,
+                MockClientCli.layerDescription(spec, flag));
         // Ctrl-C or SIGTERM: tear every peer down before the JVM exits. close() is idempotent and
         // synchronized, so this and the teardown below never both run a peer's teardown.
         Runtime.getRuntime().addShutdownHook(new Thread(session::close, "mc-session-shutdown"));
@@ -182,6 +225,44 @@ public final class SessionCommand implements Callable<Integer> {
                         + "nothing left running",
                 peers);
         return ExitCodes.OK;
+    }
+
+    /**
+     * Picks the credential channel every peer uses. With only one list configured that list wins;
+     * with both, the one at the higher layer wins, as for the root credential options.
+     *
+     * @return {@code true} for access-token files, {@code false} for refresh-token files
+     * @throws ParameterException if no list is configured, or both are at the same layer
+     */
+    private boolean chooseAccessTokenChannel() {
+        boolean refresh = !peerRefreshTokenFiles.isEmpty();
+        boolean access = !peerAccessTokenFiles.isEmpty();
+        if (!refresh && !access) {
+            throw new ParameterException(
+                    spec.commandLine(),
+                    "session needs one credential file per peer: give "
+                            + PEER_REFRESH_TOKEN_FLAG
+                            + " or "
+                            + PEER_ACCESS_TOKEN_FLAG
+                            + " (the root --oauth-refresh-token-file and --oauth-access-token-file "
+                            + "are not used by session)");
+        }
+        if (refresh && access) {
+            return MockClientCli.higherLayer(spec, PEER_ACCESS_TOKEN_FLAG, PEER_REFRESH_TOKEN_FLAG)
+                    .map(PEER_ACCESS_TOKEN_FLAG::equals)
+                    .orElseThrow(
+                            () ->
+                                    new ParameterException(
+                                            spec.commandLine(),
+                                            PEER_REFRESH_TOKEN_FLAG
+                                                    + " and "
+                                                    + PEER_ACCESS_TOKEN_FLAG
+                                                    + " are both set "
+                                                    + MockClientCli.layerDescription(
+                                                            spec, PEER_ACCESS_TOKEN_FLAG)
+                                                    + "; supply one"));
+        }
+        return access;
     }
 
     /**
