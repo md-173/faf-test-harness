@@ -411,34 +411,7 @@ public final class MockClientLifecycle {
         states.get(ClientState.JOINING)
                 .registerTransition(Disconnected.class, states.get(ClientState.TERMINATED));
         states.get(ClientState.PLAYING).onEntry(() -> matchStarted.set(true));
-        states.get(ClientState.PLAYING)
-                .registerTransition(
-                        GameExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onGameExited,
-                        null);
-
-        // #211: a game that dies before reaching PLAYING must still drive the FSM to TERMINATED
-        // instead of leaving the client hanging. Same action as the PLAYING edge above — cancelling
-        // the (not-yet-armed, in these states) safety-net task is a harmless no-op here.
-        states.get(ClientState.STARTING_GAME)
-                .registerTransition(
-                        GameExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onGameExited,
-                        null);
-        states.get(ClientState.HOSTING)
-                .registerTransition(
-                        GameExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onGameExited,
-                        null);
-        states.get(ClientState.JOINING)
-                .registerTransition(
-                        GameExited.class,
-                        states.get(ClientState.TERMINATED),
-                        this::onGameExited,
-                        null);
+        registerGameExitedTransitions();
 
         // Lobby loss during PLAYING (#193): the official client survives lobby loss mid-game —
         // FafServerAccessor auto-reconnects and the game is never killed, because established peer
@@ -623,6 +596,35 @@ public final class MockClientLifecycle {
                         states.get(ClientState.JOINING),
                         this::connectToPeer,
                         null);
+    }
+
+    /**
+     * Registers the game-exit edges: every state a launched game can die in drives the FSM to
+     * TERMINATED through {@link #onGameExited}.
+     *
+     * <p>PLAYING is the ordinary case. The other three are #211: a game that dies before reaching
+     * PLAYING must still drive the FSM to TERMINATED instead of leaving the client hanging. They
+     * share the PLAYING edge's action, because cancelling the safety-net task it cancels is a
+     * harmless no-op in states where that task was never armed.
+     *
+     * <p>Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
+     * limit, which it crossed when this branch rebased onto a longer {@code main}.
+     */
+    private void registerGameExitedTransitions() {
+        List<ClientState> gameStates =
+                List.of(
+                        ClientState.PLAYING,
+                        ClientState.STARTING_GAME,
+                        ClientState.HOSTING,
+                        ClientState.JOINING);
+        for (var s : gameStates) {
+            states.get(s)
+                    .registerTransition(
+                            GameExited.class,
+                            states.get(ClientState.TERMINATED),
+                            this::onGameExited,
+                            null);
+        }
     }
 
     /**
