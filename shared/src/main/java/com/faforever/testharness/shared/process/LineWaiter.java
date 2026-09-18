@@ -31,6 +31,7 @@ public final class LineWaiter implements Consumer<String> {
     /** Caps the backlog of unconsumed lines so a long-lived process cannot leak memory here. */
     private static final int MAX_QUEUED_LINES = 1000;
 
+    /** Lines queued by {@link #accept} and drained by {@link #awaitLine}. */
     private final BlockingQueue<String> lines = new LinkedBlockingQueue<>(MAX_QUEUED_LINES);
 
     /**

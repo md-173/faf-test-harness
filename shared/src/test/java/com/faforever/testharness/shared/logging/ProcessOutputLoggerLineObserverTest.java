@@ -62,7 +62,8 @@ class ProcessOutputLoggerLineObserverTest {
         try {
             // The observer sees the raw line the moment it arrives, independent of the
             // continuation-line buffering SLF4J applies before logging a block.
-            String tabLine = waiter.awaitLine(line -> line.startsWith("\t"), Duration.ofSeconds(10));
+            String tabLine =
+                    waiter.awaitLine(line -> line.startsWith("\t"), Duration.ofSeconds(10));
             assertEquals("\tstack-frame-continuation", tabLine);
             waiter.awaitLine(line -> "two".equals(line), Duration.ofSeconds(10));
 
@@ -72,7 +73,8 @@ class ProcessOutputLoggerLineObserverTest {
         }
 
         // SLF4J still receives the merged block: "one" then the continuation line joined into it.
-        awaitLog(e -> e.getMessage() != null && e.getMessage().contains("stack-frame-continuation"));
+        awaitLog(
+                e -> e.getMessage() != null && e.getMessage().contains("stack-frame-continuation"));
     }
 
     @Test
