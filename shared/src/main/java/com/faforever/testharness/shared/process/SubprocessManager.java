@@ -104,8 +104,8 @@ public final class SubprocessManager {
      * @param componentTag MDC component label applied to every captured log line; must be non-blank
      * @param terminateGrace per-call default grace between SIGTERM and SIGKILL used by the no-arg
      *     {@link #terminate()}; must be positive
-     * @param lineObserver invoked with each raw line of subprocess output; must not be {@code null}.
-     *     Pass a {@link LineWaiter} to wait on a specific line with a timeout.
+     * @param lineObserver invoked with each raw line of subprocess output; must not be {@code
+     *     null}. Pass a {@link LineWaiter} to wait on a specific line with a timeout.
      * @return a manager wrapping the started process
      * @throws IOException if {@link ProcessBuilder#start()} fails
      * @throws IllegalStateException if the JVM is already shutting down when this is called

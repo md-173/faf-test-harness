@@ -89,21 +89,21 @@ import org.junit.jupiter.api.io.TempDir;
  * the listener would block there on every message instead. 3.3.14 has no working telemetry off
  * switch anyway (see ice-adapter-setup.md).
  *
- * <p>This test therefore holds a plain TCP socket open on the RPC port and, before its first
- * frame, waits for the adapter's own {@code "GPGNetClient has connected"} log line — the last
- * statement of the client constructor, so seeing it proves the blocking {@code getPeerOrWait()}
- * above it has returned, and the only thing left uncovered is the {@code currentClient} write,
- * which completes long before the line travels the pipe into this JVM. See {@link
- * #awaitConstructorTail} for the wait itself and its fallback. The socket is held until after
- * {@code terminate()}, so the observed exit code comes from SIGTERM and not from the adapter's own
- * first-peer-loss shutdown: dropping the RPC peer while at {@code GameState "Lobby"} makes the
- * adapter call {@code close(0)}, which reaches {@code System.exit(0)} roughly half a second later.
- * The card's "no JSON-RPC" constraint is kept at the protocol level — not one JSON-RPC byte is
- * sent, and the handshake still needs no {@code hostGame}/{@code joinGame} — but it cannot hold at
- * the connection level, because the adapter couples its GPGNet path to an RPC peer existing. <b>For
- * 3.2.4.1 and 3.1.2.7 this is an ordering constraint across components:</b> the mock game cannot
- * hold a GPGNet session against a real adapter until the mock client's JSON-RPC connection is up,
- * so the client must connect its adapter transport before the game is told to connect its own.
+ * <p>This test therefore holds a plain TCP socket open on the RPC port and, before its first frame,
+ * waits for the adapter's own {@code "GPGNetClient has connected"} log line — the last statement of
+ * the client constructor, so seeing it proves the blocking {@code getPeerOrWait()} above it has
+ * returned, and the only thing left uncovered is the {@code currentClient} write, which completes
+ * long before the line travels the pipe into this JVM. See {@link #awaitConstructorTail} for the
+ * wait itself and its fallback. The socket is held until after {@code terminate()}, so the observed
+ * exit code comes from SIGTERM and not from the adapter's own first-peer-loss shutdown: dropping
+ * the RPC peer while at {@code GameState "Lobby"} makes the adapter call {@code close(0)}, which
+ * reaches {@code System.exit(0)} roughly half a second later. The card's "no JSON-RPC" constraint
+ * is kept at the protocol level — not one JSON-RPC byte is sent, and the handshake still needs no
+ * {@code hostGame}/{@code joinGame} — but it cannot hold at the connection level, because the
+ * adapter couples its GPGNet path to an RPC peer existing. <b>For 3.2.4.1 and 3.1.2.7 this is an
+ * ordering constraint across components:</b> the mock game cannot hold a GPGNet session against a
+ * real adapter until the mock client's JSON-RPC connection is up, so the client must connect its
+ * adapter transport before the game is told to connect its own.
  *
  * <p><b>Gating.</b> Mirrors the client's {@code IceAdapterConnectionLiveSmokeTest}: an {@link
  * EnabledIf} probe self-skips (does not fail) when no adapter jar is resolvable, from {@code
@@ -182,8 +182,8 @@ final class GpgNetConnectionLiveSmokeTest {
     private static final String CONSTRUCTOR_TAIL_MARKER = "GPGNetClient has connected";
 
     /**
-     * Budget for {@link #CONSTRUCTOR_TAIL_MARKER} to appear after the RPC peer socket connects.
-     * The window it covers is a few statements wide (WBS 3.1.2.10 / #225), so this is generous.
+     * Budget for {@link #CONSTRUCTOR_TAIL_MARKER} to appear after the RPC peer socket connects. The
+     * window it covers is a few statements wide (WBS 3.1.2.10 / #225), so this is generous.
      */
     private static final Duration CONSTRUCTOR_TAIL_TIMEOUT = Duration.ofSeconds(5);
 
@@ -191,9 +191,8 @@ final class GpgNetConnectionLiveSmokeTest {
      * Last-resort fallback used only if {@link #CONSTRUCTOR_TAIL_MARKER} never arrives within
      * {@link #CONSTRUCTOR_TAIL_TIMEOUT} — the marker is an upstream INFO string with no
      * compatibility guarantee, so a future adapter release could reword or drop it. This is the
-     * same fixed pause the test used before WBS 3.1.2.10, kept only as a safety net: a
-     * best-effort heuristic, not a guarantee, since nothing asserts the window it covers has
-     * actually closed.
+     * same fixed pause the test used before WBS 3.1.2.10, kept only as a safety net: a best-effort
+     * heuristic, not a guarantee, since nothing asserts the window it covers has actually closed.
      */
     private static final Duration CONSTRUCTOR_TAIL_FALLBACK_SETTLE = Duration.ofMillis(500);
 

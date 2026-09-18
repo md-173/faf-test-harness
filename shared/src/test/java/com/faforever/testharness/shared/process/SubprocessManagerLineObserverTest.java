@@ -20,10 +20,11 @@ import org.junit.jupiter.api.Timeout;
 import org.slf4j.LoggerFactory;
 
 /**
- * Exercises {@link SubprocessManager#start(ProcessBuilder, String, Duration, java.util.function.Consumer)}
- * end to end against {@link TestChild}, covering the acceptance criteria for WBS 3.1.2.10 / #225:
- * an observer sees subprocess output as it arrives, existing SLF4J routing is unaffected, and a
- * predicate that never matches times out rather than blocking forever.
+ * Exercises {@link SubprocessManager#start(ProcessBuilder, String, Duration,
+ * java.util.function.Consumer)} end to end against {@link TestChild}, covering the acceptance
+ * criteria for WBS 3.1.2.10 / #225: an observer sees subprocess output as it arrives, existing
+ * SLF4J routing is unaffected, and a predicate that never matches times out rather than blocking
+ * forever.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class SubprocessManagerLineObserverTest {
@@ -65,7 +66,8 @@ class SubprocessManagerLineObserverTest {
                         waiter);
 
         String matched =
-                waiter.awaitLine(line -> line.contains("hello-world-marker"), Duration.ofSeconds(10));
+                waiter.awaitLine(
+                        line -> line.contains("hello-world-marker"), Duration.ofSeconds(10));
         assertEquals("READY: hello-world-marker", matched);
 
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
@@ -87,7 +89,8 @@ class SubprocessManagerLineObserverTest {
                     TimeoutException.class,
                     () ->
                             waiter.awaitLine(
-                                    line -> line.contains("never appears"), Duration.ofMillis(300)));
+                                    line -> line.contains("never appears"),
+                                    Duration.ofMillis(300)));
             long elapsedMs = (System.nanoTime() - start) / 1_000_000;
             assertTrue(elapsedMs < 5000, "awaitLine did not honour its own timeout");
         } finally {
@@ -119,6 +122,7 @@ class SubprocessManagerLineObserverTest {
             }
             Thread.sleep(50);
         }
-        org.junit.jupiter.api.Assertions.fail("predicate never matched. captured: " + appender.list);
+        org.junit.jupiter.api.Assertions.fail(
+                "predicate never matched. captured: " + appender.list);
     }
 }

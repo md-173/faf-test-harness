@@ -74,9 +74,10 @@ public final class ProcessOutputLogger {
      * appender would. An observer that throws is logged and otherwise ignored, so it cannot stop
      * output capture.
      *
-     * <p>Callers that want a bounded wait on a specific line (e.g. a readiness marker) rather than a
-     * raw per-line callback can pass a {@link com.faforever.testharness.shared.process.LineWaiter}
-     * as {@code lineObserver} and call its {@code awaitLine}.
+     * <p>Callers that want a bounded wait on a specific line (e.g. a readiness marker) rather than
+     * a raw per-line callback can pass a {@link
+     * com.faforever.testharness.shared.process.LineWaiter} as {@code lineObserver} and call its
+     * {@code awaitLine}.
      *
      * @param process the child process whose output to capture; must be started before this call
      * @param componentTag component label applied to every captured log line, e.g. {@code
@@ -105,7 +106,10 @@ public final class ProcessOutputLogger {
                 label.wrap(
                         () ->
                                 streamToLog(
-                                        process.getErrorStream(), componentTag, true, lineObserver)));
+                                        process.getErrorStream(),
+                                        componentTag,
+                                        true,
+                                        lineObserver)));
         return executor;
     }
 
@@ -178,7 +182,10 @@ public final class ProcessOutputLogger {
         try {
             lineObserver.accept(line);
         } catch (RuntimeException e) {
-            LOG.warn("Subprocess line observer for {} threw; output capture continues", componentTag, e);
+            LOG.warn(
+                    "Subprocess line observer for {} threw; output capture continues",
+                    componentTag,
+                    e);
         }
     }
 
