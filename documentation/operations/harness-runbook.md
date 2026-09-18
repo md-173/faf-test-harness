@@ -1,6 +1,6 @@
 # Harness Runbook: Setup and Single Session (WBS 7.2.1)
 
-Everything a newcomer needs to run the Mock Client, in one ordered path. Two
+Everything a newcomer needs to run the Mock Client, in one ordered path. Three
 audiences, in this order:
 
 1. Someone embedding the mock game in another project's tests. **No FAF
@@ -8,6 +8,9 @@ audiences, in this order:
    [§2](#2-running-the-game-against-an-adapter-no-lobby-required).
 2. Someone running a full client session against the live test lobby. Needs a
    FAF test account. Continue to [§3](#3-credentials) onward.
+3. Someone wiring a CI job that runs a multi-peer session unattended against
+   their own adapter build. Read §2a and §3 first for the jars and the
+   credentials, then [§11](#11-a-session-in-a-consumers-ci-wbs-421).
 
 This document sequences and resolves material that already exists in
 [`documentation/demos/README.md`](../demos/README.md),
@@ -1300,3 +1303,334 @@ mock-game it launches as `--udp-drop-percent` (WBS-5.1-fix, #322). It is emitted
 only when non-zero, so a default run produces the argv it always produced. Both
 spellings exist because both callers do: `mock-game` takes its own flag when run
 by hand.
+
+## 11. A session in a consumer's CI (WBS 4.2.1)
+
+[§9](#9-two-peer-sessions-wbs-431)'s reader is a person at a terminal with two
+accounts. This section's reader wires a workflow: a maintainer who wants a
+build of their own `faf-ice-adapter` driven through a real two-peer session
+against the live lobby, unattended, and a verdict they can read afterwards.
+
+The job below is this repository's own `session` job
+([`live-integration.yml`](../../.github/workflows/live-integration.yml)) with
+two steps changed. It downloads the mock-client and mock-game jars from
+`releases/latest` ([§2a](#2a-the-jar-only-path-no-clone)) instead of building
+them, and it points `--ice-adapter-binary-path` at the adapter it just built
+instead of the pinned one. The session invocation itself is the same.
+
+What `session` does, how to drive it by hand and what its output means are §9's
+subject; the flag reference, the credential-layering rule and the exit-code
+table are [`mock-client/README.md`](../../mock-client/README.md)'s. Neither is
+restated here. Two refusals meet a job as squarely as they meet a person:
+`INSTANCE_NAME` must be unset, because `session` labels each peer itself, and
+`--log-level` must be INFO or finer, because the traffic checkpoint reads the
+games' own INFO lines. Both are refused before any process starts
+([§9.4](#94-per-instance-logs-and-attribution)).
+
+The host advertises its game with `friends` visibility (`MultiPeerSession`), so
+a dispatch does not put a test game on the public list. The joiners never need
+to find it: the session hands each one the host's game uid directly.
+
+### The job
+
+Copy it into `.github/workflows/` in your own repository. Two things are yours:
+the adapter build, and the two secret names.
+
+It runs on manual dispatch, as this repository's own job does and for the same
+reason: the shared test lobby's availability is outside your control, so a red
+run is a finding rather than a reason to block a merge. Add a `schedule` or a
+`push` trigger if you want it to run on its own, and keep it out of your
+required checks either way.
+
+```yaml
+name: FAF harness session (advisory)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keyed on the accounts, not the branch, and queueing rather than cancelling. See below.
+concurrency:
+  group: faf-harness-session-accounts
+  cancel-in-progress: false
+
+jobs:
+  session:
+    name: Two-peer session against the FAF test lobby
+    runs-on: ubuntu-latest
+    # Above the build and the session together, so the job cap never ends a session itself.
+    timeout-minutes: 45
+
+    env:
+      HARNESS_REPO: md-173/faf-test-harness
+      # The pin this repository runs is in .github/workflows/live-integration.yml. Check there,
+      # or FAForever/uid's releases, before carrying these two forward.
+      FAF_UID_VERSION: v4.0.7
+      FAF_UID_SHA256: 1136d0e1cd7e61682ad375043fdac4bae690bf63d7fdd98a7a3a1fb9ccac61da
+      # The session's working directory; its logs land in session-run/logs/.
+      WORK: ${{ github.workspace }}/session-run
+
+    steps:
+      # First, so a missing or dead token fails in seconds rather than after a build. Tokens come
+      # from the environment, never argv, so none reaches the process table.
+      - name: Write one token file per peer
+        timeout-minutes: 1
+        env:
+          FAF_ACCESS_TOKEN_HOST: ${{ secrets.FAF_ACCESS_TOKEN_HOST }}
+          FAF_ACCESS_TOKEN_JOINER: ${{ secrets.FAF_ACCESS_TOKEN_JOINER }}
+        run: |
+          umask 077
+          # Outside the workspace, so no checkout and no upload glob can reach them.
+          TOKENS="$RUNNER_TEMP/faf-tokens"
+          echo "TOKENS=$TOKENS" >> "$GITHUB_ENV"
+          mkdir -p "$TOKENS"
+          missing=""
+          [ -n "$FAF_ACCESS_TOKEN_HOST" ] || missing="$missing FAF_ACCESS_TOKEN_HOST"
+          [ -n "$FAF_ACCESS_TOKEN_JOINER" ] || missing="$missing FAF_ACCESS_TOKEN_JOINER"
+          if [ -n "$missing" ]; then
+            echo "::error::token secret not set:$missing"
+            exit 1
+          fi
+          # The harness reads no expiry on purpose, so that the lobby's own rejection is never
+          # flattened into a local guess (section 3). This is pre-flight rather than the harness:
+          # it refuses only a token that cannot possibly work, and every other verdict stays the
+          # lobby's. Only the expiry is ever printed.
+          python3 - <<'PY'
+          import base64, json, os, sys, time
+
+          # Everything between here and the session's first login is provisioning and your own
+          # build. A token with less than this left may not survive to be used.
+          WARN_BELOW = 15 * 60
+          expired = []
+          for name in ("FAF_ACCESS_TOKEN_HOST", "FAF_ACCESS_TOKEN_JOINER"):
+              try:
+                  segment = os.environ.get(name, "").split(".")[1]
+                  claims = json.loads(
+                      base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+              except Exception:
+                  claims = None
+              if not isinstance(claims, dict):
+                  # An opaque token carries no readable claims and may still be good.
+                  print("::warning::%s carries no readable claims; the lobby decides" % name)
+                  continue
+              exp = claims.get("exp")
+              if exp is None:
+                  print("%s carries no exp, which the lobby accepts" % name)
+              elif isinstance(exp, bool) or not isinstance(exp, (int, float)):
+                  print("::warning::%s has an exp that is not a number, which the lobby rejects "
+                        "outright; mint a fresh one" % name)
+              elif exp - time.time() <= 0:
+                  print("::error::%s expired %d minutes ago; mint a fresh one"
+                        % (name, (time.time() - exp) // 60))
+                  expired.append(name)
+              elif exp - time.time() < WARN_BELOW:
+                  print("::warning::%s has %d minutes left and may expire mid-run"
+                        % (name, (exp - time.time()) // 60))
+              else:
+                  print("%s is good for %d more minutes" % (name, (exp - time.time()) // 60))
+          if expired:
+              sys.exit(1)
+          PY
+
+          printf '%s' "$FAF_ACCESS_TOKEN_HOST" > "$TOKENS/host.txt"
+          printf '%s' "$FAF_ACCESS_TOKEN_JOINER" > "$TOKENS/joiner.txt"
+
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs third-party binaries and needs no git credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Download the harness jars
+        timeout-minutes: 5
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/harness"
+          cd "$RUNNER_TEMP/harness"
+          # Authenticated and retried: the API rate-limits per IP, and hosted runners share one.
+          curl -fsS --retry 3 --retry-all-errors -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$HARNESS_REPO/releases/latest" -o release.json
+          jq -r '.assets[] | select(.name | endswith("-all.jar")) | .browser_download_url' \
+            release.json | xargs -n1 curl -sfL --retry 3 --retry-all-errors -O
+          # Both jars from one release: the traffic check parses mock-game's own progress line.
+          jq -r '.assets[] | select(.name | endswith("-all.jar"))
+                 | (.digest // "") + "  " + .name' release.json > digests.txt
+          grep -q '^sha256:' digests.txt \
+            || { echo "::error::the release published no asset digests"; exit 1; }
+          sed 's/^sha256://' digests.txt | sha256sum --strict -c -
+          shopt -s nullglob
+          set -- mock-client-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-client jar, found $#"; exit 1; }
+          echo "CLIENT_JAR=$PWD/$1" >> "$GITHUB_ENV"
+          set -- mock-game-*-all.jar
+          [ "$#" -eq 1 ] || { echo "::error::expected one mock-game jar, found $#"; exit 1; }
+          echo "GAME_JAR=$PWD/$1" >> "$GITHUB_ENV"
+
+      # releases/latest can be older than you expect, so ask the jar rather than trust the tag.
+      - name: Check the release carries per-peer access tokens
+        timeout-minutes: 2
+        run: |
+          java -jar "$CLIENT_JAR" session --help | grep -q -- '--peer-access-token-file' || {
+            echo "::error::$(basename "$CLIENT_JAR") predates --peer-access-token-file"
+            exit 1
+          }
+
+      # faf-uid reads DMI, BIOS and CPU details a cloud VM may withhold, so probe it before the
+      # session depends on it. Its output is an identity blob: counted here, never printed.
+      - name: Download and verify faf-uid
+        timeout-minutes: 3
+        run: |
+          FAF_UID_BINARY="$RUNNER_TEMP/bin/faf-uid"
+          echo "FAF_UID_BINARY=$FAF_UID_BINARY" >> "$GITHUB_ENV"
+          mkdir -p "$(dirname "$FAF_UID_BINARY")"
+          curl -fsSL --retry 3 --retry-all-errors -o "$FAF_UID_BINARY" \
+            "https://github.com/FAForever/uid/releases/download/${FAF_UID_VERSION}/faf-uid"
+          echo "${FAF_UID_SHA256}  ${FAF_UID_BINARY}" | sha256sum -c -
+          chmod +x "$FAF_UID_BINARY"
+          set +e
+          uid=$("$FAF_UID_BINARY" 1 2>"$RUNNER_TEMP/faf-uid.stderr")
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ] || [ -z "$uid" ]; then
+            echo "::error::faf-uid exited $code with ${#uid} chars of output; every login in this session would fail"
+            head -c 200 "$RUNNER_TEMP/faf-uid.stderr"
+            exit 1
+          fi
+          echo "faf-uid produced a ${#uid}-character unique_id"
+
+      # Yours to replace, and last of the provisioning on purpose: everything cheaper than it has
+      # already failed by here. The session needs one path to one headless adapter jar; how you
+      # build, fetch or cache it is your business. Export it as ADAPTER_JAR.
+      - name: Build the adapter under test
+        timeout-minutes: 15
+        run: |
+          echo "ADAPTER_JAR=$GITHUB_WORKSPACE/<your headless adapter jar>" >> "$GITHUB_ENV"
+
+      # A backstop, not the bound that matters: the session has its own deadline and verdict.
+      - name: Run a two-peer session
+        timeout-minutes: 12
+        run: |
+          umask 077
+          mkdir -p "$WORK"
+          cd "$WORK"
+          java -jar "$CLIENT_JAR" \
+            --lobby-websocket-url=wss://ws.faforever.xyz \
+            --unique-id=00000000-0000-0000-0000-000000000000 \
+            --uid-binary-path="$FAF_UID_BINARY" \
+            --ice-adapter-binary-path="$ADAPTER_JAR" \
+            --mock-game-binary-path="$GAME_JAR" \
+            session \
+              --peers=2 \
+              --peer-access-token-file="$TOKENS/host.txt" \
+              --peer-access-token-file="$TOKENS/joiner.txt"
+
+      # On every path, including this step timing out.
+      - name: Remove the token files
+        if: always()
+        timeout-minutes: 1
+        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
+
+      # Cancellation counts: a run cancelled mid-session is the one whose logs matter most. They
+      # carry the client's lines with every adapter's and game's captured output.
+      - name: Upload the session logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: session-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: session-run/logs/*.jsonl*
+          retention-days: 14
+          if-no-files-found: warn
+```
+
+### What the job needs
+
+- **One credential per peer, still valid when the job runs.** `session` takes
+  one file per peer, and an unattended job wants the pre-signed channel,
+  `--peer-access-token-file`. What such a token must carry, and what a
+  rejection looks like, is
+  [§3](#the-other-credential-channel-a-pre-signed-access-token); how this
+  repository mints and stores its own is
+  [`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#the-live-integration-workflow-manual-advisory).
+  Nothing in the harness reads a token's expiry; the one claim it does read is
+  `sub`, to refuse two peers on one account before either logs in. An
+  expired token is therefore sent as-is and refused by the lobby at the
+  `welcome` stage, once the job has already paid for everything else, which is
+  why the job decodes `exp` itself in its first step. A refresh-token file
+  works too (`--peer-refresh-token-file`), at a price an unattended job should
+  not pay: Hydra rotates it on every use, so each run spends the secret and the
+  account needs re-bootstrapping afterwards.
+- **Test accounts nothing else uses, and a `concurrency` group keyed on them.**
+  A second login as the same account signs the first out, fatally, so a local
+  run and a dispatch on the same account kill each other. A dispatch can name
+  any ref, so a group keyed on the branch would let two runs overlap on one
+  account anyway. `CONTRIBUTING.md` §3 records the same two rules for this
+  repository's own CI accounts.
+- **Both jars from one release, and a release that carries the flag.** The
+  traffic checkpoint parses mock-game's own progress line, so a mock-game from
+  a different release can leave a full mesh with nothing to prove anything
+  crossed it. `releases/latest` skips drafts and prereleases, so it can be
+  older than the commit you are reading: in September 2026 it answers 0.2.0,
+  which predates both `session` and `--peer-access-token-file`. Ask the
+  jar rather than trust the tag, as the check step does. A jar without the
+  subcommand answers a `session` invocation with `Unmatched arguments`, naming
+  `session` and everything after it, and exits `2` once the job has
+  provisioned everything else.
+- **A placeholder `--unique-id` and a real `faf-uid`.** `--unique-id` is a
+  required field, and `--uid-binary-path` overrides it at handshake time with
+  the binary's output (§3). Neither substitutes for the other: without the flag
+  the invocation is refused as misconfigured, and without the binary the
+  lobby's policy request fails and the login ends in `{"command":"invalid"}`.
+- **Room for the session's own deadline.** `session` bounds itself at 420 s,
+  tears down after that, and reports its own verdict. A step timeout below that
+  turns a reportable failure into a killed step with no verdict at all, so
+  leave headroom: twelve minutes for two peers, as above. The deadline does not
+  yet grow with `--peers`
+  ([`mock-client/README.md`](../../mock-client/README.md)).
+- **Somewhere for the token files that nothing else can reach.** The job writes
+  them under `RUNNER_TEMP`, outside the workspace, so no checkout and no upload
+  glob can reach them, and deletes them on every path. A hosted runner is
+  destroyed afterwards anyway; a self-hosted one is not, and a hard-killed job
+  never reaches its cleanup step, so treat each file as a live bearer
+  credential until its token expires.
+
+### What the run does not cover
+
+- **The TURN relay path.** mock-client sends an empty `setIceServers` list
+  (`MockClientLifecycle`), so the adapter is given no TURN server and no relay
+  candidate can be gathered. It still uses the three built-in public STUN
+  servers whose cost §10 measures. A real FAF client passes TURN servers the
+  adapter harvests, and nothing here exercises what it does with them.
+- **NAT traversal.** Both peers run on one runner, so the pair connects over
+  that machine's own interfaces. The run proves the client, adapter and game
+  path end to end, and that the adapter forwards game packets in both
+  directions, not that it gets through anything.
+
+*Provenance. The invocation above was run on **2026-09-19** on WSL2 Linux
+against the live lobby, two peers on pre-signed access tokens for two seeded
+accounts, with `faf-ice-adapter` 3.3.14: exit `0` in 30 s, logging `session:
+credentials from --peer-access-token-file (on the command line)` and `session:
+PASS - 2 peers, full mesh and two-way game traffic, nothing left running`, with
+no adapter or game process left behind and neither account's refresh-token file
+touched, which is this channel making no exchange. It ran from mock-client and
+mock-game shadow jars built on this branch rather than from a release, for the
+reason the third bullet above gives. Every other step that can run off a runner
+was executed the way the runner hands it to bash: the token write and its
+expiry check across twelve token shapes, the download and its digest check, the
+subcommand check, which refuses today's release exactly as intended, and the
+`faf-uid` download, checksum and probe. The file passes `actionlint` with
+`shellcheck`. Two things were not done and are not claimed. The job has never
+been dispatched on a runner, and the adapter build step is the consumer's own,
+so neither is evidenced here. `releases/latest` does not yet carry `session`,
+so the download route is verified while the artifact it yields today is not the
+one this section describes.*
