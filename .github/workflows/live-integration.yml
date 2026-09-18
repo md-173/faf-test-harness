@@ -179,8 +179,9 @@ jobs:
       #
       # Each secret holds a pre-signed access token, minted right before a dispatch by
       # scripts/ci/mint-access-token.sh. Nothing is exchanged at runtime, which is why the session
-      # step below passes no OAuth endpoint or client flag at all: those five described the
-      # refresh-token bootstrap, and a pre-signed token is sent as-is.
+      # step below passes no OAuth endpoint or client flag at all. Those five belonged to the
+      # refresh channel: two that its exchange itself uses on every run, and three that describe
+      # the one-time browser bootstrap no run performs. A pre-signed token is sent as-is.
       - name: Write the peer token files
         timeout-minutes: 1
         env:
@@ -202,9 +203,9 @@ jobs:
           # Then the one thing about a pre-signed token that is already knowable here. The session
           # does not log in until after the build, and a dispatch can queue behind a running one
           # before that, so a token minted before the dispatch can be dead by the time it is used.
-          # Without this the run spends twenty minutes to report an ordinary-looking login failure.
-          # Same reasoning as the faf-uid probe below, and the same shape: a prerequisite this job
-          # provisions is checked before the job depends on it.
+          # Without this the run spends the whole build to report an ordinary-looking login
+          # failure. Same reasoning as the faf-uid probe below, and the same shape: a prerequisite
+          # this job provisions is checked before the job depends on it.
           #
           # This does not contradict StaticTokenSource, which reads no expiry on purpose so that
           # the lobby's precise rejection is never flattened into a local guess. That rule is about
@@ -218,11 +219,22 @@ jobs:
           import base64, json, os, string, sys, time
 
           B64URL = set(string.ascii_letters + string.digits + "-_")
+          # Everything between this step and the session's login: provisioning, then the Gradle
+          # build, which is the only part that takes minutes rather than seconds. A token with
+          # less than this left may not survive to be used, so say so while there is still time
+          # to mint another.
           WARN_BELOW = 15 * 60
 
 
+          # An exp that is present but not a number is not a verdict in doubt: the lobby's PyJWT
+          # raises on it rather than weighing it, so such a token is always rejected. Kept apart
+          # from "cannot read one", where the lobby may well accept.
+          MALFORMED = object()
+
+
           def expiry_of(token):
-              """The token's exp as (seconds, formatted), or None if no usable exp can be read."""
+              """The token's exp as (seconds, formatted), None if none can be read, or MALFORMED
+              if the claim is there but is not a number."""
               parts = token.strip().split(".")
               if len(parts) != 3:
                   return None
@@ -236,20 +248,27 @@ jobs:
                   return None
               if not isinstance(claims, dict):
                   return None
-              exp = claims.get("exp")
-              # bool is an int subclass and json turns `true` into one; it is not an expiry.
-              if isinstance(exp, bool) or not isinstance(exp, int):
+              if "exp" not in claims:
+                  # The lobby accepts a token carrying no exp at all, so this is not a fault.
                   return None
+              exp = claims["exp"]
+              # bool is an int subclass and json turns `true` into one; it is not an expiry.
+              # A float is: RFC 7519 lets NumericDate be non-integer, and the lobby casts it.
+              if isinstance(exp, bool) or not isinstance(exp, (int, float)):
+                  return MALFORMED
               try:
                   return exp, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))
               except (OverflowError, OSError, ValueError):
-                  # A number, but not one this platform can express as a time. Unusable, so say
-                  # so rather than reporting a nonsense span against it.
+                  # A number the lobby would still compare, but not one this platform can express
+                  # as a time. Leave it to the lobby rather than report a nonsense span.
                   return None
 
 
           def span(seconds):
-              return "less than a minute" if seconds < 60 else "%d minutes" % (seconds // 60)
+              if seconds < 60:
+                  return "less than a minute"
+              minutes = int(seconds // 60)
+              return "1 minute" if minutes == 1 else "%d minutes" % minutes
 
 
           now = time.time()
@@ -257,6 +276,10 @@ jobs:
           # Both are checked before either can end the run, so one dispatch reports both faults.
           for name in ("FAF_CI_ACCESS_TOKEN_C", "FAF_CI_ACCESS_TOKEN_D"):
               found = expiry_of(os.environ.get(name, ""))
+              if found is MALFORMED:
+                  print("::warning::%s has an exp claim that is not a number, which the lobby "
+                        "rejects outright; mint a fresh one before dispatching again" % name)
+                  continue
               if found is None:
                   # An opaque token carries no readable claims and may still be valid, so the
                   # lobby decides. Being stricter here than the thing being pre-flighted is how a
@@ -363,6 +386,8 @@ jobs:
           game=$1
           shopt -u nullglob
 
+          # One variable for both peers, because they have to agree: `session` refuses a run that
+          # mixes the two credential channels, so naming the flag once makes that structural.
           CREDENTIAL_FLAG=--peer-access-token-file
 
           cd "$WORK"
@@ -379,8 +404,8 @@ jobs:
 
       # Immediately after the run, on every path including the step timeout. The session rewrites
       # nothing on this channel, so the file still holds the token it was given: a bearer token
-      # good for about another hour, and a live credential for as long as it lasts. It never
-      # outlives the step that used it.
+      # good until the expiry the first step printed, and a live credential for as long as that
+      # lasts. It never outlives the step that used it.
       - name: Remove the token files
         if: always()
         timeout-minutes: 1
@@ -402,6 +427,7 @@ jobs:
           uids=0
           logins=0
           verdicts=0
+          auths=0
           # Counted first, then used to decide what the summary says. A missing line is itself the
           # finding, so it has to be stated rather than left as a blank: the counts are what make
           # that possible, since the step's shell has no pipefail and a grep that matches nothing
@@ -410,6 +436,11 @@ jobs:
             uids=$(grep -c 'generated unique_id via faf-uid' "$log" || true)
             logins=$(grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u | wc -l)
             verdicts=$(grep -cE 'session: (PASS|FAIL)' "$log" || true)
+            # The lobby's own rejection, which no other pattern here matches. It is the shape a
+            # token that expired mid-run takes, and the pre-flight deliberately does not refuse
+            # that case, so this is where it has to be readable. The text is the lobby's ("Token
+            # signature was invalid", "Cannot find user id"); it never carries the token.
+            auths=$(grep -c 'lobby authentication_failed' "$log" || true)
           fi
           {
             echo "### Two-peer session on a runner"
@@ -427,6 +458,12 @@ jobs:
                 grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
               else
                 echo '(no lobby authentication line: no peer reached welcome)'
+              fi
+              # Only when there is one: a passing run has no rejection to show. `[^"]*` stops at
+              # the JSON string's closing quote, as the verdict pattern below does, so the
+              # summary gets the lobby's text rather than the rest of the log record.
+              if [ "$auths" -gt 0 ]; then
+                grep -oE 'lobby authentication_failed: [^"]*' "$log" | sort -u | sed -n '1,4p'
               fi
               if [ "$verdicts" -gt 0 ]; then
                 grep -oE 'session: (PASS|FAIL)[^"]*' "$log" | sed -n '1,5p'

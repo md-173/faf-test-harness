@@ -267,9 +267,9 @@ final class SessionCommandTest {
     }
 
     @Test
-    void theAccessTokenCommandLineCiWillUseNeedsNoRefreshSettings() throws IOException {
-        // What the live workflow's session step becomes once it switches (#364 follow-up): no
-        // --oauth-token-url, no --oauth-client-id, nothing but the lobby, identity and binaries.
+    void theAccessTokenCommandLineCiUsesNeedsNoRefreshSettings() throws IOException {
+        // The live workflow's session step, as it runs: no --oauth-token-url, no
+        // --oauth-client-id, nothing but the lobby, identity and binaries.
         String[] argv = {
             "--lobby-websocket-url=wss://ws.faforever.xyz",
             "--unique-id=00000000-0000-0000-0000-000000000000",
