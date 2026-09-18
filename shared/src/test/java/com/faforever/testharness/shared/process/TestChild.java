@@ -15,6 +15,11 @@ public final class TestChild {
             case "sleep" -> Thread.sleep(Long.parseLong(args[1]));
             case "print" -> System.out.println(args[1]);
             case "env" -> System.out.println(System.getenv(args[1]));
+            case "lines" -> {
+                for (int i = 1; i < args.length; i++) {
+                    System.out.println(args[i]);
+                }
+            }
             default -> {
                 System.err.println("unknown mode: " + mode);
                 System.exit(2);
