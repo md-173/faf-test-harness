@@ -55,7 +55,9 @@ final class StateMachineCancelTest {
 
         machine.cancel();
 
-        assertTrue(awaiting.isCancelled(), "cancel() must release a future awaiting an unreached state");
+        assertTrue(
+                awaiting.isCancelled(),
+                "cancel() must release a future awaiting an unreached state");
         assertThrows(CancellationException.class, awaiting::join);
     }
 
@@ -67,7 +69,9 @@ final class StateMachineCancelTest {
 
         machine.cancel();
 
-        assertFalse(awaiting.isCancelled(), "a future for the current state is already complete, not cancelled");
+        assertFalse(
+                awaiting.isCancelled(),
+                "a future for the current state is already complete, not cancelled");
         assertDoesNotThrow(awaiting::join);
     }
 
@@ -79,6 +83,7 @@ final class StateMachineCancelTest {
         machine.stateReached(c);
 
         machine.cancel();
-        assertDoesNotThrow(machine::cancel, "a second cancel() must be safe once awaiters were released");
+        assertDoesNotThrow(
+                machine::cancel, "a second cancel() must be safe once awaiters were released");
     }
 }
