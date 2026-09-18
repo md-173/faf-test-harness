@@ -1,8 +1,13 @@
 package com.faforever.testharness.shared.statemachine;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -39,5 +44,41 @@ final class StateMachineCancelTest {
     void cancelWithNoPendingTimeoutsIsSafe() {
         StateMachine machine = new StateMachine(new State("A"));
         assertDoesNotThrow(machine::cancel, "cancel() on a machine that never scheduled is safe");
+    }
+
+    @Test
+    void cancelReleasesAPendingStateReachedFuture() {
+        State a = new State("A");
+        State c = new State("C");
+        StateMachine machine = new StateMachine(a);
+        CompletableFuture<Void> awaiting = machine.stateReached(c);
+
+        machine.cancel();
+
+        assertTrue(awaiting.isCancelled(), "cancel() must release a future awaiting an unreached state");
+        assertThrows(CancellationException.class, awaiting::join);
+    }
+
+    @Test
+    void cancelLeavesAnAlreadyReachedStateFutureAlone() {
+        State a = new State("A");
+        StateMachine machine = new StateMachine(a);
+        CompletableFuture<Void> awaiting = machine.stateReached(a);
+
+        machine.cancel();
+
+        assertFalse(awaiting.isCancelled(), "a future for the current state is already complete, not cancelled");
+        assertDoesNotThrow(awaiting::join);
+    }
+
+    @Test
+    void secondCancelIsSafeAfterAwaitedFuturesWereReleased() {
+        State a = new State("A");
+        State c = new State("C");
+        StateMachine machine = new StateMachine(a);
+        machine.stateReached(c);
+
+        machine.cancel();
+        assertDoesNotThrow(machine::cancel, "a second cancel() must be safe once awaiters were released");
     }
 }

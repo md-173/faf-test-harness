@@ -76,7 +76,8 @@ public class StateMachine implements EventListener {
 
     /**
      * Gives a future that completes when the state is reached. If the state machine's current state
-     * is {@code s} then the future completes immediately.
+     * is {@code s} then the future completes immediately. If {@link #cancel()} runs first, the
+     * future is instead cancelled rather than left pending.
      *
      * @param s state to wait for.
      * @return a future that only completes when the state is reached.
@@ -206,10 +207,13 @@ public class StateMachine implements EventListener {
 
     /**
      * Stops the machine's time-based scheduling: cancels every pending timeout and shuts down the
-     * timer thread, so no scheduled transition can fire after this returns. Intended for the
-     * shutdown path — it is terminal, so a later {@link #setTimeout(long, State)} arms nothing and
-     * returns rather than throwing on the dead timer. Event-driven transitions via {@link
-     * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     * timer thread, so no scheduled transition can fire after this returns. Also cancels every
+     * future returned by {@link #stateReached(State)} for a state not yet reached, so a caller
+     * blocked on one is released with a {@link java.util.concurrent.CancellationException} instead
+     * of waiting forever. Intended for the shutdown path — it is terminal, so a later {@link
+     * #setTimeout(long, State)} arms nothing and returns rather than throwing on the dead timer.
+     * Event-driven transitions via {@link #receiveEvent(Event)} are unaffected. Idempotent: calling
+     * it more than once is safe.
      */
     public synchronized void cancel() {
         cancelled = true;
@@ -218,6 +222,10 @@ public class StateMachine implements EventListener {
         }
         timeouts.clear();
         timeoutTimer.cancel();
+        for (var awaited : awaitedStates.values()) {
+            awaited.cancel(false);
+        }
+        awaitedStates.clear();
     }
 
     private class UpdateStateTask extends TimerTask {
