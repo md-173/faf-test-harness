@@ -5,9 +5,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -59,14 +61,51 @@ public final class ProcessOutputLogger {
      *     {@code shutdown()} after the process exits
      */
     public static ExecutorService captureAsync(final Process process, final String componentTag) {
+        return captureAsync(process, componentTag, line -> {});
+    }
+
+    /**
+     * Same as {@link #captureAsync(Process, String)}, plus an opt-in per-line observer.
+     *
+     * <p>{@code lineObserver} is invoked once per raw line read from either stream, in addition to
+     * — not instead of — the normal SLF4J routing, so it sees every line before continuation lines
+     * (stack traces) are merged into a block for the log event. It runs on a reader thread, so it
+     * must not block: a slow or hung observer stalls that stream's draining exactly as a slow SLF4J
+     * appender would. An observer that throws is logged and otherwise ignored, so it cannot stop
+     * output capture.
+     *
+     * <p>Callers that want a bounded wait on a specific line (e.g. a readiness marker) rather than a
+     * raw per-line callback can pass a {@link com.faforever.testharness.shared.process.LineWaiter}
+     * as {@code lineObserver} and call its {@code awaitLine}.
+     *
+     * @param process the child process whose output to capture; must be started before this call
+     * @param componentTag component label applied to every captured log line, e.g. {@code
+     *     "ICEAdapter"} or {@code "MockGame"}
+     * @param lineObserver invoked with each raw line from stdout or stderr, in arrival order per
+     *     stream; must not be {@code null}
+     * @return the {@link ExecutorService} managing the reader threads; the caller should invoke
+     *     {@code shutdown()} after the process exits
+     */
+    public static ExecutorService captureAsync(
+            final Process process, final String componentTag, final Consumer<String> lineObserver) {
+        Objects.requireNonNull(lineObserver, "lineObserver");
         ExecutorService executor =
                 Executors.newFixedThreadPool(
                         READER_THREAD_COUNT, new DaemonThreadFactory(componentTag));
         InstanceLabel label = InstanceLabel.capture();
         executor.submit(
-                label.wrap(() -> streamToLog(process.getInputStream(), componentTag, false)));
+                label.wrap(
+                        () ->
+                                streamToLog(
+                                        process.getInputStream(),
+                                        componentTag,
+                                        false,
+                                        lineObserver)));
         executor.submit(
-                label.wrap(() -> streamToLog(process.getErrorStream(), componentTag, true)));
+                label.wrap(
+                        () ->
+                                streamToLog(
+                                        process.getErrorStream(), componentTag, true, lineObserver)));
         return executor;
     }
 
@@ -77,13 +116,17 @@ public final class ProcessOutputLogger {
      * @param stream the input stream to read from
      * @param componentTag MDC component tag applied for the duration of reading
      * @param isStderr if {@code true}, blocks are logged at WARN level; otherwise at INFO level
+     * @param lineObserver invoked with each raw line before it is buffered for logging
      */
     private static void streamToLog(
-            final InputStream stream, final String componentTag, final boolean isStderr) {
+            final InputStream stream,
+            final String componentTag,
+            final boolean isStderr,
+            final Consumer<String> lineObserver) {
         MDC.put(LoggingSetup.COMPONENT_MDC_KEY, componentTag);
         try (BufferedReader reader =
                 new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
-            drainReaderToLog(reader, isStderr);
+            drainReaderToLog(reader, isStderr, componentTag, lineObserver);
         } catch (IOException e) {
             LOG.error("Error reading subprocess stream for {}", componentTag, e);
         } finally {
@@ -97,13 +140,20 @@ public final class ProcessOutputLogger {
      *
      * @param reader the reader positioned at the start of the stream
      * @param isStderr if {@code true}, completed blocks are logged at WARN; otherwise at INFO
+     * @param componentTag used only to identify the stream in a line-observer failure log
+     * @param lineObserver invoked with each raw line before it is buffered for logging
      * @throws IOException if the reader encounters an I/O error
      */
-    private static void drainReaderToLog(final BufferedReader reader, final boolean isStderr)
+    private static void drainReaderToLog(
+            final BufferedReader reader,
+            final boolean isStderr,
+            final String componentTag,
+            final Consumer<String> lineObserver)
             throws IOException {
         StringBuilder block = new StringBuilder();
         String line;
         while ((line = reader.readLine()) != null) {
+            observeLine(lineObserver, line, componentTag);
             if (isContinuationLine(line) && block.length() > 0) {
                 block.append('\n').append(line);
             } else {
@@ -113,6 +163,23 @@ public final class ProcessOutputLogger {
             }
         }
         flushBlock(block, isStderr);
+    }
+
+    /**
+     * Invokes {@code lineObserver} for {@code line}, containing any exception it throws so a broken
+     * observer cannot stop the reader thread from continuing to drain and log output.
+     *
+     * @param lineObserver the observer to invoke
+     * @param line the raw line just read
+     * @param componentTag identifies the stream in the failure log
+     */
+    private static void observeLine(
+            final Consumer<String> lineObserver, final String line, final String componentTag) {
+        try {
+            lineObserver.accept(line);
+        } catch (RuntimeException e) {
+            LOG.warn("Subprocess line observer for {} threw; output capture continues", componentTag, e);
+        }
     }
 
     /**
