@@ -47,25 +47,29 @@ stateDiagram-v2
     JOINING --> LIVE : Host starts peer-to-peer communication / Send GameState(Launching) message
 
     LIVE --> LIVE : Peer desynchronises [desyncs <= 20] / Send Desync message
-    LIVE --> ENDED : Game finished / Send GameState(Ended) message
+    LIVE --> ENDED : Game finished / Send GameResult (one per army), JsonStats, GameEnded, then GameState(Ended)
+    SETUP --> ENDED : DisconnectFromPeer message from server (a peer left)
+    LIVE --> ENDED : DisconnectFromPeer message from server (a peer left)
     ENDED --> [*]
-
-    state "ENDED" as ENDED
-    ENDED : Send GameEnded message
-    ENDED : Send results with GameResult and JsonStats commands
 
     # Error conditions
     INITIALIZING --> [*] : Connection not established (30s timeout)
-    SETUP --> [*] : Host/server/peers disconnected
+    SETUP --> [*] : Connection to the GPGNet server lost
+    LIVE --> [*] : Connection to the GPGNet server lost
     LIVE --> [*] : Peer desynchronises [desyncs > 20] / Send Desync message
 ```
 *State diagram of the mock game*
 
 ### Operational Failure
 
-Any disconnection from peers or the server causes the game to enter an unrecoverable failure state (shown in the diagram as a transition directly to the end state).
+Losing the connection to the GPGNet server (the ICE adapter) causes the game to enter an unrecoverable failure state (shown in the diagram as a transition directly to the end state).
 After this occurs, the client initiates tear-down of the game process, ensuring any remaining connections are closed and the game binary is killed.
-Disconnection may occur from ICE adapter crashes, ICE negotiation timeouts, game-process hangs (from peers), a lost internet signal, or any other source. The game treats all of these sources the same.
+That local connection is the only one whose loss the game acts on. An ICE adapter crash reaches it as a lost connection, but ICE negotiation timeouts, peer hangs, and a lost internet signal do not reach it at all: the adapter and the client are the components that observe those.
+
+A peer leaving is not a failure (WBS-4.3.4).
+While the game is still in the lobby, the lobby server tells the remaining players, the client relays that to its adapter, and the adapter forwards `DisconnectFromPeer` to the game, which ends normally through ENDED and exits 0.
+The same edge is drawn from LIVE because the game's own machine accepts it there too, and it stays reachable in one narrow window: the game enters LIVE when it sends `GameState(Launching)`, and its client only reaches `PLAYING` once the adapter relays that frame back, so a notice arriving inside that round trip is still relayed and still ends the game.
+Outside that window an orchestrated session does not produce one: once the client is `PLAYING` it stops relaying the notice, and once the host has launched the lobby server stops sending it, so the game plays on to the end of its own match.
 
 ## Client State Machine
 

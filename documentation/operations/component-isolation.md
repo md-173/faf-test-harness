@@ -163,7 +163,7 @@ credentials; the rest are jar-gated and run on loopback:
   `.secrets/refresh_token.txt` and the `faf-uid` binary — see
   [`demos/README.md`](../demos/README.md).
 
-None of these were run on this (off-network, un-provisioned) machine; their documented pass
+None of these were run on this un-provisioned machine; their documented pass
 conditions are recorded in the matrix and in the linked docs, and are not faked here.
 
 ## Related documents
