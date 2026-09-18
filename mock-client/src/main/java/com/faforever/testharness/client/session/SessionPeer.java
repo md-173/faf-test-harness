@@ -2,6 +2,7 @@ package com.faforever.testharness.client.session;
 
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
+import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.SessionState;
@@ -14,6 +15,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -77,6 +79,12 @@ public final class SessionPeer {
     private final AtomicReference<String> joinRefusal = new AtomicReference<>();
 
     /**
+     * The server's latest reported state per game uid, from {@code game_info}. Concurrent: the
+     * lobby's listener thread writes while a test thread reads.
+     */
+    private final Map<Integer, String> serverGameStates = new ConcurrentHashMap<>();
+
+    /**
      * Every {@code ConnectToPeer} this peer's lobby sent, as (remote id, offer). Filled on the
      * lobby listener thread.
      */
@@ -102,6 +110,7 @@ public final class SessionPeer {
             LobbyConnection lobby = new LobbyConnection(config.lobbyWebSocketUrl());
             lobby.registerHandler("game_join_failed", frame -> joinRefusal.set(frame.toString()));
             lobby.registerHandler("ConnectToPeer", this::recordOffer);
+            lobby.registerHandler("game_info", this::recordGameInfo);
             IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
             adapter.registerNotification("onConnected", this::recordVerdict);
             this.teardown = new SessionTeardown(lobby);
@@ -117,6 +126,92 @@ public final class SessionPeer {
                             adapter,
                             teardown);
         }
+    }
+
+    /**
+     * Records the server's own view of every game a {@code game_info} frame describes (WBS-4.3.4).
+     *
+     * <p>This is the only signal that reports faf-server's {@code Game.state}, and no client-side
+     * signal stands in for it: a client reaches PLAYING when its <em>own</em> adapter relays {@code
+     * GameState Launching}, which is a different event from the server processing that frame, since
+     * the forward to the lobby is fire and forget. A departure test that must know the server has
+     * left its lobby phase has to read this.
+     *
+     * <p>Two shapes, both of which faf-server sends: a batch as {@code {"games": [...]}} on connect
+     * and after each dirty sweep, and a single game dict for one update. {@code Game.to_dict} maps
+     * LOBBY to {@code "open"}, LIVE to {@code "playing"} and everything else to {@code "closed"}.
+     *
+     * <p><b>This peer always hears about its own game</b>, whatever visibility the host chose.
+     * {@code Game.is_visible_to_player} returns early on {@code player == self.host or player in
+     * self._connections}, before it looks at visibility at all, so the {@code friends} visibility
+     * the session hosts with does not hide a game from its own participants. Worth stating because
+     * the broadcast is otherwise visibility-filtered, and a reader checking only this repo's
+     * "visibility only filters the game list" note would conclude the opposite.
+     *
+     * <p>Only this peer's own game is kept. A batch describes every game visible on the server, so
+     * recording all of them would grow a map nothing reads for the life of a session.
+     *
+     * @param frame the full {@code game_info} frame
+     */
+    private void recordGameInfo(final JsonNode frame) {
+        JsonNode games = frame.path("games");
+        if (games.isArray()) {
+            games.forEach(this::recordOneGame);
+            return;
+        }
+        recordOneGame(frame);
+    }
+
+    /**
+     * Records one game dict, ignoring any without both a uid and a textual state.
+     *
+     * @param game one game as the server describes it
+     */
+    private void recordOneGame(final JsonNode game) {
+        stateOfOwnGame(game, ownGameUid())
+                .ifPresent(state -> serverGameStates.put(ownGameUid(), state));
+    }
+
+    /**
+     * The reported state of {@code game}, if that dict describes the game {@code ownUid} names.
+     *
+     * <p>Static and side-effect free so the frame shapes can be unit-tested without standing a peer
+     * up; the caller owns the map.
+     *
+     * @param game one game as the server describes it
+     * @param ownUid the uid this peer's own game was launched under, or -1 before that is known
+     * @return the state string, or empty if this dict is malformed or about another game
+     */
+    static Optional<String> stateOfOwnGame(final JsonNode game, final int ownUid) {
+        JsonNode uid = game.path("uid");
+        JsonNode state = game.path("state");
+        if (ownUid < 0 || !uid.isInt() || !state.isTextual() || uid.asInt() != ownUid) {
+            return Optional.empty();
+        }
+        return Optional.of(state.asText());
+    }
+
+    /**
+     * This peer's own game uid, once its {@code game_launch} has arrived.
+     *
+     * @return the uid, or -1 before the launch frame lands; no game uses -1
+     */
+    private int ownGameUid() {
+        if (lifecycle == null) {
+            return -1;
+        }
+        GameConfig launched = lifecycle.gameLaunched().getNow(null);
+        return launched == null ? -1 : launched.uid();
+    }
+
+    /**
+     * The server's latest reported state for one game, as seen on this peer's lobby connection.
+     *
+     * @param uid the game's lobby-assigned uid
+     * @return the client-facing state name, or empty if no {@code game_info} has named that game
+     */
+    Optional<String> serverGameState(final int uid) {
+        return Optional.ofNullable(serverGameStates.get(uid));
     }
 
     /**
