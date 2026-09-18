@@ -30,33 +30,32 @@ spawns subprocesses. The Mock Client is the sole supervisor of both.
 
 ### 1.1 Target environment
 
-This spec **targets Linux** as the runtime substrate. The Java code itself
-is OS-portable, but the orphan-prevention layer (§7.3) relies on Linux
-primitives (`prctl(PR_SET_PDEATHSIG)` via `util-linux`'s `setpriv`, plus
-`setsid` for process-group cleanup) that have no Windows or macOS
-equivalent.
+This spec **targets Linux**, the platform CI runs on (`ubuntu-latest`). The
+Java code itself is OS-portable. The unbuilt orphan-prevention layers in §7.3
+are designed around `util-linux`: `prctl(PR_SET_PDEATHSIG)` via `setpriv`, and
+`setsid` for process-group cleanup.
 
-The **Docker workspace is the supported delivery mechanism** for that Linux
-substrate. It is the canonical run target for three reasons:
+The harness needs **no container**. Both mocks ship as runnable jars on the
+releases page (WBS-7.6) and run as plain processes on a Java 21 or newer
+runtime, the way the real client runs `faf-ice-adapter` as a bare
+`ProcessBuilder` child. The reasons this section once gave for a Docker
+workspace no longer hold:
 
-1. **Fault-injection parity.** WBS 3.x (Network Fault Injection) needs
-   `tc`/`netem`/`iptables`, which only exist on Linux. Docker gives every
-   contributor — including macOS and Windows developers — the same kernel
-   tooling without requiring WSL2 or per-developer VMs.
-2. **PID 1 + zombie reaping.** The orphan-prevention plan in §7.3 depends
-   on tini at PID 1 (`docker run --init` / compose `init: true`). The
-   container is the cleanest way to guarantee a known PID 1.
-3. **Reproducible topology.** Multi-peer simulation (2–4 players) needs
-   deterministic NAT/routing across nodes; a `docker-compose` user-defined
-   bridge supplies it identically to every developer.
+1. **Fault injection lives in the harness.** WBS-5.1 puts its faults in the
+   Mock Client's ICE relay and mock-game's UDP sender, so it needs no `tc`,
+   `netem` or `iptables`. harness-runbook §10 explains why network-level tools
+   cannot express those faults.
+2. **Orphan prevention does not rely on an init process.** The harness JVM is
+   not PID 1, and `SubprocessRegistry`'s shutdown hook is the safety net. §7.3
+   records what that hook does not cover.
+3. **Multi-peer runs on one host.** `mock-client session` runs every peer's
+   client in one JVM and allocates each peer's ports itself; clients started as
+   separate `run` processes each need their own `--ice-adapter-*-port` values.
+   §9 records the decision.
 
 Implementation note: the Subprocess Execution Controller must not bake
-Docker-specific paths into the Java code. It depends on Linux primitives
-(`setpriv`, `setsid`, tini-style PID 1) that the Docker workspace provides
-by construction, but a Linux developer running bare-metal with the same
-tools installed should also be able to exercise it. Container-specific
-concerns (volume mounts, network bridges) belong in the Docker workspace
-configuration, not in the controller.
+container-specific paths or network assumptions into the Java code. Anyone who
+wraps the jars in a container keeps that configuration outside the controller.
 
 ## 2. Launch strategy
 
@@ -86,13 +85,15 @@ Mirroring `IceAdapterImpl`:
   Never rely on `PATH` — this guarantees the child runs on the same JRE as
   the parent (matching what the upstream library set chooses; see
   `libraries.md`).
-- **Adapter JAR**: configurable via env var `ICE_ADAPTER_JAR` (preferred for
-  Docker), falling back to `./faf-ice-adapter.jar` relative to the Mock
-  Client's working directory. Path is canonicalised and existence-checked
-  before launch; missing JAR is a fatal startup error, not a runtime fault.
+- **Adapter JAR**: `iceAdapterBinaryPath` (`--ice-adapter-binary-path`, env
+  `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH`), defaulting to
+  `faf-ice-adapter.jar` relative to the Mock Client's working directory. The
+  launcher checks that the path is a regular file before launch, so a missing
+  JAR fails the launch rather than starting a child.
 - **`mock-game`**: launched via the Gradle-installed launcher script (or its
-  fat JAR) at a path discovered the same way (env var `MOCK_GAME_BIN`
-  with a sensible default for the Docker image).
+  fat JAR) at a path configured the same way: `mockGameBinaryPath`
+  (`--mock-game-binary-path`, env `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH`),
+  defaulting to `mock-game/build/install/mock-game/bin/mock-game`.
 
 ### 2.3 Environment
 
@@ -103,8 +104,8 @@ Mirroring `IceAdapterImpl`:
   its file output (the `--log-directory` flag is deprecated upstream).
 - pass `LOG_LEVEL` through unchanged so children inherit the harness log
   level (see `LoggingSetup`).
-- do **not** scrub other env vars; the Docker image is the security
-  boundary.
+- do **not** scrub other env vars. The children run as the same OS user as
+  the Mock Client, so they gain nothing it does not already have.
 
 ### 2.4 Working directory
 
@@ -140,7 +141,7 @@ Bold flags are passed by the Mock Client on every launch.
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
 | `--log-directory <path>` | unset | no | Deprecated upstream — use `LOG_DIR` env var instead (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
-| `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags. **Never set in headless Docker.** |
+| `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
 | `--help` | — | no | Diagnostic only. |
 
 The Mock Client emits `--id` and `--login` first, with `--game-id`
@@ -257,11 +258,12 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > signal hook reaches `SessionTeardown` **without** going through the state
 > machine (`RunCommand` installs it as a JVM shutdown hook), so a Ctrl-C during
 > the connect window takes effect immediately rather than waiting the budget
-> out. Separately, `SubprocessManager` registers its own JVM shutdown hook, so
-> both children die with the parent whatever the FSM is doing — nothing is
-> orphaned. What remains is that a broken adapter is noticed late and
-> `AdapterExited` sits queued for that window. Moving the bring-up off the
-> transition action is tracked as a 3.1.3.3 fix.
+> out. Separately, `SubprocessRegistry` installs its own JVM shutdown hook, so
+> on any exit that runs shutdown hooks both children die with the parent
+> whatever the FSM is doing. A `SIGKILL` skips the hook and leaves them running
+> (§7.3). What remains of the connect-window cost is that a broken adapter is
+> noticed late and `AdapterExited` sits queued for that window. Moving the
+> bring-up off the transition action is tracked as a 3.1.3.3 fix.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is
@@ -344,7 +346,7 @@ two ports it shares with the adapter.
 
 ## 3. Port allocation
 
-To avoid cross-instance collisions inside the Docker network:
+To avoid collisions between harness instances sharing one host:
 
 - Open a `ServerSocket(0)` (TCP) or `DatagramSocket(0)` (UDP), read
   `getLocalPort()`, close, pass the integer to the child.
@@ -545,25 +547,24 @@ this — when the JVM is killed by `SIGKILL`, the OOM-killer, or
 `Runtime.halt()`, **shutdown hooks do not run** and child processes survive
 as orphans (they are reparented to PID 1).
 
-The strategy combines four mechanisms. Layers 1–2 are **Linux primitives
-the controller relies on directly**; layers 3–4 are **environmental
-guarantees the Docker workspace supplies** (and that any non-Docker Linux
-host would need to replicate).
+The design has four layers, and **only layer 1 is built**. Layers 2 and 4 are
+primitives that were designed but never added to the launch argv. Layer 3
+applies only when the JVM is PID 1, as in a container; the harness runs as
+plain processes, so it does not apply.
 
-| Layer | Mechanism | Covers | Provided by |
-|---|---|---|---|
-| 1. JVM-controlled exit | `Runtime.addShutdownHook` that walks tracked `Process` handles and runs §7.1 → §7.2 | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) |
-| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) |
-| 3. Init / PID 1 | tini as PID 1 (`docker run --init` / compose `init: true`) — reaps zombies, forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | Docker workspace |
-| 4. Process-group cleanup | Children launched via `setsid` so they are in their own session/process group; the init broadcasts SIGTERM to the group on container stop | Container `docker stop` after grace period | `util-linux` (`setsid`) + Docker workspace |
+| Layer | Mechanism | Covers | Provided by | Status |
+|---|---|---|---|---|
+| 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` and `session` each add their own hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
+| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) | Designed, not built |
+| 3. Init / PID 1 | An init (e.g. tini) at PID 1 that reaps zombies and forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | A container runtime | Not applicable: the harness runs as plain processes, so its JVM is not PID 1 |
+| 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built |
 
 For layer 2, the JDK does not expose `prctl`. Acceptable
 implementations (in order of preference):
 
 - **`setsid`/`setpriv` shim**: launch the child via
   `["setpriv", "--pdeathsig", "TERM", "--", javaBin, "-jar", ...]`. `setpriv`
-  is part of `util-linux`, present in the Debian-based image we're targeting.
-  Zero JNI, zero native code in our codebase.
+  is part of `util-linux`. Zero JNI, zero native code in our codebase.
 - **Fallback (no `setpriv` available)**: a small Bash launcher script that
   writes its PID to a file and `exec`s the child; a parent-side watchdog
   thread polls `/proc/<parent>/stat` and signals the group on parent death.
@@ -572,12 +573,38 @@ implementations (in order of preference):
   for one syscall.
 
 For layer 4, prefix the argv with `setsid -w` (also `util-linux`). The
-resulting child is the leader of a new session; `kill -- -<pgid>` from tini
-delivers SIGTERM to every descendant in one syscall.
+resulting child is the leader of a new session, so `kill -- -<pgid>` delivers
+SIGTERM to every descendant in one syscall.
 
-Net effect: regardless of how the harness JVM dies, the children receive
-SIGTERM within milliseconds and have at least the container's grace period
-(default 10 s, configurable) to exit cleanly before SIGKILL.
+Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
+`System.exit`) terminates its children through layer 1. A `SIGKILL` or OOM
+kill of that JVM runs no hook, and nothing else in the harness terminates the
+children, so they are left running. The adapter normally never notices:
+faf-ice-adapter 3.3.14's JSON-RPC library runs the connection-loss handler only
+when a read throws (JJsonRpc `JJsonPeer.run`), and a killed client's socket
+closes in an orderly way unless it had unread data, so the adapter carries on
+with its GPGNet server still serving the game. Observed against 3.3.14 on a
+headless host: live, the adapter stayed up with the client killed in `HOSTING`
+and in `PLAYING`; locally, with the adapter's only JSON-RPC client killed while
+the game was in `LOBBY` and after `HostGame`, it also logged no connection loss
+and kept the game connected. If a read does throw, for example on a reset, the
+handler in `RPCService.init` still leaves the adapter up on a headless host. It
+stays up by design while the game state is `Launching`; otherwise it throws
+before `System.exit`, with a `NullPointerException` if no game is connected, or
+at the unguarded `TrayIcon.close()` after closing the game's connection.
+
+mock-game keeps running too, and while the adapter holds its connection only
+its own timers can end it. In `LOBBY` it has none: the launch timer is armed
+only by `HostGame` or `JoinGame`, which the adapter sends only when its client
+asks, and `--lobby-timeout-seconds`, which `MockGameLauncher` does not pass,
+defaults to waiting indefinitely. A Mock Client killed before it gives the game
+a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
+delay; the adapter still moves it out of `IDLE` by sending `CreateLobby` itself.
+Once hosting or joining, mock-game ends when its launch and match timers finish,
+unless auto-launch is off, as `mock-client session` sets it for every peer and a
+negative `--mock-game-launch-delay-seconds` sets it for `run`; then it also
+waits indefinitely. It ends at once if the adapter closes its connection, and
+within 30 s if the connection never comes up.
 
 ### 7.4 Process tracking
 
@@ -597,7 +624,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM, container kill | Out-of-process — handled by §7.3 | Children TERM'd by `setpriv` / tini |
+| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None: a killed JVM runs no hook | Children are left running (§7.3) |
 
 ## 9. Open questions
 
@@ -640,7 +667,8 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 - `documentation/research/lobby-protocol-spec.md` §4.4, §5 — orchestration trigger and `game_launch` fields
 - [`shared/.../logging/ProcessOutputLogger.java`](../../shared/src/main/java/com/faforever/testharness/shared/logging/ProcessOutputLogger.java) — output capture implementation
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
-- [tini](https://github.com/krallin/tini) — container PID 1 / zombie reaping
+- [java-ice-adapter 3.3.14 `RPCService.java`](https://github.com/FAForever/java-ice-adapter/blob/3.3.14/ice-adapter/src/main/java/com/faforever/iceadapter/rpc/RPCService.java): adapter behaviour on losing its JSON-RPC client
+- [JJsonRpc `JJsonPeer.java` at `37669e0`](https://github.com/FAForever/JJsonRpc/blob/37669e0fed05937b733bbb64155bcb874ed07c35/src/main/java/com/nbarraille/jjsonrpc/JJsonPeer.java): the read loop that decides whether faf-ice-adapter 3.3.14 notices a lost JSON-RPC client
 
 ## 11. Sequence diagram — one-session lifecycle
 
@@ -651,20 +679,19 @@ sequenceDiagram
     participant MC as Mock Client (parent JVM)
     participant IA as faf-ice-adapter (child)
     participant MG as mock-game (child)
-    participant TINI as tini (PID 1)
 
     Note over MC: idle in IDLE state
     LS->>MC: game_launch
     MC->>MC: validate fields, allocate rpc/gpgnet/lobby ports
-    MC->>IA: ProcessBuilder.start() via setpriv --pdeathsig TERM
+    MC->>IA: ProcessBuilder.start()
     activate IA
     MC->>IA: capture stdout+stderr (2 daemon threads)
-    loop ≤ 10× @ 250 ms
+    loop ≤ 100× @ 200 ms
         MC->>IA: TCP connect 127.0.0.1:rpcPort
     end
     IA-->>MC: TCP accepted
     MC->>IA: setLobbyInitMode + setIceServers
-    MC->>MG: ProcessBuilder.start() via setpriv --pdeathsig TERM
+    MC->>MG: ProcessBuilder.start()
     activate MG
     MG->>IA: GPGNet TCP connect
     IA-->>MC: onConnectionStateChanged("Connected")
@@ -685,12 +712,10 @@ sequenceDiagram
     MG-->>MC: process exit
     deactivate MG
 
-    Note over MC,TINI: catastrophic path (parent killed)
-    TINI--xMC: SIGKILL (e.g. OOM)
-    Note right of IA: kernel sends SIGTERM via PR_SET_PDEATHSIG
-    Note right of MG: kernel sends SIGTERM via PR_SET_PDEATHSIG
-    TINI->>IA: SIGTERM (process group, belt-and-braces)
-    TINI->>MG: SIGTERM (process group)
-    IA-->>TINI: exit
-    MG-->>TINI: exit
+    Note over MC,MG: signal path (SIGTERM or SIGINT to the parent)
+    MC->>IA: terminate() from the SubprocessRegistry shutdown hook
+    MC->>MG: terminate(), in parallel
+    IA-->>MC: exit
+    MG-->>MC: exit
+    Note over MC,MG: SIGKILL or OOM kill runs no hook, so IA and MG are left running (§7.3)
 ```
