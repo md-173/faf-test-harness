@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Test;
  * shutdown path.
  */
 final class StateMachineCancelTest {
+
+    private final class Shutdown implements Event {}
 
     @Test
     void cancelStopsPendingTimeoutFromFiring() throws Exception {
@@ -85,5 +88,26 @@ final class StateMachineCancelTest {
         machine.cancel();
         assertDoesNotThrow(
                 machine::cancel, "a second cancel() must be safe once awaiters were released");
+    }
+
+    @Test
+    void cancelCalledReentrantlyFromAnEntryHookLeavesThatStatesFutureAlone() throws Exception {
+        // Mirrors GameShutdown: its ENDED entry hook calls fsm.cancel() before the machine has
+        // actually committed to ENDED, so a future taken on ENDED beforehand must still complete
+        // normally rather than being swept up by that reentrant cancel().
+        State a = new State("A");
+        State ended = new State("ENDED");
+        a.registerTransition(Shutdown.class, ended);
+        StateMachine machine = new StateMachine(a);
+        ended.onEntry(machine::cancel);
+
+        CompletableFuture<Void> reachedEnded = machine.stateReached(ended);
+        machine.receiveEvent(new Shutdown());
+
+        assertSame(ended, machine.getState());
+        assertFalse(
+                reachedEnded.isCancelled(),
+                "the future for the state whose entry hook called cancel() must still complete");
+        assertDoesNotThrow(() -> reachedEnded.get(1, TimeUnit.SECONDS));
     }
 }
