@@ -177,17 +177,15 @@ jobs:
       # First, so a run without its secrets fails in seconds rather than after a build, and names
       # exactly which secret is missing.
       #
-      # TEMPORARY (#364): these are refresh tokens, which Hydra rotates on every use, so each run
-      # spends them and the accounts are re-bootstrapped afterwards. `session` now accepts one
-      # access-token file per peer (#87), so what remains is switching this job (the #364
-      # follow-up): these become FAF_CI_ACCESS_TOKEN_C and _D, set by
-      # scripts/ci/mint-access-token.sh, and the two marked lines in the session step change with
-      # them.
+      # Each secret holds a pre-signed access token, minted right before a dispatch by
+      # scripts/ci/mint-access-token.sh. Nothing is exchanged at runtime, which is why the session
+      # step below passes no OAuth endpoint or client flag at all: those five described the
+      # refresh-token bootstrap, and a pre-signed token is sent as-is.
       - name: Write the peer token files
         timeout-minutes: 1
         env:
-          PEER_C: ${{ secrets.FAF_CI_REFRESH_TOKEN_C }}
-          PEER_D: ${{ secrets.FAF_CI_REFRESH_TOKEN_D }}
+          FAF_CI_ACCESS_TOKEN_C: ${{ secrets.FAF_CI_ACCESS_TOKEN_C }}
+          FAF_CI_ACCESS_TOKEN_D: ${{ secrets.FAF_CI_ACCESS_TOKEN_D }}
         run: |
           umask 077
           # Outside the workspace, so no upload path and no checked-out directory can reach them.
@@ -195,14 +193,14 @@ jobs:
           echo "TOKENS=$TOKENS" >> "$GITHUB_ENV"
           mkdir -p "$TOKENS"
           missing=""
-          [ -n "$PEER_C" ] || missing="$missing FAF_CI_REFRESH_TOKEN_C"
-          [ -n "$PEER_D" ] || missing="$missing FAF_CI_REFRESH_TOKEN_D"
+          [ -n "$FAF_CI_ACCESS_TOKEN_C" ] || missing="$missing FAF_CI_ACCESS_TOKEN_C"
+          [ -n "$FAF_CI_ACCESS_TOKEN_D" ] || missing="$missing FAF_CI_ACCESS_TOKEN_D"
           if [ -n "$missing" ]; then
-            echo "::error::token secret not set:$missing - set it with 'gh secret set', one seeded account per peer"
+            echo "::error::token secret not set:$missing - mint it with scripts/ci/mint-access-token.sh, one seeded account per peer"
             exit 1
           fi
-          printf '%s' "$PEER_C" > "$TOKENS/c.txt"
-          printf '%s' "$PEER_D" > "$TOKENS/d.txt"
+          printf '%s' "$FAF_CI_ACCESS_TOKEN_C" > "$TOKENS/c.txt"
+          printf '%s' "$FAF_CI_ACCESS_TOKEN_D" > "$TOKENS/d.txt"
           echo "wrote one token file per peer, owner-readable only"
 
       - uses: actions/checkout@v7
@@ -284,17 +282,7 @@ jobs:
           game=$1
           shopt -u nullglob
 
-          # TEMPORARY (#364), the two marked lines: the refresh-token channel and the OAuth settings
-          # only its one-time bootstrap uses. `session` accepts --peer-access-token-file (#87), so
-          # when this job switches, this becomes that flag and the array goes away entirely.
-          CREDENTIAL_FLAG=--peer-refresh-token-file                                  # switch with #364
-          REFRESH_ONLY_ARGS=(                                                        # drop with #364
-            --oauth-token-url=https://hydra.faforever.xyz/oauth2/token
-            --oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8
-            --oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth
-            --oauth-redirect-uri=http://127.0.0.1
-            "--oauth-scopes=openid offline lobby"
-          )
+          CREDENTIAL_FLAG=--peer-access-token-file
 
           cd "$WORK"
           java -jar "$client" \
@@ -303,15 +291,15 @@ jobs:
             --uid-binary-path="$FAF_UID_BINARY" \
             --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
             --mock-game-binary-path="$game" \
-            "${REFRESH_ONLY_ARGS[@]}" \
             session \
               --peers="$PEERS" \
               "$CREDENTIAL_FLAG=$TOKENS/c.txt" \
               "$CREDENTIAL_FLAG=$TOKENS/d.txt"
 
-      # Immediately after the run, on every path including the step timeout. The file the session
-      # leaves behind holds the rotated refresh token, which is a live credential that no secret
-      # masks, so it never outlives the step that used it.
+      # Immediately after the run, on every path including the step timeout. The session rewrites
+      # nothing on this channel, so the file still holds the token it was given: a bearer token
+      # good for about another hour, and a live credential for as long as it lasts. It never
+      # outlives the step that used it.
       - name: Remove the token files
         if: always()
         timeout-minutes: 1
