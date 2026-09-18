@@ -11,7 +11,7 @@ import java.util.Map;
 
 final class TestFixtures {
 
-    static final String LOBBY_URL = "wss://lobby.faforever.xyz";
+    static final String LOBBY_URL = "wss://ws.faforever.xyz";
     static final String OAUTH_TOKEN_URL = "https://hydra.faforever.xyz/oauth2/token";
     static final String OAUTH_AUTH_ENDPOINT = "https://hydra.faforever.xyz/oauth2/auth";
     static final String OAUTH_REDIRECT_URI = "http://127.0.0.1";
