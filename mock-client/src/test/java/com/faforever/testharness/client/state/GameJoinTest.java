@@ -60,7 +60,8 @@ final class GameJoinTest {
                     Optional.empty(),
                     Optional.empty(),
                     0,
-                    0);
+                    0,
+                    -1);
 
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
@@ -112,7 +113,8 @@ final class GameJoinTest {
                 joinConfig,
                 MINIMAL_CONFIG.queueConfig(),
                 0,
-                0);
+                0,
+                -1);
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameJoinConfig> joinConfig) throws Exception {

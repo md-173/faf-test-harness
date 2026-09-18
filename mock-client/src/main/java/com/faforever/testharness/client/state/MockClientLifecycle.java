@@ -64,6 +64,15 @@ public final class MockClientLifecycle {
      */
     private static final Duration GAME_END_SAFETY_NET_WINDOW = Duration.ofSeconds(30);
 
+    /**
+     * mock-game's {@code ExitCodes.ADAPTER_LOST}, mirrored because it cannot be imported: this
+     * module depends on {@code shared} and picocli only, never on mock-game. The value is part of
+     * the documented argv-and-exit-code contract between the two (see mock-game's {@code ExitCodes}
+     * javadoc, which names this client as its consumer), so mirroring it is reading that contract
+     * rather than guessing at it.
+     */
+    private static final int GAME_ADAPTER_LOST_EXIT = 69;
+
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
 
@@ -156,6 +165,30 @@ public final class MockClientLifecycle {
      */
     private final Executor labelledAsync =
             label.wrap(new CompletableFuture<Void>().defaultExecutor());
+
+    /**
+     * Whether the game process died in a way nobody asked for (WBS-5.2), as decided by {@link
+     * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
+     * code; see {@link #gameCrashed()}.
+     *
+     * <p>Written on the {@link #gameExit} completion handler and read on the main thread, so the
+     * two sides need an ordering. On the {@code GameExited} route they have one independently of
+     * this field: the write precedes {@code machine.receiveEvent}, which completes the {@code
+     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
+     * {@code get} that releases {@code RunCommand}. The FSM's own monitor is not what publishes it,
+     * since the reading thread never acquires that monitor.
+     *
+     * <p>{@code volatile} is for the other routes into TERMINATED, a lobby disconnect or the
+     * adapter exiting, which carry no such edge. It is worth being precise about what that buys: on
+     * those routes the classification may simply not have run yet, so the honest answer is {@code
+     * false}, and volatile makes that a defined stale read rather than an undefined one. The
+     * residual window is narrow and benign. A lobby drop returns {@code RUNTIME} from the check
+     * above this one anyway, and source-verified against java-ice-adapter's {@code
+     * GPGNetServer.onGpgnetConnectionLost}, the adapter does not exit when the game dies: it closes
+     * the client, reports {@code Disconnected} over RPC and keeps accepting. So a crashed game
+     * reaches TERMINATED through {@code GameExited} and nothing else.
+     */
+    private volatile boolean gameCrashed;
 
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
@@ -715,6 +748,26 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Whether this session's game process died in a way nobody asked for (WBS-5.2): a non-zero exit
+     * with no {@code GameEnded} observed and no harness-initiated teardown.
+     *
+     * <p>A boolean rather than the exit code, because {@link #gameExit()} already exposes the code
+     * and a second accessor for the same number would be duplicated state. What a caller cannot get
+     * from the code alone is the <em>judgement</em>: whether that code was a fault or an expected
+     * consequence of the harness's own SIGTERM. {@link #classifyGameExit} makes that call once, and
+     * this reports it.
+     *
+     * <p>Only meaningful once the game has actually exited. Reading it earlier returns {@code
+     * false}, which is the right answer for a game that is still running and the reason {@code
+     * RunCommand} reads it only after TERMINATED.
+     *
+     * @return {@code true} if the game exit was classified as abnormal
+     */
+    public boolean gameCrashed() {
+        return gameCrashed;
+    }
+
+    /**
      * The session's single adapter-exit signal: completes exactly once with the ICE adapter
      * process's exit code, whether it quit cleanly or was killed. Same copy-semantics contract as
      * {@link #gameExit()} — see there for the full details, which apply identically here.
@@ -885,7 +938,21 @@ public final class MockClientLifecycle {
      */
     void classifyGameExit(
             final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
-        if (exitCode != 0 && teardown.hasRun()) {
+        if (exitCode == GAME_ADAPTER_LOST_EXIT && !cleanEnd) {
+            // Not a crash (#357 review): the game diagnosed its own end and named the cause, which
+            // an arbitrary non-zero exit does not. Logged only. Giving adapter death an exit code
+            // of its own is #406, keyed on the adapter's exit rather than on this one, because
+            // RunCommand can read the verdict before this asynchronous handler has written it.
+            //
+            // Ahead of the teardown branch so the log line does not depend on a race: an adapter
+            // dying mid-session drives TERMINATED and so teardown, which races this handler. A
+            // harness teardown cannot itself produce this code, since SessionTeardown terminates
+            // the game and waits for it to exit before it touches the adapter.
+            LOG.warn(
+                    "mock-game exited with code {} after losing its GPGNet link to the adapter;"
+                            + " the adapter's own exit is reported separately",
+                    exitCode);
+        } else if (exitCode != 0 && teardown.hasRun()) {
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);
@@ -908,6 +975,11 @@ public final class MockClientLifecycle {
                     exitCode);
         } else {
             LOG.warn("mock-game exited abnormally with exit code {}", exitCode);
+            // The process exit code this run should produce (WBS-5.2). Set here, inside the branch
+            // that already decided this exit was unaccounted for, rather than re-derived by the
+            // caller: one predicate, so the warning above and the exit code cannot disagree about
+            // whether the game crashed.
+            gameCrashed = true;
         }
     }
 

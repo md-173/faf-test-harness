@@ -99,7 +99,7 @@ Invocation shape:
 mock-client [global flags] <subcommand> [subcommand flags]
 ```
 
-Global flags — `--config`, `--help`, `--version`, plus the 32 config options —
+Global flags (`--config`, `--help`, `--version`, plus the 38 config options)
 are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag, `ice-smoke`
@@ -118,6 +118,7 @@ is no manifest, and it prints `mock-client (development build)` instead.
 | `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file or (on access tokens) one account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, or `INSTANCE_NAME` set, all refused before any process starts. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file or the lobby session failed, `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed (including no two-way game traffic) or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
+| `71` | `GAME_CRASHED`    | `run` only: the session ran, but the game process died unaccounted for: a non-zero exit with no `GameEnded` frame observed and no harness-initiated teardown, the same condition that logs `mock-game exited abnormally`. Covers a game that failed to start as well as one that died mid-match, but not mock-game's own `69` (`ADAPTER_LOST`), which is logged as a lost adapter link and exits `0`; an exit code for adapter death is #406. Before this existed, such a run exited `0`. |
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
@@ -245,8 +246,9 @@ fields. None of the lobby or OAuth rows applies to any of them.
 | `logFile` | `FAF_MOCK_CLIENT_LOG_FILE` | `--log-file` | — | no | Optional JSONL log file path. |
 | `playerIdOverride` | `FAF_MOCK_CLIENT_PLAYER_ID_OVERRIDE` | `--player-id-override` | — | no | Player ID override for deterministic local testing; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
 | `playerLogin` | `FAF_MOCK_CLIENT_PLAYER_LOGIN` | `--player-login` | `mock-client` | no | Player login passed to `faf-ice-adapter` as `--login` and to `mock-game` as `--player-login`; used by the `launch-ice` / `launch-game` / `ice-smoke` diagnostics (a full `run` uses the lobby identity). |
-| `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions — network fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Network fault injection](../documentation/operations/harness-runbook.md#10-network-fault-injection-wbs-51). |
+| `iceRelayDelayMs` | `FAF_MOCK_CLIENT_ICE_RELAY_DELAY_MS` | `--ice-relay-delay-ms` | `0` | no | Milliseconds to delay every relayed ICE candidate, both directions, for fault injection (WBS 5.1). `0` relays inline. Delays signalling only, never drops or reorders. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
 | `mockGameUdpDropPercent` | `FAF_MOCK_CLIENT_MOCK_GAME_UDP_DROP_PERCENT` | `--mock-game-udp-drop-percent` | `0` | no | Percentage of outbound peer datagrams the launched mock-game suppresses — the lossy-link half of the same fault injection (WBS 5.1). Passed through as mock-game's `--udp-drop-percent`, and emitted only when non-zero. Drawn independently per peer per round; dropped datagrams still consume their sequence number, so the receiver sees gaps. |
+| `mockGameCrashAfterSeconds` | `FAF_MOCK_CLIENT_MOCK_GAME_CRASH_AFTER_SECONDS` | `--mock-game-crash-after-seconds` | `-1` | no | Seconds after the launched `mock-game` enters a session before it halts without a shutdown, simulating a game crash (WBS 5.2). Negative never crashes; `0` crashes as soon as the game has a session to lose. Passed through as `--crash-after-seconds`, and only when set. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
 
 ¹ **Exactly one of the two credential channels is required.** Configuring both
 *at different layers* is resolved by the ordinary precedence — CLI flag beats

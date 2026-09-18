@@ -139,9 +139,13 @@ public final class Main {
         // as the raw seconds, so a hand-run binary that took the default still says out loud
         // whether it intends to launch on its own — the one case where the default decides
         // anything (see MockGameCli's class javadoc).
+        // The crash policy joins the launch policy on this line for the same reason that one is
+        // spelled out in words (see MockGameCli's class javadoc): a hand-run binary should say out
+        // loud what it intends to do on its own. That matters more here than for the launch delay,
+        // since the whole point of an injected crash is to look unexplained afterwards.
         LOG.info(
                 "mock game started: playerId={} login={} gameUid={} "
-                        + "gpgNetPort={} lobbyPort={} gameOptions={} launch={}",
+                        + "gpgNetPort={} lobbyPort={} gameOptions={} launch={} crash={}",
                 config.playerId(),
                 config.playerLogin(),
                 config.gameUid(),
@@ -150,7 +154,10 @@ public final class Main {
                 config.gameOptions(),
                 config.launchDelay()
                         .map(delay -> "auto after " + delay.toSeconds() + "s")
-                        .orElse("manual only (auto-launch disabled)"));
+                        .orElse("manual only (auto-launch disabled)"),
+                config.crashDelay()
+                        .map(delay -> "injected " + delay.toSeconds() + "s into the session")
+                        .orElse("none (fault injection disabled)"));
 
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(

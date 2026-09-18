@@ -35,6 +35,7 @@ final class MockGameSettingsTest {
                 "Rhiza",
                 5,
                 0,
+                -1,
                 options,
                 "INFO",
                 Optional.empty());
@@ -55,6 +56,7 @@ final class MockGameSettingsTest {
                                         "   ",
                                         5,
                                         0,
+                                        -1,
                                         Map.of(),
                                         "INFO",
                                         Optional.empty()));

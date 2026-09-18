@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -169,6 +170,85 @@ final class MockGameLauncherTest {
         assertFalse(
                 argv.contains("--udp-drop-percent"),
                 "the default must produce the argv it always produced: " + argv);
+    }
+
+    /**
+     * The unset case, and the criterion that this flag changes nothing until asked for (WBS-5.2).
+     *
+     * <p>Asserted as the absence of the flag rather than as a {@code -1} value, because those are
+     * different promises: mock-game would treat an explicit {@code -1} identically, but emitting it
+     * would change the argv of every existing launch and make a reader diffing two runs work out
+     * that the difference is inert.
+     */
+    @Test
+    void argvOmitsTheCrashFlagWhenNoFaultIsRequested() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithBinary(binary)).buildArgv(binary);
+
+        assertFalse(
+                argv.contains("--crash-after-seconds"),
+                "an unrequested fault must leave the argv byte-identical. argv: " + argv);
+    }
+
+    @Test
+    void argvCarriesTheConfiguredCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithCrashDelay(binary, 3)).buildArgv(binary);
+
+        assertEquals("3", valueAfter(argv, "--crash-after-seconds"));
+    }
+
+    /**
+     * Zero is a real delay rather than a second spelling of "off", so it must reach the argv. The
+     * emission guard is {@code >= 0} for exactly this reason; a {@code > 0} guard would silently
+     * drop the shortest fault the flag can express.
+     */
+    @Test
+    void argvCarriesAZeroCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv = new MockGameLauncher(configWithCrashDelay(binary, 0)).buildArgv(binary);
+
+        assertEquals("0", valueAfter(argv, "--crash-after-seconds"));
+    }
+
+    /**
+     * Both fault-injection passthroughs set on one launch reach the game together (WBS-5.1,
+     * WBS-5.2).
+     *
+     * <p>The two emissions share the tail of {@code buildArgv} and came from different cards, so
+     * this pins that neither shadows or duplicates the other and that each value lands after its
+     * own flag rather than its neighbour's. It parses the client's real option names, so a rename
+     * on either side fails here as well.
+     */
+    @Test
+    void argvCarriesBothFaultFlagsWhenBothAreSet() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockClientConfig config =
+                configWithFlags(
+                        binary,
+                        "--mock-game-crash-after-seconds=5",
+                        "--mock-game-udp-drop-percent=25");
+
+        List<String> argv = new MockGameLauncher(config).buildArgv(binary);
+
+        assertEquals("25", valueAfter(argv, "--udp-drop-percent"));
+        assertEquals("5", valueAfter(argv, "--crash-after-seconds"));
+        assertEquals(1, Collections.frequency(argv, "--udp-drop-percent"), "argv: " + argv);
+        assertEquals(1, Collections.frequency(argv, "--crash-after-seconds"), "argv: " + argv);
+    }
+
+    /** An explicitly negative value is the disable sentinel, so it stays off the argv. */
+    @Test
+    void argvOmitsAnExplicitlyNegativeCrashDelay() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+
+        List<String> argv =
+                new MockGameLauncher(configWithCrashDelay(binary, -5)).buildArgv(binary);
+
+        assertFalse(argv.contains("--crash-after-seconds"), "argv: " + argv);
     }
 
     @Test
@@ -377,6 +457,36 @@ final class MockGameLauncherTest {
     /** As {@link #configWithBinary(Path)}, with an explicit mock-game launch delay. */
     private static MockClientConfig configWithLaunchDelay(final Path binary, final int seconds) {
         return configWithBinaryAndPlayerId(binary, null, seconds);
+    }
+
+    /** As {@link #configWithBinary(Path)}, with an explicit mock-game crash delay (WBS-5.2). */
+    private static MockClientConfig configWithCrashDelay(final Path binary, final int seconds) {
+        return configWithFlags(binary, "--mock-game-crash-after-seconds=" + seconds);
+    }
+
+    /**
+     * As {@link #configWithBinary(Path)}, plus arbitrary extra CLI flags, parsed through {@link
+     * ConfigLoader} so the real option names are exercised.
+     *
+     * @param binary the stub mock-game binary
+     * @param extra flags appended after the minimal valid set
+     * @return the loaded config
+     */
+    private static MockClientConfig configWithFlags(final Path binary, final String... extra) {
+        List<String> args =
+                new ArrayList<>(
+                        List.of(
+                                "--lobby-websocket-url=wss://lobby.faforever.xyz",
+                                "--oauth-token-url=https://hydra.faforever.xyz/oauth2/token",
+                                "--oauth-auth-endpoint=https://hydra.faforever.xyz/oauth2/auth",
+                                "--oauth-redirect-uri=http://127.0.0.1",
+                                "--oauth-scopes=openid offline lobby",
+                                "--oauth-client-id=95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+                                "--oauth-refresh-token-file=/nonexistent/test-refresh-token",
+                                "--unique-id=00000000-0000-0000-0000-000000000000",
+                                "--mock-game-binary-path=" + binary));
+        args.addAll(List.of(extra));
+        return ConfigLoader.load(args.toArray(new String[0]), Map.of()).orElseThrow();
     }
 
     private static MockClientConfig configWithBinaryAndPlayerId(

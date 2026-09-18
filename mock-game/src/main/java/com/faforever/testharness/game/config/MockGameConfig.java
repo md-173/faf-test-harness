@@ -37,6 +37,9 @@ import java.util.Optional;
  * @param udpDropPercent percentage of outbound peer datagrams the UDP sender suppresses, {@code 0}
  *     (the default) to {@code 100} — the network-fault-injection knob of WBS-5.1. Zero is the
  *     behaviour that existed before the flag
+ * @param crashAfterSeconds how long after the game enters a real session it halts the JVM without
+ *     an orderly shutdown, standing in for a game crash (WBS-5.2); negative, the default, never
+ *     crashes. Read through {@link #crashDelay()} rather than directly
  */
 public record MockGameConfig(
         int gpgNetPort,
@@ -47,7 +50,8 @@ public record MockGameConfig(
         Map<String, String> gameOptions,
         int launchDelaySeconds,
         int lobbyTimeoutSeconds,
-        int udpDropPercent) {
+        int udpDropPercent,
+        int crashAfterSeconds) {
 
     /**
      * The auto-launch delay as the lifecycle wants it: a duration to arm the timer with, or empty
@@ -85,5 +89,23 @@ public record MockGameConfig(
         return lobbyTimeoutSeconds < 0
                 ? Optional.empty()
                 : Optional.of(Duration.ofSeconds(lobbyTimeoutSeconds));
+    }
+
+    /**
+     * The injected-crash delay as the lifecycle wants it: a duration to arm the crash timer with,
+     * or empty when this game must never crash (WBS-5.2).
+     *
+     * <p>Mirrors {@link #launchDelay()} exactly, negative sentinel included, because the two are
+     * the same kind of knob and an operator who has learned one should not have to learn the other.
+     * That makes {@code 0} a real value rather than a second way of spelling "off": it arms the
+     * crash the instant the game enters a session, which is the shortest fault the flag can express
+     * and the one a deterministic test wants.
+     *
+     * @return the delay to arm the crash timer with, or empty to never crash
+     */
+    public Optional<Duration> crashDelay() {
+        return crashAfterSeconds < 0
+                ? Optional.empty()
+                : Optional.of(Duration.ofSeconds(crashAfterSeconds));
     }
 }
