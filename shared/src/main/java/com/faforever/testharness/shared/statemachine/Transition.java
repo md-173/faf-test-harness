@@ -1,5 +1,6 @@
 package com.faforever.testharness.shared.statemachine;
 
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,9 +73,13 @@ public class Transition {
      * it.
      *
      * @param event the event that triggers this transition.
+     * @param onEnter called with the state immediately before its entry hooks run — i.e. exactly
+     *     when, and only when, this method is about to return that same state. Lets a caller (see
+     *     {@link StateMachine#cancel()}) recognize a state reached reentrantly from within its own
+     *     entry hook.
      * @return the new state, or {@code null} if no hooks fired and the state did not change.
      */
-    public State transition(Event event) {
+    public State transition(Event event, Consumer<State> onEnter) {
         if (action != null) {
             try {
                 action.accept(event);
@@ -82,6 +87,7 @@ public class Transition {
                 if (e.getFailureState() != null) {
                     from.exit();
                     State s = e.getFailureState();
+                    onEnter.accept(s);
                     s.entry();
                     return s;
                 } else {
@@ -113,6 +119,7 @@ public class Transition {
             return null;
         }
         from.exit();
+        onEnter.accept(to);
         to.entry();
         return to;
     }
