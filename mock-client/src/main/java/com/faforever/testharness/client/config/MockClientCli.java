@@ -171,11 +171,17 @@ public final class MockClientCli implements Callable<Integer> {
                             + "--oauth-refresh-token-file.")
     private Path oauthAccessTokenFile;
 
-    /** Stable hardware identifier sent in the lobby auth message. */
+    /**
+     * Optional stable hardware identifier sent in the lobby auth message. If {@code
+     * --uid-binary-path} is set, used by tests that do not connect to the live lobby server. . Must
+     * set exactly one of this or {@code --uid-binary-path} for a valid configuration.
+     */
     @Option(
             names = "--unique-id",
             scope = ScopeType.INHERIT,
-            description = "Stable hardware identifier sent in the lobby auth message.")
+            description =
+                    "Stable hardware identifier sent in the lobby auth message. "
+                            + "Mutually exclusive with --uid-binary-path.")
     private String uniqueId;
 
     /** Client version string sent in the lobby {@code ask_session} message. */
@@ -200,6 +206,8 @@ public final class MockClientCli implements Callable<Integer> {
 
     /**
      * Optional path to the {@code faf-uid} binary used to generate a real lobby {@code unique_id}.
+     * Required for a live lobby connection (since the lobby rejects a static id). Must set exactly
+     * one of this or {@code --unique-id} for a valid configuration.
      */
     @Option(
             names = "--uid-binary-path",
@@ -208,7 +216,7 @@ public final class MockClientCli implements Callable<Integer> {
                     "Optional path to the FAF faf-uid binary. When set, the auth handshake runs "
                             + "'<path> <session>' and sends its output as unique_id (the lobby's "
                             + "policy server requires a real RSA-encrypted UID). When unset, the "
-                            + "static --unique-id is sent.")
+                            + "static --unique-id is sent. Mutually exclusive with --unique-id.")
     private Path uidBinaryPath;
 
     /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
@@ -528,7 +536,7 @@ public final class MockClientCli implements Callable<Integer> {
                 oauthClientId,
                 refreshTokenFile,
                 accessTokenFile,
-                uniqueId,
+                Optional.ofNullable(uniqueId),
                 clientVersion,
                 userAgent,
                 Optional.ofNullable(uidBinaryPath),

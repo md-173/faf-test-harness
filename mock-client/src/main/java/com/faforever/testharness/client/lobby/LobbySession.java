@@ -74,7 +74,7 @@ public final class LobbySession {
             final String uniqueId,
             final String clientVersion,
             final String userAgent) {
-        this(connection, uniqueId, clientVersion, userAgent, Optional.empty());
+        this(connection, Optional.of(uniqueId), clientVersion, userAgent, Optional.empty());
     }
 
     /**
@@ -82,20 +82,51 @@ public final class LobbySession {
      *
      * @param connection a {@link LobbyConnection} that has not yet been {@link
      *     LobbyConnection#connect() connected}
-     * @param uniqueId fallback hardware identifier used when {@code uidBinaryPath} is empty
      * @param clientVersion {@code version} field sent in {@code ask_session}
      * @param userAgent {@code user_agent} field sent in {@code ask_session}
      * @param uidBinaryPath optional path to the {@code faf-uid} binary (see {@link LobbyHandshake})
      */
     public LobbySession(
             final LobbyConnection connection,
-            final String uniqueId,
+            final String clientVersion,
+            final String userAgent,
+            final Path uidBinaryPath) {
+        this(connection, Optional.empty(), clientVersion, userAgent, Optional.of(uidBinaryPath));
+    }
+
+    /**
+     * Bind a session that either derives its {@code unique_id} from the {@code faf-uid} binary if
+     * {@code uidBinaryPath} exists or or from a static {@code uniqueId} if that is not set.
+     *
+     * @param connection a {@link LobbyConnection} that has not yet been {@link
+     *     LobbyConnection#connect() connected}
+     * @param uniqueId hardware identifier hash sent in the {@code auth} payload
+     * @param clientVersion {@code version} field sent in {@code ask_session}
+     * @param userAgent {@code user_agent} field sent in {@code ask_session}
+     * @param uidBinaryPath optional path to the {@code faf-uid} binary (see {@link LobbyHandshake})
+     * @throws IllegalArgumentException if {@code uniqueId} and {@code uidBinaryPath} are either
+     *     both absent or both present.
+     */
+    public LobbySession(
+            final LobbyConnection connection,
+            final Optional<String> uniqueId,
             final String clientVersion,
             final String userAgent,
             final Optional<Path> uidBinaryPath) {
+        if ((uniqueId.isEmpty() && uidBinaryPath.isEmpty())
+                || (uniqueId.isPresent() && uidBinaryPath.isPresent())) {
+            throw new IllegalArgumentException(
+                    "Exactly one of uniqueId or uidBinaryPath must be present");
+        }
+
+        if (uniqueId.isPresent()) {
+            this.handshake =
+                    new LobbyHandshake(connection, uniqueId.get(), clientVersion, userAgent);
+        } else {
+            this.handshake =
+                    new LobbyHandshake(connection, clientVersion, userAgent, uidBinaryPath.get());
+        }
         this.connection = connection;
-        this.handshake =
-                new LobbyHandshake(connection, uniqueId, clientVersion, userAgent, uidBinaryPath);
         connection.onDisconnect(
                 event -> {
                     this.disconnectEvent = event;
