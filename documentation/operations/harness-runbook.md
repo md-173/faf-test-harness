@@ -927,16 +927,19 @@ joiner, both real adapters, both real mock games, through the live lobby —
 and passes or fails on its own, with nothing to assert by hand:
 
 ```bash
+./gradlew :mock-client:installDist
 ./mock-client/build/install/mock-client/bin/mock-client session --config mock-client.json \
   --peers=2 \
   --peer-refresh-token-file=.secrets/refresh_token.txt,.secrets/refresh_token_b.txt
 ```
 
+Run both from the repo root — the credential paths above are relative (§5).
+
 `--config mock-client.json` supplies what §4 already has you write — the
 lobby URL, OAuth endpoints, `uidBinaryPath`, and the adapter/game binary
-paths, since every peer shares them — except its `oauthRefreshTokenFile`
-field, which `session` ignores entirely in favour of
-`--peer-refresh-token-file`: one file per peer, host first, comma- or
+paths, since every peer shares them — except its `oauthRefreshTokenFile` and
+`oauthAccessTokenFile` fields, both of which `session` ignores entirely in
+favour of the per-peer flags: one file per peer, host first, comma- or
 flag-separated. `2` is `--peers`'s own default, shown only for clarity. A
 pre-signed access-token file works the same way on `--peer-access-token-file`
 instead (§9.1). `mock-client session --help` and
@@ -944,7 +947,7 @@ instead (§9.1). `mock-client session --help` and
 the full flag reference, the exit-code table, and the credential-layering
 rule for when both flags are set — not restated here.
 
-A clean run exits `0` and logs exactly one line:
+A clean run exits `0` and logs exactly one verdict line:
 
 ```text
 session: PASS - 2 peers, full mesh and two-way game traffic, nothing left running
@@ -952,11 +955,14 @@ session: PASS - 2 peers, full mesh and two-way game traffic, nothing left runnin
 
 A failed checkpoint exits non-zero and logs `session: FAIL <peer>: <stage>:
 <detail>` instead — the peer and stage name what did not happen (`welcome`,
-`HOSTING`/`JOINING`, `full mesh`, `traffic`). A bad invocation — a missing
-binary, fewer credential files than peers, two peers on one account, or a
-`--log-level` finer than INFO is not the failure; INFO or finer is required,
-see [§9.4](#94-per-instance-logs-and-attribution) — is refused before any
-peer logs in, so a broken invocation never spends a rotated refresh token.
+`HOSTING`/`JOINING`, `full mesh`, `traffic`). A bad invocation (a missing
+binary, fewer credential files than peers, two peers sharing one credential
+file, or a `--log-level` above INFO, since INFO or finer is required, see
+[§9.4](#94-per-instance-logs-and-attribution)) is refused before any peer
+logs in, so a broken invocation never spends a rotated refresh token. Two
+peers on one account are refused before login only on the access-token
+channel; on the refresh-token channel this surfaces later, at the joiner's
+`welcome` (§9.1), by which point both tokens have rotated.
 
 **The same orchestration, if you would rather assert it than read a log
 line.** `session` and `MultiPeerSessionLiveTest` both drive one
@@ -974,7 +980,7 @@ where `session --peers 2` isolates just the first:
 environment rather than a flag — `FAF_REFRESH_TOKEN_A` / `FAF_REFRESH_TOKEN_B`,
 defaulting to the same two files §9.1 has you bootstrap — and a missing
 prerequisite **skips** the case it affects rather than failing it
-(`missingPrerequisites`, same file); a skip is not a pass.
+(`missingPrerequisites`, `MultiPeerSessionLiveTest`); a skip is not a pass.
 
 ### 9.3 Port allocation
 
@@ -1018,9 +1024,11 @@ output.
 become every peer's fallback label, attributing every unlabelled line to one
 peer (`SessionCommand.call`,
 `mock-client/src/main/java/.../cli/SessionCommand.java`). It also **refuses
-a `--log-level` finer than INFO**: the game-traffic checkpoint reads the
-games' own INFO progress lines, and neither the games nor this JVM emit them
-above that level (`MultiPeerSession`'s constructor, same package). Both are
+a `--log-level` above INFO** (WARN or ERROR): the game-traffic checkpoint
+reads the games' own INFO progress lines, and neither the games nor this JVM
+emit them above that level. INFO or finer is required; DEBUG and TRACE are
+fine (`MultiPeerSession`'s constructor,
+`mock-client/src/main/java/.../session/MultiPeerSession.java`). Both are
 usage errors, refused before any peer logs in (§9.2) — a CI job driving
 `session` hits the same two refusals and should not set either.
 
@@ -1031,7 +1039,7 @@ field naming the peer, and the JSONL contract exposes it as the `instance`
 field on every record (`mock-client/README.md`'s harness log contract
 documents its exact shape; not restated here). Every peer's own lines, its
 adapter's, and its game's are therefore already attributable in the shared
-`mock-client/logs/test-harness.jsonl` and each peer's own
+`mock-client/logs/mockclient.jsonl` and each peer's own
 `mock-client/logs/mockgame-<label>.jsonl` (one JSONL per game, since
 concurrent games would otherwise share `mockgame.jsonl` — `MockGameLauncher`
 forwards the label to the child it spawns for exactly this reason). Filter
@@ -1057,7 +1065,7 @@ is a real capture, not a reconstruction:
 | Stage | Log line | Source |
 |-------|----------|--------|
 | A authenticated | `session ready: id=<idA> login=<loginA>` | `WelcomeStateSync` |
-| A hosts | `Sending game_host for title=faf-test-harness 4.3.1 <uuid>` | `MockClientLifecycle` |
+| A hosts | `Sending game_host for title=faf-test-harness 4.3.1 <uuid>` (the title is `faf-test-harness session <uuid>` on the `session` path §9.2 leads with, and `faf-test-harness 4.3.1 <uuid>` on the `MultiPeerSessionLiveTest` path) | `MockClientLifecycle` |
 | A's session up | `game launch: uid=<uid> mod=faf name=…`, then `state entry: STARTING_GAME` | `MockClientLifecycle` |
 | A's game in the lobby | `Received GPGNet message: GameState Idle` → `GameState Lobby` | `[ICEAdapter]` |
 | A is hosting | `Sent GPGNet message: HostGame scmp_007`, then `state entry: HOSTING` | `[ICEAdapter]` / `MockClientLifecycle` |
@@ -1068,7 +1076,7 @@ is a real capture, not a reconstruction:
 | Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
 | Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
 | **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
-| Teardown | `state entry: TERMINATED` → `session teardown complete`, on both peers | `MockClientLifecycle` |
+| Teardown | `state entry: TERMINATED` → `session teardown complete`, on both peers | `MockClientLifecycle` / `SessionTeardown` |
 
 `offer=true` on A is the server's own doing (`connect_to_host` in
 faf-server's `gameconnection.py` makes whichever side is already in the lobby
@@ -1093,10 +1101,11 @@ running`, plus two evidenced failure shapes for a bad invocation.*
 
 ### 9.6 Known limitations
 
-- **The lobby is reachable only from some networks.** `wss://ws.faforever.xyz`
-  is Cloudflare-fronted and publicly reachable — no VPN or allowlist needed —
-  but §3/§8 already found this worth confirming per-network; the same probe
-  applies here.
+- **The lobby endpoint is public, but the path to it is still yours to prove.**
+  `wss://ws.faforever.xyz` is Cloudflare-fronted and needs no VPN or
+  allowlist, so a failure to reach it is local: DNS, a proxy, or an outbound
+  firewall rule. §3/§8 found this worth confirming per-network; the same
+  probe applies here.
 - **The run needs two real, seeded test accounts**, each with its own
   bootstrapped refresh token (§9.1) — there is no way to exercise this
   section with only the single account §3 bootstraps.
