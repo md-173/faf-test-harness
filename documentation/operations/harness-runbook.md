@@ -1468,6 +1468,8 @@ jobs:
           printf '%s' "$FAF_ACCESS_TOKEN_HOST" > "$TOKENS/host.txt"
           printf '%s' "$FAF_ACCESS_TOKEN_JOINER" > "$TOKENS/joiner.txt"
 
+      # First-party actions on major tags, as this repository's own workflows run them. A
+      # third-party action would take a commit SHA instead (CONTRIBUTING.md section 8).
       - uses: actions/checkout@v7
         timeout-minutes: 5
         with:
@@ -1715,4 +1717,4 @@ were repointed after the download step at jars built from this branch, since
 the download route is verified while the artifact it yields today is not the
 one this section describes. Two things were not done at all and are not
 claimed: the job has never been dispatched on a runner, which needs the
-repository's own secrets, and the four `uses:` steps have never run.*
+repository's own secrets, and its three `uses:` steps have never run.*
