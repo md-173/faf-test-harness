@@ -22,21 +22,21 @@ simulates a match, and reports a result. Both are driven by flags and exit codes
 ## What it can test
 
 Every row is a shipped command or flag. The account column is what the row needs, not
-what the harness needs overall: more than half of this runs on localhost with no FAF
-account at all.
+what the harness needs overall: half of this runs on localhost with no FAF account at
+all.
 
 | Capability | Command or flag | FAF account |
 | :--- | :--- | :--- |
 | Is a local adapter reachable | [`ice-smoke`](mock-client/README.md#subcommands) | no |
-| An adapter to talk to, and a GPGNet handshake by hand | [`launch-ice`, `launch-game`](mock-client/README.md#subcommands) | no |
-| GPGNet handshake against an adapter you started | [`mock-game`](mock-game/README.md) on its own | no |
+| Spawn an adapter with an RPC peer attached to it | [`launch-ice`](mock-client/README.md#subcommands) | no |
+| Drive a game through the GPGNet handshake | [`launch-game`](mock-client/README.md#subcommands), or [`mock-game`](mock-game/README.md) on its own | no |
 | One client through the live lobby | [`run`](mock-client/README.md#subcommands) | yes |
 | Matchmaking queue | [`run --queue-name`, `--queue-faction`](mock-client/README.md#field-reference) | yes |
-| Multi-peer session: full mesh, two-way game traffic | [`session --peers`](mock-client/README.md#subcommands), verified at 2 to 4, accepts up to 26 | one per peer |
+| Multi-peer session: full mesh, two-way game traffic | [`session --peers`](mock-client/README.md#subcommands), verified at 2 to 4 and accepting up to 26, though the 420 s session deadline does not grow with the count | one per peer |
 | ICE signalling delay | [`--ice-relay-delay-ms`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52) | yes |
-| UDP packet loss | [`--udp-drop-percent`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-udp-drop-percent` to inject it through a session | no on its own, yes through a session |
-| Game crash | [`--crash-after-seconds`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-crash-after-seconds` to inject it through a session | no on its own, yes through a session |
-| Token-file login, refresh or pre-signed access | [`--oauth-refresh-token-file`, `--oauth-access-token-file`](documentation/operations/harness-runbook.md#3-credentials) | yes |
+| UDP packet loss | [`--udp-drop-percent`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-udp-drop-percent` to inject it through `launch-game` or `session` | no |
+| Game crash | [`--crash-after-seconds`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-crash-after-seconds` to inject it through `launch-game` or `session` | no |
+| Token-file login, refresh or pre-signed access | [`run --oauth-refresh-token-file`, `--oauth-access-token-file`](documentation/operations/harness-runbook.md#3-credentials) | yes |
 
 To localise a failure rather than choose a capability, use
 [`component-isolation.md`](documentation/operations/component-isolation.md): it is the
@@ -53,17 +53,18 @@ flowchart LR
     end
     LOBBY["FAF lobby<br/>ws.faforever.xyz"]
     PEER["Peer: the same<br/>three processes"]
-    MC -->|"WebSocket, token read from a file"| LOBBY
+    MC <-->|"WebSocket, token read from a file"| LOBBY
     MC <-->|"JSON-RPC, loopback"| IA
     MG <-->|"GPGNet, loopback"| IA
-    IA <==>|"UDP game traffic"| PEER
+    IA <==>|"the games' UDP traffic, tunnelled"| PEER
     LOBBY -.->|"ICE candidate relay"| PEER
 ```
 
 Every player's machine runs those same three processes. The lobby relays ICE candidates
-during negotiation and never sees game traffic. The full symmetric version, with protocol
-labels sourced from the research specs, is in
-[`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md).
+during negotiation and never sees game traffic. The full symmetric version is in
+[`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md); note
+that its OAuth2 authorization-code edge predates the token-file channels the harness uses
+now.
 
 ## Quick start
 
@@ -72,14 +73,16 @@ Both mocks ship as self-contained jars on the
 pair:
 
 ```bash
-curl -s https://api.github.com/repos/md-173/faf-test-harness/releases/latest \
+curl -sf https://api.github.com/repos/md-173/faf-test-harness/releases/latest \
   | grep -o '"browser_download_url": *"[^"]*-all\.jar"' \
   | cut -d'"' -f4 \
-  | xargs -n1 curl -sfLO
+  | xargs -r -n1 curl -sfLO
 ```
 
 That leaves `mock-client-<version>-all.jar` and `mock-game-<version>-all.jar` in the
-working directory. To verify the download against the published checksums, see
+working directory. `-f` and `-r` matter: without them a rate-limited API reply leaves you
+with no jars and no error worth reading. To check the download against the digest the API
+publishes for every asset, see
 [runbook §2a](documentation/operations/harness-runbook.md#2a-the-jar-only-path-no-clone).
 
 ### Without a FAF account
@@ -100,22 +103,36 @@ connects to its GPGNet port, waits for the adapter to announce that connection b
 RPC, and tears everything down. About two seconds. Exit `0` means reachable; anything
 else names the phase that failed.
 
-**A game against an adapter you run yourself.**
+**A game through the GPGNet handshake.** The adapter will not serve a game until a
+JSON-RPC peer exists, so start one that holds a peer open, in its own terminal:
+
+```bash
+java -jar mock-client-<version>-all.jar launch-ice \
+  --ice-adapter-binary-path=faf-ice-adapter-3.3.14-nojfx.jar --duration-seconds=60
+```
+
+Then run the game against it:
 
 ```bash
 java -jar mock-game-<version>-all.jar --gpgnet-port=7237 --lobby-port=7238 \
   --player-id=1 --player-login=test --game-uid=0
 ```
 
-That gives `CreateLobby`, `GameState Idle`, `GameState Lobby`, each frame forwarded to
-your JSON-RPC peer as `onGpgNetMessageReceived`, which is where you assert. Attach that
-peer before the game connects, or the adapter's client setup blocks. The login in
-`CreateLobby` comes from the adapter's own `--login`, not `--player-login`.
+Within a few milliseconds of the game connecting you get the whole handshake: the game's
+`GameState Idle`, the adapter's `CreateLobby`, and the game's `GameState Lobby`. Only the
+game's two frames reach your JSON-RPC peer, as `onGpgNetMessageReceived`, and that is
+where you assert. `CreateLobby` travels the other way, adapter to game, so it never
+appears there. Its login comes from the adapter's own `--login`, not `--player-login`.
+
+If you would rather drive your own adapter build, start it yourself instead of using
+`launch-ice`, and give it the headless logback override described in
+[`ice-adapter-setup.md`](documentation/operations/ice-adapter-setup.md); without it the
+adapter fails on a missing JavaFX class.
 
 The game then waits in the lobby and does not exit on its own, because it is modelling a
 game sitting in a lobby. Send `hostGame` or `joinGame` over the adapter's RPC to drive it
 into a match, stop the process once you have asserted what you came for, or bound the
-wait with `--lobby-timeout-seconds` (0.3.0 or newer), which gives up and exits `75`.
+wait with `--lobby-timeout-seconds`, which gives up and exits `75`.
 
 ### With FAF accounts: a full session
 
@@ -135,11 +152,10 @@ java -jar mock-client-<version>-all.jar \
     --peer-access-token-file=./joiner.txt
 ```
 
-Needs 0.3.0 or newer. One FAF test account per peer and one credential file each: a
-pre-signed access token as above, or a refresh token with
-`--peer-refresh-token-file`, which also needs `--oauth-token-url` and
-`--oauth-client-id`. Obtaining either is
-[runbook §3](documentation/operations/harness-runbook.md#3-credentials). The complete
+One FAF test account per peer and one credential file each: a pre-signed access token as
+above, or a refresh token with `--peer-refresh-token-file`, which also needs
+`--oauth-token-url` and `--oauth-client-id`. Obtaining either, and the `faf-uid` binary,
+is [runbook §3](documentation/operations/harness-runbook.md#3-credentials). The complete
 flag list is [`mock-client/README.md`](mock-client/README.md#field-reference), and the
 exit codes are [its own table](mock-client/README.md#exit-codes);
 [`mock-game`](mock-game/README.md#exit-codes) has a separate one.
@@ -160,7 +176,7 @@ outside anyone's control, so a red run is a finding, not a reason to block a mer
 
 | | |
 | :--- | :--- |
-| Java | 21 or newer to run the jars. Exactly 21 to build: there is no foojay resolver, so Gradle cannot fetch a missing toolchain. |
+| Java | 21 or newer to run the jars. To build, a JDK 21 must be installed and auto-detectable: there is no foojay resolver, so Gradle cannot fetch a missing toolchain. The JDK running Gradle itself may be newer. |
 | `faf-ice-adapter` | 3.3.14, pinned in [`gradle.properties`](gradle.properties). It is the current `java-ice-adapter` release and the version `downlords-faf-client` pins, so the harness tracks what the real client ships. |
 | `faf-uid` | Required for any live session: the lobby's policy server rejects a placeholder `unique_id`, and login ends in `{"command":"invalid"}` without it. CI provisions `v4.0.7`, which is also what `downlords-faf-client` pins. |
 | Lobby | The test lobby `ws.faforever.xyz`, publicly reachable. Never the production lobby. |
