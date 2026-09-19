@@ -36,7 +36,8 @@ import java.util.OptionalInt;
  *     where both are configured the higher layer wins (see {@code
  *     MockClientCli#toValidatedConfig}), with a same-layer tie rejected here. A file rather than a
  *     bare flag so the token stays out of the process table and out of CI logs
- * @param uniqueId stable hardware identifier sent in the lobby auth message
+ * @param uniqueId stable hardware identifier sent in the lobby auth message, sent when {@code
+ *     uidBinaryPath} is empty.
  * @param clientVersion client version string sent in the {@code ask_session} message (a required
  *     field of that command; lobby-protocol-spec.md §3)
  * @param userAgent client identifier string sent in the {@code ask_session} message (a required
@@ -101,7 +102,7 @@ public record MockClientConfig(
         String oauthClientId,
         Path oauthRefreshTokenFile,
         Optional<Path> oauthAccessTokenFile,
-        String uniqueId,
+        Optional<String> uniqueId,
         String clientVersion,
         String userAgent,
         Optional<Path> uidBinaryPath,
@@ -170,9 +171,10 @@ public record MockClientConfig(
             missing.add("--lobby-websocket-url");
         }
 
-        if (uniqueId == null || uniqueId.isBlank()) {
-            missing.add("--unique-id");
-        }
+        // Ensure options are not null.
+        uidBinaryPath = uidBinaryPath == null ? Optional.empty() : uidBinaryPath;
+        uniqueId = uniqueId == null ? Optional.empty() : uniqueId;
+
         // Normalised, not merely tolerated. TokenSources.fromConfig dereferences this
         // unguarded, so leaving a null Optional on the record means the two files disagree about
         // whether null is legal — latent today, because every caller passes Optional.ofNullable,
@@ -246,6 +248,23 @@ public record MockClientConfig(
             throw new IllegalArgumentException(
                     "iceRelayDelayMs must not be negative: " + iceRelayDelayMs);
         }
+
+        if (uidBinaryPath.isEmpty() && uniqueId.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "no UID source supplied, set exactly one of "
+                            + "--uid-binary-path or --unique-id. "
+                            + "Note that --uid-binary-path is "
+                            + "required for live lobby communication.");
+        }
+
+        if (uidBinaryPath.isPresent() && uniqueId.isPresent()) {
+            throw new IllegalArgumentException(
+                    "both UID source supplied, set only one of "
+                            + "--uid-binary-path or --unique-id. "
+                            + "Note that --uid-binary-path is "
+                            + "required for live lobby communication.");
+        }
+
         // Hosting, joining and queueing are three ways to spend the same session, and the client
         // sends every one that is configured on the same IDLE entry. Combining them is always a
         // mistake: game_host plus game_matchmaking start puts the client in a custom game while

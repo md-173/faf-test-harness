@@ -360,7 +360,6 @@ final class MultiPeerSessionTest {
                         "--oauth-scopes=openid offline lobby extra",
                         "--oauth-client-id=client-id-1",
                         credentialFlag,
-                        "--unique-id=11111111-1111-1111-1111-111111111111",
                         "--client-version=1.2.3-distinct",
                         "--user-agent=agent-1",
                         "--uid-binary-path=" + dir.resolve("uid-binary"),
