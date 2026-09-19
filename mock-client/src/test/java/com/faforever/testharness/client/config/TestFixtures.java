@@ -8,6 +8,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 
 final class TestFixtures {
 
@@ -105,7 +106,7 @@ final class TestFixtures {
         assertEquals(OAUTH_SCOPES, config.oauthScopes());
         assertEquals(OAUTH_CLIENT_ID, config.oauthClientId());
         assertEquals(Path.of(OAUTH_REFRESH_TOKEN_FILE), config.oauthRefreshTokenFile());
-        assertEquals(UNIQUE_ID, config.uniqueId());
+        assertEquals(Optional.of(UNIQUE_ID), config.uniqueId());
         assertEquals(Path.of(ICE_ADAPTER_BIN), config.iceAdapterBinaryPath());
         assertEquals(Path.of(MOCK_GAME_BIN), config.mockGameBinaryPath());
         assertEquals(7236, config.iceAdapterRpcPort());
