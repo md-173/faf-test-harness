@@ -327,13 +327,15 @@ assets.
 
 ### Cutting one
 
-1. **Prove the live path at the commit you are about to cut.** Actions → Live integration
-   (advisory) → Run workflow, against that commit, with the two access-token secrets minted
-   beforehand and deleted after (§ 3). The gate in step 3 runs `check`, which excludes the
+1. **Prove the live path on the branch you are about to cut.** Actions → Live integration
+   (advisory) → Run workflow, with "Use workflow from" set to that branch, and the two
+   access-token secrets minted beforehand and deleted after (§ 3). `workflow_dispatch` takes a
+   branch or a tag, never a bare commit, so confirm the tip is still the commit you mean and
+   re-dispatch if it moves before step 2. The gate in step 3 runs `check`, which excludes the
    `integration` tag, so nothing else in this procedure says whether the client, adapter and game
    still complete a session against the real lobby. It builds its own snapshot jars from source
    rather than the release assets, so it does not replace the draft checks in step 4. Green alone is
-   not the verdict: the evidence step must emit no warning, which is what shows two `faf-uid` blobs
+   not the verdict: the evidence step must emit no warning, which is what shows two `faf-uid` lines
    and two distinct logins. A red run stops the cut until you know which kind it is: the shared lobby
    being unavailable is a finding about the environment, a failed checkpoint is a finding about the
    release.
