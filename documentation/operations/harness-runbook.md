@@ -170,8 +170,9 @@ These two ports are not free to choose: the game rejects a lobby port that does
 not match the adapter's, so use whatever the adapter you started was given. Its
 exit codes are `0` (played a match through), `69` (the adapter went away
 mid-session), `70` (never reached the adapter, or some other runtime failure) and
-`2` (bad invocation); the root [`README.md`](../../README.md) carries them in
-context, and `component-isolation.md` row 5 records a real standalone run.
+`2` (bad invocation); [`mock-game/README.md`](../../mock-game/README.md#exit-codes)
+carries the full table, and `component-isolation.md` row 5 records a real
+standalone run.
 
 Note that a game nothing drives into a role waits in the lobby indefinitely, by
 design — so in CI it is your step timeout that ends the run, and the exit code is
