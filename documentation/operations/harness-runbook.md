@@ -691,7 +691,6 @@ token file:
 ./mock-client/build/install/mock-client/bin/mock-client run \
   --oauth-access-token-file=.secrets/access_token.jwt \
   --lobby-websocket-url=wss://ws.faforever.xyz \
-  --unique-id=placeholder \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./faf-ice-adapter.jar \
   --mock-game-binary-path=mock-game/build/libs/mock-game-<version>-all.jar \
@@ -702,9 +701,7 @@ token file:
   --mock-game-launch-delay-seconds=-1
 ```
 
-Four of those are less obvious than they look. `--unique-id` satisfies the
-required field and `--uid-binary-path` then overrides it at handshake time with
-real `faf-uid` output, so both are needed. The four `--host-*` options have to be
+Four of those are less obvious than they look. The four `--host-*` options have to be
 set together or not at all; a partial set is rejected by name, and omitting all
 four leaves the session at IDLE rather than HOSTING.
 `--mock-game-launch-delay-seconds=-1` is what makes HOSTING an observable state:
