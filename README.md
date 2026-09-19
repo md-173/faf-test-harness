@@ -1,81 +1,66 @@
 # faf-test-harness
 
+[![CI](https://github.com/md-173/faf-test-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/md-173/faf-test-harness/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/md-173/faf-test-harness)](https://github.com/md-173/faf-test-harness/releases/latest)
+[![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![Java 21](https://img.shields.io/badge/Java-21-orange)](https://adoptium.net/temurin/releases/?version=21)
+
 A headless CLI test harness for [Forged Alliance Forever](https://github.com/FAForever).
 Testing any one FAF component has always meant standing up the others: you cannot
 exercise the lobby server without a client, and the ICE adapter's peer-connection path
 needs two games and two clients behind it. This harness supplies the missing halves as
-scriptable processes, so a component can be tested on its own.
+scriptable processes, so a component can be tested on its own, unattended, in CI.
 
-It ships two mocks. **Mock Client** stands in for the
-[FAF client](https://github.com/FAForever/downlords-faf-client). It authenticates
-against the lobby over WebSocket, hosts or joins a game, launches and manages a real
-[`faf-ice-adapter`](https://github.com/FAForever/java-ice-adapter) subprocess, and
-relays ICE signalling. **Mock Game** stands in for the Supreme Commander binary, the
-one component FAF has never replaced. It speaks the real GPGNet wire protocol to the
-adapter, simulates a match, and reports a result.
+It is for the people who maintain those components. **Mock Client** stands in for the
+[FAF client](https://github.com/FAForever/downlords-faf-client): it authenticates against
+the lobby over WebSocket, hosts or joins a game, launches a real
+[`faf-ice-adapter`](https://github.com/FAForever/java-ice-adapter) subprocess, and relays
+ICE signalling. **Mock Game** stands in for the Supreme Commander binary, the one
+component FAF has never replaced: it speaks the real GPGNet wire protocol to the adapter,
+simulates a match, and reports a result. Both are driven by flags and exit codes.
 
-Both are driven by flags and exit codes, so they compose into CI.
+## What it can test
 
-## Try it
+Every row is a shipped command or flag. The account column is what the row needs, not
+what the harness needs overall: more than half of this runs on localhost with no FAF
+account at all.
 
-Both mocks are published as self-contained jars on the
-[releases page](https://github.com/md-173/faf-test-harness/releases); they need a
-**Java 21 or newer** runtime. The check below also needs the real adapter:
-`faf-ice-adapter-3.3.14-nojfx.jar` from
-[java-ice-adapter](https://github.com/FAForever/java-ice-adapter/releases/tag/3.3.14),
-which is the version this harness pins.
+| Capability | Command or flag | FAF account |
+| :--- | :--- | :--- |
+| Is a local adapter reachable | [`ice-smoke`](mock-client/README.md#subcommands) | no |
+| An adapter to talk to, and a GPGNet handshake by hand | [`launch-ice`, `launch-game`](mock-client/README.md#subcommands) | no |
+| GPGNet handshake against an adapter you started | [`mock-game`](mock-game/README.md) on its own | no |
+| One client through the live lobby | [`run`](mock-client/README.md#subcommands) | yes |
+| Matchmaking queue | [`run --queue-name`, `--queue-faction`](mock-client/README.md#field-reference) | yes |
+| Multi-peer session: full mesh, two-way game traffic | [`session --peers`](mock-client/README.md#subcommands), verified at 2 to 4, accepts up to 26 | one per peer |
+| ICE signalling delay | [`--ice-relay-delay-ms`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52) | yes |
+| UDP packet loss | [`--udp-drop-percent`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-udp-drop-percent` to inject it through a session | no on its own, yes through a session |
+| Game crash | [`--crash-after-seconds`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-crash-after-seconds` to inject it through a session | no on its own, yes through a session |
+| Token-file login, refresh or pre-signed access | [`--oauth-refresh-token-file`, `--oauth-access-token-file`](documentation/operations/harness-runbook.md#3-credentials) | yes |
 
-```bash
-java -jar mock-client-0.2.0-all.jar ice-smoke \
-  --ice-adapter-binary-path=faf-ice-adapter-3.3.14-nojfx.jar
+To localise a failure rather than choose a capability, use
+[`component-isolation.md`](documentation/operations/component-isolation.md): it is the
+matrix that peels one seam at a time off a failing end-to-end run.
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    subgraph local["Your machine"]
+        MC["mock-client<br/>(mock)"]
+        IA["faf-ice-adapter<br/>(real, pinned 3.3.14)"]
+        MG["mock-game<br/>(mock)"]
+    end
+    LOBBY["FAF lobby<br/>ws.faforever.xyz"]
+    PEER["Peer: the same<br/>three processes"]
+    MC -->|"WebSocket, token read from a file"| LOBBY
+    MC <-->|"JSON-RPC, loopback"| IA
+    MG <-->|"GPGNet, loopback"| IA
+    IA <==>|"UDP game traffic"| PEER
+    LOBBY -.->|"ICE candidate relay"| PEER
 ```
 
-`ice-smoke` spawns the adapter, connects to its JSON-RPC port, sends one request,
-connects to its GPGNet port, waits for the adapter to announce that connection back
-over RPC, and tears everything down. About two seconds, no FAF account, localhost
-only. Exit `0` means reachable; anything else names the phase that failed.
-
-If you already run an adapter of your own, drive a real game against it directly:
-
-```bash
-java -jar mock-game-0.2.0-all.jar --gpgnet-port=7237 --lobby-port=7238 \
-  --player-id=1 --player-login=test --game-uid=0
-```
-
-That gives `CreateLobby` → `GameState Idle` → `GameState Lobby`, with each frame
-forwarded to your JSON-RPC peer as `onGpgNetMessageReceived` — which is where you
-assert. Attach that peer before the game connects, or the adapter's client setup
-blocks. Note the login in `CreateLobby` comes from the adapter's own `--login`, not
-`--player-login`.
-
-**The game then waits in the lobby and does not exit on its own.** It is modelling a
-game sitting in a lobby, so it advances only when told to: send `hostGame` or
-`joinGame` over the adapter's RPC to drive it into a match, or stop the process once
-you have asserted what you came for. In CI you can either give it your own timeout, or
-hand the job to the game with `--lobby-timeout-seconds <n>`, which gives up after `n`
-seconds in the lobby and exits `75` rather than waiting forever. A run you terminate
-yourself exits on the signal instead, `143` for `SIGTERM` and `130` for Ctrl-C, rather
-than through the harness's own codes. The harness codes apply to runs that finish on
-their own: `0` means the game played a match through to `GameEnded`; `69`
-(`ADAPTER_LOST`) means the adapter went away mid-session; `70` (`RUNTIME`) means it
-never reached the adapter, or the run failed some other way; `75` (`LOBBY_TIMEOUT`)
-means it gave up waiting in the lobby, which is an outcome rather than a failure; `2`
-is a bad invocation.
-
-Those two commands are the whole no-clone path. The full client to adapter to game
-path, and a session against the live lobby, are in the runbook.
-
-## Documentation
-
-- **Start here.** Setup, the no-lobby path, credentials, and running one client
-  session: [documentation/operations/harness-runbook.md](documentation/operations/harness-runbook.md)
-- What can be tested in isolation, and which command or Gradle filter proves each
-  seam: [documentation/operations/component-isolation.md](documentation/operations/component-isolation.md)
-- Mock Client subcommands, flags, config keys and exit codes:
-  [mock-client/README.md](mock-client/README.md)
-- Mock Game flags, exit codes, and the log lines a pipeline can assert on:
-  [mock-game/README.md](mock-game/README.md)
-- Provisioning the real ICE adapter, and the upstream quirks worked around:
-  [documentation/operations/ice-adapter-setup.md](documentation/operations/ice-adapter-setup.md)
-- Captured end-to-end demo transcripts: [documentation/demos/README.md](documentation/demos/README.md)
-- Contributor workflow and conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
+Every player's machine runs those same three processes. The lobby relays ICE candidates
+during negotiation and never sees game traffic. The full symmetric version, with protocol
+labels sourced from the research specs, is in
+[`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md).
