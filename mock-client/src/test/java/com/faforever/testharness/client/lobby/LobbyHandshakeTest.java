@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -173,8 +172,7 @@ final class LobbyHandshakeTest {
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(fakeUid));
+        LobbyHandshake handshake = new LobbyHandshake(lobby, "1.0.0", "ua", fakeUid);
         handshake.perform(fixedToken("jwt-token-abc"));
 
         server.pollReceived(2, TimeUnit.SECONDS); // ask_session
@@ -186,7 +184,7 @@ final class LobbyHandshakeTest {
     }
 
     @Test
-    void failingUidBinaryFallsBackToStaticUniqueId(@TempDir final Path dir) throws Exception {
+    void failingUidBinaryThrows(@TempDir final Path dir) throws Exception {
         assumeTrue(
                 !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
                 "POSIX-only: uses a shell script as a stand-in faf-uid binary");
@@ -200,35 +198,35 @@ final class LobbyHandshakeTest {
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(fakeUid));
-        handshake.perform(fixedToken("jwt-token-abc"));
+        LobbyHandshake handshake = new LobbyHandshake(lobby, "1.0.0", "ua", fakeUid);
+        CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
+        // uid only obtained after receiving the session command
         server.pollReceived(2, TimeUnit.SECONDS); // ask_session
-        server.broadcastText("{\"command\":\"session\",\"session\":13}");
+        server.broadcastText("{\"command\":\"session\",\"session\":99}");
 
-        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
-        assertEquals("auth", auth.get("command").asText());
-        assertEquals("static-uid", auth.get("unique_id").asText());
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
     }
 
     @Test
-    void missingUidBinaryFallsBackToStaticUniqueId() throws Exception {
+    void missingUidBinaryThrows() throws Exception {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         Path absent = Path.of("nonexistent", "faf-uid-does-not-exist");
-        LobbyHandshake handshake =
-                new LobbyHandshake(lobby, "static-uid", "1.0.0", "ua", Optional.of(absent));
-        handshake.perform(fixedToken("jwt-token-abc"));
+        LobbyHandshake handshake = new LobbyHandshake(lobby, "1.0.0", "ua", absent);
+        CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
+        // uid only obtained after receiving the session command
         server.pollReceived(2, TimeUnit.SECONDS); // ask_session
-        server.broadcastText("{\"command\":\"session\",\"session\":7}");
+        server.broadcastText("{\"command\":\"session\",\"session\":99}");
 
-        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
-        assertEquals("auth", auth.get("command").asText());
-        assertEquals("static-uid", auth.get("unique_id").asText());
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
     }
 
     private static void assertTrueExecutable(final Path file) {

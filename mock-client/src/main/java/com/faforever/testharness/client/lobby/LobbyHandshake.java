@@ -43,7 +43,7 @@ public final class LobbyHandshake {
     private final LobbyConnection connection;
 
     /** Hardware identifier hash sent in the {@code auth} message. Never logged. */
-    private final String uniqueId;
+    private final Optional<String> uniqueId;
 
     /** Client version string sent in {@code ask_session}; a required argument of that command. */
     private final String clientVersion;
@@ -84,23 +84,40 @@ public final class LobbyHandshake {
             final String uniqueId,
             final String clientVersion,
             final String userAgent) {
-        this(connection, uniqueId, clientVersion, userAgent, Optional.empty());
+        this(connection, Optional.of(uniqueId), clientVersion, userAgent, Optional.empty());
     }
 
     /**
      * Construct a handshake that derives its {@code unique_id} from the {@code faf-uid} binary.
      *
      * @param connection a connected {@link LobbyConnection}
-     * @param uniqueId fallback hardware identifier used when {@code uidBinaryPath} is empty or the
-     *     binary fails
      * @param clientVersion {@code version} field sent in {@code ask_session}
      * @param userAgent {@code user_agent} field sent in {@code ask_session}
-     * @param uidBinaryPath optional path to the {@code faf-uid} binary; when present it is run as
-     *     {@code <path> <session>} and its stdout becomes the {@code unique_id}
+     * @param uidBinaryPath path to the {@code faf-uid} binary; when present it is run as {@code
+     *     <path> <session>} and its stdout becomes the {@code unique_id}
      */
     public LobbyHandshake(
             final LobbyConnection connection,
-            final String uniqueId,
+            final String clientVersion,
+            final String userAgent,
+            final Path uidBinaryPath) {
+        this(connection, Optional.empty(), clientVersion, userAgent, Optional.of(uidBinaryPath));
+    }
+
+    /**
+     * Common constructor for both ways of constructing this object: with a {@code uniqueId} or with
+     * a {@code uidBinaryPath}.
+     *
+     * @param connection a connected {@link LobbyConnection}
+     * @param uniqueId hardware identifier hash sent in the {@code auth} payload
+     * @param clientVersion {@code version} field sent in {@code ask_session}
+     * @param userAgent {@code user_agent} field sent in {@code ask_session}
+     * @param uidBinaryPath path to the {@code faf-uid} binary; when present it is run as {@code
+     *     <path> <session>} and its stdout becomes the {@code unique_id}
+     */
+    private LobbyHandshake(
+            final LobbyConnection connection,
+            final Optional<String> uniqueId,
             final String clientVersion,
             final String userAgent,
             final Optional<Path> uidBinaryPath) {
@@ -184,10 +201,15 @@ public final class LobbyHandshake {
 
     private void sendAuth(final AccessToken token, final long session) {
         ObjectNode auth = mapper.createObjectNode();
-        auth.put("command", "auth");
-        auth.put("token", token.token());
-        auth.put("unique_id", resolveUniqueId(session));
-        auth.put("session", session);
+        try {
+            auth.put("command", "auth");
+            auth.put("token", token.token());
+            auth.put("unique_id", resolveUniqueId(session));
+            auth.put("session", session);
+        } catch (AuthenticationException e) {
+            result.completeExceptionally(e);
+            return;
+        }
         connection
                 .send(auth)
                 .exceptionally(
@@ -211,9 +233,12 @@ public final class LobbyHandshake {
      * @return the resolved unique_id string
      */
     private String resolveUniqueId(final long session) {
+        // When uidBinaryPath is not set, uniqueId is set instead.
+        // This is the path used in tests/non-live usage.
         if (uidBinaryPath.isEmpty()) {
-            return uniqueId;
+            return uniqueId.get();
         }
+
         String binary = uidBinaryPath.get().toString();
         try {
             Process process = new ProcessBuilder(binary, Long.toString(session)).start();
@@ -222,8 +247,9 @@ public final class LobbyHandshake {
             // small UID blob comfortably until the process exits.
             if (!process.waitFor(UID_BINARY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                LOG.warn("faf-uid timed out; falling back to configured unique_id");
-                return uniqueId;
+                LOG.warn(
+                        "faf-uid timed out; authentication cannot proceed without a generated uid");
+                throw new AuthenticationException("faf-uid timed out");
             }
             String output =
                     new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
@@ -233,20 +259,24 @@ public final class LobbyHandshake {
                         new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8)
                                 .strip();
                 LOG.warn(
-                        "faf-uid exited {}: {}; falling back to configured unique_id",
+                        "faf-uid exited {}: {}; authentication "
+                                + "cannot proceed without a generated uid",
                         process.exitValue(),
                         stderr.isEmpty() ? "<no stderr output>" : truncateForLog(stderr));
-                return uniqueId;
+                throw new AuthenticationException("faf-uid exited with a non-zero code");
             }
             LOG.info("generated unique_id via faf-uid ({} chars)", output.length());
             return output;
         } catch (IOException e) {
-            LOG.warn("faf-uid invocation failed ({}); falling back to configured unique_id", e);
-            return uniqueId;
+            LOG.warn(
+                    "faf-uid invocation failed ({}); authentication "
+                            + "cannot proceed without a generated uid",
+                    e);
+            throw new AuthenticationException("faf-uid invocation failed", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            LOG.warn("faf-uid interrupted; falling back to configured unique_id");
-            return uniqueId;
+            LOG.warn("faf-uid interrupted; authentication cannot proceed without a generated uid");
+            throw new AuthenticationException("faf-uid process interrupted", e);
         }
     }
 
