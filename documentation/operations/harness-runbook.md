@@ -22,7 +22,8 @@ any of them, and it does not restate their field reference, log-line contract,
 or developer conventions. Two Mock Clients on one box (WBS-4.3.1) are covered
 at [§9](#9-two-peer-sessions-wbs-431); three and four peers already run the
 same way (WBS-4.3.3) but this document's write-up of that shape is deferred —
-see the note at the end of that section.
+see the note at the end of that section. Running a session unattended in CI is
+[§11](#11-a-session-in-a-consumers-ci-wbs-421).
 
 ## 1. Prerequisites
 
@@ -1307,27 +1308,43 @@ by hand.
 
 ## 11. A session in a consumer's CI (WBS 4.2.1)
 
-[§9](#9-two-peer-sessions-wbs-431)'s reader is a person at a terminal with two
-accounts. This section's reader wires a workflow: a maintainer who wants a
-build of their own `faf-ice-adapter` driven through a real two-peer session
-against the live lobby, unattended, and a verdict they can read afterwards.
+Everything above this section assumes someone at a terminal. This section's
+reader wires a workflow: a maintainer who wants a build of their own
+`faf-ice-adapter` driven through a real two-peer session against the live
+lobby, unattended, and a verdict they can read afterwards.
 
-The job below is this repository's own `session` job
+The run itself is one command, from the published jars and nothing else. No
+clone, no Gradle:
+
+```bash
+java -jar mock-client-<version>-all.jar \
+  --lobby-websocket-url=wss://ws.faforever.xyz \
+  --unique-id=00000000-0000-0000-0000-000000000000 \
+  --uid-binary-path=./faf-uid \
+  --ice-adapter-binary-path=./your-adapter-build.jar \
+  --mock-game-binary-path=./mock-game-<version>-all.jar \
+  session \
+    --peers=2 \
+    --peer-access-token-file=./host.txt \
+    --peer-access-token-file=./joiner.txt
+```
+
+The job below is that command with everything a runner has to provision around
+it. It is this repository's own `session` job
 ([`live-integration.yml`](../../.github/workflows/live-integration.yml)) with
-its two Gradle steps replaced. It downloads the mock-client and mock-game jars
+its two Gradle steps replaced: it downloads the mock-client and mock-game jars
 from `releases/latest` ([§2a](#2a-the-jar-only-path-no-clone)) instead of
 building them, and it points `--ice-adapter-binary-path` at the adapter it just
-built instead of the pinned one. The session invocation itself is the same. The
-evidence-summary step is dropped, and the log upload fires on a cancelled run
-as well as a failed one.
+built instead of the pinned one. The evidence-summary step is dropped, and the
+log upload fires on a cancelled run as well as a failed one.
 
-What `session` does, how to drive it by hand and what its output means are §9's
-subject; the flag reference, the credential-layering rule and the exit-code
-table are [`mock-client/README.md`](../../mock-client/README.md)'s. Neither is
-restated here. Two refusals catch a job as readily as a person: `INSTANCE_NAME`
-must be unset, and `--log-level` must be INFO or finer. Both are refused before
-any process starts, for the reasons
-[§9.4](#94-per-instance-logs-and-attribution) gives.
+The flag reference, the credential-layering rule and the exit-code table are
+[`mock-client/README.md`](../../mock-client/README.md)'s, and are not restated
+here; the by-hand walkthrough for two peers lands in §9 with WBS-4.3.1. Two
+refusals catch a job as readily as a person: `INSTANCE_NAME` must be unset,
+since `session` labels each peer itself, and `--log-level` must be INFO or
+finer, since the traffic checkpoint reads the games' own INFO lines. Both are
+refused before any process starts.
 
 The host advertises its game with `friends` visibility (`MultiPeerSession`), so
 a dispatch does not put a test game on the public list. The joiners never need
@@ -1558,6 +1575,23 @@ jobs:
           if-no-files-found: warn
 ```
 
+### What the job can branch on
+
+Three exit codes, not two. A job that treats them as two reports its own
+mistakes as somebody else's.
+
+| Exit | What it means | What the job should do |
+|---|---|---|
+| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running. | Pass. |
+| `70` | A checkpoint failed, logged as `session: FAIL <peer>: <stage>: <detail>`, or a subprocess survived teardown and was killed. | Report it against the adapter under test, and keep the logs. |
+| `2` | A bad invocation: no credential list, fewer credential files than peers, two peers on one file, an unreadable or empty file, a missing binary, or `--log-level` above INFO. | Fix the job. Nothing started, so there is nothing to clean up. |
+
+Every `2` is refused before any process starts, which is what makes the
+distinction worth keeping: a job that folds `2` into `70` reports its own
+misconfiguration as a harness failure, and blames an adapter that never ran.
+The peer and the stage are named in the log line, not in the exit status, so a
+job cannot branch on them. Keep the log.
+
 ### What the job needs
 
 - **One credential per peer, still valid when the job runs.** `session` takes
@@ -1574,10 +1608,15 @@ jobs:
   why the job decodes `exp` itself in its first step. Mint each token after the
   queue clears rather than before it: the `concurrency` group makes a second
   dispatch wait, and a token minted at dispatch time can be dead by the time
-  the run starts. A refresh-token file works too
-  (`--peer-refresh-token-file`), at a price an unattended job should not pay:
-  Hydra rotates it on every use, so each run spends the secret and the account
-  needs re-bootstrapping afterwards.
+  the run starts.
+- **Not `--peer-refresh-token-file`, whatever it is worth at a terminal.**
+  Hydra rotates a refresh token on every use, the session rewrites the file in
+  place with the rotated value, and on a runner that file dies with the job. So
+  every run spends the secret, the stored copy is stale the moment the run
+  starts, and the account needs a browser re-bootstrap before the next one. The
+  by-hand two-peer section recommends the opposite for a person, and is right
+  to: there the rewrite is the point, because nothing has to be kept fresh by
+  hand. Unattended, that same rewrite is the whole cost.
 - **Test accounts nothing else uses, and a `concurrency` group keyed on them.**
   A second login as the same account signs the first out, fatally, so a local
   run and a dispatch on the same account kill each other. A dispatch can name
