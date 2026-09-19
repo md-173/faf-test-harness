@@ -183,3 +183,40 @@ The jars land in `mock-client/build/libs/` and `mock-game/build/libs/` as
 `<module>-<version>-all.jar`. Those names are a contract with downstream pipelines, and
 `check` asserts them through `verifyReleaseAssetName`, so a rename fails the pull request
 that makes it rather than the next release.
+
+## Repository layout
+
+| Path | What is in it |
+| :--- | :--- |
+| [`mock-client/`](mock-client/) | The client stand-in: lobby session, OAuth, the adapter and game subprocesses, and the client state machine. Ships as a jar. |
+| [`mock-game/`](mock-game/) | The game stand-in: GPGNet codec and dispatcher, the simulated match, and the peer UDP traffic. Ships as a jar. |
+| [`shared/`](shared/) | What both use: the state machine and the subprocess manager and registry. Not published. |
+| [`documentation/`](documentation/) | Operations guides, protocol research, diagrams, and captured demo transcripts. |
+| [`scripts/`](scripts/) | Helper scripts for CI. Today that is minting an access token for a dispatch. |
+
+## Documentation
+
+- **Start here.** Setup, the no-lobby path, credentials, and running one client
+  session: [documentation/operations/harness-runbook.md](documentation/operations/harness-runbook.md)
+- What can be tested in isolation, and which command or Gradle filter proves each
+  seam: [documentation/operations/component-isolation.md](documentation/operations/component-isolation.md)
+- Mock Client subcommands, flags, config keys and exit codes:
+  [mock-client/README.md](mock-client/README.md)
+- Mock Game flags, exit codes, and the log lines a pipeline can assert on:
+  [mock-game/README.md](mock-game/README.md)
+- Provisioning the real ICE adapter, and the upstream quirks worked around:
+  [documentation/operations/ice-adapter-setup.md](documentation/operations/ice-adapter-setup.md)
+- Component boundaries and message flow, as diagrams:
+  [documentation/diagrams/README.md](documentation/diagrams/README.md)
+- The captured protocol specs the mocks are built from, for GPGNet, JSON-RPC and the
+  lobby: [documentation/research/](documentation/research/)
+- Captured end-to-end demo transcripts: [documentation/demos/README.md](documentation/demos/README.md)
+- Contributor workflow and conventions: [CONTRIBUTING.md](CONTRIBUTING.md)
+
+## Contributing, licence and support
+
+Branch naming, commit format, the pull-request checklist and the release process are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the MIT Licence, see
+[LICENSE](LICENSE). For a problem with the harness, or a component you would like it to
+stand in for, open an
+[issue](https://github.com/md-173/faf-test-harness/issues).
