@@ -1694,20 +1694,25 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   its log for one `faf-uid` line and one login per peer, and warns when either
   is short; a consumer who wants that assurance has to add the same check.
 
-*Provenance. The invocation above was run on **2026-09-19** on WSL2 Linux
-against the live lobby, two peers on pre-signed access tokens for two seeded
-accounts, with `faf-ice-adapter` 3.3.14: exit `0` in 30 s, logging `session:
-credentials from --peer-access-token-file (on the command line)` and `session:
-PASS - 2 peers, full mesh and two-way game traffic, nothing left running`, with
-no adapter or game process left behind. It ran from mock-client and mock-game
-shadow jars built on this branch rather than from a release, for the reason the
-third bullet above gives. Five more steps were executed the way the runner
-hands them to bash: the token write and its expiry check across seventeen token
-shapes, the download and its digest check, the subcommand check, which refuses
-today's release exactly as intended, the `faf-uid` download, checksum and
-probe, and the token removal. The file passes `actionlint` with `shellcheck`.
-Two things were not done and are not claimed. The job has never been
-dispatched on a runner, and the adapter build step is the consumer's own,
-so neither is evidenced here. `releases/latest` does not yet carry `session`,
-so the download route is verified while the artifact it yields today is not the
-one this section describes.*
+*Provenance. Every `run:` step above was executed on **2026-09-19** on WSL2
+Linux, in order, the way a runner hands them to bash and with `GITHUB_ENV`
+carried between them: the token write and its expiry check, the download and
+its digest check, the subcommand check, the `faf-uid` download, checksum and
+probe, the session itself, and the token removal, which left its directory
+gone. The session step ran against the live lobby, two peers on pre-signed
+access tokens for two seeded accounts, with `faf-ice-adapter` 3.3.14: exit `0`
+in 18 s, logging `session: PASS - 2 peers, full mesh and two-way game traffic,
+nothing left running`, with its four log files under the path the upload step
+collects and no adapter or game process left behind. The expiry check was
+exercised separately across seventeen token shapes, from a valid token to an
+expired one, a `null`, a string, an `Infinity` and a 401-digit integer. The
+file passes `actionlint` with `shellcheck`.*
+
+*Two substitutions stood in for what cannot run here. `ADAPTER_JAR` was set
+directly, since the adapter build is the consumer's own step; and the jar paths
+were repointed after the download step at jars built from this branch, since
+`releases/latest` is the 0.2.0 that the subcommand check correctly refuses. So
+the download route is verified while the artifact it yields today is not the
+one this section describes. Two things were not done at all and are not
+claimed: the job has never been dispatched on a runner, which needs the
+repository's own secrets, and the four `uses:` steps have never run.*
