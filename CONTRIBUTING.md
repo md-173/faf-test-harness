@@ -327,14 +327,26 @@ assets.
 
 ### Cutting one
 
-1. **Run the workflow from `main`.** Actions → Release → Run workflow, with "Use workflow from" set
+1. **Prove the live path on the branch you are about to cut.** Actions → Live integration
+   (advisory) → Run workflow, with "Use workflow from" set to that branch, and the two
+   access-token secrets minted beforehand and deleted after (§ 3). `workflow_dispatch` takes a
+   branch or a tag, never a bare commit, so confirm the tip is still the commit you mean and
+   re-dispatch if it moves before step 2. The gate in step 3 runs `check`, which excludes the
+   `integration` tag, so nothing else in this procedure says whether the client, adapter and game
+   still complete a session against the real lobby. It builds its own snapshot jars from source
+   rather than the release assets, so it does not replace the draft checks in step 4. Green alone is
+   not the verdict: the evidence step must emit no warning, which is what shows two `faf-uid` lines
+   and two distinct logins. A red run stops the cut until you know which kind it is: the shared lobby
+   being unavailable is a finding about the environment, a failed checkpoint is a finding about the
+   release.
+2. **Run the workflow from `main`.** Actions → Release → Run workflow, with "Use workflow from" set
    to `main`. Give the version with no leading `v` (`0.3.0`, not `v0.3.0`), and leave `prerelease`
    unticked unless the release is genuinely one. The input is not validated: whatever is typed
    becomes the tag and the version segment of both jar names.
    Releasing from a branch is a convention, not an enforced rule, and it cannot be enforced in this
    file: `workflow_dispatch` runs the copy of `release.yml` on the branch selected, so a branch whose
    copy predates a change simply runs the older workflow, gate and all.
-2. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
+3. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
    -Pversion=<version> check`, the verification `ci.yml` applies to every pull request (`check` is
    the verification half of ci's `build`), because a release is dispatched at an arbitrary commit and
    nothing else guarantees CI ran green on it. If it fails, no draft and no assets are created, so
@@ -342,7 +354,7 @@ assets.
    A red gate is not to be worked around. If it is a known flake rather than a real failure (the
    lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
    its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.
-3. **Check the draft before publishing.** It must carry exactly four assets:
+4. **Check the draft before publishing.** It must carry exactly four assets:
    `mock-client-<version>-all.jar`, `mock-game-<version>-all.jar`, and a `.sha256` for each. Download
    them and confirm the checksums:
 
@@ -354,10 +366,10 @@ assets.
    If the workflow has to be re-run after a run that *succeeded*, delete the draft first. The release
    step does not pass `allowUpdates`, so it fails while a release already exists for the tag.
 
-4. **Publish the draft.** `GET /releases/latest` skips drafts and prereleases alike, so until someone
+5. **Publish the draft.** `GET /releases/latest` skips drafts and prereleases alike, so until someone
    opens the draft and clicks Publish, a consumer following that route keeps getting the previous
    release. Publishing is the last step of every release, not an optional one.
-5. **Bump the version in the docs** if the release is referenced by number: `README.md` names the jar
+6. **Bump the version in the docs** if the release is referenced by number: `README.md` names the jar
    files by version in its examples.
 
 ### The asset names are a contract
