@@ -369,8 +369,9 @@ assets.
 5. **Publish the draft.** `GET /releases/latest` skips drafts and prereleases alike, so until someone
    opens the draft and clicks Publish, a consumer following that route keeps getting the previous
    release. Publishing is the last step of every release, not an optional one.
-6. **Bump the version in the docs** if the release is referenced by number: `README.md` names the jar
-   files by version in its examples.
+6. **Bump the version in the docs** if the release is referenced by number. `README.md` no longer
+   names jar files by version: it writes `<version>` and pulls from `releases/latest`, so it needs
+   no bump. Check anything that does name a number.
 
 ### The asset names are a contract
 

@@ -40,6 +40,9 @@ supply-chain safety). To move to a new release:
 4. Update the version / SHA-256 table above, and cross-check
    [`downlords-faf-client/gradle.properties`](https://github.com/FAForever/downlords-faf-client/blob/develop/gradle.properties)
    so the harness stays matched to the version real FAF clients deploy.
+5. Update the version wherever prose names it. `README.md` names it in its compatibility table
+   and in the quick-start download links; nothing checks those against `gradle.properties`, so
+   they go stale silently.
 
 There is no automatic notification of new releases; track the
 [java-ice-adapter releases](https://github.com/FAForever/java-ice-adapter/releases) page or
