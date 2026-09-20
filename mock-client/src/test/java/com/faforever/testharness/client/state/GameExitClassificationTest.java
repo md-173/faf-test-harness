@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
@@ -72,7 +73,8 @@ final class GameExitClassificationTest {
                     Optional.empty(),
                     Optional.empty(),
                     0,
-                    0);
+                    0,
+                    -1);
 
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
@@ -227,5 +229,129 @@ final class GameExitClassificationTest {
                 event.getLevel(),
                 "teardown must not mask a match that delivered nothing");
         assertTrue(event.getFormattedMessage().contains("no GameEnded frame"));
+    }
+
+    // The harness's own exit code (WBS-5.2). RunCommand returns ExitCodes.GAME_CRASHED when the
+    // flag below is set, and the flag is set by the same branch that emits "exited abnormally",
+    // so these cases pin that the log line and the exit code can never disagree. Before this, a
+    // run whose game died reported success.
+
+    /** Nothing has exited yet, so there is nothing to report. */
+    @Test
+    void noCrashIsReportedBeforeTheGameHasExited() {
+        assertFalse(lifecycle.gameCrashed(), "a running game has not crashed");
+    }
+
+    /**
+     * mock-game's own {@code ADAPTER_LOST} is carved out of the crash reading (#357 review).
+     *
+     * <p>The game diagnosed its own end and named the cause, which an arbitrary non-zero exit does
+     * not, so it is logged as a lost link and the run exits {@code 0}. It gets no exit code of its
+     * own here: this classification is asynchronous, and the adapter's death can release {@code
+     * RunCommand} before it runs. #406 gives adapter death a code keyed on the adapter's own exit.
+     */
+    @Test
+    void anAdapterLostExitIsLoggedAsALostLinkRatherThanACrash() {
+        ILoggingEvent event = classify(69, false, true);
+
+        assertFalse(
+                lifecycle.gameCrashed(), "a diagnosed adapter loss is not an unexplained death");
+        assertEquals(Level.WARN, event.getLevel());
+        assertTrue(
+                event.getFormattedMessage().contains("losing its GPGNet link"),
+                "the log line must name the cause: " + event.getFormattedMessage());
+    }
+
+    /**
+     * The log line must not depend on a race. An adapter dying mid-session drives TERMINATED and so
+     * teardown, which races this classification, so a carve-out behind the teardown branch would
+     * name the cause on some runs and call it the harness's own SIGTERM on others.
+     */
+    @Test
+    void anAdapterLostExitIsLoggedTheSameWhenTeardownWonTheRace() {
+        teardown.run();
+
+        ILoggingEvent event = classify(69, false, true);
+
+        assertFalse(lifecycle.gameCrashed());
+        assertTrue(
+                event.getFormattedMessage().contains("losing its GPGNet link"),
+                "teardown having run first must not change the reading: "
+                        + event.getFormattedMessage());
+    }
+
+    /**
+     * A confirmed clean end outranks the code: the session delivered its closing frames and the
+     * process died afterwards, which is reported as unremarkable like any other non-zero code.
+     */
+    @Test
+    void anAdapterLostExitAfterACleanEndIsReportedAsACleanEnd() {
+        ILoggingEvent event = classify(69, true, true);
+
+        assertFalse(lifecycle.gameCrashed());
+        assertEquals(Level.INFO, event.getLevel());
+        assertTrue(event.getFormattedMessage().contains("clean game end"));
+    }
+
+    /** The crash proper: a non-zero exit, nothing observed, no teardown to explain it. */
+    @Test
+    void anAbnormalExitIsReportedAsACrash() {
+        classify(70, false, true);
+
+        assertTrue(lifecycle.gameCrashed(), "the abnormal branch must drive the crash exit code");
+    }
+
+    /**
+     * A game that died before a match ever started counts too, and this is the widening the
+     * constant's javadoc calls out. From the harness's side a mock-game that failed to boot and one
+     * that died mid-match are the same finding: it is gone and nothing accounted for it. Before
+     * this the harness exited {@code 0} for both.
+     */
+    @Test
+    void aGameThatDiedBeforeStartingCountsAsACrash() {
+        classify(70, false, false);
+
+        assertTrue(lifecycle.gameCrashed(), "a game that never started still died unaccounted for");
+    }
+
+    /** The exact case a naive teardown guard in RunCommand would have got wrong, inverted. */
+    @Test
+    void aNonZeroExitAfterTeardownIsNotACrash() {
+        teardown.run();
+        classify(143, false, true);
+
+        assertFalse(
+                lifecycle.gameCrashed(),
+                "the harness's own SIGTERM must never be reported as a crash");
+    }
+
+    /** A clean run must leave the exit code alone. */
+    @Test
+    void aCleanExitIsNotACrash() {
+        classify(0, true, true);
+
+        assertFalse(lifecycle.gameCrashed());
+    }
+
+    /**
+     * The no-delivery case warns, but it is not a crash: the game ran its whole program and exited
+     * zero. Reporting it in the exit code would conflate "nothing arrived" with "the game died",
+     * which are different findings with different causes.
+     */
+    @Test
+    void theNoDeliveryWarningIsNotACrash() {
+        classify(0, false, true);
+
+        assertFalse(
+                lifecycle.gameCrashed(),
+                "a game that completed its own program did not crash, however little arrived");
+    }
+
+    /** Non-zero after the frames landed: the session completed, so the code stays clean. */
+    @Test
+    void aNonZeroExitAfterAConfirmedCleanEndIsNotACrash() {
+        classify(70, true, true);
+
+        assertFalse(lifecycle.gameCrashed());
     }
 }
