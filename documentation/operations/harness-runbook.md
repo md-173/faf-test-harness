@@ -1443,16 +1443,20 @@ jobs:
                   print("%s carries no exp, which the lobby accepts" % name)
                   continue
               exp = claims["exp"]
+              # A bool is an int, so it is not a number here. A number too large for this
+              # platform's float is one the lobby still compares, so it is not a verdict.
+              numeric = isinstance(exp, (int, float)) and not isinstance(exp, bool)
               try:
-                  # A bool is an int, and a number too large for this platform's float is one the
-                  # lobby would still compare, so neither is read here as an expiry.
-                  left = float(exp) - time.time()
-                  usable = math.isfinite(left) and not isinstance(exp, bool)
-              except (OverflowError, TypeError, ValueError):
+                  left = float(exp) - time.time() if numeric else None
+                  usable = left is not None and math.isfinite(left)
+              except OverflowError:
                   usable = False
-              if not usable:
-                  print("::warning::%s has an exp that is not a usable number, which the lobby "
-                        "rejects outright; mint a fresh one" % name)
+              if not numeric:
+                  print("::warning::%s has an exp that is not a number, which the lobby rejects "
+                        "outright; mint a fresh one" % name)
+              elif not usable:
+                  print("::warning::%s has an exp this runner cannot read as a time; the lobby "
+                        "decides" % name)
               elif left <= 0:
                   print("::error::%s expired %d minutes ago; mint a fresh one" % (name, -left // 60))
                   expired.append(name)
@@ -1511,7 +1515,9 @@ jobs:
           [ "$#" -eq 1 ] || { echo "::error::expected one mock-game jar, found $#"; exit 1; }
           echo "GAME_JAR=$PWD/$1" >> "$GITHUB_ENV"
 
-      # releases/latest can be older than you expect, so ask the jar rather than trust the tag.
+      # releases/latest can be older than you expect, so ask the jar rather than trust the tag,
+      # and ask before the build: the session step would otherwise fail after it, with picocli's
+      # usage dump rather than a named cause.
       - name: Check the release carries per-peer access tokens
         timeout-minutes: 2
         run: |
