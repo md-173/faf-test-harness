@@ -118,11 +118,17 @@ java -jar mock-game-<version>-all.jar --gpgnet-port=7237 --lobby-port=7238 \
   --player-id=1 --player-login=test --game-uid=0
 ```
 
-Within a few milliseconds of the game connecting you get the whole handshake: the game's
-`GameState Idle`, the adapter's `CreateLobby`, and the game's `GameState Lobby`. Only the
-game's two frames reach your JSON-RPC peer, as `onGpgNetMessageReceived`, and that is
-where you assert. `CreateLobby` travels the other way, adapter to game, so it never
-appears there. Its login comes from the adapter's own `--login`, not `--player-login`.
+About half a second after the game connects you get the whole handshake: the game's
+`GameState Idle`, the adapter's `CreateLobby` in reply, then the game's `GameState
+Lobby`. The half second is the game's own deliberate pause before its first frame, which
+avoids a race in the adapter. Only the game's two frames reach your JSON-RPC peer, as
+`onGpgNetMessageReceived`, and that is where you assert. `CreateLobby` travels the other
+way, adapter to game, so it never appears there. Its login comes from the adapter's own
+`--login`, not `--player-login`.
+
+If you read the adapter's log rather than your own peer, note that it prints `Sent ...
+CreateLobby` a millisecond before `Received ... GameState Idle`: it logs the receive
+after running the handler that sent the reply. The wire order is the one above.
 
 If you would rather drive your own adapter build, start it yourself instead of using
 `launch-ice`, and give it the headless logback override described in
@@ -144,6 +150,7 @@ the peer and the stage that failed.
 ```bash
 java -jar mock-client-<version>-all.jar \
   --lobby-websocket-url=wss://ws.faforever.xyz \
+  --unique-id=00000000-0000-0000-0000-000000000000 \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./faf-ice-adapter-3.3.14-nojfx.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -151,6 +158,9 @@ java -jar mock-client-<version>-all.jar \
     --peer-access-token-file=./host.txt \
     --peer-access-token-file=./joiner.txt
 ```
+
+`--unique-id` satisfies a required field and `--uid-binary-path` then overrides it at
+handshake time with a real value, which is why both are given.
 
 One FAF test account per peer and one credential file each: a pre-signed access token as
 above, or a refresh token with `--peer-refresh-token-file`, which also needs
