@@ -50,7 +50,7 @@ final class HarnessLogContractTest {
 
     private static final MockClientConfig MINIMAL_CONFIG =
             new MockClientConfig(
-                    URI.create("wss://lobby.faforever.xyz"),
+                    URI.create("wss://ws.faforever.xyz"),
                     URI.create("https://hydra.faforever.xyz/oauth2/token"),
                     URI.create("https://hydra.faforever.xyz/oauth2/auth"),
                     URI.create("http://127.0.0.1"),
