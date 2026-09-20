@@ -1342,11 +1342,11 @@ upload fires on a cancelled run as well as a failed one.
 
 The flag reference, the credential-layering rule and the full exit-code table
 are [`mock-client/README.md`](../../mock-client/README.md)'s, and are not
-restated here; the by-hand walkthrough for two peers lands in §9 with R79b. Two
-refusals catch a job as readily as a person: `INSTANCE_NAME` must be unset,
-since `session` labels each peer itself, and `--log-level` must be INFO or
-finer, since the traffic checkpoint reads the games' own INFO lines. Both are
-refused before any process starts.
+restated here, and [§9](#9-two-peer-sessions-wbs-431) is the by-hand walkthrough for
+two peers. Two refusals catch a job as readily as a person: `INSTANCE_NAME`
+must be unset, and `--log-level` must be INFO or finer. Both are refused
+before any process starts, for the reasons
+[§9.4](#94-per-instance-logs-and-attribution) gives.
 
 The host advertises its game with `friends` visibility (`MultiPeerSession`), so
 a dispatch does not put a test game on the public list. The joiners never need
@@ -1644,9 +1644,9 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   place with the rotated value, and on a runner that file dies with the job. So
   every run spends the secret, the stored copy is stale the moment that peer
   logs in, and the account needs a browser re-bootstrap before the next run.
-  The by-hand section for a person will land in §9 recommending the opposite,
-  and will be right to: there the rewrite is the point, because nothing has to
-  be kept fresh by hand. Unattended, that same rewrite is the whole cost.
+  [§9.1](#91-the-second-identity) recommends the opposite for a person, and is
+  right to: there the rewrite is the point, because nothing has to be kept
+  fresh by hand. Unattended, that same rewrite is the whole cost.
 - **Test accounts nothing else uses, and a `concurrency` group keyed on them.**
   A second login as the same account signs the first out, fatally, so a local
   run and a dispatch on the same account kill each other. A dispatch can name
