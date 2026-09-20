@@ -1749,9 +1749,7 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   than the commit you are reading. Ask the jar rather than trust the tag, as
   the check step does. Without that step, a jar lacking the subcommand answers
   the session invocation with `Unmatched arguments`, naming `session` and
-  everything after it, and exits `2` after the adapter build. (When this
-  section was written, `releases/latest` was 0.2.0, which predates both
-  `session` and `--peer-access-token-file`.)
+  everything after it, and exits `2` after the adapter build.
 - **A placeholder `--unique-id` and a real `faf-uid`.** Both are needed, for
   the reason §3 gives. On a runner the failure is easy to misread: without the
   binary the lobby's policy request fails and the login ends in
@@ -1807,8 +1805,9 @@ file passes `actionlint` with `shellcheck`.*
 *Two substitutions stood in for what cannot run here. `ADAPTER_JAR` was set
 directly, since the adapter build is the consumer's own step; and the jar paths
 were repointed after the download step at jars built from this branch, since
-`releases/latest` is the 0.2.0 that the subcommand check correctly refuses. So
-the download route is verified while the artifact it yields today is not the
-one this section describes. Two things were not done at all and are not
-claimed: the job has never been dispatched on a runner, which needs the
-repository's own secrets, and its three `uses:` steps have never run.*
+at the time `releases/latest` predated the `session` subcommand and the check
+step correctly refused it. So the download route was verified while the
+artifact it yielded was not the one this section describes. Two things were
+not done at all and are not claimed: the job has never been dispatched on a
+runner, which needs the repository's own secrets, and its three `uses:` steps
+have never run.*
