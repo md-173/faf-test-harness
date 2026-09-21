@@ -1447,9 +1447,11 @@ the adapter build, and the two secret names.
 
 It runs on manual dispatch, as this repository's own job does and for the same
 reason: the shared test lobby's availability is outside your control, so a red
-run is a finding rather than a reason to block a merge. Add a `schedule` or a
-`push` trigger if you want it to run on its own, and keep it out of your
-required checks either way.
+run is a finding rather than a reason to block a merge. Add a `push` trigger
+if you want it to run on its own, and keep it out of your required checks
+either way. A `schedule` needs a credential that is still valid when it
+fires, which neither channel gives you today: an access token lasts about an
+hour, and a refresh token is spent on first use. §3 has the detail.
 
 ```yaml
 name: FAF harness session (advisory)
@@ -1754,7 +1756,13 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   the reason §3 gives. On a runner the failure is easy to misread: without the
   binary the lobby's policy request fails and the login ends in
   `{"command":"invalid"}`, which looks like an ordinary auth failure. That is
-  what the probe step exists to pre-empt.
+  what the probe step exists to pre-empt. A stock GitHub-hosted
+  `ubuntu-latest` runner is enough: `faf-uid` v4.0.7 produced a real
+  `unique_id` there rather than falling back to the placeholder, and both
+  peers' logins were accepted (run 35520318859). So neither a self-hosted
+  runner nor a policy exemption is needed. The blob's length varies between
+  runs and between the probe and the session, so the figure the probe step
+  prints is not a value to match.
 - **Room for the session's own deadline.** `session` bounds itself at 420 s
   from the first login, tears down outside that bound, and reports its own
   verdict. A step timeout below the two together turns a reportable failure
