@@ -554,8 +554,11 @@ since nothing is exchanged. `--oauth-auth-endpoint`, `--oauth-redirect-uri` and
 browser bootstrap earlier in this section, which no run performs.
 
 **What the lobby checks.** `oauth_service.get_player_id_from_token` accepts a
-token only if all four of these hold. There is no fifth check hiding anywhere,
-and no local check at all: the first thing that inspects the token is the lobby.
+token only if all four of these hold. There is no fifth check hiding anywhere.
+The harness itself reads one claim: `session` decodes each peer's access
+token for its numeric `sub`, to refuse two peers on one account before any
+process starts. It verifies no signature and reads nothing else, so every
+verdict on the token is still the lobby's. `run` inspects nothing.
 
 - **RS256, signed with a key the lobby's JWKS publishes**, located by the token's
   `kid` header. For `ws.faforever.xyz` that JWKS is
