@@ -75,7 +75,7 @@ final class LifecyclePeerDisconnectTest {
     void setup() throws IOException {
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, -1, 0);
+                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
 
