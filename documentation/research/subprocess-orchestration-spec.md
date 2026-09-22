@@ -119,10 +119,15 @@ Mirroring `IceAdapterImpl`:
 
 ### 2.4 Working directory
 
-`ProcessBuilder.directory(...)` is set to a per-session scratch directory
-(e.g. `/tmp/harness/<sessionId>/<child>/`), created before launch. This
-isolates any files the adapter writes (its own log fallback, dump files)
-from the harness CWD.
+**Intended, not implemented.** The design is a per-session scratch directory
+(e.g. `/tmp/harness/<sessionId>/<child>/`), created before launch and set with
+`ProcessBuilder.directory(...)`, isolating what a child writes (its own log
+fallback, dump files) from the harness CWD.
+
+No launcher calls `directory(...)` today, so every child inherits the harness's
+working directory, and the relative paths in §2.3 resolve against it: two
+harness instances started in one directory share `logs/ice-adapter/`.
+`IceAdapterLauncher`'s javadoc records the same gap and points back here.
 
 ### 2.5 Stream wiring
 
@@ -208,7 +213,7 @@ The example below mirrors json-rpc-spec §9 phases A–B.
      "--gpgnet-port", gpgnetPort,
      "--lobby-port",  lobbyUdpPort ]
    env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<mock-client's resolved level>
-   cwd   = <session scratch dir>
+   cwd   = <inherited from the harness; see §2.4>
    redirectErrorStream(false)
 
 3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
