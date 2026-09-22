@@ -101,6 +101,8 @@ After the command completes, run `git status` / `git diff` so any formatter-
 
 Note that the `mock-client` `test` and `integrationTest` tasks run at `LOG_LEVEL=DEBUG` (set in `mock-client/build.gradle`), so a local run is noisier than the `INFO` default suggests. That is deliberate — see the `build` bullet below — and it applies to local runs as much as to CI.
 
+The `mock-game` `test` task is pinned as well, to the `INFO` default (set in `mock-game/build.gradle`), because several of its tests read the log and would otherwise fail, or pass without testing anything, in a shell that exported `LOG_LEVEL=WARN`.
+
 ### What CI runs on every PR
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
