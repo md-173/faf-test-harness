@@ -62,9 +62,7 @@ flowchart LR
 
 Every player's machine runs those same three processes. The lobby relays ICE candidates
 during negotiation and never sees game traffic. The full symmetric version is in
-[`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md); note
-that its OAuth2 authorization-code edge predates the token-file channels the harness uses
-now.
+[`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md).
 
 ## Quick start
 
