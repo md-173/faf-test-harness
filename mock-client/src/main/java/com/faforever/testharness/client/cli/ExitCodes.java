@@ -43,6 +43,13 @@ public final class ExitCodes {
      * (WBS-3.1.3.3-fix, #437): a binary that could not be started, an adapter that exited or never
      * accepted its JSON-RPC connection, or one that refused a setup call. Read from {@code
      * MockClientLifecycle.launchFailed()}. Before that existed, such a run exited {@code 0}.
+     *
+     * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
+     * name a subprocess that died under a session that was running, and a launch that never came up
+     * had no running session: like a failed token exchange or a handshake timeout, it never got one
+     * going. {@code session} reports the same failure as {@code 70} at its {@code game_launch}
+     * checkpoint, and {@code launch-ice} and {@code launch-game} already use it for a binary they
+     * cannot start. The line logged ahead of the verdict names which of them it was.
      */
     public static final int RUNTIME = 70;
 
@@ -75,10 +82,12 @@ public final class ExitCodes {
      * or launched with an argument it rejected, is a failure of the harness run itself and worth
      * surfacing.
      *
-     * <p>Distinct from {@link #RUNTIME} because that code already means five other things here: a
-     * failed token exchange, a lobby handshake timeout, a setup failure, an abrupt lobby close, a
-     * launch that never came up. So reusing it would have told a pipeline nothing. {@code 71} sits
-     * next to it deliberately: this is a runtime failure, and one with a known cause.
+     * <p>Distinct from {@link #RUNTIME}, which covers the ways a run fails without a subprocess
+     * dying under a running session: a failed token exchange, a lobby handshake timeout, a setup
+     * failure, an abrupt lobby close, a launch that never came up. A game dying mid-session is the
+     * finding a pipeline most needs to tell from those, which is why it has a number of its own
+     * rather than a sixth share of {@code 70}. {@code 71} sits next to it deliberately: this is a
+     * runtime failure, and one with a known cause.
      *
      * <p>Before this existed the harness exited {@code 0} when its game died, reporting success for
      * a run that failed.
@@ -124,12 +133,13 @@ public final class ExitCodes {
      * <p>An adapter that quits cleanly under its own power, exit {@code 0}, is not this either: it
      * reads as the real client's "terminated normally" and leaves this run's code alone.
      *
-     * <p>Distinct from {@link #RUNTIME}, which already means a failed token exchange, a handshake
-     * timeout, a setup failure, an abrupt lobby close or a launch that never came up, and from
-     * {@link #GAME_CRASHED}, which is the game dying rather than the adapter underneath it. {@code
-     * 72} continues what those two started: a runtime failure, with a known cause. Deliberately not
-     * mock-game's {@code 69}: the client logs that as a lost adapter link and it contributes
-     * nothing to the run's code, so one number would mean two things in one log.
+     * <p>Distinct from {@link #RUNTIME}, which covers the ways a run fails without a subprocess
+     * dying under a running session (a failed token exchange, a handshake timeout, a setup failure,
+     * an abrupt lobby close, a launch that never came up), and from {@link #GAME_CRASHED}, which is
+     * the game dying rather than the adapter underneath it. {@code 72} continues what those two
+     * started: a runtime failure, with a known cause. Deliberately not mock-game's {@code 69}: the
+     * client logs that as a lost adapter link and it contributes nothing to the run's code, so one
+     * number would mean two things in one log.
      *
      * <p>Before this existed the harness exited {@code 0} when its adapter died mid-session,
      * reporting success for a run that failed.

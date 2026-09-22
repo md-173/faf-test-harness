@@ -131,6 +131,11 @@ the reverse. A run that a signal ended logs none of these lines, because its exi
 code is the signal's own, unless the session's own end and the signal land in the
 same instant.
 
+For a pipeline, `71` and `72` each name a subprocess that died under a session
+that was running, and `70` groups every other way a run fails, from a bad token
+to a launch that never came up. Which one it was is in the line logged ahead of
+the exit, not in the code.
+
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.
 

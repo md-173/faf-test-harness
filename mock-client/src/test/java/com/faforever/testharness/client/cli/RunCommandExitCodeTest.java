@@ -8,6 +8,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -195,7 +196,28 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 ExitCodes.RUNTIME,
                 RunCommand.sessionExitCode(true, true, false, false, false, log));
+        assertEquals(
+                ExitCodes.GAME_CRASHED,
+                RunCommand.sessionExitCode(true, false, false, false, true, log));
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
+    }
+
+    /**
+     * The shutdown hook raises the flag before it tears down (#437). Swapped, a signal during
+     * bring-up can leave the hook blocked in the synchronized teardown, behind the launch thread
+     * that got there first, with the flag still down: the main thread then reads it as a session
+     * that ended on its own, and the verdict line returns on a signalled run. Nothing else pins
+     * that order, since the hook itself only ever runs on a real signal.
+     */
+    @Test
+    void theShutdownHookRaisesTheFlagBeforeTearingDown() {
+        AtomicBoolean shuttingDown = new AtomicBoolean();
+        AtomicBoolean flagWasUp = new AtomicBoolean();
+
+        RunCommand.shutdownHook(shuttingDown, () -> flagWasUp.set(shuttingDown.get())).run();
+
+        assertTrue(flagWasUp.get(), "teardown must not start before the flag is raised");
+        assertTrue(shuttingDown.get(), "and the flag must stay raised afterwards");
     }
 }

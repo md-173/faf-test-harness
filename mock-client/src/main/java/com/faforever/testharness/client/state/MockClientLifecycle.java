@@ -808,12 +808,12 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437). Written
-     * before the failed transition commits, so readable once {@code stateReached(TERMINATED)}
-     * completes, and never once teardown has started: a launch the harness cut short (a Ctrl-C
-     * during bring-up) is not a finding.
+     * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437), readable
+     * once {@code stateReached(TERMINATED)} completes. Never written once {@link SessionTeardown}
+     * has started, though a signal can still set it, since SIGINT reaches the adapter too, which is
+     * why {@code RunCommand} names no verdict on a signalled run.
      *
-     * @return {@code true} if the adapter or game never came up and the harness did not cause it
+     * @return {@code true} if the adapter or game never came up before session teardown began
      */
     public boolean launchFailed() {
         return launchFailed;

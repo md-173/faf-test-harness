@@ -119,16 +119,16 @@ public final class RunCommand implements Callable<Integer> {
         // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
         // the main thread. No-op if the session has already disconnected (e.g. a server-initiated
         // close that let call() return normally), so a normal exit doesn't emit a spurious
-        // "shutdown signal" line. The flag is set first so the end of this method can tell that a
-        // signal, not the session, is what ended the run.
+        // "shutdown signal" line. The flag it raises first is what tells the end of this method
+        // that a signal, not the session, ended the run; see shutdownHook for why that order is
+        // load bearing.
         AtomicBoolean shuttingDown = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
                         new Thread(
-                                () -> {
-                                    shuttingDown.set(true);
-                                    teardownOnShutdown(session, teardown, log);
-                                },
+                                shutdownHook(
+                                        shuttingDown,
+                                        () -> teardownOnShutdown(session, teardown, log)),
                                 "mc-shutdown"));
 
         SessionState me;
@@ -190,6 +190,27 @@ public final class RunCommand implements Callable<Integer> {
                 lifecycle.adapterLost(),
                 lifecycle.gameCrashed(),
                 log);
+    }
+
+    /**
+     * The body of {@code run}'s shutdown hook: raise the flag, then tear the session down.
+     *
+     * <p>That order is load bearing, which is why this is a method with a test rather than a
+     * lambda. {@link com.faforever.testharness.client.process.SessionTeardown#run()} is
+     * synchronized, and on a signal during bring-up the launch thread reaches it too, through
+     * TERMINATED's entry hook. A hook that tore down first would block there with the flag still
+     * down, and the main thread, released as TERMINATED commits, would read it as a session that
+     * ended on its own and log a verdict for a run the signal ended (#437).
+     *
+     * @param shuttingDown the flag {@link #sessionExitCode} reads, raised before anything else
+     * @param teardown the coordinated teardown to run once it is raised
+     * @return the hook's body
+     */
+    static Runnable shutdownHook(final AtomicBoolean shuttingDown, final Runnable teardown) {
+        return () -> {
+            shuttingDown.set(true);
+            teardown.run();
+        };
     }
 
     /**
