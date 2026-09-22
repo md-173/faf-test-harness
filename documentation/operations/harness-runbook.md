@@ -208,16 +208,24 @@ existing wildcard listener (measured against `0.0.0.0:7236`) — permitting a
 duplicate listening bind is BSD and Darwin behaviour, where `SO_REUSEADDR` is
 enough; on Linux that needs `SO_REUSEPORT`, which `ServerSocket` never sets. When
 it does slip through, the run fails later instead, and what holds the port decides
-which verdict you get. A leftover working adapter answers every probe, so the
-check passes against someone else's adapter and its closing liveness test is what
-catches that ours is gone, reporting `ADAPTER_EXITED` with a `verdict:` detail.
-Anything else holding the port accepts the connection but never answers
-`setLobbyInitMode`, reporting `RPC_SILENT` with an `RPC round-trip:` detail. Two
-further signatures are not port conflicts at all: `ADAPTER_EXITED` with an `RPC
-connect:` detail means nothing answered and the adapter we launched died, and
-`RPC_UNREACHABLE` means nothing accepted a connection while it is still running.
-Treat `ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` on a runner as "check
-the ports too", not only as "the adapter is broken".
+which verdict you get:
+
+- **A leftover adapter** answers the RPC round-trip but sends its GPGNet
+  notification to the first client it ever had, so the check ends
+  `GPGNET_UNCONFIRMED`. Every harness command attaches a client, so this is the
+  usual leftover. Only one that never had a client passes every probe, and then
+  the check's closing liveness test catches that ours is gone: `ADAPTER_EXITED`
+  with a `verdict:` detail.
+- **Anything else listening** accepts the connection but never answers
+  `setLobbyInitMode`: `RPC_SILENT` with an `RPC round-trip:` detail.
+- **Nothing accepting a connection** reads `RPC_UNREACHABLE` while our adapter is
+  still running, or `ADAPTER_EXITED` with an `RPC connect:` detail once it has
+  gone. That is usually the adapter's own failure, but a held GPGNet port causes
+  it too: the adapter binds GPGNet before RPC, and when that bind fails it never
+  starts its RPC server.
+
+Treat any of these on a runner as "check the ports too", not only as "the adapter
+is broken".
 
 **Exit `70` is ambiguous, and there is no way around it from the code alone.** It
 covers both "the binary is missing or would not start" and "the ports were busy",
@@ -843,7 +851,7 @@ and is not repeated here.**
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
 | `ice-smoke` exits `70` and you cannot tell why | `ice-smoke: FAIL [<verdict>] …` | `70` covers both a missing binary and busy ports. The verdict line distinguishes them: `PORTS_IN_USE` names the port to free, anything about the binary means the path is wrong. This is the no-account path's most common first failure. |
 | `ice-smoke` reports `PORTS_IN_USE` on a CI runner | `ice-smoke: FAIL [PORTS_IN_USE] port pre-flight: …` | Something else on the runner holds `7236` or `7237` — the pre-flight only tests those two TCP ports, never the UDP lobby port — often a previous step's adapter that outlived it. Free the port, or move all three with `--ice-adapter-rpc-port`, `--ice-adapter-gpg-net-port` and `--ice-adapter-lobby-port` (§2a). |
-| `ice-smoke` reports `ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` and the adapter looks fine | `ice-smoke: FAIL [RPC_SILENT] RPC round-trip: …` or `ice-smoke: FAIL [ADAPTER_EXITED] verdict: …` | Check the ports before the adapter, **on macOS**. The pre-flight tests by binding, and on Darwin a bind can succeed alongside an existing wildcard listener (measured against `0.0.0.0:7236`), so a busy port surfaces here instead. Which of the two lines you get says what holds the port: a `verdict:` detail means a leftover working adapter, anything else means `RPC_SILENT` (§2a). On Linux, including hosted runners, the pre-flight catches it and you get `PORTS_IN_USE` above. `lsof -i :7236` settles it. |
+| `ice-smoke` reports `GPGNET_UNCONFIRMED`, `ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` and the adapter looks fine | `ice-smoke: FAIL [GPGNET_UNCONFIRMED] GPGNet confirmation: …`, `ice-smoke: FAIL [RPC_SILENT] RPC round-trip: …` or `ice-smoke: FAIL [ADAPTER_EXITED] verdict: …` | Check the ports before the adapter, **on macOS**. The pre-flight tests by binding, and on Darwin a bind can succeed alongside an existing wildcard listener (measured against `0.0.0.0:7236`), so a busy port surfaces here instead. The verdict says what holds the port: `GPGNET_UNCONFIRMED`, or `ADAPTER_EXITED` with a `verdict:` detail, means a leftover adapter; `RPC_SILENT` means something else is listening (§2a). On Linux, including hosted runners, the pre-flight catches it and you get `PORTS_IN_USE` above. `lsof -i :7236` settles it. |
 | `mock-game` exits `143` from a run that looked fine | `mock game started: …` with no `mock game finished` line | Nothing drove the game out of the lobby, so it waited as designed and your step timeout killed it. That is not a harness failure: a game sitting in a lobby is what a real one does. Bound it yourself with `--lobby-timeout-seconds <n>`, which ends the wait from inside the game and exits `75` instead of a signal, or with `timeout 30 java -jar …`, noting that GNU `timeout` reports `124` rather than `143` unless you pass `--preserve-status` (§2a). |
 | The release jar you downloaded is not the one you expected | — | Verify it: releases cut after the checksum step landed carry a `.sha256` beside each jar (`sha256sum -c`), and the API exposes a per-asset `digest` for any release. If it is the wrong *version*, note that `releases/latest` skips drafts and prereleases — a release stays invisible to it until someone publishes the draft by hand, so a pipeline can keep pulling the previous one. |
 
@@ -1342,9 +1350,9 @@ What to look for when it is on:
   shutdown, use the last
   `player <receiver> peer traffic from player <sender>` progress line instead,
   which can read one datagram behind. The loss ratio is
-  `(H - S + 1 - N) / (H - S + 1)`. Counting from `S` rather than from zero
-  leaves out datagrams sent before the ICE link was up, which would otherwise
-  read as loss at every percentage, `0` included.
+  `(H - S + 1 - N) / (H - S + 1)`, where `H - S + 1` is the span. Counting
+  from `S` rather than from zero leaves out datagrams sent before the ICE link
+  was up, which would otherwise read as loss at every percentage, `0` included.
 - Do not use the gap count, under either of its two names. The same quantity
   is called `discontinuities` on the totals line above and `gaps` on both the
   mid-run progress line and the per-datagram `DEBUG` record, so recognise it
@@ -1358,28 +1366,37 @@ What to look for when it is on:
   datagram are not counted, which biases the ratio slightly low. That is one
   face of a more general point: the span is delimited by received datagrams at
   both ends, so only the ones between them can ever read as lost. That costs
-  the ratio roughly `2/span` of the true rate, negligible over hundreds of
-  datagrams and worth allowing for over tens. A peer re-registered at a
-  changed address restarts its sequence at zero, so the ratio only holds
-  within one registration.
+  the ratio roughly `2/span` of the true rate: a true 40% reads about 37% over
+  a span of 30, and the difference is negligible over hundreds. A peer
+  re-registered at a changed address restarts its sequence at zero, so the
+  ratio only holds within one registration.
 - The ratio needs a large sample, and an orchestrated `session` does not
   produce one. It counts from `S`, the first datagram to arrive once the ICE
-  link is up, and the session tears down once it has proven its mesh, which
-  takes two progress lines per direction reaching three datagrams with an
-  advancing sequence. Measured on a `session: PASS` run at `40`, that left
-  spans of 32 and 30 datagrams reading 15.6% and 30.0%. At that span one
-  standard deviation is about 9 percentage points, so 40% and 25% sit about
-  1.7 standard deviations apart: a run like this shows that datagrams are
-  being lost, and cannot separate one percentage from the other at any usual
-  confidence. To confirm the magnitude, hand-run two games pointed at each
-  other with `--launch-delay-seconds=-1` so they hold in the lobby and keep
-  sending: a span of about 890 datagrams read 25.6% against 25% expected,
-  with the control direction at exactly zero.
+  link is up, and `session` tears down once it has proven its mesh and its
+  traffic, which takes two progress lines per direction reaching three
+  datagrams with an advancing sequence. Measured on a `session: PASS` run at
+  `40` (2026-09-18), that left spans of 32 and 30 datagrams reading 15.6% and
+  30.0%. At that span one standard deviation is about 9 percentage points, so
+  40% and 25% sit about 1.7 standard deviations apart: a run like this shows
+  that datagrams are being lost, and cannot separate one percentage from the
+  other at any usual confidence.
+- To measure the magnitude, run the pair by hand as two `run` clients, which
+  hold until you stop them. Give each its own credential (§9.1) and its own
+  three adapter ports (§9.3). The host takes the four `--host-*` options (§3's
+  example) plus `--mock-game-udp-drop-percent=<n>`; the joiner takes
+  `--target-game-id=<uid>` from the host's `game launch: uid=` line; both
+  take `--mock-game-launch-delay-seconds=-1`, so their games (launched with
+  `--launch-delay-seconds -1`) stay in the lobby and keep sending. Stop both
+  with SIGTERM and each game writes its totals line to `logs/mockgame.jsonl`
+  under its own client's working directory. Measured this way at `25`
+  (2026-09-23), two minutes of traffic gave a span of 1318 datagrams reading
+  25.2%, with the control direction at exactly zero and `discontinuities 248`
+  where `n·p·(1 - p)` predicts 247.
 - What an orchestrated run does establish on its own is that the value
   reached the game: `--udp-drop-percent <n>` in the launch argv and the
   `dropping n%` line at the sending game. That is what the pass-through
-  regressions (#322, #392) were about, and it is a different question from
-  how much was lost.
+  defects (#322, #353) were about, and it is a different question from how
+  much was lost.
 - The loss is attributable to the sender that dropped it, because the counts
   are kept per sender id. That is the whole reason injection sits here rather
   than on the interface, where loss is traceable to nobody.

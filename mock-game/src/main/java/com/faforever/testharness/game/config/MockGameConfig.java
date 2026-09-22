@@ -18,9 +18,9 @@ import java.util.Optional;
  *
  * @param gpgNetPort TCP port of the ICE adapter's local GPGNet server the game connects to; must
  *     match the port the adapter was started with
- * @param lobbyPort UDP port the game binds for lobby/peer traffic, used as a fallback: the game
- *     binds the port the adapter announces in {@code CreateLobby} and only falls back to this one
- *     when that frame carries no usable port (WBS-4.3.2, #321)
+ * @param lobbyPort fallback UDP port for lobby/peer traffic: the game binds the port the adapter
+ *     announces in {@code CreateLobby}, and this one only when that frame carries no usable port
+ *     (WBS-4.3.2, #321)
  * @param playerId FAF player id of the owning client's session
  * @param playerLogin FAF player login of the owning client's session
  * @param gameUid id of the game being played, from the lobby's {@code game_launch.uid}. Zero means

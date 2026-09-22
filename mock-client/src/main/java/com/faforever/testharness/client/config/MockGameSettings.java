@@ -31,7 +31,9 @@ import java.util.OptionalInt;
  *
  * @param binaryPath path to the {@code mock-game} executable
  * @param gpgNetPort the adapter's GPGNet TCP port, which mock-game connects out to
- * @param lobbyPort the UDP port mock-game announces as its lobby port
+ * @param lobbyPort the fallback UDP port passed as {@code --lobby-port}; mock-game binds the port
+ *     the adapter announces in {@code CreateLobby}, and this one only when that frame carries no
+ *     usable port (WBS-4.3.2, #321)
  * @param gameUid game uid passed as {@code --game-uid}; {@code 0} means no orchestrated session
  * @param playerIdOverride optional player id for deterministic local testing; empty means the
  *     caller's default applies

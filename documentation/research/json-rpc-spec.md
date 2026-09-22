@@ -316,7 +316,7 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 | **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client allocates a free port and passes it explicitly so multiple harness instances do not collide. |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
-| `--log-directory <path>` | env `LOG_DIR` | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. Use the `LOG_DIR` env var. |
+| `--log-directory <path>` | unset | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var. |
 | `--force-relay` | off | Forces TURN-only candidates; useful for fault-injection later (WBS 3.x). |
 | `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
 | `--info-window` | off | Same. |
@@ -349,7 +349,7 @@ must implement.
 | Boot | 2 | MC → IA | TCP connect to `127.0.0.1:P` | Mock Client is the TCP client. |
 | Setup | 3 | MC → IA | `setLobbyInitMode("normal" \| "auto")` | "auto" iff matchmaker game. |
 | Setup | 4 | MC → IA | `setIceServers([…])` | Required before `joinGame` / `connectToPeer`. STUN/TURN config from lobby (or static dev config). |
-| Setup | 5 | (CLI) | launch `mock-game` with `--gpgnet-port`, `--lobby-port` matching adapter | Subprocess launch. See WBS 2.2.8. |
+| Setup | 5 | (CLI) | launch `mock-game` with `--gpgnet-port` matching the adapter, and `--lobby-port` as a fallback for the port `CreateLobby` announces | Subprocess launch. See WBS 2.2.8. |
 | Setup | 6 | IA → MC | `onConnectionStateChanged("Connected")` | Mock-game has connected to the adapter's GPGNet TCP server. |
 | Setup | 7 | IA → MC | `onGpgNetMessageReceived("GameState", ["Idle"])` | Mock-game emitted its first frame. Mock Client wraps and forwards to lobby. |
 | Setup | 8 | IA → MC | `onGpgNetMessageReceived("GameState", ["Lobby"])` | Same. |

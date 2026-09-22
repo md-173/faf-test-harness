@@ -37,9 +37,9 @@ sequenceDiagram
     Note over Dev,Hydra: Phase 1 - Authentication (one-time bootstrap)
     Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange (manual, browser)
     Hydra-->>Dev: access_token + refresh_token
-    Dev->>MC: persist FAF_MOCK_REFRESH_TOKEN (gitignored)
+    Dev->>MC: write refresh_token to .secrets/refresh_token.txt (gitignored)
 
-    Note over MC,Hydra: Steady-state (every ~1h, or on startup)
+    Note over MC,Hydra: Steady-state (at the start of each run)
     MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
     Hydra-->>MC: access_token + rotated refresh_token
     MC->>MC: persist new refresh_token atomically

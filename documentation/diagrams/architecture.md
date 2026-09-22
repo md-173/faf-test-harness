@@ -43,7 +43,7 @@ flowchart LR
         L2["REAL component (reused)"]
         L3["External service"]
     end
-    MC  -.->|"HTTPS POST /oauth2/token (refresh-token channel)"| HYDRA
+    MC -.->|"HTTPS POST /oauth2/token (refresh-token channel)"| HYDRA
     PMC -.->|"HTTPS POST /oauth2/token (refresh-token channel)"| HYDRA
     MC  <-->|"JSON over TCP (WebSocket/WSS via ws_bridge_rs)"| LS
     PMC <-->|"JSON over TCP (WebSocket/WSS via ws_bridge_rs)"| LS
@@ -67,20 +67,22 @@ flowchart LR
   components connected the same way. Each Mock Client reads its credential
   from a file, and which file decides whether the Hydra edge exists at all.
   On the refresh-token channel the client exchanges that token at Hydra for
-  a short-lived access token, which is the dotted edge drawn here; on the
-  pre-signed access-token channel it sends the token as-is and never
-  contacts Hydra. Either way it then opens a WebSocket to the lobby carrying
-  the resulting JWT. No client performs the OAuth2 authorization-code flow:
-  that is a one-time human bootstrap in a browser
+  a short-lived access token, rewriting the file with the rotated refresh
+  token each time, which is the dotted edge drawn here; on the pre-signed
+  access-token channel it sends the token as-is and never contacts Hydra.
+  Either way the JWT reaches the lobby in the handshake's `auth` message,
+  over a WebSocket the client has already opened. No client performs the
+  OAuth2 authorization-code flow: that is a one-time human bootstrap in a
+  browser
   ([`../operations/harness-runbook.md`](../operations/harness-runbook.md)
-  §3), and it is how the refresh token in that file got there. Neither
-  client "routes through" Hydra on its way to the lobby; the lobby WebSocket
-  is a separate long-lived connection.
+  §3), and it is how the first refresh token in that file got there.
+  Neither client "routes through" Hydra on its way to the lobby; the lobby
+  WebSocket is a separate long-lived connection.
 - **Thin bidirectional arrows** are signalling / control-plane links. They
   carry JSON, JSON-RPC, or GPGNet control messages.
-- **Dotted arrow** means the edge is taken on one credential channel only.
-  The Hydra edges are the refresh-token exchange, which a run
-  authenticating from a pre-signed access token never makes.
+- **Dotted arrow**, in this diagram, means the edge is taken on one
+  credential channel only. The Hydra edges are the refresh-token exchange,
+  which a run authenticating from a pre-signed access token never makes.
 - **Thick bidirectional arrow** (`IA <==> PIA`) carries the actual UDP
   game-simulation traffic. The lobby server deliberately never sees game
   traffic — it only relays ICE candidates during negotiation.
@@ -94,13 +96,13 @@ flowchart LR
 
 ## Protocol label sources
 
-Every edge label on the four live channels is taken verbatim from the
-Communication Channels table in
+Every edge label on the four live channels follows the Communication
+Channels table in
 [`../research/project-briefing.md`](../research/project-briefing.md). The
 dotted Hydra edges have no row there, because that table covers session
-traffic only; they follow
-[`sequence-full-session.md`](./sequence-full-session.md) Phase 1, which
-draws the same exchange. The
+traffic only; they follow the Mock Client's steady-state token exchange in
+[`sequence-full-session.md`](./sequence-full-session.md), drawn there as
+`POST /oauth2/token (grant_type=refresh_token)`. The
 `(WebSocket/WSS via ws_bridge_rs)` addendum on the lobby link is drawn from
 [`../research/lobby-protocol-spec.md`](../research/lobby-protocol-spec.md)
 §1, which documents the WebSocket bridge that translates between the mock

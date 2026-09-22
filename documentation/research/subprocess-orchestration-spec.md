@@ -149,7 +149,7 @@ Bold flags are passed by the Mock Client on every launch.
 | **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. Allocated dynamically (§3) so multiple harness instances on one host do not collide. |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
-| `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. Use the `LOG_DIR` env var (§2.3). |
+| `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
 | `--help` | — | no | Diagnostic only. |
@@ -286,7 +286,7 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
 ```text
 [ mockGameBin,
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
-  "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
+  "--lobby-port",  lobbyUdpPort,  // UDP, fallback only; CreateLobby's port wins
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
   "--game-uid",    game_launch.uid,

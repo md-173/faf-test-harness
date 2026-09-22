@@ -316,7 +316,9 @@ not raise `mock-client`'s level; use `--log-level` or `FAF_MOCK_CLIENT_LOG_LEVEL
 no such flag and honours the variable **when run directly** — but not under `mock-client run`,
 because `MockGameLauncher` and `IceAdapterLauncher` both overwrite `LOG_LEVEL` in the children they
 spawn with `mock-client`'s own resolved level. An orchestrated run therefore comes up at
-`mock-client`'s level in all three processes.
+`mock-client`'s level in all three processes, the adapter included only when it is launched from
+a `.jar`: upstream reads no `LOG_LEVEL`, so the level reaches it through the headless logback
+config the launcher injects on that path alone (`subprocess-orchestration-spec.md` §2.3).
 
 
 ## 8. Releases

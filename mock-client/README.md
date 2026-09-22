@@ -204,6 +204,9 @@ only when run directly. Under `mock-client run`, which is the example above,
 even that does not apply: `MockGameLauncher` and `IceAdapterLauncher` each
 overwrite `LOG_LEVEL` in the child they spawn with `mock-client`'s own resolved
 level, so an orchestrated run comes up at that level in all three processes.
+The adapter is included only when it is launched from a `.jar`: upstream reads
+no `LOG_LEVEL`, and the level reaches it through the headless logback config the
+launcher injects on that path alone (`subprocess-orchestration-spec.md` §2.3).
 `LOG_LEVEL=DEBUG mock-client run …` gives `INFO` everywhere.
 
 ### Environment variable convention
