@@ -931,6 +931,25 @@ public final class MockGameLifecycle {
             // so every army reports its team's result (WBS-4.3.3). Army 1 is always on TEAMS[0].
             // Before teams existed this rule read "army 1 wins, every other army loses"; with two
             // teams that would have army 3 report defeat while its team wins.
+            //
+            // The host and every joiner send this same set, which is the contract rather than
+            // duplication (WBS-3.2.4.3-fix, #384). faf-server resolves each army by vote across
+            // reporters (GameResultReports._compute_outcome), and the real game reports this way
+            // too: FA's sim declares a result for every army and UserSync.lua sends each one from
+            // every client. The ids are the host's alone, since handle_player_option ignores a
+            // non-host and add_result drops any army the host did not give to a player present at
+            // launch. So a joiner never learns its own army, and does not need to. It agrees with
+            // the host only while this loop stays in step with sendPlayerOptions, which numbers
+            // armies by arrival and teams them by the same teamForArmy rule. If the two drift,
+            // nothing here fails and the damage shows only on the server: complementary sets leave
+            // every army CONFLICTING, games that each report only their own army as the winner
+            // leave both teams claiming victory, and either way the game goes unranked.
+            // PeerResultAgreementTest is what notices.
+            //
+            // The range also covers every army still in play only because peers is never pruned, so
+            // a departed player's army simply stays in it. A game taught to play on after a
+            // departure (WBS-4.3.4) must not just prune peers: the host does not renumber, so the
+            // range would then name the wrong armies whenever anyone but the last arrival had left.
             for (int army = 1; army <= peers.size() + 1; army++) {
                 String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
                 gpgnetSender.gameResult(army, result, SCORES.get(result));
