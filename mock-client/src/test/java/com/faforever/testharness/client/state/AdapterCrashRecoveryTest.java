@@ -33,6 +33,7 @@ import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -117,6 +118,7 @@ final class AdapterCrashRecoveryTest {
     private DummyIceLauncher iceLauncher;
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
+    private Level originalLevel;
 
     // Stashed by RecordingIceAdapterConnection's constructor so firePlayingNotification can reach
     // it after it's been handed off to the lifecycle.
@@ -139,10 +141,17 @@ final class AdapterCrashRecoveryTest {
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
+        // The teardown-owned classification this class waits on is DEBUG, and the level is set
+        // here rather than inherited from the Gradle task's LOG_LEVEL so the same wait works from
+        // an IDE. Without it those records never reach the appender and the wait would expire
+        // instead of asserting.
+        originalLevel = root.getLevel();
+        root.setLevel(Level.DEBUG);
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        root.setLevel(originalLevel);
         appender.stop();
         root.detachAppender(appender);
         if (iceLauncher != null && iceLauncher.getSubprocess() != null) {
@@ -208,8 +217,63 @@ final class AdapterCrashRecoveryTest {
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
+        // The PLAYING edge carries the exit status too (WBS-3.1.2.8), not only the warning. Both
+        // come from the one branch in onAdapterExited, so this pins that they stay together.
+        assertTrue(lifecycle.adapterLost(), "an adapter killed while PLAYING is a lost adapter");
     }
 
+    /**
+     * The exit status is decided before anything can read it (WBS-3.1.2.8).
+     *
+     * <p>This is the property #357's attempt lacked. That one keyed the code on the game's reported
+     * status, written on a {@code CompletableFuture} continuation, so {@code RunCommand} could be
+     * released by the adapter's death before the verdict existed and the same scenario exited 69 or
+     * 0 run to run.
+     *
+     * <p>Asserting {@code adapterLost()} after a second {@code get()} would prove nothing, because
+     * by then any late write has had time to land. So the verdict is sampled from a dependent
+     * registered on the TERMINATED future <em>before</em> the adapter is killed: a dependent on an
+     * incomplete future runs on the thread that completes it, inside {@code commitTransition},
+     * which is the exact moment {@code RunCommand}'s own {@code get()} is released. A verdict
+     * written any later than the transition action fails this.
+     *
+     * <p>Teardown reaps the game from TERMINATED's entry hook, which runs before that commit, so
+     * the game's exit is already reaped here while its classification is still outstanding on
+     * another thread. That is the ordering this asserts is irrelevant to the adapter's verdict.
+     */
+    @Test
+    void theExitVerdictIsSetBeforeTerminatedCompletes() throws Exception {
+        MockClientLifecycle lifecycle = hostedLifecycle();
+        AtomicBoolean atCommit = new AtomicBoolean();
+        lifecycle
+                .stateReached(ClientState.TERMINATED)
+                .thenRun(() -> atCommit.set(lifecycle.adapterLost()));
+
+        killAdapter();
+
+        lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
+        assertTrue(
+                atCommit.get(),
+                "the adapter verdict must already be set when TERMINATED commits, not written"
+                        + " afterwards. captured: "
+                        + significantEvents());
+        assertTrue(lifecycle.adapterLost(), "and it must still read true afterwards");
+    }
+
+    /**
+     * A teardown-initiated adapter exit is not a crash, and this waits for the classification
+     * before saying so.
+     *
+     * <p>The wait is the test, not housekeeping. Until WBS-3.1.2.8 this asserted as soon as the
+     * adapter process had exited, but the event is posted to the FSM asynchronously ({@code
+     * adapterExit().thenAcceptAsync(...)}), so the assertion usually ran before anything had
+     * classified the exit at all: measured, the test passes with the {@code teardown.hasRun()}
+     * branch of {@code onAdapterExited} deleted, which is the defect it exists to catch.
+     *
+     * <p>It waits on {@code logAdapterExitAfterTeardown}'s own trailing record rather than on the
+     * classification line, because that record is emitted whichever branch classified the exit. A
+     * regression therefore fails the assertion below instead of expiring the wait.
+     */
     @Test
     void cleanShutdownLogsNoAdapterCrashWarning() throws Exception {
         MockClientLifecycle lifecycle = hostedLifecycle();
@@ -218,10 +282,9 @@ final class AdapterCrashRecoveryTest {
         lifecycle.shutdown();
 
         lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
-        // Teardown terminated the adapter as part of shutdown; give the exit future a moment to
-        // fire and be classified before asserting no crash warning was logged.
-        iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
+        int code = iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
         assertFalse(iceLauncher.getSubprocess().isAlive());
+        awaitEvent(e -> e.getFormattedMessage().contains("exited after session teardown"));
 
         boolean crashWarned =
                 appender.list.stream()
@@ -230,9 +293,27 @@ final class AdapterCrashRecoveryTest {
                                         e.getLevel() == Level.WARN
                                                 && e.getFormattedMessage()
                                                         .contains("ICE adapter exited abnormally"));
-        assertFalse(crashWarned, "a teardown-initiated adapter exit must not log a crash warning");
+        assertFalse(
+                crashWarned,
+                "a teardown-initiated adapter exit (code="
+                        + code
+                        + ") must not log a crash warning. captured: "
+                        + significantEvents());
+        assertFalse(
+                lifecycle.adapterLost(),
+                "nor may it set the exit verdict, or every clean shutdown would report a lost"
+                        + " adapter");
     }
 
+    /**
+     * A non-zero adapter exit delivered after teardown is a no-op: no unregistered-event warning,
+     * no crash warning, and no exit verdict.
+     *
+     * <p>The deterministic guard for the {@code teardown.hasRun()} branch of {@code
+     * onAdapterExited}, and the test its javadoc points at. {@code post} delivers the event
+     * synchronously on this thread, so unlike the sibling test above there is nothing to wait for
+     * and nothing to race: delete that branch and this fails outright.
+     */
     @Test
     void lateAdapterExitedAfterTerminatedIsNoOp() throws Exception {
         MockClientLifecycle lifecycle = hostedLifecycle();
@@ -254,6 +335,19 @@ final class AdapterCrashRecoveryTest {
                 "a post-teardown adapter exit must be a deliberate no-op, not an "
                         + "unregistered-event warning. captured: "
                         + significantEvents());
+        assertFalse(
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("ICE adapter exited abnormally")),
+                "nor a crash warning, whatever the code it carries. captured: "
+                        + significantEvents());
+        assertFalse(
+                lifecycle.adapterLost(),
+                "nor may it set the exit verdict after TERMINATED has already been observed, which"
+                        + " is the race that removed the game-keyed code from #357");
     }
 
     /** Kills the running adapter subprocess and returns the exit code it actually produced. */
@@ -292,6 +386,27 @@ final class AdapterCrashRecoveryTest {
     private void firePlayingNotification() throws Exception {
         connection.fireNotification(
                 "onGpgNetMessageReceived", MAPPER.readTree(LAUNCHING_NOTIFICATION));
+    }
+
+    /**
+     * Waits for a record the FSM emits from an asynchronous continuation, up to the class timeout's
+     * worth of short polls. Used where the signal being asserted on is only observable once a
+     * post-teardown event has actually been delivered to the machine.
+     *
+     * @param matcher the record being waited for
+     * @return that record
+     */
+    private ILoggingEvent awaitEvent(final Predicate<ILoggingEvent> matcher) throws Exception {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            for (ILoggingEvent event : appender.list) {
+                if (matcher.test(event)) {
+                    return event;
+                }
+            }
+            Thread.sleep(50);
+        }
+        fail("no log event matched within 5s. captured: " + significantEvents());
+        throw new AssertionError("unreachable");
     }
 
     private ILoggingEvent findEvent(final Predicate<ILoggingEvent> matcher) {

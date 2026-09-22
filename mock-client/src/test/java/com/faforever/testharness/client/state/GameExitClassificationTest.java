@@ -246,9 +246,10 @@ final class GameExitClassificationTest {
      * mock-game's own {@code ADAPTER_LOST} is carved out of the crash reading (#357 review).
      *
      * <p>The game diagnosed its own end and named the cause, which an arbitrary non-zero exit does
-     * not, so it is logged as a lost link and the run exits {@code 0}. It gets no exit code of its
-     * own here: this classification is asynchronous, and the adapter's death can release {@code
-     * RunCommand} before it runs. #406 gives adapter death a code keyed on the adapter's own exit.
+     * not, so it is logged as a lost link and contributes nothing to the run's code. It gets no
+     * exit code of its own here: this classification is asynchronous, and the adapter's death can
+     * release {@code RunCommand} before it runs. Adapter death has its own code, {@code
+     * ExitCodes.ADAPTER_LOST}, keyed on the adapter's own exit for exactly that reason.
      */
     @Test
     void anAdapterLostExitIsLoggedAsALostLinkRatherThanACrash() {
