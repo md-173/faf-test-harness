@@ -34,15 +34,20 @@ sequenceDiagram
     participant Hydra as Ory Hydra
     participant LS as Lobby Server
 
-    Note over Dev,Hydra: Phase 1 - Authentication (one-time bootstrap)
-    Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange (manual, browser)
-    Hydra-->>Dev: access_token + refresh_token
-    Dev->>MC: write refresh_token to .secrets/refresh_token.txt (gitignored)
-
-    Note over MC,Hydra: Steady-state (at the start of each run)
-    MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
-    Hydra-->>MC: access_token + rotated refresh_token
-    MC->>MC: persist new refresh_token atomically
+    Note over Dev,Hydra: Phase 1 - Authentication (one credential channel or the other)
+    alt refresh-token file (--oauth-refresh-token-file)
+        Note over Dev,Hydra: One-time bootstrap, by hand in a browser
+        Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange (manual, browser)
+        Hydra-->>Dev: access_token + refresh_token
+        Dev->>MC: write refresh_token to .secrets/refresh_token.txt (gitignored)
+        Note over MC,Hydra: At the start of each run
+        MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
+        Hydra-->>MC: access_token + rotated refresh_token
+        MC->>MC: persist new refresh_token atomically
+    else pre-signed access-token file (--oauth-access-token-file)
+        Dev->>MC: write a token someone else signed (gitignored, or a CI secret)
+        MC->>MC: read it at the start of each run and send it as-is, no Hydra call
+    end
 
 
     MC->>LS: WebSocket handshake (WSS, JSON over TCP)
@@ -177,6 +182,12 @@ sequenceDiagram
 
 ## Reading guide
 
+- **Phase 1 branches on the credential channel.** A run authenticates either
+  from a refresh-token file, which it exchanges at Hydra as the run starts, or
+  from a pre-signed access-token file, which it sends as-is and which never
+  reaches Hydra. Exactly one branch happens per run. The browser
+  authorization-code exchange is a one-time human bootstrap that produces the
+  first branch's file; no run performs it.
 - **Participant-set changes between Part 1 and Part 2.** `Dev` and `Hydra`
   only matter for OAuth and are dropped from Part 2. The peer lane
   (`PIA` / Peer ICE Adapter, `PMG` / Peer Mock Game) only matters once the
