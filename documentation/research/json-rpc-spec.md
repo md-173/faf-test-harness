@@ -316,7 +316,7 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 | **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client allocates a free port and passes it explicitly so multiple harness instances do not collide. |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
-| `--log-directory <path>` | env `LOG_DIR` | Deprecated; use the `LOG_DIR` env var instead. |
+| `--log-directory <path>` | env `LOG_DIR` | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. Use the `LOG_DIR` env var. |
 | `--force-relay` | off | Forces TURN-only candidates; useful for fault-injection later (WBS 3.x). |
 | `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
 | `--info-window` | off | Same. |

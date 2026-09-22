@@ -99,11 +99,21 @@ Mirroring `IceAdapterImpl`:
 
 `ProcessBuilder.environment()` starts as a copy of the parent. We:
 
-- set `LOG_DIR` to a per-child directory under `${LOG_DIR:-logs}/<child>/`;
-  the adapter's README documents `LOG_DIR` as the supported way to redirect
-  its file output (the `--log-directory` flag is deprecated upstream).
-- pass `LOG_LEVEL` through unchanged so children inherit the harness log
-  level (see `LoggingSetup`).
+- set `LOG_DIR` to a fixed per-child directory, `logs/ice-adapter/`; the
+  adapter's README documents `LOG_DIR` as the supported way to redirect its
+  file output. No parent `LOG_DIR` is read: the harness's own output path
+  comes from `LOG_FILE` (`LoggingSetup`). On the `.jar` path it redirects
+  nothing, because the injected config below has no file appender.
+- set `LOG_LEVEL` to the harness's own resolved level, overwriting any
+  inherited value, so a child logs at the level mock-client resolved (see
+  `LoggingSetup` for that precedence). Upstream does not read it: the pinned
+  3.3.14 adapter's bundled `logback.xml` hardcodes `<root level="DEBUG">` and
+  substitutes `${LOG_DIR}` only, and neither its README nor its `IceOptions`
+  mentions a log level. It takes effect only because the launcher injects a
+  console-only logback config whose root level is `${LOG_LEVEL:-INFO}`, and
+  that injection happens on the `.jar` path alone. Against a non-jar adapter
+  `LOG_LEVEL` is inert. The two variables are mirror images: `LOG_LEVEL`
+  works only on the jar path, `LOG_DIR` only off it.
 - do **not** scrub other env vars. The children run as the same OS user as
   the Mock Client, so they gain nothing it does not already have.
 
@@ -139,7 +149,7 @@ Bold flags are passed by the Mock Client on every launch.
 | **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. Allocated dynamically (§3) so multiple harness instances on one host do not collide. |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
-| `--log-directory <path>` | unset | no | Deprecated upstream — use `LOG_DIR` env var instead (§2.3). |
+| `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. Use the `LOG_DIR` env var (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
 | `--help` | — | no | Diagnostic only. |
@@ -197,7 +207,7 @@ The example below mirrors json-rpc-spec §9 phases A–B.
      "--rpc-port",    rpcPort,
      "--gpgnet-port", gpgnetPort,
      "--lobby-port",  lobbyUdpPort ]
-   env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<inherited>
+   env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<mock-client's resolved level>
    cwd   = <session scratch dir>
    redirectErrorStream(false)
 
