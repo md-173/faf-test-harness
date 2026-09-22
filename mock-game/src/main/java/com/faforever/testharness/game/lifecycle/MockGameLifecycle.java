@@ -45,7 +45,10 @@ public final class MockGameLifecycle {
     private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * A mapping of result strings to numerical scores.
+     * A mapping of result strings to numerical scores, as FA itself scores them: {@code
+     * VictoryForArmy}, {@code DefeatForArmy} and {@code DrawForArmy} in FA's {@code
+     * AbstractVictoryCondition.lua} send {@code "victory 10"}, {@code "defeat -10"} and {@code
+     * "draw 0"} (WBS-3.2.4.3-fix, #384).
      *
      * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
      * end-of-match result is fixed: army 1's team wins and the other team loses (WBS-3.2.4.3-fix,
@@ -53,7 +56,7 @@ public final class MockGameLifecycle {
      * gap.
      */
     private static final Map<String, Integer> SCORES =
-            Map.of("victory", 10, "defeat", -10, "draw", 10);
+            Map.of("victory", 10, "defeat", -10, "draw", 0);
 
     /**
      * The numerical values for the teams in the match. We are not using team 1 since that is the
