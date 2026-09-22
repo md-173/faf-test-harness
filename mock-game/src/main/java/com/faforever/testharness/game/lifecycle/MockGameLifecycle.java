@@ -944,9 +944,11 @@ public final class MockGameLifecycle {
             // sim declares a result for every army and UserSync.lua sends each one from every
             // client. faf-server keeps each player's report per army and resolves each army across
             // them, unanimously when they agree (GameResultReports._compute_outcome). Reporting
-            // from each game's own vantage instead, the alternative #384 raised, would make the
-            // reports disagree, and depending on player count and game type faf-server would
-            // either fail to resolve the game or score it as a draw, never as the result above.
+            // from each game's own vantage, the alternative #384 raised, means nothing to
+            // faf-server, which reads every army id in the host's numbering (below) whoever sent
+            // it. A game whose set disagreed would split the vote for an army, which faf-server
+            // settles by majority where it can and otherwise marks CONFLICTING. That can leave the
+            // game unresolved, or draw a 1v1 matchmaker game, which is decided by score.
             //
             // The army ids are the host's: faf-server takes PlayerOption from no other game, and
             // add_result drops any army the host did not give to a player present at launch. A
