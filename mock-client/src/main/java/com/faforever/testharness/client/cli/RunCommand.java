@@ -80,8 +80,11 @@ public final class RunCommand implements Callable<Integer> {
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
      *     could not be established or the connection dropped unexpectedly; {@link
-     *     ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted for.
-     *     Superseded by the signal's own exit code whenever a signal is what ended the run.
+     *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
+     *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
+     *     for. The last three are ordered by {@link #sessionExitCode(boolean, boolean, boolean,
+     *     Logger)}. Superseded by the signal's own exit code whenever a signal is what ended the
+     *     run.
      */
     @Override
     public Integer call() {
@@ -162,18 +165,57 @@ public final class RunCommand implements Callable<Integer> {
             // stateReached futures complete normally; nothing actionable on this teardown path.
         }
 
+        // Both verdicts are read from the lifecycle rather than re-derived from an exit code,
+        // because each judgement needs signals the classifier already weighed: the clean-end and
+        // teardown flags for the game, and whether teardown was running for the adapter. Testing
+        // teardown here would be useless anyway, since it has always run by this point (the
+        // TERMINATED entry hook performs it before the stateReached future above completes).
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
-        if (event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE) {
+        boolean lobbyDropped =
+                event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
+        return sessionExitCode(lobbyDropped, lifecycle.adapterLost(), lifecycle.gameCrashed(), log);
+    }
+
+    /**
+     * Picks a finished session's exit code from the three verdicts it can carry, and logs the one
+     * being reported.
+     *
+     * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
+     * session is a different and more fundamental finding than anything that happened inside one,
+     * and it was here first. The adapter comes before the game because it is the verdict with an
+     * ordering against this read (WBS-3.1.2.8 writes it in the transition action that drives
+     * TERMINATED, while {@code gameCrashed} is written on a continuation that may not have run
+     * yet), so consulting the game first would let a race pick the code for a run whose adapter
+     * died. It also matches cause and effect: an adapter dying is what makes the game react, and
+     * never the reverse, since java-ice-adapter closes the game's connection and keeps serving when
+     * the game dies.
+     *
+     * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
+     * takes the logger instead of holding one because this class obtains its logger only after
+     * {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
+     *
+     * @param lobbyDropped whether the lobby connection closed abruptly under the session
+     * @param adapterLost whether the ICE adapter died unaccounted for; {@link
+     *     MockClientLifecycle#adapterLost()}
+     * @param gameCrashed whether the game process died unaccounted for; {@link
+     *     MockClientLifecycle#gameCrashed()}
+     * @param log the configured logger, for the single line naming what is reported
+     * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
+     */
+    static int sessionExitCode(
+            final boolean lobbyDropped,
+            final boolean adapterLost,
+            final boolean gameCrashed,
+            final Logger log) {
+        if (lobbyDropped) {
             log.warn("lobby connection dropped unexpectedly");
             return ExitCodes.RUNTIME;
         }
-        // Checked after the lobby drop, not before: a connection that died under the session is a
-        // different and more fundamental finding than a game that died inside one, and it was here
-        // first. Read from the lifecycle rather than re-derived from the exit code, because the
-        // judgement needs the clean-end and teardown signals the classifier already weighed, and
-        // because teardown has always run by this point (the TERMINATED entry hook performs it
-        // before the stateReached future above completes), so testing it here would be useless.
-        if (lifecycle.gameCrashed()) {
+        if (adapterLost) {
+            log.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
+            return ExitCodes.ADAPTER_LOST;
+        }
+        if (gameCrashed) {
             log.warn("the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
         }
