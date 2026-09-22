@@ -22,6 +22,15 @@ test {
     useJUnitPlatform {
         excludeTags 'integration'
     }
+    // Pinned to logback.xml's own default because several tests here read the log.
+    // PeerResultAgreementTest, TwoGameTrafficLoopbackTest and LifecyclePeerConnectTest depend on
+    // INFO lines, and CrashInjectionProcessTest proves its child JVM ran no orderly shutdown by
+    // the absence of one. LOG_LEVEL is read from the environment, so a developer who exported
+    // WARN to quiet a manual run would see the first three fail and the last keep passing even if
+    // the crash regressed; the child inherits this value. Pinning the default changes nothing
+    // when the variable is unset. mock-client pins DEBUG for its own evidence; here DEBUG would
+    // log every datagram the traffic tests receive.
+    environment 'LOG_LEVEL', 'INFO'
     // VersionFlagJarTest runs the shadow jar that ships, because no test from class directories can
     // see a manifest (WBS-3.1.5.2, #383). inputs.files on the task provider builds the jar first and
     // reruns the test when it changes. The path goes through an argument provider because Gradle
