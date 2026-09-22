@@ -285,6 +285,12 @@ final class AdapterConnectRaceTest {
      * An interrupted bring-up is a failed launch like any other (#437). Nothing in production
      * interrupts the thread that runs it today, which is why this is the only test that reaches
      * that catch arm.
+     *
+     * <p>Worth knowing if something ever does: the arm restores the interrupt flag before it
+     * throws, so TERMINATED's entry hook runs the whole teardown on an interrupted thread, where
+     * every bounded wait returns at once. SIGTERM, grace and SIGKILL collapse into one kill and the
+     * lobby close is not awaited. Nothing is leaked, which is what the last assertion pins, but the
+     * shutdown is abrupt.
      */
     @Test
     void anInterruptedBringUpIsALaunchFailure() throws Exception {
@@ -316,8 +322,17 @@ final class AdapterConnectRaceTest {
 
         assertTrue(lifecycle.launchFailed(), "an interrupted bring-up is a failed launch");
         ILoggingEvent cause =
-                findEvent(e -> e.getFormattedMessage().contains("Could not launch the game"));
+                findEvent(
+                        e ->
+                                e.getFormattedMessage()
+                                        .contains(
+                                                "Could not connect or setup the ICE adapter"
+                                                        + " (interrupted)"));
         assertEquals(Level.WARN, cause.getLevel(), "got: " + cause.getFormattedMessage());
+        // A bounded wait, not an isAlive() probe: terminate() returns without awaiting anything on
+        // an interrupted thread, so the kill it just sent is still in flight. The wait failing is
+        // the assertion that teardown reaped the adapter at all.
+        iceLauncher.getSubprocess().onExit().get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
     }
 
     /**

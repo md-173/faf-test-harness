@@ -128,7 +128,8 @@ practice, since no session ran for an adapter or a game to die in. The adapter
 comes before the game because its verdict is the one decided before the run's end
 is observable, and because an adapter's death is what makes the game react, never
 the reverse. A run that a signal ended logs none of these lines, because its exit
-code is the signal's own.
+code is the signal's own, unless the session's own end and the signal land in the
+same instant.
 
 No subcommand returns `64` (`NOT_IMPLEMENTED`) — the constant no longer exists.
 Nothing shipped here is a placeholder.

@@ -86,8 +86,8 @@ public final class RunCommand implements Callable<Integer> {
      *     adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if the session ran but its
      *     game process died unaccounted for. A dropped connection, a launch that never came up, a
      *     lost adapter and a crashed game are ordered by {@link #sessionExitCode(boolean, boolean,
-     *     boolean, boolean, Logger)}. Superseded by the signal's own exit code whenever a signal is
-     *     what ended the run, and then no verdict is logged.
+     *     boolean, boolean, boolean, Logger)}. Superseded by the signal's own exit code whenever a
+     *     signal is what ended the run, and then no verdict is logged.
      */
     @Override
     public Integer call() {
@@ -183,17 +183,13 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
-        // On a signal the code computed here never reaches the process, so no verdict is named.
-        // The lifecycle's own teardown check cannot promise that alone: SubprocessRegistry's
-        // shutdown hook, or the terminal's SIGINT to the process group, can kill the adapter
-        // before teardown starts, and its death would then read as a finding (#437).
-        Logger verdictLog = shuttingDown.get() ? NOPLogger.NOP_LOGGER : log;
         return sessionExitCode(
+                shuttingDown.get(),
                 lobbyDropped,
                 lifecycle.launchFailed(),
                 lifecycle.adapterLost(),
                 lifecycle.gameCrashed(),
-                verdictLog);
+                log);
     }
 
     /**
@@ -212,10 +208,19 @@ public final class RunCommand implements Callable<Integer> {
      * adapter dying is what makes the game react, and never the reverse, since java-ice-adapter
      * closes the game's connection and keeps serving when the game dies.
      *
+     * <p>A run a signal ended names no verdict at all. Its code is the signal's own (#334), so the
+     * one computed here is discarded and a line would only mislead. The lifecycle's own teardown
+     * check cannot promise that by itself: {@code SubprocessRegistry}'s shutdown hook, or the
+     * terminal's SIGINT to the whole process group, can kill the adapter before {@code
+     * SessionTeardown} starts, and its death would then read as a finding (#437). The verdicts are
+     * still computed, since the caller returns the code either way.
+     *
      * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
      * takes the logger instead of holding one because this class obtains its logger only after
      * {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
      *
+     * @param shuttingDown whether the JVM is already shutting down, which while a run is live can
+     *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
      * @param launchFailed whether the session's ICE adapter or game never came up; {@link
      *     MockClientLifecycle#launchFailed()}
@@ -227,25 +232,29 @@ public final class RunCommand implements Callable<Integer> {
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */
     static int sessionExitCode(
+            final boolean shuttingDown,
             final boolean lobbyDropped,
             final boolean launchFailed,
             final boolean adapterLost,
             final boolean gameCrashed,
             final Logger log) {
+        Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
-            log.warn("lobby connection dropped unexpectedly");
+            verdict.warn("lobby connection dropped unexpectedly");
             return ExitCodes.RUNTIME;
         }
         if (launchFailed) {
-            log.warn("the ICE adapter or game never came up; reporting it in this run's exit code");
+            verdict.warn(
+                    "the ICE adapter or game never came up; reporting it in this run's exit code");
             return ExitCodes.RUNTIME;
         }
         if (adapterLost) {
-            log.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
+            verdict.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
             return ExitCodes.ADAPTER_LOST;
         }
         if (gameCrashed) {
-            log.warn("the game process died unexpectedly; reporting it in this run's exit code");
+            verdict.warn(
+                    "the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
         }
         return ExitCodes.OK;

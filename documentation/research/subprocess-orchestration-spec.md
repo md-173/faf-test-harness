@@ -618,7 +618,7 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 |---|---|---|---|
 | Adapter binary missing | wrong path | the launcher's regular-file check, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter exits immediately (with `0` on bad CLI args, §2.6) | bad CLI args, port in use | `onExit()` before the RPC connect completes (§2.7) | Log args, abort session, surface to FSM as launch failure; `run` exits `70` |
-| Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | `destroyForcibly()`, abort session as a launch failure; `run` exits `70` |
+| Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |

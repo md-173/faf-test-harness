@@ -111,7 +111,7 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 expected,
                 RunCommand.sessionExitCode(
-                        lobbyDropped, launchFailed, adapterLost, gameCrashed, log));
+                        false, lobbyDropped, launchFailed, adapterLost, gameCrashed, log));
     }
 
     /**
@@ -124,13 +124,14 @@ final class RunCommandExitCodeTest {
     @Test
     void aLostAdapterOutranksACrashedGame() {
         assertEquals(
-                ExitCodes.ADAPTER_LOST, RunCommand.sessionExitCode(false, false, true, true, log));
+                ExitCodes.ADAPTER_LOST,
+                RunCommand.sessionExitCode(false, false, false, true, true, log));
     }
 
     /** A clean session says nothing: the log surface is a documented interface. */
     @Test
     void aCleanSessionLogsNothing() {
-        RunCommand.sessionExitCode(false, false, false, false, log);
+        RunCommand.sessionExitCode(false, false, false, false, false, log);
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -138,7 +139,7 @@ final class RunCommandExitCodeTest {
     /** Each reported verdict names itself once, at WARN, so a run's log says which one it was. */
     @Test
     void aLostAdapterIsReportedAtWarn() {
-        RunCommand.sessionExitCode(false, false, true, false, log);
+        RunCommand.sessionExitCode(false, false, false, true, false, log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -151,7 +152,9 @@ final class RunCommandExitCodeTest {
     /** A launch that never came up names itself once, at WARN, like the others (#437). */
     @Test
     void aFailedLaunchIsReportedAtWarn() {
-        assertEquals(ExitCodes.RUNTIME, RunCommand.sessionExitCode(false, true, false, false, log));
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(false, false, true, false, false, log));
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -167,11 +170,32 @@ final class RunCommandExitCodeTest {
      */
     @Test
     void aLobbyDropOutranksAFailedLaunch() {
-        RunCommand.sessionExitCode(true, true, false, false, log);
+        RunCommand.sessionExitCode(false, true, true, false, false, log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         assertTrue(
                 appender.list.get(0).getFormattedMessage().contains("lobby connection dropped"),
                 "the lobby drop must be the line reported: " + appender.list);
+    }
+
+    /**
+     * A run a signal ended names no verdict, whatever it found (#437). The code is still computed,
+     * because the caller returns it either way, but the process exits on the signal's own code and
+     * a verdict line would contradict it. Only a live run exercises the hook that sets this, so
+     * this is the one place the rule itself is pinned.
+     */
+    @Test
+    void aSignalledRunNamesNoVerdict() {
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(true, false, true, false, false, log));
+        assertEquals(
+                ExitCodes.ADAPTER_LOST,
+                RunCommand.sessionExitCode(true, false, false, true, false, log));
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(true, true, false, false, false, log));
+
+        assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
 }

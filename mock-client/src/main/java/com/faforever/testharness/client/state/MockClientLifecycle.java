@@ -1295,7 +1295,8 @@ public final class MockClientLifecycle {
             throw launchFailure("connect or setup the ICE adapter", e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw launchFailure("launch the game", "interrupted");
+            // Named for the adapter: every interruptible wait above is its connect or a setup call.
+            throw launchFailure("connect or setup the ICE adapter", "interrupted");
         } catch (MockGameLaunchException e) {
             throw launchFailure("launch game binary", e.getMessage());
         }
