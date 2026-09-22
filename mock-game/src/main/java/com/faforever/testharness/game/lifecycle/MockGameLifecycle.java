@@ -48,7 +48,12 @@ public final class MockGameLifecycle {
      * A mapping of result strings to numerical scores, as FA itself scores them: {@code
      * VictoryForArmy}, {@code DefeatForArmy} and {@code DrawForArmy} in FA's {@code
      * AbstractVictoryCondition.lua} send {@code "victory 10"}, {@code "defeat -10"} and {@code
-     * "draw 0"} (WBS-3.2.4.3-fix, #384).
+     * "draw 0"}.
+     *
+     * <p>The values are not decoration. faf-server decides a 1v1 matchmaker game by comparing the
+     * scores reported for its two armies rather than their outcomes ({@code
+     * LadderGame._outcome_override_hook}, on by default), so victory has to outscore defeat for the
+     * fixed result described below to be the one it records.
      *
      * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
      * end-of-match result is fixed: army 1's team wins and the other team loses (WBS-3.2.4.3-fix,
@@ -935,24 +940,28 @@ public final class MockGameLifecycle {
             // Before teams existed this rule read "army 1 wins, every other army loses"; with two
             // teams that would have army 3 report defeat while its team wins.
             //
-            // The host and every joiner send this same set, which is the contract rather than
-            // duplication (WBS-3.2.4.3-fix, #384). faf-server resolves each army by vote across
-            // reporters (GameResultReports._compute_outcome), and the real game reports this way
-            // too: FA's sim declares a result for every army and UserSync.lua sends each one from
-            // every client. The ids are the host's alone, since handle_player_option ignores a
-            // non-host and add_result drops any army the host did not give to a player present at
-            // launch. So a joiner never learns its own army, and does not need to. It agrees with
-            // the host only while this loop stays in step with sendPlayerOptions, which numbers
-            // armies by arrival and teams them by the same teamForArmy rule. If the two drift,
-            // nothing here fails and the damage shows only on the server: complementary sets leave
-            // every army CONFLICTING, games that each report only their own army as the winner
-            // leave both teams claiming victory, and either way the game goes unranked.
-            // PeerResultAgreementTest is what notices.
+            // The host and every joiner send this same set, which is how FA itself reports: its
+            // sim declares a result for every army and UserSync.lua sends each one from every
+            // client. faf-server keeps each player's report per army and resolves each army across
+            // them, unanimously when they agree (GameResultReports._compute_outcome). Reporting
+            // from each game's own vantage instead, the alternative #384 raised, would make the
+            // reports disagree, and depending on player count and game type faf-server would
+            // either fail to resolve the game or score it as a draw, never as the result above.
             //
-            // The range also covers every army still in play only because peers is never pruned, so
-            // a departed player's army simply stays in it. A game taught to play on after a
-            // departure (WBS-4.3.4) must not just prune peers: the host does not renumber, so the
-            // range would then name the wrong armies whenever anyone but the last arrival had left.
+            // The army ids are the host's: faf-server takes PlayerOption from no other game, and
+            // add_result drops any army the host did not give to a player present at launch. A
+            // joiner never learns its own army and does not need to. Every game runs this loop,
+            // and while nobody leaves every game holds the same number of peers, so the games
+            // always agree with each other. The risk is that together they stop matching the
+            // host's frames, if this loop and sendPlayerOptions (arrival order numbering, teams by
+            // teamForArmy) drift apart: nothing here fails, and faf-server can resolve the game
+            // wrongly or not at all. PeerResultAgreementTest derives its expectation from the
+            // host's frames to catch exactly that.
+            //
+            // The agreement between games depends on nobody leaving. peers is never pruned, so a
+            // departed player's army stays in the range of every game that knew them, but a player
+            // joining afterwards never hears of them and its range falls short. Playing on after a
+            // departure needs more than pruning peers, since the host does not renumber.
             for (int army = 1; army <= peers.size() + 1; army++) {
                 String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
                 gpgnetSender.gameResult(army, result, SCORES.get(result));
