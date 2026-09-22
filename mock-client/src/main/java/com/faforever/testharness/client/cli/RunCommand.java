@@ -183,12 +183,12 @@ public final class RunCommand implements Callable<Integer> {
      * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
      * session is a different and more fundamental finding than anything that happened inside one,
      * and it was here first. The adapter comes before the game because it is the verdict with an
-     * ordering against this read (WBS-3.1.2.8 writes it in the transition action that drives
-     * TERMINATED, while {@code gameCrashed} is written on a continuation that may not have run
-     * yet), so consulting the game first would let a race pick the code for a run whose adapter
-     * died. It also matches cause and effect: an adapter dying is what makes the game react, and
-     * never the reverse, since java-ice-adapter closes the game's connection and keeps serving when
-     * the game dies.
+     * ordering against this read (#406 writes it in the transition action that drives TERMINATED,
+     * while {@code gameCrashed} is written on a continuation that may not have run yet), so
+     * consulting the game first would let a race pick the code for a run whose adapter died. It
+     * also matches cause and effect: an adapter dying is what makes the game react, and never the
+     * reverse, since java-ice-adapter closes the game's connection and keeps serving when the game
+     * dies.
      *
      * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
      * takes the logger instead of holding one because this class obtains its logger only after

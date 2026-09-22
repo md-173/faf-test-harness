@@ -16,7 +16,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
 
 /**
- * How {@code run} turns a finished session's verdicts into one exit code (WBS-3.1.2.8).
+ * How {@code run} turns a finished session's verdicts into one exit code (WBS-3.1.2.8-fix, #406).
  *
  * <p>The precedence is the part worth pinning. {@code RunCommand.call()} builds a real {@link
  * com.faforever.testharness.client.lobby.LobbyConnection} and cannot be driven from a unit test,
@@ -31,23 +31,36 @@ import org.slf4j.LoggerFactory;
  */
 final class RunCommandExitCodeTest {
 
+    /**
+     * Name of the logger handed to {@code sessionExitCode}, which no other class uses. The appender
+     * sits on it rather than on the root because the Gradle task runs every test class in one JVM
+     * at DEBUG, where an earlier class's lingering threads can log at any moment, and the
+     * assertions here count records exactly.
+     */
+    private static final String VERDICT_LOGGER =
+            RunCommandExitCodeTest.class.getName() + ".verdict";
+
     private ListAppender<ILoggingEvent> appender;
-    private Logger root;
+    private Logger log;
 
     @BeforeEach
     void setUp() {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
-        root = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        log = context.getLogger(VERDICT_LOGGER);
+        // Pinned rather than inherited, so the WARN assertions do not depend on the root level,
+        // and not additive, so these records stay out of the console and every other appender.
+        log.setLevel(Level.DEBUG);
+        log.setAdditive(false);
         appender = new ListAppender<>();
         appender.setContext(context);
         appender.start();
-        root.addAppender(appender);
+        log.addAppender(appender);
     }
 
     @AfterEach
     void tearDown() {
+        log.detachAppender(appender);
         appender.stop();
-        root.detachAppender(appender);
     }
 
     /**
@@ -75,12 +88,7 @@ final class RunCommandExitCodeTest {
             final boolean gameCrashed,
             final int expected) {
         assertEquals(
-                expected,
-                RunCommand.sessionExitCode(
-                        lobbyDropped,
-                        adapterLost,
-                        gameCrashed,
-                        LoggerFactory.getLogger(RunCommandExitCodeTest.class)));
+                expected, RunCommand.sessionExitCode(lobbyDropped, adapterLost, gameCrashed, log));
     }
 
     /**
@@ -92,17 +100,13 @@ final class RunCommandExitCodeTest {
      */
     @Test
     void aLostAdapterOutranksACrashedGame() {
-        assertEquals(
-                ExitCodes.ADAPTER_LOST,
-                RunCommand.sessionExitCode(
-                        false, true, true, LoggerFactory.getLogger(RunCommandExitCodeTest.class)));
+        assertEquals(ExitCodes.ADAPTER_LOST, RunCommand.sessionExitCode(false, true, true, log));
     }
 
     /** A clean session says nothing: the log surface is a documented interface. */
     @Test
     void aCleanSessionLogsNothing() {
-        RunCommand.sessionExitCode(
-                false, false, false, LoggerFactory.getLogger(RunCommandExitCodeTest.class));
+        RunCommand.sessionExitCode(false, false, false, log);
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -110,8 +114,7 @@ final class RunCommandExitCodeTest {
     /** Each reported verdict names itself once, at WARN, so a run's log says which one it was. */
     @Test
     void aLostAdapterIsReportedAtWarn() {
-        RunCommand.sessionExitCode(
-                false, true, false, LoggerFactory.getLogger(RunCommandExitCodeTest.class));
+        RunCommand.sessionExitCode(false, true, false, log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);

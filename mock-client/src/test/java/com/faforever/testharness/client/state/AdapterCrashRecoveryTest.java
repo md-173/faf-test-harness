@@ -33,7 +33,6 @@ import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -217,25 +216,30 @@ final class AdapterCrashRecoveryTest {
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
-        // The PLAYING edge carries the exit status too (WBS-3.1.2.8), not only the warning. Both
-        // come from the one branch in onAdapterExited, so this pins that they stay together.
+        // The PLAYING edge carries the exit status too (WBS-3.1.2.8-fix, #406), not only the
+        // warning. Both come from the one branch in onAdapterExited, so this pins that they stay
+        // together.
         assertTrue(lifecycle.adapterLost(), "an adapter killed while PLAYING is a lost adapter");
     }
 
     /**
-     * The exit status is decided before anything can read it (WBS-3.1.2.8).
+     * The exit status is decided before anything can read it (WBS-3.1.2.8-fix, #406).
      *
      * <p>This is the property #357's attempt lacked. That one keyed the code on the game's reported
      * status, written on a {@code CompletableFuture} continuation, so {@code RunCommand} could be
      * released by the adapter's death before the verdict existed and the same scenario exited 69 or
      * 0 run to run.
      *
-     * <p>Asserting {@code adapterLost()} after a second {@code get()} would prove nothing, because
-     * by then any late write has had time to land. So the verdict is sampled from a dependent
-     * registered on the TERMINATED future <em>before</em> the adapter is killed: a dependent on an
-     * incomplete future runs on the thread that completes it, inside {@code commitTransition},
-     * which is the exact moment {@code RunCommand}'s own {@code get()} is released. A verdict
-     * written any later than the transition action fails this.
+     * <p>Asserting {@code adapterLost()} after a second {@code get()} would prove little, because
+     * by then a late write has had time to land. So the verdict is sampled by a dependent
+     * registered on the TERMINATED future <em>before</em> the adapter is killed. In the ordinary
+     * course that dependent runs on the thread completing the future, inside {@code
+     * commitTransition}, which is the moment {@code RunCommand}'s own {@code get()} is released, so
+     * a verdict written any later than the transition action samples as {@code false}.
+     *
+     * <p>The assertion waits on the dependent's own future rather than on the TERMINATED one. The
+     * JDK unparks a thread waiting on a future before it has necessarily run every other dependent,
+     * so reading a flag the dependent sets could see it still unset on a correct build.
      *
      * <p>Teardown reaps the game from TERMINATED's entry hook, which runs before that commit, so
      * the game's exit is already reaped here while its classification is still outstanding on
@@ -244,16 +248,15 @@ final class AdapterCrashRecoveryTest {
     @Test
     void theExitVerdictIsSetBeforeTerminatedCompletes() throws Exception {
         MockClientLifecycle lifecycle = hostedLifecycle();
-        AtomicBoolean atCommit = new AtomicBoolean();
-        lifecycle
-                .stateReached(ClientState.TERMINATED)
-                .thenRun(() -> atCommit.set(lifecycle.adapterLost()));
+        CompletableFuture<Boolean> atCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.adapterLost());
 
         killAdapter();
 
-        lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
         assertTrue(
-                atCommit.get(),
+                atCommit.get(5, TimeUnit.SECONDS),
                 "the adapter verdict must already be set when TERMINATED commits, not written"
                         + " afterwards. captured: "
                         + significantEvents());
@@ -264,15 +267,18 @@ final class AdapterCrashRecoveryTest {
      * A teardown-initiated adapter exit is not a crash, and this waits for the classification
      * before saying so.
      *
-     * <p>The wait is the test, not housekeeping. Until WBS-3.1.2.8 this asserted as soon as the
-     * adapter process had exited, but the event is posted to the FSM asynchronously ({@code
+     * <p>The wait is the test, not housekeeping. Until #406 this asserted as soon as the adapter
+     * process had exited, but the event is posted to the FSM asynchronously ({@code
      * adapterExit().thenAcceptAsync(...)}), so the assertion usually ran before anything had
-     * classified the exit at all: measured, the test passes with the {@code teardown.hasRun()}
+     * classified the exit at all: measured, the test passed with the {@code teardown.hasRun()}
      * branch of {@code onAdapterExited} deleted, which is the defect it exists to catch.
      *
      * <p>It waits on {@code logAdapterExitAfterTeardown}'s own trailing record rather than on the
      * classification line, because that record is emitted whichever branch classified the exit. A
-     * regression therefore fails the assertion below instead of expiring the wait.
+     * regression therefore fails the assertion below instead of expiring the wait. The match names
+     * the adapter explicitly: {@code logGameExitAfterTeardown}'s trailing record reads {@code
+     * mock-game exited after session teardown}, and the game's exit is queued on the same monitor,
+     * so a looser match can end the wait with the adapter still unclassified.
      */
     @Test
     void cleanShutdownLogsNoAdapterCrashWarning() throws Exception {
@@ -284,7 +290,8 @@ final class AdapterCrashRecoveryTest {
         lifecycle.stateReached(ClientState.TERMINATED).get(5, TimeUnit.SECONDS);
         int code = iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
         assertFalse(iceLauncher.getSubprocess().isAlive());
-        awaitEvent(e -> e.getFormattedMessage().contains("exited after session teardown"));
+        awaitEvent(
+                e -> e.getFormattedMessage().contains("ICE adapter exited after session teardown"));
 
         boolean crashWarned =
                 appender.list.stream()
@@ -389,9 +396,9 @@ final class AdapterCrashRecoveryTest {
     }
 
     /**
-     * Waits for a record the FSM emits from an asynchronous continuation, up to the class timeout's
-     * worth of short polls. Used where the signal being asserted on is only observable once a
-     * post-teardown event has actually been delivered to the machine.
+     * Waits for a record the FSM emits from an asynchronous continuation, polling every 50 ms for
+     * up to 5 s, well inside the class timeout. Used where the signal being asserted on is only
+     * observable once a post-teardown event has actually been delivered to the machine.
      *
      * @param matcher the record being waited for
      * @return that record

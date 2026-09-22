@@ -66,7 +66,8 @@ public final class ExitCodes {
 
     /**
      * The session ran, but the ICE adapter process died in a way nobody asked for: a non-zero exit
-     * observed while the session was live, outside any harness-initiated teardown (WBS-3.1.2.8).
+     * observed while the session was live, outside any harness-initiated teardown (WBS-3.1.2.8-fix,
+     * #406).
      *
      * <p>Set where {@code MockClientLifecycle.onAdapterExited} has already decided an exit was
      * abnormal, in the same branch that logs {@code ICE adapter exited abnormally}, so the log line
@@ -84,16 +85,19 @@ public final class ExitCodes {
      *
      * <p>The guarantee is exactly that, and no wider: ordered whenever {@code AdapterExited} is the
      * event that drives TERMINATED, which is what a killed adapter produces. Verified live under
-     * both SIGKILL and SIGTERM against the pinned adapter, which registers no shutdown hook and so
-     * closes its GPGNet socket only as its process exits, leaving the game unable to report the
-     * lost link first. A session ended by some other event while the adapter is dying reports what
-     * that event found instead.
+     * both SIGKILL and SIGTERM against the pinned adapter, whose own code registers no shutdown
+     * hook, so its GPGNet socket closes only as its process exits and the game has not yet reported
+     * the lost link when the adapter's exit arrives. That is timing, not a guarantee, and a session
+     * ended by some other event while the adapter is dying reports what that event found instead,
+     * exiting {@code 0}: a {@code connectToPeer}, {@code hostGame} or {@code joinGame} call in
+     * flight at that instant fails first and ends the session itself, or the game's own exit is
+     * processed first. Each window is milliseconds wide.
      *
      * <p><b>An adapter that was up and then died</b>, not one that never came up. A failed launch,
      * or an adapter that exits before its JSON-RPC port accepts a connection, fails the {@code
      * LaunchGame} transition into TERMINATED instead, and an adapter given a bad argument exits
      * {@code 0} while doing so (subprocess-orchestration-spec §2.6), so neither this flag nor its
-     * exit code can speak for that case. It is carded separately.
+     * exit code can speak for that case. It is out of #406's scope and wants a card of its own.
      *
      * <p>An adapter that quits cleanly under its own power, exit {@code 0}, is not this either: it
      * reads as the real client's "terminated normally" and leaves this run's code alone.
@@ -102,8 +106,8 @@ public final class ExitCodes {
      * timeout, a setup failure or an abrupt lobby close, and from {@link #GAME_CRASHED}, which is
      * the game dying rather than the adapter underneath it. {@code 72} continues what those two
      * started: a runtime failure, with a known cause. Deliberately not mock-game's {@code 69}: the
-     * client logs that as a lost adapter link and it leaves the code at {@link #OK}, so one number
-     * would mean two things in one log.
+     * client logs that as a lost adapter link and it contributes nothing to the run's code, so one
+     * number would mean two things in one log.
      *
      * <p>Before this existed the harness exited {@code 0} when its adapter died mid-session,
      * reporting success for a run that failed.

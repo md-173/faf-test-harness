@@ -191,9 +191,9 @@ public final class MockClientLifecycle {
     private volatile boolean gameCrashed;
 
     /**
-     * Whether the ICE adapter process died in a way nobody asked for (WBS-3.1.2.8), as decided by
-     * {@link #onAdapterExited}'s final branch. Read by {@code RunCommand} to pick the harness's own
-     * exit code; see {@link #adapterLost()}.
+     * Whether the ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix, #406), as
+     * decided by {@link #onAdapterExited}'s final branch. Read by {@code RunCommand} to pick the
+     * harness's own exit code; see {@link #adapterLost()}.
      *
      * <p>Unlike {@link #gameCrashed} this needs no argument about stale reads on the route that
      * matters. It is written inside the {@code AdapterExited} transition action, which runs before
@@ -785,8 +785,9 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Whether this session's ICE adapter process died in a way nobody asked for (WBS-3.1.2.8): a
-     * non-zero exit observed while the session was live, outside harness-initiated teardown.
+     * Whether this session's ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix,
+     * #406): a non-zero exit observed while the session was live, outside harness-initiated
+     * teardown.
      *
      * <p>A boolean rather than the exit code for the same reason as {@link #gameCrashed()}: {@link
      * #adapterExit()} already exposes the code, and what a caller cannot get from the code alone is
@@ -1071,19 +1072,20 @@ public final class MockClientLifecycle {
      * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
      * logs.
      *
-     * <p>Since WBS-3.1.2.8 it also decides this run's exit status, setting {@link #adapterLost} in
-     * the same branch that warns, so the two cannot disagree. That makes the {@link
-     * SessionTeardown#hasRun()} branch above load bearing rather than cosmetic: it is what keeps a
-     * teardown-owned exit from setting the flag, on both routes that arrive here with teardown
-     * already run. One is the TERMINATED self-loop through {@link
+     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, setting {@link
+     * #adapterLost} in the same branch that warns, so the two cannot disagree. That makes the
+     * {@link SessionTeardown#hasRun()} branch above load bearing rather than cosmetic: it is what
+     * keeps a teardown-owned exit from setting the flag, on both routes that arrive here with
+     * teardown already run. One is the TERMINATED self-loop through {@link
      * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
      * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
      * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
      * while the session is mid-state. Deleting that branch, which is what #371 item 1 asked for
-     * (written before #341 routed the self-loop through this method), logs a crash on every clean
-     * shutdown and lets a teardown-owned code set the flag after {@code RunCommand} may already
-     * have read it. Measured, with the branch removed: a plain {@link #shutdown()} logs {@code ICE
-     * adapter exited abnormally (code=143)}. {@code AdapterCrashRecoveryTest} pins both halves.
+     * (written before #341 routed the self-loop through this method), logs a crash on any clean
+     * shutdown whose teardown has to end the adapter with a signal, and lets that teardown-owned
+     * code set the flag after {@code RunCommand} may already have read it. Measured, with the
+     * branch removed: a plain {@link #shutdown()} in {@code AdapterCrashRecoveryTest}'s fixture
+     * logs {@code ICE adapter exited abnormally (code=143)}. That class pins both halves.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
@@ -1096,10 +1098,11 @@ public final class MockClientLifecycle {
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {
             LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
-            // The process exit code this run should produce (WBS-3.1.2.8). Set inside the branch
-            // that already decided this exit was unaccounted for, rather than re-derived by the
-            // reader, so the warning above and the exit code cannot disagree about whether the
-            // adapter was lost. Same arrangement classifyGameExit has with gameCrashed.
+            // The process exit code this run should produce (WBS-3.1.2.8-fix, #406). Set inside
+            // the branch that already decided this exit was unaccounted for, rather than
+            // re-derived by the reader, so the warning above and the exit code cannot disagree
+            // about whether the adapter was lost. Same arrangement classifyGameExit has with
+            // gameCrashed.
             adapterLost = true;
         }
     }
@@ -1470,7 +1473,11 @@ public final class MockClientLifecycle {
         // A failure still ends the session, just asynchronously — without the relay this peer is
         // unreachable, and a session that carried on would look healthy while silently unable to
         // connect. An adapter that has died outright is not this path's concern: its process exit
-        // posts AdapterExited (#214), which is the reliable channel for that.
+        // posts AdapterExited (#214), which is the reliable channel for that. One consequence of
+        // both firing (#406): the kernel closes the RPC socket as the adapter dies, so a call in
+        // flight can fail first, and then this ShutdownRequested takes the session to TERMINATED
+        // and the adapter's exit is classified after teardown. The run then exits 0 instead of
+        // ExitCodes.ADAPTER_LOST. The window is the call's round trip; see that constant.
         //
         // whenCompleteAsync, not whenComplete: a send that fails outright (dead socket) completes
         // the future before call() even returns, and a synchronous continuation would then re-enter
