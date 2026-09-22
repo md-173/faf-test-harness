@@ -61,10 +61,12 @@ import org.slf4j.LoggerFactory;
  * <p><b>What proves a peer was counted.</b> A joiner answers {@code ConnectToPeer} with nothing on
  * the wire, and {@code launchMatch()} runs on this thread without queueing behind frames still
  * unread on the socket, so a frame sent just before it can land in LIVE and be dropped, leaving
- * that game an army short. The barrier is {@code GameTrafficSession}'s "sending peer traffic to
- * player" line, which the lifecycle reaches only after {@code peers.add}. Its earlier "New peer"
- * line would not do, since it is logged before the add. Each game has its own stub relay socket, so
- * the address in that line says which game logged it.
+ * that game an army short. The barrier is the lifecycle's own "New peer" line, logged inside the
+ * {@code ConnectToPeer} transition: {@code StateMachine.receiveEvent} is synchronized, so a {@code
+ * launchMatch()} from this thread queues behind the rest of that transition, {@code peers.add}
+ * included. Any line logged inside the transition would serve, and this is the one {@code
+ * LifecyclePeerConnectTest} already reads. Each game has its own stub relay socket, so the address
+ * in the line says which game logged it.
  *
  * <p>Pinning the host's frames value by value is {@code LifecycleSetupTest}'s job. This class
  * asserts only what the two games' results have to say about each other.
@@ -108,7 +110,7 @@ final class PeerResultAgreementTest {
 
         /**
          * The address every peer of this game is announced at. Never read: it exists so the peer
-         * traffic has a real destination and so the registration line names this game.
+         * traffic has a real destination and so the "New peer" line names this game.
          */
         private final DatagramSocket relay;
 
@@ -254,19 +256,24 @@ final class PeerResultAgreementTest {
         game.gpgnet.sendFrame(
                 new GpgNetFrame(
                         "ConnectToPeer", List.of(game.relayAddress(), loginOf(peerId), peerId)));
-        awaitRegistered(game, peerId);
+        awaitCounted(game, peerId);
     }
 
     /**
-     * Waits for the line the traffic session logs on registering a peer, which the lifecycle
-     * reaches only after adding that peer to the list {@code gameEnds} sizes its results from.
+     * Waits until a game has counted a peer into the list {@code gameEnds} sizes its results from.
+     *
+     * <p>The line arrives before {@code peers.add} rather than after it, and is still a sound
+     * barrier: it is logged inside the {@code ConnectToPeer} transition, which holds the state
+     * machine's monitor until the add and the commit are done, so the {@code launchMatch()} that
+     * follows cannot overtake it.
      */
-    private void awaitRegistered(final Game game, final int peerId) throws InterruptedException {
-        String line = "sending peer traffic to player " + peerId + " at " + game.relayAddress();
+    private void awaitCounted(final Game game, final int peerId) throws InterruptedException {
         long deadline = System.nanoTime() + FRAME_TIMEOUT.toNanos();
         do {
             for (ILoggingEvent event : captured.list) {
-                if (line.equals(event.getFormattedMessage())) {
+                if (event.getMessage().startsWith("New peer")
+                        && Integer.valueOf(peerId).equals(event.getArgumentArray()[1])
+                        && game.relayAddress().equals(event.getArgumentArray()[2])) {
                     return;
                 }
             }
@@ -278,13 +285,12 @@ final class PeerResultAgreementTest {
                         + game.config.playerId()
                         + " never counted peer "
                         + peerId
-                        + ": no '"
-                        + line
-                        + "' within "
+                        + " at "
+                        + game.relayAddress()
+                        + " within "
                         + FRAME_TIMEOUT
-                        + ". A 'failed to bind' line instead means another process took the lobby"
-                        + " port after setUp released it. No line at all, outside Gradle, can mean"
-                        + " LOG_LEVEL is above INFO, which mock-game's build pins for its tests.");
+                        + ". No 'New peer' line at all, outside Gradle, can mean LOG_LEVEL is"
+                        + " above INFO, which mock-game's build pins for its tests.");
     }
 
     /** Launches and ends the game's match, returning every frame the game sent, in order. */

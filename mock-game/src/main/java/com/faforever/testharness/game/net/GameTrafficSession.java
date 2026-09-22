@@ -262,8 +262,6 @@ public final class GameTrafficSession implements AutoCloseable {
                     "peer traffic started: one datagram per peer every {} ms, dropping {}%",
                     cadence.toMillis(), dropPercent);
         }
-        // PeerResultAgreementTest waits on this exact wording as proof that the lifecycle has
-        // already added the peer it counts results from, so a rewording has to be made there too.
         LOG.info("sending peer traffic to player {} at {}", peerId, netAddress);
     }
 
