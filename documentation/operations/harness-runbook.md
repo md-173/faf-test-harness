@@ -1323,10 +1323,10 @@ What to look for when it is on:
   That line is the check that the flag took effect; the per-datagram evidence
   below is `DEBUG` only.
 - The receiving peer's loss ratio for that sender tracks the percentage. Read
-  three numbers from the receiving game's log: `S` from
+  three of the four numbers from the receiving game's log: `S` from
   `first datagram from sender <id> (seq S)`, and the received count `N` and
   highest sequence `H` from
-  `game UDP receiver stopped; sender <id> totals: received N, highest sequence H`,
+  `game UDP receiver stopped; sender <id> totals: received N, highest sequence H, discontinuities D`,
   logged when the game shuts down in an orderly way. In an orchestrated run
   that line reaches only the game's own `logs/mockgame.jsonl` (§6), not the
   client's output: the client stops relaying the game's stream during
@@ -1337,16 +1337,41 @@ What to look for when it is on:
   `(H - S + 1 - N) / (H - S + 1)`. Counting from `S` rather than from zero
   leaves out datagrams sent before the ICE link was up, which would otherwise
   read as loss at every percentage, `0` included.
-- Do not use the `gaps` count. It rises once per gap, not once per lost
-  datagram, so five consecutive drops count as one. For independent drops at
-  probability `p` its expectation is `n·p·(1 - p)`: it peaks at 50% and falls
-  back to zero at 100%, where nothing arrives at all.
+- Do not use the gap count, under either of its two names. The same quantity
+  is called `discontinuities` on the totals line above and `gaps` on both the
+  mid-run progress line and the per-datagram `DEBUG` record, so recognise it
+  whichever line you are looking at; `D` above is it. It rises once per gap,
+  not once per lost datagram, so five consecutive drops count as one. For
+  independent drops at probability `p` its expectation is `n·p·(1 - p)`: it
+  peaks at 50% and falls back to zero at 100%, where nothing arrives at all.
 - Caveats on the ratio. At `100` the receiver never sees that sender, so it
   logs no line for it; the evidence is the other direction still flowing plus
   the sender's `DEBUG` drop records below. Drops after the last received
-  datagram are not counted, which biases the ratio slightly low. A peer
-  re-registered at a changed address restarts its sequence at zero, so the
-  ratio only holds within one registration.
+  datagram are not counted, which biases the ratio slightly low. That is one
+  face of a more general point: the span is delimited by received datagrams at
+  both ends, so only the ones between them can ever read as lost. That costs
+  the ratio roughly `2/span` of the true rate, negligible over hundreds of
+  datagrams and worth allowing for over tens. A peer re-registered at a
+  changed address restarts its sequence at zero, so the ratio only holds
+  within one registration.
+- The ratio needs a large sample, and an orchestrated `session` does not
+  produce one. It counts from `S`, the first datagram to arrive once the ICE
+  link is up, and the session tears down once it has proven its mesh, which
+  takes two progress lines per direction reaching three datagrams with an
+  advancing sequence. Measured on a `session: PASS` run at `40`, that left
+  spans of 32 and 30 datagrams reading 15.6% and 30.0%. At that span one
+  standard deviation is about 9 percentage points, so 40% and 25% sit about
+  1.7 standard deviations apart: a run like this shows that datagrams are
+  being lost, and cannot separate one percentage from the other at any usual
+  confidence. To confirm the magnitude, hand-run two games pointed at each
+  other with `--launch-delay-seconds=-1` so they hold in the lobby and keep
+  sending: a span of about 890 datagrams read 25.6% against 25% expected,
+  with the control direction at exactly zero.
+- What an orchestrated run does establish on its own is that the value
+  reached the game: `--udp-drop-percent <n>` in the launch argv and the
+  `dropping n%` line at the sending game. That is what the pass-through
+  regressions (#322, #392) were about, and it is a different question from
+  how much was lost.
 - The loss is attributable to the sender that dropped it, because the counts
   are kept per sender id. That is the whole reason injection sits here rather
   than on the interface, where loss is traceable to nobody.
