@@ -8,7 +8,6 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
@@ -34,28 +33,30 @@ import org.slf4j.LoggerFactory;
  * The host and a joiner in one session report the same {@code GameResult} frames, naming exactly
  * the armies the host assigned (WBS-3.2.4.3-fix, #384).
  *
- * <p><b>Why identical is the contract.</b> faf-server does not take one game's word for a result.
- * {@code GameResultReports} keeps every reporter's frame per army and resolves each army by vote,
- * and FA sends the whole table from every client: its sim declares a result for every army and
- * {@code UserSync.lua} forwards each one. So every game reports every army, with the same outcome
- * for it. The army ids come from the host alone, because faf-server accepts {@code PlayerOption}
- * only from the host and drops a result for any army the host never assigned. {@code
- * MockGameLifecycle.gameEnds} records the rest of the reasoning.
+ * <p><b>Why identical is the contract.</b> FA sends the whole result table from every client: its
+ * sim declares a result for every army and {@code UserSync.lua} forwards each one. faf-server keeps
+ * every player's report per army and resolves each army across them ({@code GameResultReports}),
+ * unanimously when they agree. So every game reports every army, with the same outcome for it. The
+ * army ids come from the host alone, because faf-server accepts {@code PlayerOption} only from the
+ * host and drops a result for any army the host never assigned. {@code MockGameLifecycle.gameEnds}
+ * records the rest of the reasoning.
  *
  * <p><b>Why a joiner agrees without knowing its own army.</b> It never receives a {@code
  * PlayerOption}. It reports armies {@code 1..N}, with an outcome that depends on the army number
  * alone, and that matches the host only while two separate rules stay in step: the arrival order
  * assignment in {@code sendPlayerOptions} and the range and team rule in {@code gameEnds}. Nothing
  * else notices if they drift, so the expected frames are built from the host's own {@code
- * PlayerOption} frames, the only numbering the server sees, rather than restated here.
+ * PlayerOption} frames, the numbering faf-server records, rather than restated here.
  *
  * <p><b>Why two games rather than one per player.</b> The property is that a host and a joiner
- * holding the same number of peers send the same frames, and a third or fourth joiner is the same
- * shape as the first. The player count still varies, because it moves the range and, at three
- * players, leaves the teams uneven. Each game is told about the others the way faf-server does it:
- * a newcomer gets {@code JoinGame} for the host only, and everyone already present gets {@code
- * ConnectToPeer} for the newcomer ({@code connect_to_host} and {@code connect_to_peer} in {@code
- * gameconnection.py}).
+ * holding the same number of peers send the same frames, and a third or fourth joiner ends up
+ * holding as many peers as the first, which is all {@code gameEnds} reads. The player count still
+ * varies, because it moves the range and, at three players, leaves the teams uneven. Each game is
+ * told about the others the way faf-server does it ({@code connect_to_host} and {@code
+ * connect_to_peer} in {@code gameconnection.py}): a newcomer gets {@code JoinGame} for the host and
+ * {@code ConnectToPeer} for every other player already present, and each of those gets {@code
+ * ConnectToPeer} for the newcomer. The joiner here arrives second, so every later peer reaches it
+ * the second way.
  *
  * <p><b>What proves a peer was counted.</b> A joiner answers {@code ConnectToPeer} with nothing on
  * the wire, and {@code launchMatch()} runs on this thread without queueing behind frames still
@@ -117,18 +118,18 @@ final class PeerResultAgreementTest {
         /** The game under test, driven by hand: no launch delay and no match duration. */
         private final MockGameLifecycle lifecycle;
 
-        private Game(final int playerId) throws IOException {
+        private Game(final int playerId, final int lobbyPort) throws IOException {
             this.gpgnet = new ScriptedGpgNetServer();
             this.relay = new DatagramSocket(0);
             this.config =
                     new MockGameConfig(
                             50000,
-                            TestPorts.freeUdpPort(),
+                            lobbyPort,
                             playerId,
                             loginOf(playerId),
                             9001,
                             Map.of(),
-                            0,
+                            -1,
                             -1,
                             0,
                             -1);
@@ -160,8 +161,14 @@ final class PeerResultAgreementTest {
         captured.start();
         root.addAppender(captured);
 
-        host = new Game(PLAYER_IDS[0]);
-        joiner = new Game(PLAYER_IDS[1]);
+        // Both lobby ports stay reserved until both games exist, and are released for their
+        // lifecycles to bind on CreateLobby. Taken one at a time, the joiner's relay or its lobby
+        // port could land on the port just released for the host's, and a bind would then fail.
+        try (DatagramSocket hostLobby = new DatagramSocket(0);
+                DatagramSocket joinerLobby = new DatagramSocket(0)) {
+            host = new Game(PLAYER_IDS[0], hostLobby.getLocalPort());
+            joiner = new Game(PLAYER_IDS[1], joinerLobby.getLocalPort());
+        }
     }
 
     @AfterEach
@@ -275,8 +282,9 @@ final class PeerResultAgreementTest {
                         + line
                         + "' within "
                         + FRAME_TIMEOUT
-                        + ". A 'failed to bind' line instead means the lobby port was taken"
-                        + " between allocation and bind (see TestPorts).");
+                        + ". A 'failed to bind' line instead means another process took the lobby"
+                        + " port after setUp released it. No line at all, outside Gradle, can mean"
+                        + " LOG_LEVEL is above INFO, which mock-game's build pins for its tests.");
     }
 
     /** Launches and ends the game's match, returning every frame the game sent, in order. */
