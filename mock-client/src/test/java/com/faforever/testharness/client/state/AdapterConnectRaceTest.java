@@ -1,8 +1,10 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -20,6 +22,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +46,10 @@ import org.slf4j.LoggerFactory;
  * <p>The connect here <em>never</em> completes, so without the race this test does not fail — it
  * hangs, which is why the class carries a {@link Timeout}. A budget-shaped wait would have been the
  * weaker test: it would pass on a slow machine for the wrong reason.
+ *
+ * <p>The same bring-up decides whether the launch failed (WBS-3.1.3.3-fix, #437), which {@code run}
+ * reports in its exit code, so the tests below also pin when that verdict is set and when it is
+ * not.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class AdapterConnectRaceTest {
@@ -112,6 +119,7 @@ final class AdapterConnectRaceTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
+    private Level originalLevel;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -123,6 +131,10 @@ final class AdapterConnectRaceTest {
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
+        // A launch failure teardown caused is logged at DEBUG. Set here rather than inherited from
+        // the Gradle task's LOG_LEVEL, so the assertion on it also holds from an IDE.
+        originalLevel = root.getLevel();
+        root.setLevel(Level.DEBUG);
 
         server = new ScriptedWebSocketServer();
         server.startAndAwait();
@@ -134,6 +146,7 @@ final class AdapterConnectRaceTest {
     @AfterEach
     void tearDown() throws Exception {
         if (appender != null) {
+            root.setLevel(originalLevel);
             appender.stop();
             root.detachAppender(appender);
         }
@@ -171,6 +184,13 @@ final class AdapterConnectRaceTest {
                         new SessionTeardown(lobby));
 
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        // Sampled the moment TERMINATED commits (#437). A read after the wait could not tell a
+        // verdict written before the commit from one written after it, which is where this
+        // adapter's own exit lands, through logAdapterExitAfterTeardown.
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.launchFailed());
         long start = System.nanoTime();
         // Posted off the test thread. post() is machine.receiveEvent, which is synchronous and
         // synchronized, so on a regression the test thread blocks inside this call and every
@@ -209,6 +229,95 @@ final class AdapterConnectRaceTest {
                 "the wait must end with the process, not with the connect budget; took "
                         + elapsedMillis
                         + "ms");
+        assertTrue(
+                failedAtCommit.get(GIVE_UP_SECONDS, TimeUnit.SECONDS),
+                "an adapter dying before it accepts fails the launch before TERMINATED commits");
+    }
+
+    /**
+     * A launch the harness's own teardown cut short is not a failed launch (#437). The test thread
+     * runs teardown mid-bring-up, as the CLI's shutdown hook does on a Ctrl-C, so the adapter dies
+     * under the race above and the launch fails for a reason the harness caused.
+     */
+    @Test
+    void aTeardownDuringBringUpIsNotALaunchFailure() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        // The default `sort` stays alive until something kills it, here the teardown.
+        iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        CountDownLatch connecting = new CountDownLatch(1);
+        SessionTeardown teardown = new SessionTeardown(lobby);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new NeverConnectingIceAdapterConnection(
+                                MINIMAL_CONFIG.iceAdapterRpcPort(), connecting),
+                        new DummyGameLauncher(MINIMAL_CONFIG),
+                        iceLauncher,
+                        teardown);
+
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        CompletableFuture<Void> posted =
+                CompletableFuture.runAsync(
+                        () -> lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG)));
+        // connect() runs only once the adapter is registered for teardown, so teardown reaches it.
+        assertTrue(
+                connecting.await(GIVE_UP_SECONDS, TimeUnit.SECONDS),
+                "the bring-up never reached the adapter connect");
+        teardown.run();
+
+        lifecycle.stateReached(ClientState.TERMINATED).get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
+        posted.get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertFalse(lifecycle.launchFailed(), "a launch teardown cut short is not a finding");
+        // Pinned to the mechanism: the race failed the launch, and it was seen as teardown's.
+        ILoggingEvent cause =
+                findEvent(
+                        e ->
+                                e.getFormattedMessage()
+                                        .contains(
+                                                "before its JSON-RPC port accepted a connection"));
+        assertEquals(Level.DEBUG, cause.getLevel(), "got: " + cause.getFormattedMessage());
+    }
+
+    /**
+     * An interrupted bring-up is a failed launch like any other (#437). Nothing in production
+     * interrupts the thread that runs it today, which is why this is the only test that reaches
+     * that catch arm.
+     */
+    @Test
+    void anInterruptedBringUpIsALaunchFailure() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        CountDownLatch connecting = new CountDownLatch(1);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new NeverConnectingIceAdapterConnection(
+                                MINIMAL_CONFIG.iceAdapterRpcPort(), connecting),
+                        new DummyGameLauncher(MINIMAL_CONFIG),
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        // A thread of its own rather than the common pool, so the interrupt reaches nothing else.
+        Thread launch =
+                new Thread(() -> lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG)), "launch");
+        launch.start();
+        assertTrue(
+                connecting.await(GIVE_UP_SECONDS, TimeUnit.SECONDS),
+                "the bring-up never reached the adapter connect");
+        launch.interrupt();
+
+        lifecycle.stateReached(ClientState.TERMINATED).get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
+        launch.join(TimeUnit.SECONDS.toMillis(GIVE_UP_SECONDS));
+
+        assertTrue(lifecycle.launchFailed(), "an interrupted bring-up is a failed launch");
+        ILoggingEvent cause =
+                findEvent(e -> e.getFormattedMessage().contains("Could not launch the game"));
+        assertEquals(Level.WARN, cause.getLevel(), "got: " + cause.getFormattedMessage());
     }
 
     /**
@@ -229,15 +338,27 @@ final class AdapterConnectRaceTest {
                         });
     }
 
-    /** A connection whose connect never resolves, so only the process exit can end the wait. */
+    /**
+     * A connection whose connect never resolves, so only the process exit can end the wait. It
+     * counts {@code connecting} down when the connect starts, which is after the adapter has been
+     * registered for teardown.
+     */
     private static final class NeverConnectingIceAdapterConnection extends IceAdapterConnection {
 
+        private final CountDownLatch connecting;
+
         NeverConnectingIceAdapterConnection(final int port) {
+            this(port, new CountDownLatch(1));
+        }
+
+        NeverConnectingIceAdapterConnection(final int port, final CountDownLatch connecting) {
             super(port);
+            this.connecting = connecting;
         }
 
         @Override
         public CompletableFuture<Void> connect() {
+            connecting.countDown();
             return new CompletableFuture<>();
         }
     }

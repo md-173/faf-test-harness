@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -25,6 +26,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 final class LifecycleSetupTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -166,6 +169,7 @@ final class LifecycleSetupTest {
         Object[] iceServers = iceConn.receivedMessage("setIceServers");
         assertTrue(iceServers != null);
         assertTrue(((Object[]) iceServers[0]).length == 0);
+        assertFalse(lifecycle.launchFailed(), "a launch that came up is not a failed launch");
     }
 
     @Test
@@ -279,6 +283,7 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertTrue(lifecycle.launchFailed(), "a game binary that cannot start fails the launch");
     }
 
     @Test
@@ -301,6 +306,7 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertTrue(lifecycle.launchFailed(), "an adapter that cannot start fails the launch");
     }
 
     @Test
@@ -323,10 +329,12 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertTrue(lifecycle.launchFailed(), "an adapter that never connects fails the launch");
     }
 
-    @Test
-    void iceConnectionCallFails() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"setLobbyInitMode", "setIceServers"})
+    void iceConnectionCallFails(final String method) throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
@@ -334,7 +342,7 @@ final class LifecycleSetupTest {
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
-        iceConn.setupCallFail("setLobbyInitMode");
+        iceConn.setupCallFail(method);
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -348,5 +356,6 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertTrue(lifecycle.launchFailed(), "an adapter that refuses " + method + " fails it too");
     }
 }

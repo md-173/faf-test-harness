@@ -207,6 +207,9 @@ public final class MockClientLifecycle {
      */
     private volatile boolean adapterLost;
 
+    /** Backs {@link #launchFailed()}; written only by {@link #launchFailure}. */
+    private volatile boolean launchFailed;
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -805,6 +808,18 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437). Written
+     * before the failed transition commits, so readable once {@code stateReached(TERMINATED)}
+     * completes, and never once teardown has started: a launch the harness cut short (a Ctrl-C
+     * during bring-up) is not a finding.
+     *
+     * @return {@code true} if the adapter or game never came up and the harness did not cause it
+     */
+    public boolean launchFailed() {
+        return launchFailed;
+    }
+
+    /**
      * The session's single adapter-exit signal: completes exactly once with the ICE adapter
      * process's exit code, whether it quit cleanly or was killed. Same copy-semantics contract as
      * {@link #gameExit()} — see there for the full details, which apply identically here.
@@ -1275,18 +1290,26 @@ public final class MockClientLifecycle {
             // leaves it pending and the FSM reaches TERMINATED instead.
             gameLaunched.complete(gameConfig);
         } catch (IceAdapterLaunchException e) {
-            LOG.warn("Could not launch the ICE adapter ({})", e.getMessage());
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw launchFailure("launch the ICE adapter", e.getMessage());
         } catch (CancellationException | ExecutionException e) {
-            LOG.warn("Could not connect or setup the ICE adapter ({})", e.getMessage());
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw launchFailure("connect or setup the ICE adapter", e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw launchFailure("launch the game", "interrupted");
         } catch (MockGameLaunchException e) {
-            LOG.warn("Could not launch game binary ({})", e.getMessage());
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw launchFailure("launch game binary", e.getMessage());
         }
+    }
+
+    private FailedTransitionException launchFailure(final String what, final String reason) {
+        // The line and the verdict are decided together, as in onAdapterExited, so they agree.
+        if (teardown.hasRun()) {
+            LOG.debug("Could not {} during session teardown ({})", what, reason);
+        } else {
+            LOG.warn("Could not {} ({})", what, reason);
+            launchFailed = true;
+        }
+        return new FailedTransitionException(reason, states.get(ClientState.TERMINATED));
     }
 
     /**
