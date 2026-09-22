@@ -195,6 +195,7 @@ final class AdapterCrashRecoveryTest {
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
+        assertTrue(lifecycle.adapterLost(), "an adapter killed while HOSTING is a lost adapter");
     }
 
     @Test

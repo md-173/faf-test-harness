@@ -42,6 +42,8 @@ final class RunCommandExitCodeTest {
 
     private ListAppender<ILoggingEvent> appender;
     private Logger log;
+    private Level originalLevel;
+    private boolean originalAdditive;
 
     @BeforeEach
     void setUp() {
@@ -49,6 +51,9 @@ final class RunCommandExitCodeTest {
         log = context.getLogger(VERDICT_LOGGER);
         // Pinned rather than inherited, so the WARN assertions do not depend on the root level,
         // and not additive, so these records stay out of the console and every other appender.
+        // Both are restored afterwards: the context caches the logger for the whole JVM.
+        originalLevel = log.getLevel();
+        originalAdditive = log.isAdditive();
         log.setLevel(Level.DEBUG);
         log.setAdditive(false);
         appender = new ListAppender<>();
@@ -61,6 +66,8 @@ final class RunCommandExitCodeTest {
     void tearDown() {
         log.detachAppender(appender);
         appender.stop();
+        log.setLevel(originalLevel);
+        log.setAdditive(originalAdditive);
     }
 
     /**

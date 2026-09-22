@@ -6,6 +6,20 @@ package com.faforever.testharness.client.cli;
  * <p>The values are stable so CI pipelines can distinguish failure modes without scraping log
  * output. {@link #USAGE} matches picocli's default ({@link picocli.CommandLine.ExitCode#USAGE}) so
  * parameter-exception handling does not need a custom remap.
+ *
+ * <p><b>The numbers are project-local, not sysexits.</b> {@link #USAGE} is picocli's {@code 2}
+ * rather than sysexits' {@code EX_USAGE} ({@code 64}), and the codes past {@link #RUNTIME} are
+ * assigned in sequence as failure modes earn one, so their sysexits meanings ({@code EX_OSERR} for
+ * {@code 71}, {@code EX_OSFILE} for {@code 72}) say nothing about what they report here. Only
+ * {@link #OK} and {@link #RUNTIME} agree with the standard ({@code EX_OK}, {@code EX_SOFTWARE}),
+ * which is why mock-game's {@code ExitCodes} cites both sysexits and this class for its own {@code
+ * 70}.
+ *
+ * <p>That class does follow sysexits, code by code, so <b>the two components' numbers are not
+ * comparable</b>. A lost adapter is mock-game's {@code ADAPTER_LOST} ({@code 69}, {@code
+ * EX_UNAVAILABLE}) when the game reports its own link going down, and this client's {@link
+ * #ADAPTER_LOST} ({@code 72}) when the adapter process itself dies under a session. Same name,
+ * different number, different observer: read each component against its own table.
  */
 public final class ExitCodes {
 
