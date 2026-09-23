@@ -1175,13 +1175,14 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "launchGame method called without a LaunchGame event, should be impossible");
         }
-        GameConfig gameConfig = ((LaunchGame) message).config();
-        // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults. The
-        // adapter half is what matters, since faf-ice-adapter copies its --id and --login straight
-        // into the CreateLobby frame that tells the game who it is.
-        LaunchIdentity identity =
-                new LaunchIdentity(sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
         try {
+            GameConfig gameConfig = ((LaunchGame) message).config();
+            // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults.
+            // The adapter half is what matters, since faf-ice-adapter copies its --id and --login
+            // straight into the CreateLobby frame that tells the game who it is.
+            LaunchIdentity identity =
+                    new LaunchIdentity(
+                            sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
             SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
@@ -1290,6 +1291,11 @@ public final class MockClientLifecycle {
             throw failures.launch("connect or setup the ICE adapter", "interrupted");
         } catch (MockGameLaunchException e) {
             throw failures.launch("launch game binary", e.getMessage());
+        } catch (RuntimeException e) {
+            // Last, after CancellationException above. Contained by Transition instead, the throw
+            // would leave the session in IDLE with the adapter, and perhaps the game, still
+            // running, and nothing that moves it on (#439).
+            throw failures.launchDefect("launch the game session", e);
         }
     }
 
@@ -1374,21 +1380,23 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "hostGame method called without a HostGame event, should be impossible");
         }
-        JsonNode command = ((HostGame) message).command();
-        JsonNode mapNode = command.path("args").path(0);
-        if (!mapNode.isTextual()) {
-            throw failures.session(
-                    "host the game", "textual map argument not found in HostGame message");
-        }
-
-        String map = mapNode.asText();
         try {
-            iceConnection.call("hostGame", map).get();
+            JsonNode command = ((HostGame) message).command();
+            JsonNode mapNode = command.path("args").path(0);
+            if (!mapNode.isTextual()) {
+                throw failures.session(
+                        "host the game", "textual map argument not found in HostGame message");
+            }
+            iceConnection.call("hostGame", mapNode.asText()).get();
         } catch (ExecutionException e) {
             throw failures.call("host the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw failures.session("host the game", "interrupted");
+        } catch (RuntimeException e) {
+            // As in launchGame (#439). Contained by Transition, the throw would leave the session
+            // in STARTING_GAME, where the game waits in LOBBY for a role that never comes.
+            throw failures.sessionDefect("host the game", e);
         }
     }
 
@@ -1397,22 +1405,25 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "joinGame method called without a JoinGame event should be impossible");
         }
-        JsonNode command = ((JoinGame) message).command();
-        JsonNode remoteLogin = command.path("args").path(0);
-        JsonNode remoteID = command.path("args").path(1);
-        if (!remoteLogin.isTextual() || !remoteID.isInt()) {
-            throw failures.session(
-                    "join the game",
-                    "textual remote login and remote id arguments not found in JoinGame message");
-        }
-
         try {
+            JsonNode command = ((JoinGame) message).command();
+            JsonNode remoteLogin = command.path("args").path(0);
+            JsonNode remoteID = command.path("args").path(1);
+            if (!remoteLogin.isTextual() || !remoteID.isInt()) {
+                throw failures.session(
+                        "join the game",
+                        "textual remote login and remote id arguments not found in JoinGame"
+                                + " message");
+            }
             iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
         } catch (ExecutionException e) {
             throw failures.call("join the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw failures.session("join the game", "interrupted");
+        } catch (RuntimeException e) {
+            // As in hostGame (#439).
+            throw failures.sessionDefect("join the game", e);
         }
     }
 

@@ -500,6 +500,82 @@ final class LifecycleSetupTest {
     }
 
     /**
+     * An unchecked throw during the launch, once the adapter has started, ends the session instead
+     * of stranding it (WBS-3.1.3.3-fix, #439). Left to {@code Transition}, it was contained and the
+     * FSM stayed in IDLE with the adapter running and nothing to move it on, so this test would
+     * time out. Now it is a failed launch, TERMINATED's teardown reaps the adapter, and the trace
+     * is still logged at ERROR. {@code setIceServers} is the throw's site because it runs after the
+     * adapter has started and connected.
+     */
+    @Test
+    void anUncheckedThrowDuringTheLaunchEndsTheSessionInsteadOfStrandingIt() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallThrow("setIceServers", new IllegalStateException("boom"));
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().launchFailed());
+
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the throw must end the session as a failed launch, not leave it in IDLE");
+        // A bounded wait rather than an isAlive() probe: the wait failing is the assertion that
+        // teardown reaped the adapter the launch had started.
+        iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
+        assertTrue(
+                errorsWithTrace().stream()
+                        .anyMatch(m -> m.startsWith("Could not launch the game session")),
+                "the defect must be logged at ERROR with its trace: " + errorsWithTrace());
+    }
+
+    /**
+     * An unchecked throw in {@code hostGame} or {@code joinGame} ends the session too (#439).
+     * Contained, it left the FSM in STARTING_GAME with the adapter up and the game waiting in LOBBY
+     * for a role that never comes. The adapter and game did come up, so it is #445's verdict.
+     *
+     * @param method the call that throws
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hostGame", "joinGame"})
+    void anUncheckedThrowInHostOrJoinEndsTheSession(final String method) throws Exception {
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallThrow(method, new IllegalStateException("boom"));
+        MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
+
+        lifecycle.post(roleFrame(method));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the throw must end the session with a verdict, not leave it in STARTING_GAME");
+        String action = "hostGame".equals(method) ? "host the game" : "join the game";
+        assertTrue(
+                errorsWithTrace().stream().anyMatch(m -> m.startsWith("Could not " + action)),
+                "the defect must be logged at ERROR with its trace: " + errorsWithTrace());
+    }
+
+    /**
      * A lifecycle that has launched on {@code iceConn} and waits in STARTING_GAME for its role.
      *
      * @param iceConn the adapter connection, rigged by the caller
@@ -535,6 +611,21 @@ final class LifecycleSetupTest {
         return "hostGame".equals(method)
                 ? new HostGame(HOST_GAME_MESSAGE)
                 : new JoinGame(JOIN_GAME_MESSAGE);
+    }
+
+    /**
+     * The ERROR lines the lifecycle logged on this test's thread with a stack trace attached; see
+     * {@link #warnings()} for why only this thread's.
+     *
+     * @return the messages, in order
+     */
+    private List<String> errorsWithTrace() {
+        String testThread = Thread.currentThread().getName();
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR && e.getThrowableProxy() != null)
+                .filter(e -> testThread.equals(e.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 
     /**

@@ -157,6 +157,56 @@ final class SessionFailuresTest {
     }
 
     /**
+     * An unchecked throw is a defect (#439): its one line is at ERROR and carries the stack trace,
+     * which is the only record of the bug, and it records the verdict of the stage it broke.
+     */
+    @Test
+    void aDefectLogsItsTraceAtErrorAndRecordsItsStagesVerdict() {
+        FailedTransitionException launch =
+                failures.launchDefect("launch the game session", new IllegalStateException("boom"));
+        failures.sessionDefect("host the game", new NullPointerException());
+
+        assertTrue(verdicts.launchFailed());
+        assertTrue(verdicts.sessionFailed());
+        assertSame(terminated, launch.getFailureState());
+        assertEquals(
+                List.of(
+                        "ERROR Could not launch the game session (IllegalStateException: boom)",
+                        "ERROR Could not host the game (NullPointerException)"),
+                lines());
+        assertTrue(
+                testThreadEvents().stream().allMatch(e -> e.getThrowableProxy() != null),
+                "each defect's line must carry its stack trace");
+    }
+
+    /**
+     * Once teardown has started, a defect still records nothing, but its line stays at ERROR with
+     * the trace: a bug is still a bug when the session is already ending, and {@code Transition}
+     * logs an uncaught one at ERROR whatever the state.
+     */
+    @Test
+    void aDefectOnceTeardownHasStartedIsStillLoggedButRecordsNothing() {
+        teardown.run();
+
+        failures.launchDefect("launch the game session", new IllegalStateException("boom"));
+
+        assertFalse(verdicts.launchFailed());
+        assertEquals(
+                List.of("ERROR Could not launch the game session (IllegalStateException: boom)"),
+                lines());
+    }
+
+    /**
+     * The events this test logged through the lifecycle's logger; see {@link #lines()}.
+     *
+     * @return the captured events on the test thread, in order
+     */
+    private List<ILoggingEvent> testThreadEvents() {
+        String testThread = Thread.currentThread().getName();
+        return appender.list.stream().filter(e -> testThread.equals(e.getThreadName())).toList();
+    }
+
+    /**
      * The lines this test logged through the lifecycle's logger, as {@code LEVEL message}.
      *
      * <p>Only the test thread's. The Gradle task runs every class in one JVM, and a lifecycle an

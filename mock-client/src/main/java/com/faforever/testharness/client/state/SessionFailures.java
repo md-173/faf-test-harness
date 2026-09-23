@@ -14,9 +14,10 @@ import org.slf4j.LoggerFactory;
  * the verdict it records together, so the two cannot disagree (WBS-3.1.3.3-fix, #437, #445).
  *
  * <p>Every method follows the rule the verdicts share: once {@link SessionTeardown} has started, a
- * failure is the harness's own doing, so its line drops to DEBUG and nothing is recorded. Each
- * returns the {@link FailedTransitionException} that takes the session to TERMINATED, for a
- * transition action to throw.
+ * failure is the harness's own doing, so nothing is recorded and its line drops to DEBUG. A
+ * defect's line is the one exception, kept at ERROR; see {@link #defect}. Each returns the {@link
+ * FailedTransitionException} that takes the session to TERMINATED, for a transition action to
+ * throw.
  *
  * <p>Split out of the lifecycle to keep that file within Checkstyle's length limit. It logs under
  * the lifecycle's name, deliberately: these are the lifecycle's lines, and tests and log readers
@@ -107,6 +108,54 @@ final class SessionFailures {
                     describe(cause));
         }
         return new FailedTransitionException(describe(cause), terminated);
+    }
+
+    /**
+     * An unchecked throw during a launch (#439), recorded as {@link
+     * SessionVerdicts#launchFailed()}; see {@link #defect}.
+     *
+     * @param what the action that failed, for the log line
+     * @param defect what was thrown
+     * @return the exception that fails the transition into TERMINATED
+     */
+    FailedTransitionException launchDefect(final String what, final RuntimeException defect) {
+        return defect(verdicts::recordLaunchFailed, what, defect);
+    }
+
+    /**
+     * An unchecked throw after the session came up (#439), recorded as {@link
+     * SessionVerdicts#sessionFailed()}; see {@link #defect}.
+     *
+     * @param what the action that failed, for the log line
+     * @param defect what was thrown
+     * @return the exception that fails the transition into TERMINATED
+     */
+    FailedTransitionException sessionDefect(final String what, final RuntimeException defect) {
+        return defect(verdicts::recordSessionFailed, what, defect);
+    }
+
+    /**
+     * Ends the session on a defect rather than a modelled failure: an unchecked throw out of a
+     * transition action with live subprocesses (#439). Left to {@code Transition}, it would be
+     * contained and the session left in the state it was leaving, where nothing moves it on.
+     *
+     * <p>Its one cause line is at ERROR with the stack trace, as {@code Transition} logs it,
+     * because the trace is the only record of the bug. So that line is logged even once teardown
+     * has started, while the verdict still follows the usual rule.
+     *
+     * @param verdict records this failure's verdict
+     * @param what the action that failed, for the log line
+     * @param defect what was thrown
+     * @return the exception that fails the transition into TERMINATED
+     */
+    private FailedTransitionException defect(
+            final Runnable verdict, final String what, final RuntimeException defect) {
+        String reason = describe(defect);
+        LOG.error("Could not {} ({})", what, reason, defect);
+        if (!teardown.hasRun()) {
+            verdict.run();
+        }
+        return new FailedTransitionException(reason, terminated);
     }
 
     private FailedTransitionException fail(

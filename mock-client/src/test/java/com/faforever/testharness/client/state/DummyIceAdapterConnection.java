@@ -28,6 +28,9 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
      */
     private final Map<String, Throwable> failCalls = new ConcurrentHashMap<>();
 
+    /** What each rigged call throws from {@code call} itself, instead of failing its future. */
+    private final Map<String, RuntimeException> throwCalls = new ConcurrentHashMap<>();
+
     private final boolean failOnConnection;
 
     DummyIceAdapterConnection(int port) {
@@ -67,6 +70,15 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
     }
 
     /**
+     * A {@link #call(final String method, final Object... params)} with {@code method} will throw
+     * {@code defect} rather than return a future at all: the unchecked throw out of a transition
+     * action that #439 is about, standing in for a bug anywhere in it.
+     */
+    public void setupCallThrow(String method, RuntimeException defect) {
+        throwCalls.put(method, defect);
+    }
+
+    /**
      * If {@link #call(final String method, final Object... params)} was called with the given
      * {@code method}, return the {@code params} given.
      */
@@ -77,6 +89,10 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
     @Override
     public CompletableFuture<JsonNode> call(final String method, final Object... params) {
         received.put(method, params);
+        RuntimeException defect = throwCalls.remove(method);
+        if (defect != null) {
+            throw defect;
+        }
         Throwable failure = failCalls.remove(method);
         if (failure != null) {
             return CompletableFuture.failedFuture(failure);
