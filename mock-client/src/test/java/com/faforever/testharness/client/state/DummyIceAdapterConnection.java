@@ -4,10 +4,8 @@ import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
@@ -24,7 +22,11 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
     private final Map<String, List<Consumer<JsonNode>>> notificationHandlers =
             new ConcurrentHashMap<>();
 
-    private final Set<String> failCalls = new HashSet<>();
+    /**
+     * What each rigged call fails with. Concurrent for the same reason as {@link #received}: a test
+     * rigs it on its own thread, and the call can arrive on the lobby connection's.
+     */
+    private final Map<String, Throwable> failCalls = new ConcurrentHashMap<>();
 
     private final boolean failOnConnection;
 
@@ -51,7 +53,17 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
      * in an exceptional future.
      */
     public void setupCallFail(String method) {
-        failCalls.add(method);
+        setupCallFail(method, new IOException("Bad call"));
+    }
+
+    /**
+     * A {@link #call(final String method, final Object... params)} with {@code method} will fail
+     * with {@code failure}, the way the real connection fails it: an {@code IceRpcException} for an
+     * error answer, a {@code TimeoutException} for none in time, an {@code IOException} for a
+     * closed connection. The lifecycle judges a failed call by which one it was (#445).
+     */
+    public void setupCallFail(String method, Throwable failure) {
+        failCalls.put(method, failure);
     }
 
     /**
@@ -65,8 +77,9 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
     @Override
     public CompletableFuture<JsonNode> call(final String method, final Object... params) {
         received.put(method, params);
-        if (failCalls.remove(method)) {
-            return CompletableFuture.failedFuture(new IOException("Bad call"));
+        Throwable failure = failCalls.remove(method);
+        if (failure != null) {
+            return CompletableFuture.failedFuture(failure);
         } else {
             return CompletableFuture.completedFuture(null);
         }

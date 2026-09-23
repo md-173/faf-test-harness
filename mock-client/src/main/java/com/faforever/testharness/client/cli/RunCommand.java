@@ -82,13 +82,14 @@ public final class RunCommand implements Callable<Integer> {
      * class javadoc for why it is accepted rather than worked around.
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
-     *     could not be established, its ICE adapter or game never came up, or the connection
-     *     dropped unexpectedly; {@link ExitCodes#ADAPTER_LOST} if the session ran but its ICE
-     *     adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if the session ran but its
-     *     game process died unaccounted for. A dropped connection, a launch that never came up, a
-     *     lost adapter and a crashed game are ordered by {@link #sessionExitCode(boolean, boolean,
-     *     boolean, boolean, boolean, Logger)}. Superseded by the signal's own exit code whenever a
-     *     signal is what ended the run, and then no verdict is logged.
+     *     could not be established, its ICE adapter or game never came up, the connection dropped
+     *     unexpectedly, or the session failed after it came up (a lobby frame it could not read, an
+     *     adapter call answered with an error or not at all, a match the server cancelled); {@link
+     *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
+     *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
+     *     for. When more than one applies, {@link #sessionExitCode(boolean, boolean, boolean,
+     *     boolean, boolean, boolean, Logger)} orders them. Superseded by the signal's own exit code
+     *     whenever a signal is what ended the run, and then no verdict is logged.
      */
     @Override
     public Integer call() {
@@ -191,6 +192,7 @@ public final class RunCommand implements Callable<Integer> {
                 verdicts.launchFailed(),
                 verdicts.adapterLost(),
                 verdicts.gameCrashed(),
+                verdicts.sessionFailed(),
                 log);
     }
 
@@ -216,7 +218,7 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Picks a finished session's exit code from the four verdicts it can carry, and logs the one
+     * Picks a finished session's exit code from the five verdicts it can carry, and logs the one
      * being reported.
      *
      * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
@@ -230,6 +232,12 @@ public final class RunCommand implements Callable<Integer> {
      * a race pick the code for a run whose adapter died. It also matches cause and effect: an
      * adapter dying is what makes the game react, and never the reverse, since java-ice-adapter
      * closes the game's connection and keeps serving when the game dies.
+     *
+     * <p>A session that failed after it came up is last (#445, #344): a lobby frame it could not
+     * read, an adapter call that failed while the adapter was still connected, or a match the
+     * server cancelled. {@code 71} and {@code 72} each name a subprocess that died under the
+     * session, and when one did, a failed call or a cancelled match is its consequence rather than
+     * its cause (faf-server cancels a match when a player's game closes).
      *
      * <p>A run a signal ended names no verdict at all. Its code is the signal's own (#334), so the
      * one computed here is discarded and a line would only mislead. The lifecycle's own teardown
@@ -251,6 +259,8 @@ public final class RunCommand implements Callable<Integer> {
      *     SessionVerdicts#adapterLost()}
      * @param gameCrashed whether the game process died unaccounted for; {@link
      *     SessionVerdicts#gameCrashed()}
+     * @param sessionFailed whether the session failed after its adapter and game came up; {@link
+     *     SessionVerdicts#sessionFailed()}
      * @param log the configured logger, for the single line naming what is reported
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */
@@ -260,6 +270,7 @@ public final class RunCommand implements Callable<Integer> {
             final boolean launchFailed,
             final boolean adapterLost,
             final boolean gameCrashed,
+            final boolean sessionFailed,
             final Logger log) {
         Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
@@ -279,6 +290,12 @@ public final class RunCommand implements Callable<Integer> {
             verdict.warn(
                     "the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
+        }
+        if (sessionFailed) {
+            verdict.warn(
+                    "the session failed after its ICE adapter and game came up; reporting it in"
+                            + " this run's exit code");
+            return ExitCodes.RUNTIME;
         }
         return ExitCodes.OK;
     }

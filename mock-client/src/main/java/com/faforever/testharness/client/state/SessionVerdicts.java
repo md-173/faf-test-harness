@@ -28,6 +28,9 @@ public final class SessionVerdicts {
     /** Backs {@link #gameCrashed()}. */
     private volatile boolean gameCrashed;
 
+    /** Backs {@link #sessionFailed()}. */
+    private volatile boolean sessionFailed;
+
     /** Created by the lifecycle, which owns the only reference that can record. */
     SessionVerdicts() {}
 
@@ -92,6 +95,26 @@ public final class SessionVerdicts {
         return gameCrashed;
     }
 
+    /**
+     * Whether this session failed after its ICE adapter and game came up (WBS-3.1.3.3-fix, #445;
+     * WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or {@code ConnectToPeer} frame
+     * it could not read, an adapter that answered one of those calls with an error or not within
+     * its timeout, or a match the server cancelled after {@code game_launch}.
+     *
+     * <p>Not recorded when one of those calls failed because the adapter's connection closed. The
+     * adapter is gone then, and its own exit is the finding (#406, #438), not the call. Never
+     * recorded once {@code SessionTeardown} has started, the same rule as {@link #launchFailed()}.
+     *
+     * <p>Recorded inside the transition action that ends the session, or, for {@code
+     * connectToPeer}'s asynchronous failure, just before the event that ends it is posted, so it is
+     * ordered before {@code RunCommand}'s read either way.
+     *
+     * @return {@code true} if the session failed after it came up, before session teardown began
+     */
+    public boolean sessionFailed() {
+        return sessionFailed;
+    }
+
     /** Records that the launch failed on the way up; see {@link #launchFailed()}. */
     void recordLaunchFailed() {
         launchFailed = true;
@@ -105,5 +128,10 @@ public final class SessionVerdicts {
     /** Records that the game died unaccounted for; see {@link #gameCrashed()}. */
     void recordGameCrashed() {
         gameCrashed = true;
+    }
+
+    /** Records that the session failed after it came up; see {@link #sessionFailed()}. */
+    void recordSessionFailed() {
+        sessionFailed = true;
     }
 }

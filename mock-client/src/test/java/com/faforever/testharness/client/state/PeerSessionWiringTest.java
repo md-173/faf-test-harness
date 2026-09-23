@@ -11,6 +11,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -19,6 +20,7 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -26,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +36,8 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -245,6 +250,7 @@ final class PeerSessionWiringTest {
     @Test
     void malformedConnectToPeerEndsTheSessionRatherThanContinuingWithoutAPeer() throws Exception {
         MockClientLifecycle lifecycle = hostingLifecycle();
+        CompletableFuture<Boolean> failedAtCommit = sessionFailedAtCommit(lifecycle);
 
         // offer missing: the adapter cannot be told which side initiates, so the peer link cannot
         // be set up. Treated exactly as a malformed HostGame/JoinGame is.
@@ -256,19 +262,54 @@ final class PeerSessionWiringTest {
         assertNull(
                 adapter.receivedMessage("connectToPeer"),
                 "a frame we could not read must not produce a half-specified RPC");
+        assertTrue(
+                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                "a frame the client cannot read fails the session before TERMINATED (#445)");
     }
 
-    @Test
-    void adapterRejectingConnectToPeerEndsTheSession() throws Exception {
+    /**
+     * The adapter refusing to set up the relay, with an error answer or none in time, is not
+     * recoverable here: this session can never reach that peer, so it ends rather than sitting in
+     * HOSTING looking healthy while the other side waits for candidates that will never come. The
+     * adapter was still connected, so it is a finding (#445), recorded before the asynchronous
+     * failure posts the event that ends the session.
+     *
+     * @param errorAnswer whether the adapter answers with an error, rather than not in time
+     */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void adapterRejectingConnectToPeerEndsTheSession(final boolean errorAnswer) throws Exception {
         MockClientLifecycle lifecycle = hostingLifecycle();
-        adapter.setupCallFail("connectToPeer");
+        adapter.setupCallFail(
+                "connectToPeer",
+                errorAnswer ? new IceRpcException(-32000, "refused") : new TimeoutException());
+        CompletableFuture<Boolean> failedAtCommit = sessionFailedAtCommit(lifecycle);
 
         server.broadcastText(connectToPeer(PEER_LOGIN, PEER_ID, true) + "\n");
 
-        // The adapter refusing to set up the relay is not recoverable here: this session can never
-        // reach that peer, so it ends rather than sitting in HOSTING looking healthy while the
-        // other side waits for candidates that will never come.
         awaitState(lifecycle, ClientState.TERMINATED);
+        assertTrue(
+                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                "the verdict must be recorded before the session ends");
+    }
+
+    /**
+     * A {@code connectToPeer} that fails because the adapter's connection closed still ends the
+     * session, but records nothing (#445): the adapter is gone, and its own exit is the finding.
+     */
+    @Test
+    void aClosedAdapterConnectionEndsTheSessionWithoutAVerdict() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        adapter.setupCallFail(
+                "connectToPeer", new IOException("ICE adapter connection closed (REMOTE_CLOSE)"));
+        CompletableFuture<Boolean> failedAtCommit = sessionFailedAtCommit(lifecycle);
+
+        server.broadcastText(connectToPeer(PEER_LOGIN, PEER_ID, true) + "\n");
+
+        awaitState(lifecycle, ClientState.TERMINATED);
+        assertFalse(
+                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                "a closed connection is the adapter's finding, not the call's");
     }
 
     @Test
@@ -613,6 +654,17 @@ final class PeerSessionWiringTest {
                 MAPPER.readTree(frame).path("command").asText(),
                 "unexpected frame reached the lobby: " + frame);
         return frame;
+    }
+
+    /**
+     * Whether a session failure was recorded at the moment TERMINATED commits. Registered before
+     * the frame is sent, so a verdict written after the commit could not pass.
+     */
+    private static CompletableFuture<Boolean> sessionFailedAtCommit(
+            final MockClientLifecycle lifecycle) {
+        return lifecycle
+                .stateReached(ClientState.TERMINATED)
+                .thenApply(reached -> lifecycle.verdicts().sessionFailed());
     }
 
     /** Bounded wait for the FSM to reach {@code state}. */

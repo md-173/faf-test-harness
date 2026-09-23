@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -324,6 +325,9 @@ final class MatchmakingQueueTest {
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":null}");
         idleAgain.get(3, TimeUnit.SECONDS);
         assertEquals(ClientState.IDLE, lifecycle.getState());
+        assertFalse(
+                lifecycle.verdicts().sessionFailed(),
+                "a match cancelled before game_launch leaves the run free to search again (#344)");
 
         // A cancelled match must not silently re-queue. faf-server emits match_cancelled from the
         // handler that also calls violation_service.register_violations, so an automatic re-queue
@@ -382,13 +386,20 @@ final class MatchmakingQueueTest {
         searching.get(3, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
-        var terminated = lifecycle.stateReached(ClientState.TERMINATED);
+        // Sampled the moment TERMINATED commits (#344): the run reads the verdict once that
+        // future completes, so one written afterwards would reach it too late.
+        var failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
         assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
 
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":12345}");
-        terminated.get(3, TimeUnit.SECONDS);
 
+        assertTrue(
+                failedAtCommit.get(3, TimeUnit.SECONDS),
+                "a match cancelled after game_launch is a finding the exit code must carry");
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
         assertTrue(
                 messages().stream()

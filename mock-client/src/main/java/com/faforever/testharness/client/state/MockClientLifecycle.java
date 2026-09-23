@@ -173,6 +173,9 @@ public final class MockClientLifecycle {
      */
     private final SessionVerdicts verdicts = new SessionVerdicts();
 
+    /** How a failure ends this session: its one cause line and its verdict, decided together. */
+    private final SessionFailures failures;
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -326,6 +329,7 @@ public final class MockClientLifecycle {
         for (var s : ClientState.values()) {
             states.put(s, new State(s.toString()));
         }
+        failures = new SessionFailures(teardown, verdicts, states.get(ClientState.TERMINATED));
         machine =
                 new StateMachine(
                         states.get(ClientState.CONNECTING), InvalidTransitionPolicy.IGNORE);
@@ -1277,27 +1281,16 @@ public final class MockClientLifecycle {
             // leaves it pending and the FSM reaches TERMINATED instead.
             gameLaunched.complete(gameConfig);
         } catch (IceAdapterLaunchException e) {
-            throw launchFailure("launch the ICE adapter", e.getMessage());
+            throw failures.launch("launch the ICE adapter", e.getMessage());
         } catch (CancellationException | ExecutionException e) {
-            throw launchFailure("connect or setup the ICE adapter", e.getMessage());
+            throw failures.launch("connect or setup the ICE adapter", e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             // Named for the adapter: every interruptible wait above is its connect or a setup call.
-            throw launchFailure("connect or setup the ICE adapter", "interrupted");
+            throw failures.launch("connect or setup the ICE adapter", "interrupted");
         } catch (MockGameLaunchException e) {
-            throw launchFailure("launch game binary", e.getMessage());
+            throw failures.launch("launch game binary", e.getMessage());
         }
-    }
-
-    private FailedTransitionException launchFailure(final String what, final String reason) {
-        // The line and the verdict are decided together, as in onAdapterExited, so they agree.
-        if (teardown.hasRun()) {
-            LOG.debug("Could not {} during session teardown ({})", what, reason);
-        } else {
-            LOG.warn("Could not {} ({})", what, reason);
-            verdicts.recordLaunchFailed();
-        }
-        return new FailedTransitionException(reason, states.get(ClientState.TERMINATED));
     }
 
     /**
@@ -1384,19 +1377,18 @@ public final class MockClientLifecycle {
         JsonNode command = ((HostGame) message).command();
         JsonNode mapNode = command.path("args").path(0);
         if (!mapNode.isTextual()) {
-            throw new FailedTransitionException(
-                    "textual map argument not found in HostGame message",
-                    states.get(ClientState.TERMINATED));
+            throw failures.session(
+                    "host the game", "textual map argument not found in HostGame message");
         }
 
         String map = mapNode.asText();
         try {
             iceConnection.call("hostGame", map).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.call("host the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.session("host the game", "interrupted");
         }
     }
 
@@ -1409,18 +1401,18 @@ public final class MockClientLifecycle {
         JsonNode remoteLogin = command.path("args").path(0);
         JsonNode remoteID = command.path("args").path(1);
         if (!remoteLogin.isTextual() || !remoteID.isInt()) {
-            throw new FailedTransitionException(
-                    "textual remote login and remote id arguments not found in JoinGame message",
-                    states.get(ClientState.TERMINATED));
+            throw failures.session(
+                    "join the game",
+                    "textual remote login and remote id arguments not found in JoinGame message");
         }
 
         try {
             iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.call("join the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.session("join the game", "interrupted");
         }
     }
 
@@ -1440,7 +1432,9 @@ public final class MockClientLifecycle {
      * {@link #hostGame} and {@link #joinGame} give theirs: the peer link cannot be set up from a
      * frame we could not read, and a session that silently carries on without one would report a
      * connection failure that the harness would have to attribute by hand. A frame that parses but
-     * whose RPC then fails ends the session too, asynchronously — see the comment on the call.
+     * whose RPC then fails ends the session too, asynchronously; see the comment on the call. Both
+     * record {@link SessionVerdicts#sessionFailed()} (WBS-3.1.3.3-fix, #445), except a call that
+     * failed because the adapter's connection closed, which is the adapter's finding.
      *
      * <p><b>Blast radius, deliberately session-wide (#218 review).</b> Unlike {@link #hostGame} and
      * {@link #joinGame}, which fire once at role assignment, this edge fires once per peer as the
@@ -1465,10 +1459,10 @@ public final class MockClientLifecycle {
         JsonNode remoteId = command.path("args").path(1);
         JsonNode offer = command.path("args").path(2);
         if (!remoteLogin.isTextual() || !remoteId.isInt() || !offer.isBoolean()) {
-            throw new FailedTransitionException(
+            throw failures.session(
+                    "connect to a peer",
                     "textual remote login, int remote id, and boolean offer arguments not found in"
-                            + " ConnectToPeer message",
-                    states.get(ClientState.TERMINATED));
+                            + " ConnectToPeer message");
         }
 
         LOG.info(
@@ -1516,13 +1510,14 @@ public final class MockClientLifecycle {
                                 LOG.debug(
                                         "connectToPeer for id={} failed during teardown ({})",
                                         peerId,
-                                        error.getMessage());
+                                        SessionFailures.describe(SessionFailures.unwrap(error)));
                                 return;
                             }
-                            LOG.warn(
-                                    "peer relay setup failed for id={} ({}); ending session",
-                                    peerId,
-                                    error.getMessage());
+                            // Judged by cause, as hostGame and joinGame are (#445), and recorded
+                            // before the session is ended, so RunCommand reads it. The exception
+                            // it returns is for a transition action to throw; this is a
+                            // continuation, so the session ends through ShutdownRequested.
+                            failures.call("set up the peer relay for id=" + peerId, error);
                             machine.receiveEvent(new ShutdownRequested());
                         },
                         labelledAsync);
@@ -1694,14 +1689,24 @@ public final class MockClientLifecycle {
      *
      * <p>Teardown itself is not done here — TERMINATED's entry hook owns it, so this only reports.
      *
+     * <p>It also records {@link SessionVerdicts#sessionFailed()} (WBS-3.1.1.9-fix, #344), in the
+     * branch that warns, so the run exits {@code 70} rather than reading an abandoned match as a
+     * pass. Not once teardown has started, the rule every other verdict follows.
+     *
      * @param message the {@link MatchCancelled} event; guaranteed by registration.
      */
     private void onMatchCancelledAfterLaunch(Event message) {
         JsonNode command = ((MatchCancelled) message).command();
+        String gameId = command.path("game_id").asText("null");
+        if (teardown.hasRun()) {
+            LOG.debug("match_cancelled after game_launch (game_id={}) during teardown", gameId);
+            return;
+        }
         LOG.warn(
                 "match_cancelled after game_launch (game_id={}); the matched game will not start,"
                         + " terminating",
-                command.path("game_id").asText("null"));
+                gameId);
+        verdicts.recordSessionFailed();
     }
 
     /**
