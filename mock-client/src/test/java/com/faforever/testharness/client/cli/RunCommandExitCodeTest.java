@@ -8,6 +8,9 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.faforever.testharness.client.lobby.LobbyConnection;
+import com.faforever.testharness.client.process.SessionTeardown;
+import java.net.URI;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -263,5 +266,42 @@ final class RunCommandExitCodeTest {
 
         assertTrue(flagWasUp.get(), "teardown must not start before the flag is raised");
         assertTrue(shuttingDown.get(), "and the flag must stay raised afterwards");
+    }
+
+    /**
+     * The hook names a signal only while {@code call()} still had the session (#446). It runs on
+     * every JVM exit, and the guard it used before, the lobby's disconnect, lost a race on a normal
+     * one: teardown's close returns once its frame is sent, before the server's echo marks the
+     * session disconnected, so a run that ended on its own logged the line after its verdict.
+     * {@code call()} raises the flag on every way out, so a hook that finds it down started under a
+     * live run. Teardown runs either way.
+     */
+    @Test
+    void theShutdownHookNamesASignalOnlyWhileTheRunWasLive() {
+        SessionTeardown underALiveRun = unconnectedTeardown();
+        RunCommand.teardownOnShutdown(new AtomicBoolean(false), underALiveRun, log);
+
+        assertTrue(underALiveRun.hasRun(), "a signal's teardown must run");
+        assertEquals(1, appender.list.size(), "captured: " + appender.list);
+        assertEquals(
+                "shutdown signal received; tearing down session",
+                appender.list.get(0).getFormattedMessage());
+
+        appender.list.clear();
+        SessionTeardown afterTheRunEnded = unconnectedTeardown();
+        RunCommand.teardownOnShutdown(new AtomicBoolean(true), afterTheRunEnded, log);
+
+        assertTrue(afterTheRunEnded.hasRun(), "teardown still runs on a normal exit");
+        assertTrue(appender.list.isEmpty(), "a normal exit names no signal: " + appender.list);
+    }
+
+    /**
+     * A teardown whose lobby connection never connected, so running it touches no network and no
+     * process.
+     *
+     * @return the teardown
+     */
+    private static SessionTeardown unconnectedTeardown() {
+        return new SessionTeardown(new LobbyConnection(URI.create("ws://127.0.0.1:1")));
     }
 }

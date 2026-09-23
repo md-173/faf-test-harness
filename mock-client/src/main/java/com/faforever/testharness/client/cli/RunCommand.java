@@ -119,20 +119,50 @@ public final class RunCommand implements Callable<Integer> {
 
         // Graceful shutdown on Ctrl-C / SIGTERM: run the coordinated teardown synchronously before
         // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
-        // the main thread. No-op if the session has already disconnected (e.g. a server-initiated
-        // close that let call() return normally), so a normal exit doesn't emit a spurious
-        // "shutdown signal" line. The flag it raises first is what tells the end of this method
-        // that a signal, not the session, ended the run; see shutdownHook for why that order is
-        // load bearing.
+        // the main thread. The flag it raises first is what tells runSession that a signal, not
+        // the session, ended the run; see shutdownHook for why that order is load bearing.
+        //
+        // The hook runs on every JVM exit, a normal one included, so its "shutdown signal" line is
+        // guarded on callFinished, raised on every way out of this method. A hook that finds it
+        // down started while the run was still live, which only a signal does (#446). The lobby's
+        // disconnect, the guard before, lost a race on a normal exit: teardown's close returns
+        // once its frame is sent, before the server's echo marks the session disconnected.
         AtomicBoolean shuttingDown = new AtomicBoolean();
+        AtomicBoolean callFinished = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
                         new Thread(
                                 shutdownHook(
                                         shuttingDown,
-                                        () -> teardownOnShutdown(session, teardown, log)),
+                                        () -> teardownOnShutdown(callFinished, teardown, log)),
                                 "mc-shutdown"));
+        try {
+            return runSession(tokens, session, teardown, lifecycle, shuttingDown, log);
+        } finally {
+            callFinished.set(true);
+        }
+    }
 
+    /**
+     * The rest of {@link #call()}, from the moment the shutdown hook exists: opens the session,
+     * waits for it to end, and picks the exit code. A method of its own so that {@code call()} can
+     * mark every way out of it for the hook (#446).
+     *
+     * @param tokens the session's access tokens
+     * @param session the lobby session to open
+     * @param teardown the session's teardown, shared with the hook
+     * @param lifecycle the lifecycle driving the session
+     * @param shuttingDown raised by the hook, first thing, when the JVM starts shutting down
+     * @param log the configured logger
+     * @return the code {@code run} should exit with; see {@link #call()}
+     */
+    private static int runSession(
+            final TokenSource tokens,
+            final LobbySession session,
+            final SessionTeardown teardown,
+            final MockClientLifecycle lifecycle,
+            final AtomicBoolean shuttingDown,
+            final Logger log) {
         SessionState me;
         try {
             me = lifecycle.start(tokens).get(SETUP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
@@ -301,18 +331,22 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Shutdown-hook body: always run the coordinated session teardown — even when the lobby is
-     * already disconnected, later-registered handles (the game at launch, the adapter via R38/R59b)
-     * may still need tearing down. Only the "shutdown signal" line is guarded, so normal exits stay
-     * quiet.
+     * Shutdown-hook body: always run the coordinated session teardown, since even a session whose
+     * lobby is already disconnected may have later-registered handles (the game at launch, the
+     * adapter via R38/R59b) still to tear down. Only the "shutdown signal" line is guarded.
      *
-     * @param session the live lobby session, checked only to keep normal exits quiet
+     * <p>It is logged only while {@code call()} has not yet finished (#446). The hook runs on every
+     * JVM exit, and one that starts while the run is still live can only have been started by a
+     * signal. A run that ends on its own finishes {@code call()} before {@code Main}'s {@link
+     * System#exit(int)} starts the hook, so it never logs the line, whatever its exit code.
+     *
+     * @param callFinished raised once {@code call()} has its result, on every way out of it
      * @param teardown the session's teardown, shared with the FSM path (R59b)
      * @param log logger for the single "shutdown signal received" line
      */
-    private static void teardownOnShutdown(
-            final LobbySession session, final SessionTeardown teardown, final Logger log) {
-        if (!session.isDisconnected()) {
+    static void teardownOnShutdown(
+            final AtomicBoolean callFinished, final SessionTeardown teardown, final Logger log) {
+        if (!callFinished.get()) {
             log.info("shutdown signal received; tearing down session");
         }
         teardown.run();
