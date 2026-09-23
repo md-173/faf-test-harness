@@ -6,9 +6,9 @@ package com.faforever.testharness.client.state;
  *
  * <p>Each one is a judgement rather than a raw fact. An exit code or a failed call says what
  * happened; whether that was a fault or the harness's own doing is decided once, by {@link
- * MockClientLifecycle}, in the same branch that logs it, so the line and the exit code cannot
- * disagree. This class only holds the answers. The lifecycle writes them through the
- * package-private recorders, and nothing else does.
+ * MockClientLifecycle} or by {@link SessionFailures} on its behalf, in the same branch that logs
+ * it, so the line and the exit code cannot disagree. This class only holds the answers. Only those
+ * two write them, through the package-private recorders.
  *
  * <p>Read them once {@code stateReached(TERMINATED)} has completed. A verdict written inside the
  * transition action that drives TERMINATED is ordered before that read: the action runs before

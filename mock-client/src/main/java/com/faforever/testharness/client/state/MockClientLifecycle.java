@@ -168,8 +168,8 @@ public final class MockClientLifecycle {
 
     /**
      * What this session found, as the verdicts {@code RunCommand} turns into {@code run}'s exit
-     * code. Recorded only here, each in the same branch that logs its cause; see {@link
-     * SessionVerdicts} for the ordering each one relies on.
+     * code. Recorded only by this lifecycle and its {@link SessionFailures}, each in the same
+     * branch that logs its cause; see {@link SessionVerdicts} for the ordering each one relies on.
      */
     private final SessionVerdicts verdicts = new SessionVerdicts();
 
@@ -1700,24 +1700,15 @@ public final class MockClientLifecycle {
      *
      * <p>Teardown itself is not done here — TERMINATED's entry hook owns it, so this only reports.
      *
-     * <p>It also records {@link SessionVerdicts#sessionFailed()} (WBS-3.1.1.9-fix, #344), in the
-     * branch that warns, so the run exits {@code 70} rather than reading an abandoned match as a
-     * pass. Not once teardown has started, the rule every other verdict follows.
+     * <p>{@link SessionFailures#matchCancelled} logs it and records {@link
+     * SessionVerdicts#sessionFailed()} (WBS-3.1.1.9-fix, #344), so the run exits {@code 70} rather
+     * than reading an abandoned match as a pass.
      *
      * @param message the {@link MatchCancelled} event; guaranteed by registration.
      */
     private void onMatchCancelledAfterLaunch(Event message) {
         JsonNode command = ((MatchCancelled) message).command();
-        String gameId = command.path("game_id").asText("null");
-        if (teardown.hasRun()) {
-            LOG.debug("match_cancelled after game_launch (game_id={}) during teardown", gameId);
-            return;
-        }
-        LOG.warn(
-                "match_cancelled after game_launch (game_id={}); the matched game will not start,"
-                        + " terminating",
-                gameId);
-        verdicts.recordSessionFailed();
+        failures.matchCancelled(command.path("game_id").asText("null"));
     }
 
     /**

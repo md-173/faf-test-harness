@@ -568,6 +568,31 @@ final class IceAdapterConnectionTest {
         assertInstanceOf(IOException.class, thrown.getCause());
     }
 
+    /**
+     * The reset half of the guarantee above: an adapter whose socket goes away with a TCP reset, as
+     * a killed process's can, also fails a later call fast with an {@link IOException}. The reader
+     * ends on the reset without closing the socket, and the write then hits a broken pipe.
+     */
+    @Test
+    void aCallAfterTheAdapterResetTheConnectionFailsFast() throws Exception {
+        conn =
+                new IceAdapterConnection(
+                        server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(30));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        conn.onDisconnect(e -> disconnected.countDown());
+
+        server.resetClient();
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire");
+
+        CompletableFuture<JsonNode> late = conn.call("hostGame", "scmp_007");
+
+        ExecutionException thrown =
+                assertThrows(ExecutionException.class, () -> late.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(IOException.class, thrown.getCause());
+    }
+
     @Test
     void closeFiresLocalCloseDisconnect() throws Exception {
         conn = connect();

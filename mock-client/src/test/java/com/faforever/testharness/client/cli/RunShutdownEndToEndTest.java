@@ -55,8 +55,11 @@ final class RunShutdownEndToEndTest {
     /** The hook's line, which must mark a signal and nothing else (#446). */
     private static final String SIGNAL_LINE = "shutdown signal received; tearing down session";
 
-    /** How every verdict line {@code RunCommand} logs ends. */
+    /** How every verdict line {@code RunCommand} logs ends, bar the lobby drop's. */
     private static final String VERDICT_ENDING = "reporting it in this run's exit code";
+
+    /** The lobby drop's verdict line, the one that does not end that way. */
+    private static final String LOBBY_DROP_VERDICT = "lobby connection dropped unexpectedly";
 
     /** Logged just before the main thread parks: the session is idle. */
     private static final String IDLE_LINE = "mock client idle as player";
@@ -118,8 +121,8 @@ final class RunShutdownEndToEndTest {
     void aSigintWhileIdleExits130AndClosesCleanly() throws Exception {
         assumeTrue(
                 sigintReachesAChild(),
-                "SIGINT is ignored in this JVM or cannot be checked, so a child would inherit it"
-                        + " and never run its hook");
+                "SIGINT is ignored in this JVM, so a child would inherit it and never run its hook,"
+                        + " or this platform has no /proc/self/status to tell");
         startRunAndReachIdle();
 
         Process kill =
@@ -324,7 +327,9 @@ final class RunShutdownEndToEndTest {
     }
 
     private static List<String> verdicts(final List<JsonNode> records) {
-        return messages(records).stream().filter(m -> m.endsWith(VERDICT_ENDING)).toList();
+        return messages(records).stream()
+                .filter(m -> m.endsWith(VERDICT_ENDING) || m.equals(LOBBY_DROP_VERDICT))
+                .toList();
     }
 
     private static long count(final List<JsonNode> records, final String message) {

@@ -60,6 +60,11 @@ public final class ExitCodes {
      * because the adapter's connection closed is not this: the adapter is gone, which is {@link
      * #ADAPTER_LOST}'s finding, although a run that such a failure ends still exits {@code 0} until
      * that code can see it (#438).
+     *
+     * <p>An unexpected exception in the bring-up is a defect rather than a finding, and ends the
+     * run here too instead of leaving it waiting (WBS-3.1.3.3-fix, #439): as a launch that never
+     * came up when it is thrown in the launch, and as a failed session when it is thrown in the
+     * host or join step.
      */
     public static final int RUNTIME = 70;
 

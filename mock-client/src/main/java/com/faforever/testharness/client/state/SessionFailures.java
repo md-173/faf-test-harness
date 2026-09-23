@@ -11,13 +11,14 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Ends a {@link MockClientLifecycle} session on a failure, deciding the one line that names it and
- * the verdict it records together, so the two cannot disagree (WBS-3.1.3.3-fix, #437, #445).
+ * the verdict it records together, so the two cannot disagree (WBS-3.1.3.3-fix, #437, #439, #445,
+ * and WBS-3.1.1.9-fix, #344).
  *
- * <p>Every method follows the rule the verdicts share: once {@link SessionTeardown} has started, a
- * failure is the harness's own doing, so nothing is recorded and its line drops to DEBUG. A
- * defect's line is the one exception, kept at ERROR; see {@link #defect}. Each returns the {@link
- * FailedTransitionException} that takes the session to TERMINATED, for a transition action to
- * throw.
+ * <p>Every failure path here follows the rule the verdicts share: once {@link SessionTeardown} has
+ * started, a failure is the harness's own doing, so nothing is recorded and its line drops to
+ * DEBUG. A defect's line is the one exception, kept at ERROR; see {@link #defect}. The paths that
+ * fail a transition return the {@link FailedTransitionException} that takes the session to
+ * TERMINATED, for the transition action to throw.
  *
  * <p>Split out of the lifecycle to keep that file within Checkstyle's length limit. It logs under
  * the lifecycle's name, deliberately: these are the lifecycle's lines, and tests and log readers
@@ -27,6 +28,9 @@ final class SessionFailures {
 
     /** The lifecycle's logger, not this class's; see the class javadoc. */
     private static final Logger LOG = LoggerFactory.getLogger(MockClientLifecycle.class);
+
+    /** How deep {@link #describe} follows a cause chain, so one that loops cannot hang a line. */
+    private static final int MAX_CAUSE_DEPTH = 16;
 
     /** The session's teardown; once it has started, a failure records nothing. */
     private final SessionTeardown teardown;
@@ -86,9 +90,10 @@ final class SessionFailures {
      *
      * <p>One case reads wrong. A live adapter whose stream went out of sync fails the calls in
      * flight with an {@code IOException} too, as the reader gives up on a frame it cannot parse, so
-     * those read as a dead adapter and the run can exit {@code 0}. A call made after that point
-     * times out and does record the verdict. Telling them apart needs to know whether the adapter
-     * process outlives its RPC link, which is left to a follow-up.
+     * those read as a dead adapter and the run can exit {@code 0}. The INFO line still names the
+     * parse error underneath, and a call made after that point times out and does record the
+     * verdict. Telling them apart needs to know whether the adapter process outlives its RPC link,
+     * which is #452's.
      *
      * @param what the action that failed, for the log line
      * @param failure what the call's future failed with, wrapped or not
@@ -108,6 +113,25 @@ final class SessionFailures {
                     describe(cause));
         }
         return new FailedTransitionException(describe(cause), terminated);
+    }
+
+    /**
+     * A match the server cancelled after {@code game_launch} (#344), recorded as {@link
+     * SessionVerdicts#sessionFailed()} with the one WARN that names it. Nothing is returned: the
+     * lifecycle registers a transition to TERMINATED for this event rather than failing into one.
+     *
+     * @param gameId the cancelled game's id, as the frame carried it
+     */
+    void matchCancelled(final String gameId) {
+        if (teardown.hasRun()) {
+            LOG.debug("match_cancelled after game_launch (game_id={}) during teardown", gameId);
+            return;
+        }
+        LOG.warn(
+                "match_cancelled after game_launch (game_id={}); the matched game will not start,"
+                        + " terminating",
+                gameId);
+        verdicts.recordSessionFailed();
     }
 
     /**
@@ -187,15 +211,27 @@ final class SessionFailures {
 
     /**
      * Names a failure for a log line: its type, which carries the meaning, then its message when it
-     * has one. The {@code TimeoutException} a call's timer completes it with has none.
+     * has one (the {@code TimeoutException} a call's timer completes it with has none), then the
+     * failure at the bottom of its cause chain, when there is one. That last part is what tells a
+     * closed connection's kinds apart: nothing for a clean end of the stream, a {@code
+     * SocketException} for a reset, a {@code JsonProcessingException} for a stream that stopped
+     * parsing.
      *
      * @param cause the failure to name
-     * @return its simple class name, and its message when it has one
+     * @return its simple class name and message, and its root cause's when it has one
      */
     static String describe(final Throwable cause) {
-        String message = cause.getMessage();
+        Throwable root = cause;
+        for (int depth = 0; depth < MAX_CAUSE_DEPTH && root.getCause() != null; depth++) {
+            root = root.getCause();
+        }
+        return root == cause ? name(cause) : name(cause) + ", caused by " + name(root);
+    }
+
+    private static String name(final Throwable failure) {
+        String message = failure.getMessage();
         return message == null
-                ? cause.getClass().getSimpleName()
-                : cause.getClass().getSimpleName() + ": " + message;
+                ? failure.getClass().getSimpleName()
+                : failure.getClass().getSimpleName() + ": " + message;
     }
 }

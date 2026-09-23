@@ -16,6 +16,7 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
 import java.io.IOException;
+import java.net.SocketException;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.CompletionException;
@@ -147,13 +148,52 @@ final class SessionFailuresTest {
         failures.session("host the game", "bad frame");
         failures.call("join the game", new ExecutionException(new TimeoutException()));
         failures.call("host the game", new ExecutionException(new IOException("closed")));
+        failures.matchCancelled("4242");
 
         assertFalse(verdicts.launchFailed());
         assertFalse(verdicts.sessionFailed());
         assertTrue(
                 lines().stream().allMatch(line -> line.startsWith("DEBUG ")),
                 "every line must drop to DEBUG: " + lines());
-        assertEquals(4, lines().size(), "one line per failure: " + lines());
+        assertEquals(5, lines().size(), "one line per failure: " + lines());
+    }
+
+    /**
+     * A closed connection's line names what closed it: the root of the cause chain, which is what
+     * tells a reset or a stream that stopped parsing from a clean end of the stream (#445 review).
+     */
+    @Test
+    void aClosedConnectionsLineNamesWhatClosedIt() {
+        IOException closed =
+                new IOException(
+                        "ICE adapter connection closed (REMOTE_CLOSE)",
+                        new SocketException("Connection reset"));
+
+        failures.call("host the game", new ExecutionException(closed));
+
+        assertFalse(verdicts.sessionFailed());
+        assertEquals(
+                List.of(
+                        "INFO Could not host the game: the ICE adapter connection closed"
+                                + " (IOException: ICE adapter connection closed (REMOTE_CLOSE),"
+                                + " caused by SocketException: Connection reset); ending session"),
+                lines());
+    }
+
+    /**
+     * A match the server cancelled after {@code game_launch} is a failed session (#344), named by
+     * the one WARN the lifecycle has always logged for it.
+     */
+    @Test
+    void aMatchCancelledAfterLaunchRecordsTheSessionVerdict() {
+        failures.matchCancelled("4242");
+
+        assertTrue(verdicts.sessionFailed());
+        assertEquals(
+                List.of(
+                        "WARN match_cancelled after game_launch (game_id=4242); the matched game"
+                                + " will not start, terminating"),
+                lines());
     }
 
     /**

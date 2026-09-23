@@ -573,6 +573,14 @@ final class LifecycleSetupTest {
         assertTrue(
                 errorsWithTrace().stream().anyMatch(m -> m.startsWith("Could not " + action)),
                 "the defect must be logged at ERROR with its trace: " + errorsWithTrace());
+        // Both came up for this one, so teardown must reap both. Bounded waits rather than
+        // isAlive() probes: failing to complete is the assertion that nothing was left running.
+        gameLaunchers
+                .get(gameLaunchers.size() - 1)
+                .getSubprocess()
+                .onExit()
+                .get(5, TimeUnit.SECONDS);
+        iceLaunchers.get(iceLaunchers.size() - 1).getSubprocess().onExit().get(5, TimeUnit.SECONDS);
     }
 
     /**
