@@ -158,7 +158,7 @@ not have. Bold flags are passed by the Mock Client on every launch.
 | **`--id <int>`** | — | yes | Local player id. Sourced from `welcome.me.id` cached at lobby auth time (json-rpc-spec §8.1). |
 | **`--login <string>`** | — | yes | Local player login. Sourced from `welcome.me.login`. |
 | **`--game-id <int>`** | — | yes | Game id. **Required by adapter 3.3.x** — it prints usage and exits without it. Sourced from `game_launch.uid`; a placeholder (`iceAdapterGameId`, default 0) for the standalone diagnostics. |
-| **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. Allocated dynamically (§3) so multiple harness instances on one host do not collide. |
+| **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. The configured value, `7236` unless moved; only `session` allocates a free port per peer (§3), so two other harness commands on one host collide unless one is moved (runbook §2a, **Ports**). |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
 | `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var (§2.3). |
@@ -395,7 +395,8 @@ two ports it shares with the adapter.
 
 ## 3. Port allocation
 
-To avoid collisions between harness instances sharing one host:
+**Implemented by `session` only, and without the retry.** To avoid
+collisions between harness instances sharing one host, the design is:
 
 - Open a `ServerSocket(0)` (TCP) or `DatagramSocket(0)` (UDP), read
   `getLocalPort()`, close, pass the integer to the child.
@@ -404,6 +405,14 @@ To avoid collisions between harness instances sharing one host:
   error; cap retries at 3.
 - Ports are **per session**, not pooled. The Mock Client never holds a port
   binding alongside the child.
+
+`session` does the first and last of these for every peer
+(`MultiPeerSession.freeAdapterPorts`, the one free-port allocator in main
+source), but nothing retries with a fresh port, so a collision in that window
+fails the run. `run`, `launch-ice` and `ice-smoke` allocate nothing: they pass
+the configured ports, which default to `7236`, `7237` and `7238`, so two of
+them on one host collide unless one is moved by hand (runbook §2a,
+**Ports**).
 
 ## 4. stdout / stderr capture
 

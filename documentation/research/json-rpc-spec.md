@@ -315,7 +315,7 @@ arguments relevant to the Mock Client are bold.
 | **`--id <int>`** | required | Local player id. Sourced from `welcome.me.id` cached at lobby auth time, OR `game_launch.uid` if we want per-game ids — see §8.1. |
 | **`--login <string>`** | required | Local player login. Sourced from `welcome.me.login`. |
 | **`--game-id <int>`** | required | Game id. **Required by 3.3.x — the adapter prints usage and exits without it.** Sourced from `game_launch.uid`; a placeholder for the standalone diagnostics. |
-| **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client allocates a free port and passes it explicitly so multiple harness instances do not collide. |
+| **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client passes it explicitly: the configured value, `7236` unless moved, or a free port per peer under `session` (subprocess-orchestration-spec §3). |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | `--log-directory <path>` | unset | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var. |
