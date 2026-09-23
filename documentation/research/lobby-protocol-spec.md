@@ -149,7 +149,7 @@ The Authorization Code flow requires a browser interaction, which is unsuitable 
    - Persist the `refresh_token` to a gitignored config file.
 
 4. **Steady-state (headless).**
-   - On startup or when the access_token nears expiry (~1 hour), POST to `/oauth2/token` with `grant_type=refresh_token` + the saved refresh_token.
+   - Once per run, after the lobby WebSocket opens and before `ask_session`, POST to `/oauth2/token` with `grant_type=refresh_token` + the saved refresh_token. Refreshing again as the access_token nears expiry (~1 hour) is not implemented: `AccessToken.expiryDate` is never read.
    - Hydra rotates the refresh_token on each use — persist the new one atomically (write-then-rename) **before** treating the refresh as successful.
    - On `invalid_grant`, surface the error and prompt the developer to re-run the bootstrap.
 

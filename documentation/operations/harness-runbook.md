@@ -274,14 +274,11 @@ self-skips when the adapter jar is absent.*
 ### The adapter subprocess alone: `launch-ice`
 
 `ice-smoke` answers "is the adapter reachable?" and is the one to reach for
-first. `launch-ice` answers a different question — "what does the adapter do
-when left alone?" — and the difference is not just scope: it attaches **no
-JSON-RPC peer**, which is a distinct state upstream behaves differently in
-(the adapter accepts a game's connection but cannot finish serving it; see
-below). It also holds the adapter up for a configurable window instead of
-exiting as soon as a verdict exists, which is what makes it the right tool for
-reading the adapter's own output after a version bump
-([`ice-adapter-setup.md`](ice-adapter-setup.md)).
+first. `launch-ice` answers a different question, "what does the adapter do
+when left alone?", and the difference is not just scope: it holds the adapter
+up for a configurable window instead of exiting as soon as a verdict exists,
+which is what makes it the right tool for reading the adapter's own output
+after a version bump ([`ice-adapter-setup.md`](ice-adapter-setup.md)).
 
 Since WBS-3.1.6.3 (#279) `launch-ice` also **attaches a JSON-RPC peer** and holds
 it open for the window. That is what makes the pair below work: the adapter
@@ -1382,16 +1379,22 @@ What to look for when it is on:
   other at any usual confidence.
 - To measure the magnitude, run the pair by hand as two `run` clients, which
   hold until you stop them. Give each its own credential (§9.1) and its own
-  three adapter ports (§9.3). The host takes the four `--host-*` options (§3's
-  example) plus `--mock-game-udp-drop-percent=<n>`; the joiner takes
+  three adapter ports: `run` defaults to `7236`, `7237` and `7238`, so move
+  all three on the joiner with the overrides in §2a's **Ports** paragraph
+  (`session` allocates them itself, §9.3, but `run` does not). Start the host
+  with `INSTANCE_NAME=A` and the joiner with `INSTANCE_NAME=B` (§9.4), so each
+  client and its game log to their own `logs/mockclient-<label>.jsonl` and
+  `logs/mockgame-<label>.jsonl`; unlabelled, both games would append to one
+  `logs/mockgame.jsonl`. The host takes the `--host-*` options §3's example
+  uses plus `--mock-game-udp-drop-percent=<n>`; the joiner takes
   `--target-game-id=<uid>` from the host's `game launch: uid=` line; both
   take `--mock-game-launch-delay-seconds=-1`, so their games (launched with
   `--launch-delay-seconds -1`) stay in the lobby and keep sending. Stop both
-  with SIGTERM and each game writes its totals line to `logs/mockgame.jsonl`
-  under its own client's working directory. Measured this way at `25`
-  (2026-09-23), two minutes of traffic gave a span of 1318 datagrams reading
-  25.2%, with the control direction at exactly zero and `discontinuities 248`
-  where `n·p·(1 - p)` predicts 247.
+  with SIGTERM and each game writes its totals line to its own
+  `logs/mockgame-<label>.jsonl`. Measured this way at `25` (2026-09-23),
+  about two minutes of traffic gave a span of 1318 datagrams reading 25.2%,
+  with the control direction at exactly zero and `discontinuities 248` where
+  `n·p·(1 - p)` predicts 247.
 - What an orchestrated run does establish on its own is that the value
   reached the game: `--udp-drop-percent <n>` in the launch argv and the
   `dropping n%` line at the sending game. That is what the pass-through

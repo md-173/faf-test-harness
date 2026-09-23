@@ -45,10 +45,10 @@ flowchart LR
     end
     MC -.->|"HTTPS POST /oauth2/token (refresh-token channel)"| HYDRA
     PMC -.->|"HTTPS POST /oauth2/token (refresh-token channel)"| HYDRA
-    MC  <-->|"JSON over TCP (WebSocket/WSS via ws_bridge_rs)"| LS
+    MC <-->|"JSON over TCP (WebSocket/WSS via ws_bridge_rs)"| LS
     PMC <-->|"JSON over TCP (WebSocket/WSS via ws_bridge_rs)"| LS
-    MC  <-->|"JSON-RPC over TCP (loopback)"| IA
-    MG  <-->|"GPGNet: custom binary over TCP (loopback)"| IA
+    MC <-->|"JSON-RPC over TCP (loopback)"| IA
+    MG <-->|"GPGNet: custom binary over TCP (loopback)"| IA
     PMC <-->|"JSON-RPC over TCP (loopback)"| PIA
     PMG <-->|"GPGNet: custom binary over TCP (loopback)"| PIA
     IA <==>|"UDP peer-to-peer (NAT-traversed game traffic)"| PIA

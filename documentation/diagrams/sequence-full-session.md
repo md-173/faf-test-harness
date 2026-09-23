@@ -40,17 +40,20 @@ sequenceDiagram
         Dev->>Hydra: HTTPS OAuth2 Authorization Code exchange (manual, browser)
         Hydra-->>Dev: access_token + refresh_token
         Dev->>MC: write refresh_token to .secrets/refresh_token.txt (gitignored)
-        Note over MC,Hydra: At the start of each run
-        MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
-        Hydra-->>MC: access_token + rotated refresh_token
-        MC->>MC: persist new refresh_token atomically
     else pre-signed access-token file (--oauth-access-token-file)
         Dev->>MC: write a token someone else signed (gitignored, or a CI secret)
-        MC->>MC: read it at the start of each run and send it as-is, no Hydra call
     end
 
 
     MC->>LS: WebSocket handshake (WSS, JSON over TCP)
+    Note over MC,Hydra: Each run, once the socket is open and before ask_session
+    alt refresh-token file
+        MC->>Hydra: POST /oauth2/token (grant_type=refresh_token)
+        Hydra-->>MC: access_token + rotated refresh_token
+        MC->>MC: persist new refresh_token atomically
+    else pre-signed access-token file
+        MC->>MC: read the token file and send it as-is, no Hydra call
+    end
     MC->>LS: ask_session
     LS-->>MC: session(N)
     MC->>LS: auth(token, unique_id, session)
@@ -183,11 +186,13 @@ sequenceDiagram
 ## Reading guide
 
 - **Phase 1 branches on the credential channel.** A run authenticates either
-  from a refresh-token file, which it exchanges at Hydra as the run starts, or
-  from a pre-signed access-token file, which it sends as-is and which never
-  reaches Hydra. Exactly one branch happens per run. The browser
+  from a refresh-token file or from a pre-signed access-token file; the first
+  `alt` block is how that file came to exist, the second is what each run
+  does with it. A refresh token is exchanged at Hydra once the lobby
+  WebSocket is open and before `ask_session` (`LobbyHandshake.perform`); a
+  pre-signed access token is sent as-is and never reaches Hydra. The browser
   authorization-code exchange is a one-time human bootstrap that produces the
-  first branch's file; no run performs it.
+  refresh-token file; no run performs it.
 - **Participant-set changes between Part 1 and Part 2.** `Dev` and `Hydra`
   only matter for OAuth and are dropped from Part 2. The peer lane
   (`PIA` / Peer ICE Adapter, `PMG` / Peer Mock Game) only matters once the

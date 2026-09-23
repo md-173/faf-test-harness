@@ -8,8 +8,10 @@ the IPC wire protocol on `127.0.0.1:7236`).
 Scope: process lifecycle only — launch, output capture, health, teardown.
 The JSON-RPC traffic itself is out of scope here.
 
-> **Source of truth.** CLI flags and the example startup sequence are taken
-> from the upstream [`java-ice-adapter` README][readme]. The supervision
+> **Source of truth.** CLI flags are checked against the pinned 3.3.14
+> adapter's `IceOptions` (the upstream [`java-ice-adapter` README][readme]
+> option list is stale at that version, see §2.6); the example startup
+> sequence is taken from that README. The supervision
 > pattern is informed by the real client's
 > [`IceAdapterImpl.java`][downlords-iceadapter] in `downlords-faf-client`.
 
@@ -99,11 +101,12 @@ Mirroring `IceAdapterImpl`:
 
 `ProcessBuilder.environment()` starts as a copy of the parent. We:
 
-- set `LOG_DIR` to a fixed per-child directory, `logs/ice-adapter/`; the
-  adapter's README documents `LOG_DIR` as the supported way to redirect its
-  file output. No parent `LOG_DIR` is read: the harness's own output path
-  comes from `LOG_FILE` (`LoggingSetup`). On the `.jar` path it redirects
-  nothing, because the injected config below has no file appender.
+- set `LOG_DIR`, for the adapter only, to the fixed directory
+  `logs/ice-adapter/`; the adapter's README documents `LOG_DIR` as the
+  supported way to redirect its file output. No parent `LOG_DIR` is read: the
+  harness's own output path comes from `LOG_FILE` (`LoggingSetup`). On the
+  `.jar` path it redirects nothing, because the injected config below has no
+  file appender.
 - set `LOG_LEVEL` to the harness's own resolved level, overwriting any
   inherited value, so a child logs at the level mock-client resolved (see
   `LoggingSetup` for that precedence). Upstream does not read it: the pinned
@@ -112,8 +115,9 @@ Mirroring `IceAdapterImpl`:
   mentions a log level. It takes effect only because the launcher injects a
   console-only logback config whose root level is `${LOG_LEVEL:-INFO}`, and
   that injection happens on the `.jar` path alone. Against a non-jar adapter
-  `LOG_LEVEL` is inert. The two variables are mirror images: `LOG_LEVEL`
-  works only on the jar path, `LOG_DIR` only off it.
+  `LOG_LEVEL` is inert. For the adapter the two variables are mirror images:
+  `LOG_LEVEL` works only on the jar path, `LOG_DIR` only off it. mock-game,
+  our own component, honours `LOG_LEVEL` on every path.
 - do **not** scrub other env vars. The children run as the same OS user as
   the Mock Client, so they gain nothing it does not already have.
 
@@ -143,8 +147,11 @@ harness instances started in one directory share `logs/ice-adapter/`.
 
 ### 2.6 ICE adapter CLI arguments
 
-Verbatim from [the upstream README's "Commandline invocation"][readme].
-Bold flags are passed by the Mock Client on every launch.
+The adapter's options at the pinned 3.3.14, checked against its `IceOptions`
+class. The [upstream README's "Commandline invocation"][readme] list is stale
+at that version: it omits `--game-id`, `--ping-count`, `--acceptable-latency`
+and `--telemetry-server`, and still lists `--log-directory`, which 3.3.14 does
+not have. Bold flags are passed by the Mock Client on every launch.
 
 | Flag | Default | Required | Notes |
 |---|---|---|---|
@@ -157,6 +164,9 @@ Bold flags are passed by the Mock Client on every launch.
 | `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
+| `--ping-count <int>` | `1` | no | Pings sent to each ICE server to measure its round-trip time; `0` skips the measurement. Not set by the Mock Client. |
+| `--acceptable-latency <double>` | `250.0` | no | Round-trip-time threshold: ICE servers measured below it, or not measured, are tried first (`IceServer.hasAcceptableLatency`). Upstream's `--help` text for this flag repeats `--ping-count`'s. Not set by the Mock Client. |
+| `--telemetry-server <url>` | `wss://ice-telemetry.faforever.com` | no | Websocket the adapter opens to FAF's ICE telemetry service on launch. No clean disable at 3.3.14 (json-rpc-spec §8). The Mock Client never passes it, so every harness launch connects there. |
 | `--help` | — | no | Diagnostic only. |
 
 The Mock Client emits `--id` and `--login` first, with `--game-id`

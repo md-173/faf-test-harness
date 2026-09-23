@@ -306,7 +306,9 @@ lobby server performs.
 
 ## 8. Adapter command-line arguments
 
-Verbatim from the README; arguments relevant to the Mock Client are bold.
+The adapter's options at the pinned 3.3.14, checked against its `IceOptions`
+class rather than the upstream README, whose list is stale at that version;
+arguments relevant to the Mock Client are bold.
 
 | Flag | Default | Notes |
 |---|---|---|
@@ -321,6 +323,8 @@ Verbatim from the README; arguments relevant to the Mock Client are bold.
 | `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
 | `--info-window` | off | Same. |
 | `--delay-ui <ms>` | 0 | Same. |
+| `--ping-count <int>` | `1` | Pings sent to each ICE server to measure its round-trip time; `0` skips the measurement. |
+| `--acceptable-latency <double>` | `250.0` | Round-trip-time threshold: ICE servers measured below it, or not measured, are tried first. Upstream's `--help` text for this flag repeats `--ping-count`'s. |
 | `--telemetry-server <url>` | FAF telemetry | On launch the adapter opens a websocket to `ice-telemetry.faforever.com`. **No clean disable in 3.3.14** — an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. |
 | `--help` | — | Print usage and exit. |
 
