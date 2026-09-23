@@ -42,7 +42,7 @@ public final class ExitCodes {
      * <p>For {@code run} that includes a session whose ICE adapter or game never came up
      * (WBS-3.1.3.3-fix, #437): a binary that could not be started, an adapter that exited or never
      * accepted its JSON-RPC connection, or one that refused a setup call. Read from {@code
-     * MockClientLifecycle.launchFailed()}. Before that existed, such a run exited {@code 0}.
+     * SessionVerdicts.launchFailed()}. Before that existed, such a run exited {@code 0}.
      *
      * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
      * name a subprocess that died under a session that was running, and a launch that never came up
@@ -128,7 +128,7 @@ public final class ExitCodes {
      * LaunchGame} transition into TERMINATED instead, and an adapter given a bad argument exits
      * {@code 0} while doing so (subprocess-orchestration-spec §2.6), so neither this flag nor its
      * exit code can speak for that case. That case is {@link #RUNTIME}, from {@code
-     * MockClientLifecycle.launchFailed()} (WBS-3.1.3.3-fix, #437).
+     * SessionVerdicts.launchFailed()} (WBS-3.1.3.3-fix, #437).
      *
      * <p>An adapter that quits cleanly under its own power, exit {@code 0}, is not this either: it
      * reads as the real client's "terminated normally" and leaves this run's code alone.

@@ -190,7 +190,7 @@ final class AdapterConnectRaceTest {
         CompletableFuture<Boolean> failedAtCommit =
                 lifecycle
                         .stateReached(ClientState.TERMINATED)
-                        .thenApply(reached -> lifecycle.launchFailed());
+                        .thenApply(reached -> lifecycle.verdicts().launchFailed());
         long start = System.nanoTime();
         // Posted off the test thread. post() is machine.receiveEvent, which is synchronous and
         // synchronized, so on a regression the test thread blocks inside this call and every
@@ -270,7 +270,9 @@ final class AdapterConnectRaceTest {
         posted.get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertFalse(lifecycle.launchFailed(), "a launch teardown cut short is not a finding");
+        assertFalse(
+                lifecycle.verdicts().launchFailed(),
+                "a launch teardown cut short is not a finding");
         // Pinned to the mechanism: the race failed the launch, and it was seen as teardown's.
         ILoggingEvent cause =
                 findEvent(
@@ -320,7 +322,8 @@ final class AdapterConnectRaceTest {
         lifecycle.stateReached(ClientState.TERMINATED).get(GIVE_UP_SECONDS, TimeUnit.SECONDS);
         launch.join(TimeUnit.SECONDS.toMillis(GIVE_UP_SECONDS));
 
-        assertTrue(lifecycle.launchFailed(), "an interrupted bring-up is a failed launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(), "an interrupted bring-up is a failed launch");
         ILoggingEvent cause =
                 findEvent(
                         e ->

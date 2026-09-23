@@ -12,6 +12,7 @@ import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
+import com.faforever.testharness.client.state.SessionVerdicts;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
 import java.util.concurrent.Callable;
@@ -183,12 +184,13 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
+        SessionVerdicts verdicts = lifecycle.verdicts();
         return sessionExitCode(
                 shuttingDown.get(),
                 lobbyDropped,
-                lifecycle.launchFailed(),
-                lifecycle.adapterLost(),
-                lifecycle.gameCrashed(),
+                verdicts.launchFailed(),
+                verdicts.adapterLost(),
+                verdicts.gameCrashed(),
                 log);
     }
 
@@ -244,11 +246,11 @@ public final class RunCommand implements Callable<Integer> {
      *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
      * @param launchFailed whether the session's ICE adapter or game never came up; {@link
-     *     MockClientLifecycle#launchFailed()}
+     *     SessionVerdicts#launchFailed()}
      * @param adapterLost whether the ICE adapter died unaccounted for; {@link
-     *     MockClientLifecycle#adapterLost()}
+     *     SessionVerdicts#adapterLost()}
      * @param gameCrashed whether the game process died unaccounted for; {@link
-     *     MockClientLifecycle#gameCrashed()}
+     *     SessionVerdicts#gameCrashed()}
      * @param log the configured logger, for the single line naming what is reported
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */

@@ -167,48 +167,11 @@ public final class MockClientLifecycle {
             label.wrap(new CompletableFuture<Void>().defaultExecutor());
 
     /**
-     * Whether the game process died in a way nobody asked for (WBS-5.2), as decided by {@link
-     * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
-     * code; see {@link #gameCrashed()}.
-     *
-     * <p>Written on the {@link #gameExit} completion handler and read on the main thread, so the
-     * two sides need an ordering. On the {@code GameExited} route they have one independently of
-     * this field: the write precedes {@code machine.receiveEvent}, which completes the {@code
-     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
-     * {@code get} that releases {@code RunCommand}. The FSM's own monitor is not what publishes it,
-     * since the reading thread never acquires that monitor.
-     *
-     * <p>{@code volatile} is for the other routes into TERMINATED, a lobby disconnect or the
-     * adapter exiting, which carry no such edge. It is worth being precise about what that buys: on
-     * those routes the classification may simply not have run yet, so the honest answer is {@code
-     * false}, and volatile makes that a defined stale read rather than an undefined one. The
-     * residual window is narrow and benign. A lobby drop returns {@code RUNTIME} from the check
-     * above this one anyway, and source-verified against java-ice-adapter's {@code
-     * GPGNetServer.onGpgnetConnectionLost}, the adapter does not exit when the game dies: it closes
-     * the client, reports {@code Disconnected} over RPC and keeps accepting. So a crashed game
-     * reaches TERMINATED through {@code GameExited} and nothing else.
+     * What this session found, as the verdicts {@code RunCommand} turns into {@code run}'s exit
+     * code. Recorded only here, each in the same branch that logs its cause; see {@link
+     * SessionVerdicts} for the ordering each one relies on.
      */
-    private volatile boolean gameCrashed;
-
-    /**
-     * Whether the ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix, #406), as
-     * decided by {@link #onAdapterExited}'s final branch. Read by {@code RunCommand} to pick the
-     * harness's own exit code; see {@link #adapterLost()}.
-     *
-     * <p>Unlike {@link #gameCrashed} this needs no argument about stale reads on the route that
-     * matters. It is written inside the {@code AdapterExited} transition action, which runs before
-     * TERMINATED's entry hook and before {@code commitTransition} completes the {@code
-     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
-     * {@code get} that releases {@code RunCommand}. That ordering is the point of the card: #357
-     * read a verdict written on a continuation thread and exited 69 or 0 run to run.
-     *
-     * <p>{@code volatile} for the reads that do not follow that future, such as a harness or a test
-     * calling {@link #adapterLost()} directly.
-     */
-    private volatile boolean adapterLost;
-
-    /** Backs {@link #launchFailed()}; written only by {@link #launchFailure}. */
-    private volatile boolean launchFailed;
+    private final SessionVerdicts verdicts = new SessionVerdicts();
 
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
@@ -828,55 +791,13 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Whether this session's game process died in a way nobody asked for (WBS-5.2): a non-zero exit
-     * with no {@code GameEnded} observed and no harness-initiated teardown.
+     * What this session found: the verdicts {@code RunCommand} reads once {@code
+     * stateReached(TERMINATED)} completes, to pick {@code run}'s exit code.
      *
-     * <p>A boolean rather than the exit code, because {@link #gameExit()} already exposes the code
-     * and a second accessor for the same number would be duplicated state. What a caller cannot get
-     * from the code alone is the <em>judgement</em>: whether that code was a fault or an expected
-     * consequence of the harness's own SIGTERM. {@link #classifyGameExit} makes that call once, and
-     * this reports it.
-     *
-     * <p>Only meaningful once the game has actually exited. Reading it earlier returns {@code
-     * false}, which is the right answer for a game that is still running and the reason {@code
-     * RunCommand} reads it only after TERMINATED.
-     *
-     * @return {@code true} if the game exit was classified as abnormal
+     * @return this session's verdicts, live rather than a snapshot
      */
-    public boolean gameCrashed() {
-        return gameCrashed;
-    }
-
-    /**
-     * Whether this session's ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix,
-     * #406): a non-zero exit observed while the session was live, outside harness-initiated
-     * teardown.
-     *
-     * <p>A boolean rather than the exit code for the same reason as {@link #gameCrashed()}: {@link
-     * #adapterExit()} already exposes the code, and what a caller cannot get from the code alone is
-     * whether that code was a fault or the harness's own SIGTERM.
-     *
-     * <p>Readable as soon as {@code stateReached(TERMINATED)} completes on the route a dying
-     * adapter takes, because the verdict is written by the transition action that drives that
-     * state; see {@link #adapterLost} for the ordering and its limits. Reading it earlier returns
-     * {@code false}, which is the right answer for an adapter that is still running.
-     *
-     * @return {@code true} if the adapter's exit was classified as abnormal
-     */
-    public boolean adapterLost() {
-        return adapterLost;
-    }
-
-    /**
-     * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437), readable
-     * once {@code stateReached(TERMINATED)} completes. Never written once {@link SessionTeardown}
-     * has started, though a signal can still set it, since SIGINT reaches the adapter too, which is
-     * why {@code RunCommand} names no verdict on a signalled run.
-     *
-     * @return {@code true} if the adapter or game never came up before session teardown began
-     */
-    public boolean launchFailed() {
-        return launchFailed;
+    public SessionVerdicts verdicts() {
+        return verdicts;
     }
 
     /**
@@ -1092,7 +1013,7 @@ public final class MockClientLifecycle {
             // that already decided this exit was unaccounted for, rather than re-derived by the
             // caller: one predicate, so the warning above and the exit code cannot disagree about
             // whether the game crashed.
-            gameCrashed = true;
+            verdicts.recordGameCrashed();
         }
     }
 
@@ -1147,11 +1068,11 @@ public final class MockClientLifecycle {
      * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
      * logs.
      *
-     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, setting {@link
-     * #adapterLost} in the same branch that warns, so the two cannot disagree. That makes the
-     * {@link SessionTeardown#hasRun()} branch above load bearing rather than cosmetic: it is what
-     * keeps a teardown-owned exit from setting the flag, on both routes that arrive here with
-     * teardown already run. One is the TERMINATED self-loop through {@link
+     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, recording {@link
+     * SessionVerdicts#adapterLost()} in the same branch that warns, so the two cannot disagree.
+     * That makes the {@link SessionTeardown#hasRun()} branch above load bearing rather than
+     * cosmetic: it is what keeps a teardown-owned exit from setting the flag, on both routes that
+     * arrive here with teardown already run. One is the TERMINATED self-loop through {@link
      * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
      * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
      * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
@@ -1178,7 +1099,7 @@ public final class MockClientLifecycle {
             // re-derived by the reader, so the warning above and the exit code cannot disagree
             // about whether the adapter was lost. Same arrangement classifyGameExit has with
             // gameCrashed.
-            adapterLost = true;
+            verdicts.recordAdapterLost();
         }
     }
 
@@ -1374,7 +1295,7 @@ public final class MockClientLifecycle {
             LOG.debug("Could not {} during session teardown ({})", what, reason);
         } else {
             LOG.warn("Could not {} ({})", what, reason);
-            launchFailed = true;
+            verdicts.recordLaunchFailed();
         }
         return new FailedTransitionException(reason, states.get(ClientState.TERMINATED));
     }

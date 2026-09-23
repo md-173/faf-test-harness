@@ -169,7 +169,9 @@ final class LifecycleSetupTest {
         Object[] iceServers = iceConn.receivedMessage("setIceServers");
         assertTrue(iceServers != null);
         assertTrue(((Object[]) iceServers[0]).length == 0);
-        assertFalse(lifecycle.launchFailed(), "a launch that came up is not a failed launch");
+        assertFalse(
+                lifecycle.verdicts().launchFailed(),
+                "a launch that came up is not a failed launch");
     }
 
     @Test
@@ -283,7 +285,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "a game binary that cannot start fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "a game binary that cannot start fails the launch");
     }
 
     @Test
@@ -306,7 +310,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that cannot start fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that cannot start fails the launch");
     }
 
     @Test
@@ -329,7 +335,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that never connects fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that never connects fails the launch");
     }
 
     @ParameterizedTest
@@ -356,6 +364,8 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that refuses " + method + " fails it too");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that refuses " + method + " fails it too");
     }
 }
