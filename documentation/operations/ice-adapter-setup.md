@@ -74,9 +74,10 @@ EOF
 ```
 
 `downloadIceAdapter` is idempotent: a re-run verifies the existing jar's SHA-256 and skips the
-download. It is deliberately **not** wired into `build`/`check`, because it hits the network and
-only the live tests need the jar; run it explicitly, as `ci.yml`'s `live-tests` job does. The jar
-lands at `./faf-ice-adapter.jar`, which is the launcher's default `--ice-adapter-binary-path`, so
+download. A failed download is retried twice, 5 and 10 s apart, before the task fails. It is
+deliberately **not** wired into `build`/`check`, because it hits the network and only the live
+tests need the jar; run it explicitly, as `ci.yml`'s `live-tests` job does. The jar lands at
+`./faf-ice-adapter.jar`, which is the launcher's default `--ice-adapter-binary-path`, so
 `launch-ice` / `run` find it with no extra config.
 
 `launch-ice` needs no lobby or OAuth flags: it opens no lobby connection, so it validates only the
@@ -171,8 +172,14 @@ below):
   `ice-telemetry.faforever.com`. 3.3.14 has **no clean disable** — `--telemetry-server=""` just
   fails with `unknown scheme: null`, and an unreachable host errors too; either way telemetry
   failure is **non-blocking** (the adapter still binds and answers `status`). Offline, it
-  logs an error and continues. Left as-is — a flag that only changes which error is logged isn't
-  worth plumbing.
+  logs an error and continues. Online, which now includes `ci.yml`'s `live-tests` job on every
+  pull request, it reaches FAF's production telemetry service with the tests' made-up game and
+  player ids. That service (FAForever/faf-telemetry-server) keeps games in memory only, 4 hours by
+  default, and closes 3.3.14's socket with `Internal Error`; the adapter reconnects. Left as-is for
+  now: `--telemetry-server` would now decide whether production is contacted at all (the test
+  environment has `wss://ice-telemetry.faforever.xyz`), but pointing it at a closed port would
+  unregister the telemetry debugger and hide the gpgnet-format-spec.md section 8.1 condition 2
+  crash that mock-game's 500 ms first-frame wait guards against.
 - Runtime reports `Version: SNAPSHOT` — a cosmetic upstream build-stamp quirk; the artifact is the
   `3.3.14` release.
 - **The adapter's GPGNet server is unusable until a JSON-RPC peer connects.** The GPGNet port binds

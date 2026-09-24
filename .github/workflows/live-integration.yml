@@ -78,11 +78,13 @@ jobs:
       # no credential and is worth running: it separates "this runner cannot reach the lobby at all"
       # from a credential failure in the session job. The four also run on every pull request, in
       # ci.yml's live-tests job; they stay here so that one dispatch covers every live test CI runs,
-      # on any ref. Keep this list and that job's in step.
+      # on any ref. Keep this list and that job's in step. --continue for the reason ci.yml gives,
+      # and more so here: connectSucceeds fails whenever the shared lobby is down, and without it
+      # Gradle would then never start mock-game's GPGNet test.
       - name: Run the live tests that need no account
         timeout-minutes: 20
         run: |
-          ./gradlew \
+          ./gradlew --continue \
             :mock-client:integrationTest \
               --tests '*.IceSmokeLiveTest' \
               --tests '*.IceAdapterConnectionLiveSmokeTest' \

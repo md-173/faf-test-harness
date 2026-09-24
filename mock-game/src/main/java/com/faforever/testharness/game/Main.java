@@ -76,11 +76,13 @@ public final class Main {
      *
      * <p>Revisited against a real workload, as the previous javadoc asked (WBS-3.2.5.1-fix, #253).
      * At 30s it was three quarters of a ~40s end-to-end run. That cost falls on local integration
-     * runs and the live demo capture rather than on CI, which invokes {@code build} and so excludes
-     * the {@code integration} tag; CI's own mock-game runs use a 100 ms match. Nothing upstream
-     * requires the old value: the client's post-{@code GameEnded} safety net is armed by the {@code
-     * GameEnded} frame rather than by match length, so it bounds the exit and not the match, and no
-     * lobby or adapter timeout is measured against this window.
+     * runs, the live demo capture and ci.yml's {@code live-tests} job, where {@code
+     * ClientGameLifecycleLiveTest} plays the default match on every pull request (with the default
+     * 5s launch delay, about 15s of a job of roughly a minute); {@code build}'s own mock-game runs
+     * use a 100 ms match. Nothing upstream requires the old value: the client's post-{@code
+     * GameEnded} safety net is armed by the {@code GameEnded} frame rather than by match length, so
+     * it bounds the exit and not the match, and no lobby or adapter timeout is measured against
+     * this window.
      *
      * <p>What does constrain it is peer overlap, which {@link #matchDuration(Duration, Optional)}
      * now enforces rather than leaving to this number. This is the floor for the default 5s launch

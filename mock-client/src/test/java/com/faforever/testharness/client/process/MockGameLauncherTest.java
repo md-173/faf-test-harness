@@ -33,9 +33,10 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 /**
- * Unit tests for {@link MockGameLauncher}. The real {@code mock-game} binary is not built in CI, so
- * a stub shell script stands in for it (WBS-3.1.2.3 deliverables). Argument-list construction is
- * verified directly; spawn / capture / terminate are exercised against the stub.
+ * Unit tests for {@link MockGameLauncher}. The real {@code mock-game} binary is not available to
+ * {@code build}, which runs these unit tests, so a stub shell script stands in for it (WBS-3.1.2.3
+ * deliverables). Argument-list construction is verified directly; spawn / capture / terminate are
+ * exercised against the stub.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class MockGameLauncherTest {

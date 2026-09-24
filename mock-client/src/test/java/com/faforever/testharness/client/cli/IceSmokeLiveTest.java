@@ -68,7 +68,13 @@ final class IceSmokeLiveTest {
                             "--ice-adapter-rpc-port=" + ports[0],
                             "--ice-adapter-gpg-net-port=" + ports[1],
                             "--ice-adapter-lobby-port=" + ports[2],
-                            "--timeout-seconds=" + BUDGET.toSeconds()
+                            "--timeout-seconds=" + BUDGET.toSeconds(),
+                            // The command writes its --log-level into the LOG_LEVEL system
+                            // property before the first logger exists (LoggingSetup javadoc,
+                            // #306), and this test runs first in the shared integrationTest JVM.
+                            // Left at the INFO default it pins every later class at INFO too,
+                            // overriding the DEBUG the task sets for their evidence.
+                            "--log-level=" + System.getenv().getOrDefault("LOG_LEVEL", "INFO")
                         });
         Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
 

@@ -102,7 +102,22 @@ tasks.register('downloadIceAdapter') {
             return
         }
         logger.lifecycle("Downloading faf-ice-adapter ${iceAdapterVersion} from ${url}")
-        downloadFollowingRedirects(url, target)
+        // Up to three attempts: ci.yml's live-tests gate runs this on every pull request, and one
+        // transient error from GitHub's release CDN would otherwise fail a PR it has nothing to do
+        // with. The checksum below is still checked once, on whichever attempt completed.
+        for (int attempt = 1; ; attempt++) {
+            try {
+                downloadFollowingRedirects(url, target)
+                break
+            } catch (IOException | GradleException e) {
+                if (attempt == 3) {
+                    throw e
+                }
+                logger.warn("Download attempt ${attempt} of 3 failed (${e.message}); " +
+                        "retrying in ${5 * attempt} s")
+                Thread.sleep(5000L * attempt)
+            }
+        }
         def actual = sha256Hex(target)
         if (actual != iceAdapterSha256) {
             target.delete()

@@ -90,13 +90,19 @@ jobs:
   # minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting
   # 13 earlier passes of live-integration.yml's live-tests (one-sided 95%), so if this job goes red
   # on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory
-  # (continue-on-error, and CONTRIBUTING.md section 3 says so) and the flake gets a fix card.
+  # (job-level continue-on-error, and CONTRIBUTING.md section 3 says so) and the flake gets a fix
+  # card.
   #
   # The one known timing risk is the wait before the first GPGNet frame (gpgnet-format-spec.md
   # section 8.1): mock-game's own 500 ms, and GpgNetConnectionLiveSmokeTest's until #225 replaces
   # it. The measured runs had at least 477 ms of it to spare. Adapter output showing "gameState
-  # must not change to null" is that race; unless the pull request changed that wait or the order
-  # the client and game connect in, treat it as a flake.
+  # must not change to null" is that race; unless the pull request changed that wait, the order
+  # the client and game connect in, or the pinned adapter, treat it as a flake. The same signature
+  # with no "GPGNetClient has connected" line is section 8.1's condition 1 instead: no JSON-RPC
+  # peer ever connected, which is a real ordering bug. Green runs also log telemetry noise that
+  # means nothing on its own: "Error on sending message object" and "Telemetry websocket closed
+  # (reason: Internal Error)". A status or setIceServers timeout can be slow DNS: 3.3.14 resolves
+  # three public STUN hostnames on first use (GameSession), inside the client's 5 s call budget.
   #
   # live-integration.yml runs the same four on dispatch too, so that one dispatch still covers
   # every live test CI runs, on any ref. Keep its class list and the ones below in step: a list
@@ -109,7 +115,7 @@ jobs:
       contents: read
 
     env:
-      # Every prerequisite this job provisions is therefore a failure when absent, not a skip.
+      # Turns each live test's self-skip on a missing binary into a failure naming what is missing.
       FAF_LIVE_REQUIRED: "true"
       # downloadIceAdapter writes the jar to the repository root. Naming it explicitly means a
       # broken download fails at the probe with the variable named, rather than resolving some

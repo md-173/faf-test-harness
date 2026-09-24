@@ -7,7 +7,7 @@ a real environment, captured by hand and committed here.
 | Demo | WBS | Proves | Artifact |
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
-| `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
+| `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, runs on every pull request in `ci.yml`'s `live-tests` job; see below |
 | `multi-peer-session` | 4.3.1, 4.3.2, 4.3.3 | two, three and four clients host and join the same game through the live lobby, ICE candidates relay across it, every adapter reports a link to every other peer, and every line is attributable to its instance | ▶️ live test, run on demand. 4.3.1 verified 2026-08-25 (`test` ↔ `Foo`); 3 and 4 peers verified 2026-09-15, three passes (`test`, `Foo`, `Tagada`, `Paralon` against `ws.faforever.xyz`); see below |
 
 ---
