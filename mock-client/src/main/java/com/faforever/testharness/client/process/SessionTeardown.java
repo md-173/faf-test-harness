@@ -215,14 +215,13 @@ public final class SessionTeardown {
             LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
         }
         try {
-            process.onExit().get(ADAPTER_QUIT_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            // waitFor, not onExit(): see SubprocessManager.waitFor for why a busy common pool must
+            // not decide how long this takes.
+            if (!process.waitFor(ADAPTER_QUIT_EXIT_TIMEOUT)) {
+                LOG.debug("ICE adapter did not exit within {} of quit", ADAPTER_QUIT_EXIT_TIMEOUT);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            LOG.debug(
-                    "ICE adapter did not exit within {} of quit: {}",
-                    ADAPTER_QUIT_EXIT_TIMEOUT,
-                    e.getMessage());
         }
     }
 

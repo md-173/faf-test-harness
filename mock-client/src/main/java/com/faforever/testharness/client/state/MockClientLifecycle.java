@@ -461,9 +461,9 @@ public final class MockClientLifecycle {
         // has installed STARTING_GAME as the current state — receiveEvent is synchronized and
         // publishes the new state before releasing its lock, so hopping to the common pool here
         // guarantees this continuation cannot run until that transition has actually completed.
-        // It also keeps GameExited's TERMINATED entry hook (which synchronously terminates the
-        // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
-        // own exit wiring below needs free to observe that death.
+        // It also keeps GameExited's TERMINATED entry hook, which runs teardown and can block for
+        // a termination grace, off the common-pool thread that completed this exit (the JDK's
+        // handleAsync, not the reaper), a thread the pool needs to complete other exits.
         gameExit.thenAcceptAsync(this::onGameProcessExit, labelledAsync);
     }
 
@@ -1194,13 +1194,13 @@ public final class MockClientLifecycle {
             // #214: the FSM's adapter-death subscriber reads the shared signal instead of the
             // process directly, the way 3.1.2.6 reads R26's game signal (gameExit()).
             //
-            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run
-            // synchronously on the JDK's internal process-reaper machinery by default, and this
-            // event's handling can itself block on that same machinery (TERMINATED's entry hook
-            // synchronously terminates subprocesses via SessionTeardown, which awaits their exit
-            // futures). A synchronous thenAccept here ties up the reaper thread that a concurrent
-            // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
-            // a full termination grace. thenAcceptAsync moves the event post off that thread.
+            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run on the
+            // common-pool thread that completes it (the JDK's handleAsync; only the exit record
+            // behind isAlive() and waitFor is the reaper's), and this event's handling can block
+            // there (TERMINATED's entry hook runs SessionTeardown, which can wait out a termination
+            // grace). A synchronous thenAccept would hold that thread for the whole teardown,
+            // taking it from the pool other exits complete on. thenAcceptAsync moves the event
+            // post off it.
             adapterExit()
                     .thenAcceptAsync(
                             exitCode -> machine.receiveEvent(new AdapterExited(exitCode)),

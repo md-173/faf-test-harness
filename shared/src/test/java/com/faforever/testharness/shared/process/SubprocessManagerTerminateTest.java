@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.time.Duration;
 import java.util.OptionalInt;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -20,6 +23,10 @@ class SubprocessManagerTerminateTest {
 
     private static final Duration DEFAULT_GRACE = Duration.ofSeconds(2);
     private static final Duration SHORT_GRACE = Duration.ofMillis(500);
+
+    /** Long enough that waiting out both strikes would plainly show, inside the class timeout. */
+    private static final Duration LONG_GRACE = Duration.ofSeconds(10);
+
     private static final String TAG = "TestChild";
     private static final int AWAIT_SECONDS = 10;
     private static final long TERMINATE_BUDGET_MS = 3_000;
@@ -47,5 +54,70 @@ class SubprocessManagerTerminateTest {
         m.terminate(Duration.ofMillis(100));
         assertFalse(m.isAlive());
         assertEquals(OptionalInt.of(0), m.exitCode());
+    }
+
+    /**
+     * A busy common pool does not stretch {@code terminate}. The JDK completes {@code
+     * Process.onExit()} with a common-pool task, and {@code terminate} used to wait on it: with
+     * every worker blocked it waited out both strikes' full grace for a child that died at the
+     * first. It now waits on the reaper's exit record, which needs no pool thread.
+     */
+    @Test
+    void terminateIsNotStretchedByABusyCommonPool() throws Exception {
+        // With a parallelism below two, CompletableFuture runs async stages on fresh threads rather
+        // than the common pool, so there is nothing to starve.
+        assumeTrue(ForkJoinPool.getCommonPoolParallelism() > 1, "no common pool to occupy");
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.testChild("sleep", "60000"), TAG, LONG_GRACE);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            occupyCommonPool(release);
+            long start = System.nanoTime();
+            m.terminate();
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+            assertFalse(m.isAlive());
+            assertTrue(
+                    elapsedMs < LONG_GRACE.toMillis() / 2,
+                    "terminate waited on the busy common pool: " + elapsedMs + "ms");
+        } finally {
+            release.countDown();
+        }
+    }
+
+    @Test
+    void waitForReportsWhetherTheProcessHasExited() throws Exception {
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.testChild("sleep", "60000"), TAG, SHORT_GRACE);
+        assertFalse(m.waitFor(Duration.ofMillis(100)), "a live child has not exited");
+        m.terminate();
+        assertTrue(m.waitFor(Duration.ZERO), "an exited child says so without waiting");
+    }
+
+    /**
+     * Blocks every common-pool thread until {@code release} opens. It takes one task per thread the
+     * pool already has when that exceeds its parallelism, so a spare an earlier test left idle
+     * cannot run the work this holds back.
+     *
+     * @param release opened by the caller to let the pool go
+     * @throws InterruptedException if interrupted while the pool fills
+     */
+    private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
+        ForkJoinPool pool = ForkJoinPool.commonPool();
+        int threads = Math.max(ForkJoinPool.getCommonPoolParallelism(), pool.getPoolSize());
+        CountDownLatch occupied = new CountDownLatch(threads);
+        for (int i = 0; i < threads; i++) {
+            pool.execute(
+                    () -> {
+                        occupied.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+        }
+        assertTrue(
+                occupied.await(AWAIT_SECONDS, TimeUnit.SECONDS),
+                "could not occupy every common-pool thread");
     }
 }
