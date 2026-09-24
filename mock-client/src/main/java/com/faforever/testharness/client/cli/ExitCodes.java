@@ -6,6 +6,20 @@ package com.faforever.testharness.client.cli;
  * <p>The values are stable so CI pipelines can distinguish failure modes without scraping log
  * output. {@link #USAGE} matches picocli's default ({@link picocli.CommandLine.ExitCode#USAGE}) so
  * parameter-exception handling does not need a custom remap.
+ *
+ * <p><b>The numbers are project-local, not sysexits.</b> {@link #USAGE} is picocli's {@code 2}
+ * rather than sysexits' {@code EX_USAGE} ({@code 64}), and the codes past {@link #RUNTIME} are
+ * assigned in sequence as failure modes earn one, so their sysexits meanings ({@code EX_OSERR} for
+ * {@code 71}, {@code EX_OSFILE} for {@code 72}) say nothing about what they report here. Only
+ * {@link #OK} and {@link #RUNTIME} agree with the standard ({@code EX_OK}, {@code EX_SOFTWARE}),
+ * which is why mock-game's {@code ExitCodes} cites both sysexits and this class for its own {@code
+ * 70}.
+ *
+ * <p>That class does follow sysexits, code by code, so <b>the two components' numbers are not
+ * comparable</b>. A lost adapter is mock-game's {@code ADAPTER_LOST} ({@code 69}, {@code
+ * EX_UNAVAILABLE}) when the game reports its own link going down, and this client's {@link
+ * #ADAPTER_LOST} ({@code 72}) when the adapter process itself dies under a session. Same name,
+ * different number, different observer: read each component against its own table.
  */
 public final class ExitCodes {
 
@@ -44,10 +58,10 @@ public final class ExitCodes {
      *
      * <p>One exit is carved out of that width: mock-game's own {@code ADAPTER_LOST} ({@code 69}).
      * The game told us why it ended, and an adapter dying underneath a healthy game is not the
-     * game's doing, so it is logged as a lost link and the run exits {@link #OK}. A client exit
-     * code for adapter death is #406, which keys it on the adapter's own exit: this one is
-     * classified asynchronously, after the adapter's death may already have released {@code
-     * RunCommand}, so a code read from it would differ run to run.
+     * game's doing, so it is logged as a lost link and contributes nothing here. Adapter death has
+     * a code of its own, {@link #ADAPTER_LOST}, keyed on the adapter's own exit rather than on this
+     * one: this classification is asynchronous, after the adapter's death may already have released
+     * {@code RunCommand}, so a code read from it would differ run to run.
      *
      * <p>Only that one, although mock-game also names its cause when it exits {@code LOBBY_TIMEOUT}
      * or {@code USAGE}. Those two stay here deliberately: a game that was never driven into a role,
@@ -63,6 +77,56 @@ public final class ExitCodes {
      * a run that failed.
      */
     public static final int GAME_CRASHED = 71;
+
+    /**
+     * The session ran, but the ICE adapter process died in a way nobody asked for: a non-zero exit
+     * observed while the session was live, outside any harness-initiated teardown (WBS-3.1.2.8-fix,
+     * #406).
+     *
+     * <p>Set where {@code MockClientLifecycle.onAdapterExited} has already decided an exit was
+     * abnormal, in the same branch that logs {@code ICE adapter exited abnormally}, so the log line
+     * and the exit code cannot disagree. Same arrangement {@link #GAME_CRASHED} has with {@code
+     * mock-game exited abnormally}.
+     *
+     * <p><b>Keyed on the adapter's own exit, which is what makes it deterministic.</b> #357 tried
+     * keying a client code on the game reporting mock-game's {@code ADAPTER_LOST}, and review
+     * removed it: that classification runs on a {@code CompletableFuture} continuation, so {@code
+     * RunCommand} could read the verdict before it was written and one scenario exited {@code 69}
+     * or {@code 0} run to run. This flag is written inside the {@code AdapterExited} transition
+     * action, which runs before TERMINATED's entry hook and before the {@code
+     * stateReached(TERMINATED)} future that releases {@code RunCommand} is completed, so the read
+     * is ordered with no future to await.
+     *
+     * <p>The guarantee is exactly that, and no wider: ordered whenever {@code AdapterExited} is the
+     * event that drives TERMINATED, which is what a killed adapter produces. Verified live under
+     * both SIGKILL and SIGTERM against the pinned adapter, whose own code registers no shutdown
+     * hook, so its GPGNet socket closes only as its process exits and the game has not yet reported
+     * the lost link when the adapter's exit arrives. That is timing, not a guarantee, and a session
+     * ended by some other event while the adapter is dying reports what that event found instead,
+     * exiting {@code 0}: a {@code connectToPeer}, {@code hostGame} or {@code joinGame} call in
+     * flight at that instant fails first and ends the session itself, or the game's own exit is
+     * processed first. Each window is milliseconds wide.
+     *
+     * <p><b>An adapter that was up and then died</b>, not one that never came up. A failed launch,
+     * or an adapter that exits before its JSON-RPC port accepts a connection, fails the {@code
+     * LaunchGame} transition into TERMINATED instead, and an adapter given a bad argument exits
+     * {@code 0} while doing so (subprocess-orchestration-spec §2.6), so neither this flag nor its
+     * exit code can speak for that case. It is out of #406's scope and wants a card of its own.
+     *
+     * <p>An adapter that quits cleanly under its own power, exit {@code 0}, is not this either: it
+     * reads as the real client's "terminated normally" and leaves this run's code alone.
+     *
+     * <p>Distinct from {@link #RUNTIME}, which already means a failed token exchange, a handshake
+     * timeout, a setup failure or an abrupt lobby close, and from {@link #GAME_CRASHED}, which is
+     * the game dying rather than the adapter underneath it. {@code 72} continues what those two
+     * started: a runtime failure, with a known cause. Deliberately not mock-game's {@code 69}: the
+     * client logs that as a lost adapter link and it contributes nothing to the run's code, so one
+     * number would mean two things in one log.
+     *
+     * <p>Before this existed the harness exited {@code 0} when its adapter died mid-session,
+     * reporting success for a run that failed.
+     */
+    public static final int ADAPTER_LOST = 72;
 
     private ExitCodes() {}
 }

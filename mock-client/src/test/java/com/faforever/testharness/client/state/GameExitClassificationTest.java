@@ -232,9 +232,10 @@ final class GameExitClassificationTest {
     }
 
     // The harness's own exit code (WBS-5.2). RunCommand returns ExitCodes.GAME_CRASHED when the
-    // flag below is set, and the flag is set by the same branch that emits "exited abnormally",
-    // so these cases pin that the log line and the exit code can never disagree. Before this, a
-    // run whose game died reported success.
+    // flag below is set and neither verdict it checks first (a lobby drop, then a lost adapter,
+    // per #406) is, and the flag is set by the same branch that emits "exited abnormally", so
+    // these cases pin that the log line and the exit code can never disagree. Before this, a run
+    // whose game died reported success.
 
     /** Nothing has exited yet, so there is nothing to report. */
     @Test
@@ -246,9 +247,10 @@ final class GameExitClassificationTest {
      * mock-game's own {@code ADAPTER_LOST} is carved out of the crash reading (#357 review).
      *
      * <p>The game diagnosed its own end and named the cause, which an arbitrary non-zero exit does
-     * not, so it is logged as a lost link and the run exits {@code 0}. It gets no exit code of its
-     * own here: this classification is asynchronous, and the adapter's death can release {@code
-     * RunCommand} before it runs. #406 gives adapter death a code keyed on the adapter's own exit.
+     * not, so it is logged as a lost link and contributes nothing to the run's code. It gets no
+     * exit code of its own here: this classification is asynchronous, and the adapter's death can
+     * release {@code RunCommand} before it runs. Adapter death has its own code, {@code
+     * ExitCodes.ADAPTER_LOST}, keyed on the adapter's own exit for exactly that reason.
      */
     @Test
     void anAdapterLostExitIsLoggedAsALostLinkRatherThanACrash() {

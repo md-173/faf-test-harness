@@ -190,6 +190,23 @@ public final class MockClientLifecycle {
      */
     private volatile boolean gameCrashed;
 
+    /**
+     * Whether the ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix, #406), as
+     * decided by {@link #onAdapterExited}'s final branch. Read by {@code RunCommand} to pick the
+     * harness's own exit code; see {@link #adapterLost()}.
+     *
+     * <p>Unlike {@link #gameCrashed} this needs no argument about stale reads on the route that
+     * matters. It is written inside the {@code AdapterExited} transition action, which runs before
+     * TERMINATED's entry hook and before {@code commitTransition} completes the {@code
+     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
+     * {@code get} that releases {@code RunCommand}. That ordering is the point of the card: #357
+     * read a verdict written on a continuation thread and exited 69 or 0 run to run.
+     *
+     * <p>{@code volatile} for the reads that do not follow that future, such as a harness or a test
+     * calling {@link #adapterLost()} directly.
+     */
+    private volatile boolean adapterLost;
+
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
 
@@ -768,6 +785,26 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Whether this session's ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix,
+     * #406): a non-zero exit observed while the session was live, outside harness-initiated
+     * teardown.
+     *
+     * <p>A boolean rather than the exit code for the same reason as {@link #gameCrashed()}: {@link
+     * #adapterExit()} already exposes the code, and what a caller cannot get from the code alone is
+     * whether that code was a fault or the harness's own SIGTERM.
+     *
+     * <p>Readable as soon as {@code stateReached(TERMINATED)} completes on the route a dying
+     * adapter takes, because the verdict is written by the transition action that drives that
+     * state; see {@link #adapterLost} for the ordering and its limits. Reading it earlier returns
+     * {@code false}, which is the right answer for an adapter that is still running.
+     *
+     * @return {@code true} if the adapter's exit was classified as abnormal
+     */
+    public boolean adapterLost() {
+        return adapterLost;
+    }
+
+    /**
      * The session's single adapter-exit signal: completes exactly once with the ICE adapter
      * process's exit code, whether it quit cleanly or was killed. Same copy-semantics contract as
      * {@link #gameExit()} — see there for the full details, which apply identically here.
@@ -940,9 +977,10 @@ public final class MockClientLifecycle {
             final int exitCode, final boolean cleanEnd, final boolean matchWasStarted) {
         if (exitCode == GAME_ADAPTER_LOST_EXIT && !cleanEnd) {
             // Not a crash (#357 review): the game diagnosed its own end and named the cause, which
-            // an arbitrary non-zero exit does not. Logged only. Giving adapter death an exit code
-            // of its own is #406, keyed on the adapter's exit rather than on this one, because
-            // RunCommand can read the verdict before this asynchronous handler has written it.
+            // an arbitrary non-zero exit does not. Logged only, and it stays that way. Adapter
+            // death has a code of its own, ExitCodes.ADAPTER_LOST, keyed on the adapter's exit
+            // rather than on this one, because RunCommand can read the verdict before this
+            // asynchronous handler has written it.
             //
             // Ahead of the teardown branch so the log line does not depend on a race: an adapter
             // dying mid-session drives TERMINATED and so teardown, which races this handler. A
@@ -1034,6 +1072,21 @@ public final class MockClientLifecycle {
      * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
      * logs.
      *
+     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, setting {@link
+     * #adapterLost} in the same branch that warns, so the two cannot disagree. That makes the
+     * {@link SessionTeardown#hasRun()} branch above load bearing rather than cosmetic: it is what
+     * keeps a teardown-owned exit from setting the flag, on both routes that arrive here with
+     * teardown already run. One is the TERMINATED self-loop through {@link
+     * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
+     * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
+     * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
+     * while the session is mid-state. Deleting that branch, which is what #371 item 1 asked for
+     * (written before #341 routed the self-loop through this method), logs a crash on any clean
+     * shutdown whose teardown has to end the adapter with a signal, and lets that teardown-owned
+     * code set the flag after {@code RunCommand} may already have read it. Measured, with the
+     * branch removed: a plain {@link #shutdown()} in {@code AdapterCrashRecoveryTest}'s fixture
+     * logs {@code ICE adapter exited abnormally (code=143)}. That class pins both halves.
+     *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
     private void onAdapterExited(Event event) {
@@ -1041,9 +1094,16 @@ public final class MockClientLifecycle {
         if (exitCode == 0) {
             LOG.info("ICE adapter terminated normally");
         } else if (teardown.hasRun()) {
+            // Load bearing for the exit status, not only for the log level; see the javadoc.
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {
             LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
+            // The process exit code this run should produce (WBS-3.1.2.8-fix, #406). Set inside
+            // the branch that already decided this exit was unaccounted for, rather than
+            // re-derived by the reader, so the warning above and the exit code cannot disagree
+            // about whether the adapter was lost. Same arrangement classifyGameExit has with
+            // gameCrashed.
+            adapterLost = true;
         }
     }
 
@@ -1413,7 +1473,11 @@ public final class MockClientLifecycle {
         // A failure still ends the session, just asynchronously — without the relay this peer is
         // unreachable, and a session that carried on would look healthy while silently unable to
         // connect. An adapter that has died outright is not this path's concern: its process exit
-        // posts AdapterExited (#214), which is the reliable channel for that.
+        // posts AdapterExited (#214), which is the reliable channel for that. One consequence of
+        // both firing (#406): the kernel closes the RPC socket as the adapter dies, so a call in
+        // flight can fail first, and then this ShutdownRequested takes the session to TERMINATED
+        // and the adapter's exit is classified after teardown. The run then exits 0 instead of
+        // ExitCodes.ADAPTER_LOST. The window is the call's round trip; see that constant.
         //
         // whenCompleteAsync, not whenComplete: a send that fails outright (dead socket) completes
         // the future before call() even returns, and a synchronous continuation would then re-enter
