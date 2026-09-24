@@ -4,28 +4,43 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
+import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
+import com.fasterxml.jackson.core.JsonParseException;
 import java.io.IOException;
 import java.net.SocketException;
 import java.net.URI;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -35,16 +50,33 @@ import org.slf4j.LoggerFactory;
  * isolate. Running teardown there to test the teardown rule would kill the stand-in subprocesses,
  * and their exits could end the session before the failure under test arrives.
  *
- * <p>The teardown here holds only a lobby connection that never connected, so running it touches no
- * network and no process.
+ * <p>The teardown here holds a lobby connection that never connected, so running it touches no
+ * network. The tests of teardown's adapter check (#438, #452) register an adapter stand-in with it,
+ * a real {@code sleep} or {@code sh} child, since the check reads the exit the process reaper
+ * records.
  */
+@Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class SessionFailuresTest {
+
+    /** Long enough that a wait the check should not have taken hangs into the timeout. */
+    private static final Duration FOREVER = Duration.ofHours(1);
+
+    /** The check's DEBUG line, logged just before it waits for a dying adapter. */
+    private static final String WAITING = "ICE adapter closed its JSON-RPC link; waiting";
 
     private final State terminated = new State("TERMINATED");
     private final SessionVerdicts verdicts = new SessionVerdicts();
+    private final AtomicBoolean signalled = new AtomicBoolean();
     private final SessionTeardown teardown =
-            new SessionTeardown(new LobbyConnection(URI.create("ws://127.0.0.1:1")));
+            new SessionTeardown(
+                    new LobbyConnection(URI.create("ws://127.0.0.1:1")), signalled::get);
     private final SessionFailures failures = new SessionFailures(teardown, verdicts, terminated);
+
+    /** Adapter stand-ins a test started, terminated afterwards whatever the test did. */
+    private final List<SubprocessManager> children = new ArrayList<>();
+
+    /** Run on the logging thread when the check logs {@link #WAITING}; a no-op unless set. */
+    private volatile Runnable onWaiting = () -> {};
 
     private ListAppender<ILoggingEvent> appender;
     private Logger logger;
@@ -58,7 +90,19 @@ final class SessionFailuresTest {
         logger = context.getLogger(MockClientLifecycle.class);
         originalLevel = logger.getLevel();
         logger.setLevel(Level.DEBUG);
-        appender = new ListAppender<>();
+        appender =
+                new ListAppender<>() {
+                    @Override
+                    protected void append(final ILoggingEvent event) {
+                        super.append(event);
+                        // Synchronously, on the thread that is about to wait: whatever this does
+                        // is done before the wait begins, which is what makes the tests using it
+                        // deterministic.
+                        if (event.getMessage().startsWith(WAITING)) {
+                            onWaiting.run();
+                        }
+                    }
+                };
         appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(context);
         appender.start();
@@ -70,6 +114,9 @@ final class SessionFailuresTest {
         logger.detachAppender(appender);
         appender.stop();
         logger.setLevel(originalLevel);
+        for (SubprocessManager child : children) {
+            child.terminate();
+        }
     }
 
     /** A failed session is recorded, named once at WARN, and ends in the terminated state. */
@@ -234,6 +281,303 @@ final class SessionFailuresTest {
         assertEquals(
                 List.of("ERROR Could not launch the game session (IllegalStateException: boom)"),
                 lines());
+    }
+
+    /**
+     * An adapter teardown finds already dead with a non-zero code is lost (#438), with the same one
+     * WARN its own exit event logs. It is not waited for, being dead already.
+     */
+    @Test
+    void anAdapterFoundDeadIsLostWithOneWarning() throws Exception {
+        exitedAdapter(3);
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertTrue(verdicts.adapterLost());
+        assertFalse(verdicts.sessionFailed());
+        assertEquals(List.of("WARN ICE adapter exited abnormally (code=3)"), lines());
+    }
+
+    /**
+     * An adapter whose link has closed but whose exit the reaper has not recorded yet is waited
+     * for, and read by its exit once it comes (#438): a dying adapter, not one that dropped its
+     * link. It is killed the moment the check says it is waiting, so the exit lands inside the wait
+     * with no timing involved.
+     */
+    @Test
+    void anAdapterThatDiesDuringTheWaitIsLost() throws Exception {
+        SubprocessManager adapter = liveAdapter();
+        onWaiting = adapter::terminate;
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(new IOException("closed")));
+
+        assertTrue(verdicts.adapterLost());
+        assertFalse(verdicts.sessionFailed());
+        assertEquals(
+                List.of(
+                        "DEBUG ICE adapter closed its JSON-RPC link; waiting up to PT1H for it to"
+                                + " exit",
+                        "WARN ICE adapter exited abnormally (code=143)"),
+                lines());
+    }
+
+    /**
+     * A live adapter whose JSON-RPC link closed from its side, still running once the wait is up,
+     * dropped its own link (#452): the failed session's verdict, with one WARN naming the link and
+     * what closed it.
+     */
+    @Test
+    void aLiveAdapterWhoseLinkDroppedFailsTheSession() throws Exception {
+        liveAdapter();
+
+        waitingFailures(Duration.ofMillis(100))
+                .adapterAtTeardown(
+                        linkDropped(
+                                new JsonParseException(
+                                        null,
+                                        "Unexpected character ('}' (code 125)): expected a"
+                                                + " value")));
+
+        assertTrue(verdicts.sessionFailed());
+        assertFalse(verdicts.adapterLost());
+        assertEquals(
+                List.of(
+                        "DEBUG ICE adapter closed its JSON-RPC link; waiting up to PT0.1S for it to"
+                                + " exit",
+                        "WARN ICE adapter JSON-RPC link dropped while the adapter kept running"
+                                + " (JsonParseException: Unexpected character ('}' (code 125)):"
+                                + " expected a value)"),
+                lines());
+    }
+
+    /** A live adapter that closed its end cleanly is named for that: the stream simply ended. */
+    @Test
+    void aLinkThatEndedCleanlyIsNamedAsTheEndOfTheStream() throws Exception {
+        liveAdapter();
+
+        waitingFailures(Duration.ofMillis(100)).adapterAtTeardown(linkDropped(null));
+
+        assertTrue(verdicts.sessionFailed());
+        assertTrue(
+                lines().get(lines().size() - 1)
+                        .endsWith("dropped while the adapter kept running (end of stream)"),
+                "the WARN must say the stream ended: " + lines());
+    }
+
+    /** An adapter that quit with {@code 0} did so on its own, which records nothing, as ever. */
+    @Test
+    void anAdapterThatQuitCleanlyRecordsNothing() throws Exception {
+        exitedAdapter(0);
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertNothingRecorded();
+    }
+
+    /**
+     * Only a link closed from the adapter's side is waited on. One still open, closed by this side,
+     * or never connected says nothing about the adapter, and with an hour's wait any wait here
+     * would hang into the class timeout rather than pass.
+     */
+    @Test
+    void onlyALinkTheAdapterClosedIsWaitedOn() throws Exception {
+        liveAdapter();
+        SessionFailures check = waitingFailures(FOREVER);
+
+        check.adapterAtTeardown(Optional.empty());
+        check.adapterAtTeardown(
+                Optional.of(new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, null)));
+        check.adapterAtTeardown(
+                Optional.of(
+                        new DisconnectEvent(
+                                DisconnectReason.CONNECT_FAILED, new IOException("refused"))));
+
+        assertNothingRecorded();
+    }
+
+    /**
+     * A signalled teardown records nothing: the signal kills the adapter itself (#438), so its
+     * death is not a finding.
+     */
+    @Test
+    void aSignalledTeardownRecordsNothing() throws Exception {
+        exitedAdapter(143);
+        signalled.set(true);
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertNothingRecorded();
+    }
+
+    /**
+     * A signal that lands during the wait counts too, which is why the flag is read again after it.
+     * Here the signal comes as {@code SubprocessRegistry}'s hook does, killing the adapter.
+     */
+    @Test
+    void aSignalDuringTheWaitRecordsNothing() throws Exception {
+        SubprocessManager adapter = liveAdapter();
+        onWaiting =
+                () -> {
+                    signalled.set(true);
+                    adapter.terminate();
+                };
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertFalse(verdicts.adapterLost());
+        assertFalse(verdicts.sessionFailed());
+        assertEquals(1, lines().size(), "only the wait's own line: " + lines());
+    }
+
+    /**
+     * A session that already has a verdict keeps its one cause line: the check adds neither a
+     * second verdict nor a second WARN, whichever verdict it is.
+     *
+     * @param verdict which verdict the session already has
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"launchFailed", "adapterLost", "gameCrashed", "sessionFailed"})
+    void aSessionThatHasAVerdictIsLeftAlone(final String verdict) throws Exception {
+        switch (verdict) {
+            case "launchFailed" -> verdicts.recordLaunchFailed();
+            case "adapterLost" -> verdicts.recordAdapterLost();
+            case "gameCrashed" -> verdicts.recordGameCrashed();
+            default -> verdicts.recordSessionFailed();
+        }
+        exitedAdapter(3);
+
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertEquals(List.of(), lines(), "no second cause line");
+        assertEquals(verdict.equals("adapterLost"), verdicts.adapterLost());
+    }
+
+    /** A session that never launched an adapter has nothing for the check to judge. */
+    @Test
+    void noAdapterMeansNoVerdict() {
+        waitingFailures(FOREVER).adapterAtTeardown(linkDropped(null));
+
+        assertNothingRecorded();
+    }
+
+    /**
+     * The wait ends on the reaper's record of the exit, not on a future the common pool completes
+     * (#438 review). With every common-pool thread blocked, as the connectToPeer route can leave a
+     * small pool, a wait on such a future would sit out its whole bound for an adapter that died at
+     * its start, holding the state machine all the while.
+     */
+    @Test
+    void theWaitDoesNotNeedTheCommonPool() throws Exception {
+        // Below two, CompletableFuture runs async stages on fresh threads, not the common pool.
+        assumeTrue(ForkJoinPool.getCommonPoolParallelism() > 1, "no common pool to occupy");
+        SubprocessManager adapter = liveAdapter();
+        onWaiting = adapter::terminate;
+        Duration wait = Duration.ofSeconds(10);
+        CountDownLatch release = new CountDownLatch(1);
+        long elapsedMs;
+        try {
+            occupyCommonPool(release);
+            long start = System.nanoTime();
+
+            waitingFailures(wait).adapterAtTeardown(linkDropped(null));
+
+            elapsedMs = (System.nanoTime() - start) / 1_000_000L;
+        } finally {
+            release.countDown();
+        }
+
+        assertTrue(verdicts.adapterLost(), "read as lost, not as a live adapter: " + lines());
+        assertTrue(
+                elapsedMs < wait.toMillis() / 2,
+                "the wait sat out the busy common pool: " + elapsedMs + "ms");
+    }
+
+    /**
+     * Failure paths whose check waits {@code wait} for a dying adapter.
+     *
+     * @param wait how long the check waits
+     * @return the failure paths, sharing this test's teardown and verdicts
+     */
+    private SessionFailures waitingFailures(final Duration wait) {
+        return new SessionFailures(teardown, verdicts, terminated, wait);
+    }
+
+    /**
+     * Starts a long-running adapter stand-in and registers it with the teardown.
+     *
+     * @return its manager
+     * @throws IOException if it cannot start
+     */
+    private SubprocessManager liveAdapter() throws IOException {
+        SubprocessManager adapter =
+                SubprocessManager.start(
+                        new ProcessBuilder("sleep", "60"),
+                        "adapter-stand-in",
+                        Duration.ofSeconds(1));
+        children.add(adapter);
+        teardown.registerAdapterProcess(adapter);
+        return adapter;
+    }
+
+    /**
+     * Starts an adapter stand-in that exits with {@code code}, registers it with the teardown, and
+     * waits until the reaper has recorded the exit.
+     *
+     * @param code what it exits with
+     * @throws Exception if it cannot start, or does not exit in time
+     */
+    private void exitedAdapter(final int code) throws Exception {
+        SubprocessManager adapter =
+                SubprocessManager.start(
+                        new ProcessBuilder("sh", "-c", "exit " + code),
+                        "adapter-stand-in",
+                        Duration.ofSeconds(1));
+        children.add(adapter);
+        teardown.registerAdapterProcess(adapter);
+        assertTrue(adapter.waitFor(Duration.ofSeconds(5)), "the stand-in never exited");
+    }
+
+    /**
+     * A link the adapter closed from its side, as the connection records it.
+     *
+     * @param error what ended it, or {@code null} for a clean end of the stream
+     * @return the recorded disconnect
+     */
+    private static Optional<DisconnectEvent> linkDropped(final Throwable error) {
+        return Optional.of(new DisconnectEvent(DisconnectReason.REMOTE_CLOSE, error));
+    }
+
+    /** Fails unless the check recorded no verdict and logged nothing. */
+    private void assertNothingRecorded() {
+        assertFalse(verdicts.adapterLost());
+        assertFalse(verdicts.sessionFailed());
+        assertEquals(List.of(), lines());
+    }
+
+    /**
+     * Blocks every common-pool thread until {@code release} opens, taking one task per thread the
+     * pool already has when that exceeds its parallelism.
+     *
+     * @param release opened by the caller to let the pool go
+     * @throws InterruptedException if interrupted while the pool fills
+     */
+    private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
+        ForkJoinPool pool = ForkJoinPool.commonPool();
+        int threads = Math.max(ForkJoinPool.getCommonPoolParallelism(), pool.getPoolSize());
+        CountDownLatch occupied = new CountDownLatch(threads);
+        for (int i = 0; i < threads; i++) {
+            pool.execute(
+                    () -> {
+                        occupied.countDown();
+                        try {
+                            release.await();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+        }
+        assertTrue(
+                occupied.await(10, TimeUnit.SECONDS), "could not occupy every common-pool thread");
     }
 
     /**

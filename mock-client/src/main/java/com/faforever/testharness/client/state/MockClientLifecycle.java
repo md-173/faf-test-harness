@@ -349,9 +349,20 @@ public final class MockClientLifecycle {
         // (WBS-3.1.6.2).
         logStateEntry(ClientState.CONNECTING);
 
-        // Teardown's step once the game is down, on every path into teardown (#454). Registered
-        // last, so a teardown that starts early finds no step rather than a half-built lifecycle.
-        teardown.registerAfterGameStep(this::sendGameStateEnded);
+        // Teardown's step once the game is down, on every path into teardown (#454, #438, #452).
+        // Registered last, so a teardown that starts early finds no step rather than a half-built
+        // lifecycle.
+        teardown.registerAfterGameStep(this::afterGameStopped);
+    }
+
+    /**
+     * Teardown's step once the game is down: reports the game's end to the lobby (#454), then has
+     * {@link SessionFailures#adapterAtTeardown} judge the adapter (#438, #452). The send swallows
+     * its own failures, so it can never cost the session its verdict.
+     */
+    private void afterGameStopped() {
+        sendGameStateEnded();
+        failures.adapterAtTeardown(iceConnection.disconnectEvent());
     }
 
     private void setupStateMachine() {
@@ -1121,13 +1132,11 @@ public final class MockClientLifecycle {
             // Load bearing for the exit status, not only for the log level; see the javadoc.
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {
-            LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
-            // The process exit code this run should produce (WBS-3.1.2.8-fix, #406). Set inside
-            // the branch that already decided this exit was unaccounted for, rather than
-            // re-derived by the reader, so the warning above and the exit code cannot disagree
-            // about whether the adapter was lost. Same arrangement classifyGameExit has with
-            // gameCrashed.
-            verdicts.recordAdapterLost();
+            // The warning and the process exit code this run should produce (WBS-3.1.2.8-fix,
+            // #406), decided in the branch that already found this exit unaccounted for, so the
+            // two cannot disagree about whether the adapter was lost. SessionFailures holds the
+            // line so teardown's check logs it the same way (#438).
+            failures.adapterLost(exitCode);
         }
     }
 
@@ -1540,8 +1549,8 @@ public final class MockClientLifecycle {
         // posts AdapterExited (#214), which is the reliable channel for that. One consequence of
         // both firing (#406): the kernel closes the RPC socket as the adapter dies, so a call in
         // flight can fail first, and then this ShutdownRequested takes the session to TERMINATED
-        // and the adapter's exit is classified after teardown. The run then exits 0 instead of
-        // ExitCodes.ADAPTER_LOST. The window is the call's round trip; see that constant.
+        // and the adapter's exit is classified after teardown has begun. Teardown's own adapter
+        // check finds the death instead, so the run still exits ExitCodes.ADAPTER_LOST (#438).
         //
         // whenCompleteAsync, not whenComplete: a send that fails outright (dead socket) completes
         // the future before call() even returns, and a synchronous continuation would then re-enter

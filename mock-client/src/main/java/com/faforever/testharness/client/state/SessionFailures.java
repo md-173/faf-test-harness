@@ -1,9 +1,15 @@
 package com.faforever.testharness.client.state;
 
+import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
+import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
 import java.io.IOException;
+import java.time.Duration;
+import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
@@ -16,9 +22,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Every failure path here follows the rule the verdicts share: once {@link SessionTeardown} has
  * started, a failure is the harness's own doing, so nothing is recorded and its line drops to
- * DEBUG. A defect's line is the one exception, kept at ERROR; see {@link #defect}. The paths that
- * fail a transition return the {@link FailedTransitionException} that takes the session to
- * TERMINATED, for the transition action to throw.
+ * DEBUG. A defect's line is one exception, kept at ERROR; see {@link #defect}. The other is {@link
+ * #adapterAtTeardown}, which teardown itself runs, and which records what happened to the adapter
+ * before teardown touched it. The paths that fail a transition return the {@link
+ * FailedTransitionException} that takes the session to TERMINATED, for the transition action to
+ * throw.
  *
  * <p>Split out of the lifecycle to keep that file within Checkstyle's length limit. It logs under
  * the lifecycle's name, deliberately: these are the lifecycle's lines, and tests and log readers
@@ -32,6 +40,19 @@ final class SessionFailures {
     /** How deep {@link #describe} follows a cause chain, so one that loops cannot hang a line. */
     private static final int MAX_CAUSE_DEPTH = 16;
 
+    /**
+     * How long {@link #adapterAtTeardown} gives an adapter whose JSON-RPC link closed from its side
+     * to exit, before reading it as alive (WBS-3.1.2.8-fix, #438, #452).
+     *
+     * <p>Measured against the pinned 3.3.14 over 80 kills, one RPC client each: the exit followed
+     * the socket's close within 0.9 ms of a SIGKILL, and within 330 ms of a SIGTERM, whose shutdown
+     * closes the socket first. Its own orderly {@code IceAdapter.close(status)} stops the RPC
+     * server and calls {@code System.exit} two 250 ms steps later. Two seconds clears all of those
+     * several times over, and only an adapter that is still alive waits it out, so a dying adapter
+     * reads as lost ({@code 72}) rather than as one that dropped its link ({@code 70}).
+     */
+    private static final Duration ADAPTER_EXIT_WAIT = Duration.ofSeconds(2);
+
     /** The session's teardown; once it has started, a failure records nothing. */
     private final SessionTeardown teardown;
 
@@ -40,6 +61,9 @@ final class SessionFailures {
 
     /** The state every failure here takes the session to. */
     private final State terminated;
+
+    /** {@link #ADAPTER_EXIT_WAIT}, unless a test shortens or lengthens it. */
+    private final Duration adapterExitWait;
 
     /**
      * Creates the failure paths for one session.
@@ -52,9 +76,26 @@ final class SessionFailures {
             final SessionTeardown teardown,
             final SessionVerdicts verdicts,
             final State terminated) {
+        this(teardown, verdicts, terminated, ADAPTER_EXIT_WAIT);
+    }
+
+    /**
+     * Creates the failure paths for one session with its own wait for a dying adapter, for tests.
+     *
+     * @param teardown the session's teardown, whose start silences every verdict
+     * @param verdicts where the verdicts are recorded
+     * @param terminated the state a failure takes the session to
+     * @param adapterExitWait how long {@link #adapterAtTeardown} waits for a dying adapter
+     */
+    SessionFailures(
+            final SessionTeardown teardown,
+            final SessionVerdicts verdicts,
+            final State terminated,
+            final Duration adapterExitWait) {
         this.teardown = teardown;
         this.verdicts = verdicts;
         this.terminated = terminated;
+        this.adapterExitWait = adapterExitWait;
     }
 
     /**
@@ -82,18 +123,13 @@ final class SessionFailures {
 
     /**
      * A failed adapter call, judged by what failed it (#445). An {@link IOException} means the
-     * adapter's connection closed: Jackson closes the socket once the reader reaches the end of its
-     * input, and a reset breaks the pipe, so a dead adapter fails a call with one at once (pinned
-     * by {@code IceAdapterConnectionTest}). The adapter's own exit is the finding then (#406,
-     * #438), so this logs at INFO and records nothing. Anything else, an error answer or no answer
-     * in time, came from an adapter that was still connected, and is {@link #session}.
-     *
-     * <p>One case reads wrong. A live adapter whose stream went out of sync fails the calls in
-     * flight with an {@code IOException} too, as the reader gives up on a frame it cannot parse, so
-     * those read as a dead adapter and the run can exit {@code 0}. The INFO line still names the
-     * parse error underneath, and a call made after that point times out and does record the
-     * verdict. Telling them apart needs to know whether the adapter process outlives its RPC link,
-     * which is #452's.
+     * adapter's connection closed: once it has, every call fails with one at once (pinned by {@code
+     * IceAdapterConnectionTest}). That closed connection is the adapter's finding, not the call's,
+     * so this logs at INFO and records nothing, and {@link #adapterAtTeardown} decides it once the
+     * session ends: an adapter that died is lost ({@code 72}, #438), and a live adapter whose
+     * stream stopped parsing, which fails its calls the same way, dropped its link ({@code 70},
+     * #452). Anything else, an error answer or no answer in time, came from an adapter that was
+     * still connected, and is {@link #session}.
      *
      * @param what the action that failed, for the log line
      * @param failure what the call's future failed with, wrapped or not
@@ -113,6 +149,103 @@ final class SessionFailures {
                     describe(cause));
         }
         return new FailedTransitionException(describe(cause), terminated);
+    }
+
+    /**
+     * An ICE adapter lost under the session (#406, #438), recorded as {@link
+     * SessionVerdicts#adapterLost()} with its one WARN. Shared by the adapter's own exit event and
+     * {@link #adapterAtTeardown}, so the line reads the same whichever of them found the death.
+     *
+     * @param exitCode the adapter's non-zero exit code
+     */
+    void adapterLost(final int exitCode) {
+        verdicts.recordAdapterLost();
+        LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
+    }
+
+    /**
+     * Teardown's look at the ICE adapter once the game is down and before the adapter step
+     * (WBS-3.1.2.8-fix, #438, #452): the verdict for an adapter that failed while something else
+     * ended the session.
+     *
+     * <p>#406 records a lost adapter when its exit is the event that ends the session. When
+     * something the same death caused gets there first, a call in flight failing as the adapter's
+     * socket closes, or the game exiting {@code 69} on its dead GPGNet link, that event ends the
+     * session and the adapter's exit is only classified after teardown has begun, too late to
+     * count. A live adapter whose JSON-RPC stream stopped parsing fails its calls exactly as a dead
+     * one does, and then carries on, which nothing else notices at all. Every such session passes
+     * through teardown, so this runs there, before the adapter is touched:
+     *
+     * <ul>
+     *   <li>adapter dead with a non-zero code: {@link #adapterLost}, exit {@code 72};
+     *   <li>link closed from the adapter's side and the adapter still running after {@link
+     *       #ADAPTER_EXIT_WAIT}: {@link SessionVerdicts#sessionFailed()}, exit {@code 70}, with one
+     *       WARN naming the dropped link;
+     *   <li>anything else records nothing. An adapter that exited {@code 0} quit on its own.
+     * </ul>
+     *
+     * <p>It reads the exit the process reaper records, not the lifecycle's exit future, which the
+     * common pool completes. On the connectToPeer route this runs on a pool thread that holds the
+     * state machine, with another pool thread waiting on it for the game's exit, and a small pool
+     * would then have no thread left to complete that future inside the wait.
+     *
+     * <p>Records nothing on a signalled teardown, read again after the wait since a signal can land
+     * during it: the signal kills the adapter itself. Nor once the session has a verdict, so a run
+     * keeps one cause line: a failed launch (#437) already reported its adapter, and a lost
+     * adapter, crashed game or failed session already named its cause. Unlike every other path
+     * here, it records although teardown has started, because what it judges happened before
+     * teardown touched the adapter. Never keyed on the game's {@code 69}: mock-game reports a
+     * truncated frame or a bug in its own decoder the same way as a link that went away.
+     *
+     * @param link how the adapter's JSON-RPC connection ended, if it has
+     */
+    void adapterAtTeardown(final Optional<DisconnectEvent> link) {
+        Optional<SubprocessManager> adapter = teardown.adapterProcess();
+        if (adapter.isEmpty() || teardown.signalled() || hasVerdict()) {
+            return;
+        }
+        SubprocessManager process = adapter.get();
+        Optional<DisconnectEvent> dropped =
+                link.filter(event -> event.reason() == DisconnectReason.REMOTE_CLOSE);
+        if (process.isAlive() && dropped.isPresent()) {
+            LOG.debug(
+                    "ICE adapter closed its JSON-RPC link; waiting up to {} for it to exit",
+                    adapterExitWait);
+            try {
+                process.waitFor(adapterExitWait);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (teardown.signalled()) {
+                return;
+            }
+        }
+        OptionalInt exitCode = process.exitCode();
+        if (exitCode.isPresent()) {
+            if (exitCode.getAsInt() != 0) {
+                adapterLost(exitCode.getAsInt());
+            }
+        } else if (dropped.isPresent()) {
+            Throwable error = dropped.get().error();
+            verdicts.recordSessionFailed();
+            LOG.warn(
+                    "ICE adapter JSON-RPC link dropped while the adapter kept running ({})",
+                    error == null ? "end of stream" : describe(error));
+        }
+    }
+
+    /**
+     * Whether the session already has a verdict, whose cause line {@link #adapterAtTeardown} would
+     * only repeat or contradict.
+     *
+     * @return {@code true} once any verdict has been recorded
+     */
+    private boolean hasVerdict() {
+        return verdicts.launchFailed()
+                || verdicts.adapterLost()
+                || verdicts.gameCrashed()
+                || verdicts.sessionFailed();
     }
 
     /**

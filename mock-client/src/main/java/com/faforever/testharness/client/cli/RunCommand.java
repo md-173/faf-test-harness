@@ -114,7 +114,11 @@ public final class RunCommand implements Callable<Integer> {
                         config.clientVersion(),
                         config.userAgent(),
                         config.uidBinaryPath());
-        SessionTeardown teardown = new SessionTeardown(connection);
+        // Raised first thing by the shutdown hook below, and created before the teardown, which
+        // reads it too: its adapter check records nothing once a signal is tearing the run down,
+        // since the signal kills the adapter itself (#438).
+        AtomicBoolean shuttingDown = new AtomicBoolean();
+        SessionTeardown teardown = new SessionTeardown(connection, shuttingDown::get);
         MockClientLifecycle lifecycle = new MockClientLifecycle(config, session, teardown);
 
         // Graceful shutdown on Ctrl-C / SIGTERM: run the coordinated teardown synchronously before
@@ -127,7 +131,6 @@ public final class RunCommand implements Callable<Integer> {
         // down started while the run was still live, which only a signal does (#446). The lobby's
         // disconnect, the guard before, lost a race on a normal exit: teardown's close returns
         // once its frame is sent, before the server's echo marks the session disconnected.
-        AtomicBoolean shuttingDown = new AtomicBoolean();
         AtomicBoolean callFinished = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
@@ -226,7 +229,9 @@ public final class RunCommand implements Callable<Integer> {
      * synchronized, and on a signal during bring-up the launch thread reaches it too, through
      * TERMINATED's entry hook. A hook that tore down first would block there with the flag still
      * down, and the main thread, released as TERMINATED commits, would read it as a session that
-     * ended on its own and log a verdict for a run the signal ended (#437).
+     * ended on its own and log a verdict for a run the signal ended (#437). Teardown reads the same
+     * flag for its adapter check (#438), and the hook's own teardown must find it raised, since
+     * {@code SubprocessRegistry}'s hook is killing the adapter at the same moment.
      *
      * @param shuttingDown the flag {@link #sessionExitCode} reads, raised before anything else
      * @param teardown the coordinated teardown to run once it is raised

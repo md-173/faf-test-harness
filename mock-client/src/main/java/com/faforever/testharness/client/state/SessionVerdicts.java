@@ -64,6 +64,11 @@ public final class SessionVerdicts {
      * it earlier returns {@code false}, which is the right answer for an adapter that is still
      * running.
      *
+     * <p>When another event the same death caused ends the session first, a call in flight failing
+     * as the socket closes or the game exiting on its dead link, teardown's check records it
+     * instead (#438; {@link SessionFailures#adapterAtTeardown}). That runs inside TERMINATED's
+     * entry hook, which is ordered before the same read.
+     *
      * @return {@code true} if the adapter's exit was classified as abnormal
      */
     public boolean adapterLost() {
@@ -102,20 +107,21 @@ public final class SessionVerdicts {
      * answered a host, join or peer-connect call with an error or not within its timeout, or a
      * match the server cancelled after {@code game_launch} and before the game started.
      *
-     * <p>Not recorded when one of those calls failed because the adapter's connection closed. The
-     * adapter is gone then, and its own exit is the finding (#406, #438), not the call. A live
-     * adapter whose RPC stream stopped parsing fails its calls the same way, which is #452's; see
-     * {@link SessionFailures#call}. Never recorded once {@code SessionTeardown} has started, the
-     * same rule as {@link #launchFailed()}.
+     * <p>Not recorded when one of those calls failed because the adapter's connection closed: the
+     * connection is the adapter's finding, not the call's. Teardown's check decides it (#438, #452;
+     * {@link SessionFailures#adapterAtTeardown}), recording this verdict for a live adapter whose
+     * JSON-RPC link closed from its side, such as one whose stream stopped parsing, and {@link
+     * #adapterLost()} for one that died. Otherwise never recorded once {@code SessionTeardown} has
+     * started, the same rule as {@link #launchFailed()}.
      *
-     * <p>Recorded inside the transition action that ends the session, which orders it before {@code
-     * RunCommand}'s read. {@code connectToPeer}'s asynchronous failure is the exception: it records
-     * the verdict and then posts the {@code ShutdownRequested} that ends the session, which orders
-     * it the same way only when that event is what ends it. If another route commits TERMINATED
-     * first, such as the server closing the lobby or the game exiting, the verdict can land after
-     * the read, and a run with no other finding exits {@code 0}. The window is the few instructions
-     * between the teardown check and the record, which is why the record comes before the line that
-     * names it.
+     * <p>Recorded inside the transition action that ends the session, or by teardown's check inside
+     * TERMINATED's entry hook, both of which order it before {@code RunCommand}'s read. {@code
+     * connectToPeer}'s asynchronous failure is the exception: it records the verdict and then posts
+     * the {@code ShutdownRequested} that ends the session, which orders it the same way only when
+     * that event is what ends it. If another route commits TERMINATED first, such as the server
+     * closing the lobby or the game exiting, the verdict can land after the read, and a run with no
+     * other finding exits {@code 0}. The window is the few instructions between the teardown check
+     * and the record, which is why the record comes before the line that names it.
      *
      * @return {@code true} if the session failed after it came up, before session teardown began
      */

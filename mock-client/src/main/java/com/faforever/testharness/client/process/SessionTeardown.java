@@ -7,9 +7,11 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,6 +72,9 @@ public final class SessionTeardown {
     /** Lobby connection; present from session startup. */
     private final LobbyConnection lobby;
 
+    /** Raised once a signal has started the JVM's shutdown; see {@link #signalled()}. */
+    private final BooleanSupplier signalled;
+
     /** Adapter JSON-RPC connection; {@code null} until registered. */
     private volatile IceAdapterConnection adapterRpc;
 
@@ -90,12 +95,25 @@ public final class SessionTeardown {
 
     /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
-     * are registered later, as they come into existence.
+     * are registered later, as they come into existence. No signal ever reaches it: for a session
+     * whose owner has no signal hook of its own.
      *
      * @param lobby the session's lobby connection; must not be {@code null}
      */
     public SessionTeardown(final LobbyConnection lobby) {
+        this(lobby, () -> false);
+    }
+
+    /**
+     * Creates a teardown that knows when a signal is tearing the JVM down (WBS-3.1.2.8-fix, #438).
+     *
+     * @param lobby the session's lobby connection; must not be {@code null}
+     * @param signalled raised once a signal has started the JVM's shutdown: {@code run}'s {@code
+     *     shuttingDown} flag (#442), which its hook raises before it tears down
+     */
+    public SessionTeardown(final LobbyConnection lobby, final BooleanSupplier signalled) {
         this.lobby = Objects.requireNonNull(lobby, "lobby");
+        this.signalled = Objects.requireNonNull(signalled, "signalled");
     }
 
     /**
@@ -169,6 +187,30 @@ public final class SessionTeardown {
      */
     public boolean hasRun() {
         return done;
+    }
+
+    /**
+     * Whether a signal started the JVM's shutdown (WBS-3.1.2.8-fix, #438). Read by the verdict
+     * check teardown runs through the owner's step: a signal kills the adapter itself (a terminal's
+     * SIGINT reaches it directly, and {@code SubprocessRegistry}'s hook terminates it), so an
+     * adapter found dead then is the signal's doing, not a finding.
+     *
+     * @return {@code true} once a signal has started the shutdown
+     */
+    public boolean signalled() {
+        return signalled.getAsBoolean();
+    }
+
+    /**
+     * The ICE adapter process registered for teardown, if one was (WBS-3.1.2.8-fix, #438). The
+     * verdict check reads its exit from here, as the process reaper records it ({@link
+     * SubprocessManager#exitCode()}, {@link SubprocessManager#waitFor}), rather than from a future
+     * the common pool completes.
+     *
+     * @return the adapter's manager, or empty if no adapter was launched
+     */
+    public Optional<SubprocessManager> adapterProcess() {
+        return Optional.ofNullable(adapterProcess);
     }
 
     /**
