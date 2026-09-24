@@ -96,40 +96,18 @@ jobs:
       # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
       # would leave its --tests pattern matching nothing while the others still ran, and the job
       # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
-      # would have failed in never existed. Check the JUnit XML instead. ci.yml's live-tests job
-      # carries a copy of this check, so a fix to either belongs in both.
+      # would have failed in never existed. The script reads the JUnit XML instead; ci.yml's and
+      # release.yml's live-tests jobs call it too, each with the classes it ran.
       - name: Check every expected live test ran
         if: success()
         timeout-minutes: 2
         run: |
-          status=0
-          check() {
-            xml="$1/build/test-results/integrationTest/TEST-$2.xml"
-            if [ ! -f "$xml" ]; then
-              echo "::error::$2 did not run: no $xml (did the class move or get renamed?)"
-              status=1
-              return
-            fi
-            # `|| true` on each: the step runs under `bash -e`, and an assignment whose pipeline
-            # ends in a grep that matches nothing would abort it, losing the message below that
-            # names the offending class. The `${var:-0}` defaults then turn "no match" into a
-            # reported failure instead of a bare non-zero exit.
-            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1 || true)
-            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' || true)
-            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*' || true)
-            if [ "${tests:-0}" -lt 1 ] || [ "${skipped:-0}" -ne 0 ]; then
-              echo "::error::$2 ran ${tests:-0} test(s) with ${skipped:-0} skipped; expected at least one run and none skipped"
-              status=1
-              return
-            fi
-            echo "$2: ${tests} test(s), none skipped"
-          }
-          check mock-client com.faforever.testharness.client.cli.IceSmokeLiveTest
-          check mock-client com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest
-          check mock-client com.faforever.testharness.client.state.ClientGameLifecycleLiveTest
-          check mock-client com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest
-          check mock-game com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
-          exit $status
+          scripts/ci/check-live-tests-ran.sh \
+            mock-client:com.faforever.testharness.client.cli.IceSmokeLiveTest \
+            mock-client:com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest \
+            mock-client:com.faforever.testharness.client.state.ClientGameLifecycleLiveTest \
+            mock-client:com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest \
+            mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
 
       # Failure only, as in ci.yml: a green run has nothing to explain. The JSONL logs are what
       # makes a live failure readable (the adapter's and the game's captured output next to the
