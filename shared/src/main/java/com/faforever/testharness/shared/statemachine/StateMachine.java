@@ -38,19 +38,6 @@ public class StateMachine implements EventListener {
     private boolean cancelled;
 
     /**
-     * The state whose entry hooks are currently running, if any; {@code null} otherwise. Set right
-     * before {@link Transition#transition(Event, java.util.function.Consumer)} invokes {@code
-     * entry()} on it and cleared once that call returns. An entry hook can call back into this
-     * machine on the same thread — a shutdown sequence calling {@link #cancel()} from a terminal
-     * state's own entry hook is exactly this pattern. When it does, that reentrant {@link
-     * #cancel()} runs before {@link #commitTransition(State)} has assigned {@code state} or
-     * completed the awaiting future for the state being entered, so {@link #cancel()} reads this
-     * field to leave that one future alone rather than cancelling a future {@code commitTransition}
-     * is about to complete normally moments later.
-     */
-    private State enteringState;
-
-    /**
      * Initializes the machine with its initial state and policy.
      *
      * @param initialState the initial state of the machine.
@@ -89,8 +76,14 @@ public class StateMachine implements EventListener {
 
     /**
      * Gives a future that completes when the state is reached. If the state machine's current state
-     * is {@code s} then the future completes immediately. If {@link #cancel()} runs first, the
-     * future is instead cancelled rather than left pending.
+     * is {@code s} then the future completes immediately.
+     *
+     * <p><b>Not resolved by {@link #cancel()}.</b> If {@code s} is never reached — including
+     * because {@link #cancel()} has stopped the time-based scheduling that would have reached it —
+     * the future returned here is left pending forever; {@code cancel()} does not complete, cancel,
+     * or otherwise resolve it. A caller that blocks on this future (e.g. with {@code get()}) must
+     * have some other bound, such as a timeout, if the state it names might not be reached
+     * (WBS-2.3.7-fix, #260).
      *
      * @param s state to wait for.
      * @return a future that only completes when the state is reached.
@@ -128,8 +121,7 @@ public class StateMachine implements EventListener {
                     event.getClass().getSimpleName());
             for (var t : transitions) {
                 if (t.guard(event)) {
-                    State newState = t.transition(event, s -> enteringState = s);
-                    enteringState = null;
+                    State newState = t.transition(event);
                     if (newState == null) {
                         // The event was handled but no transition occurred, so none of the
                         // bookkeeping that follows a state change applies: pending timeouts stay
@@ -160,8 +152,7 @@ public class StateMachine implements EventListener {
      * Adopts the result of a transition that actually changed state: makes it current, disarms
      * every pending timeout (a state change is exactly what timeouts wait for) and releases
      * anything blocked on {@link #stateReached(State)} for the new state. Only ever called with a
-     * genuine new state; see {@link Transition#transition(Event, java.util.function.Consumer)} for
-     * when there isn't one.
+     * genuine new state; see {@link Transition#transition(Event)} for when there isn't one.
      *
      * <p>The caller must already hold this machine's monitor.
      *
@@ -222,17 +213,20 @@ public class StateMachine implements EventListener {
 
     /**
      * Stops the machine's time-based scheduling: cancels every pending timeout and shuts down the
-     * timer thread, so no scheduled transition can fire after this returns. Also cancels every
-     * future returned by {@link #stateReached(State)} for a state not yet reached, so a caller
-     * blocked on one is released with a {@link java.util.concurrent.CancellationException} instead
-     * of waiting forever — except the future for {@link #enteringState}, if set: that state is
-     * reached the moment this call returns, and its future is left for {@link
-     * #commitTransition(State)} to complete normally. This is what lets a shutdown sequence call
-     * {@link #cancel()} from a terminal state's own entry hook without cancelling the very future
-     * that transition is about to satisfy. Intended for the shutdown path — it is terminal, so a
-     * later {@link #setTimeout(long, State)} arms nothing and returns rather than throwing on the
-     * dead timer. Event-driven transitions via {@link #receiveEvent(Event)} are unaffected.
-     * Idempotent: calling it more than once is safe.
+     * timer thread, so no scheduled transition can fire after this returns. Intended for the
+     * shutdown path — it is terminal, so a later {@link #setTimeout(long, State)} arms nothing and
+     * returns rather than throwing on the dead timer. Event-driven transitions via {@link
+     * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     *
+     * <p><b>Does not touch {@link #awaitedStates}.</b> A future already handed out by {@link
+     * #stateReached(State)} for a state this machine never reaches is left pending forever — this
+     * method neither completes nor cancels it, and no future one taken after this call is resolved
+     * either. This is a known, deliberate gap (WBS-2.3.7-fix, #260): closing it by cancelling those
+     * futures here regressed the ordinary shutdown path (a JVM shutdown hook calling this from a
+     * thread with no transition in flight, racing the thread still parked on {@link
+     * #stateReached(State)}), so the omission is documented rather than papered over. Callers that
+     * block on a {@link #stateReached(State)} future for a state that might never be reached must
+     * bound that wait themselves.
      */
     public synchronized void cancel() {
         cancelled = true;
@@ -241,15 +235,6 @@ public class StateMachine implements EventListener {
         }
         timeouts.clear();
         timeoutTimer.cancel();
-        var pending = awaitedStates.entrySet().iterator();
-        while (pending.hasNext()) {
-            var awaited = pending.next();
-            if (awaited.getKey() == enteringState) {
-                continue;
-            }
-            awaited.getValue().cancel(false);
-            pending.remove();
-        }
     }
 
     private class UpdateStateTask extends TimerTask {
@@ -283,8 +268,7 @@ public class StateMachine implements EventListener {
                 // No need to check guard and no actual event that triggered this.
                 State newState;
                 try {
-                    newState = transition.transition(null, s -> enteringState = s);
-                    enteringState = null;
+                    newState = transition.transition(null);
                 } catch (RuntimeException e) {
                     // Letting this escape would kill the timer thread, and every later setTimeout
                     // would then throw IllegalStateException. The thrower can only be the
