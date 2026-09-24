@@ -105,6 +105,7 @@ final class SessionTeardownTest {
     void concurrentRunsExecuteTeardownOnce() throws Exception {
         SessionTeardown teardown = new SessionTeardown(recordingLobby());
         teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(() -> events.add("step"));
 
         CountDownLatch go = new CountDownLatch(1);
         Runnable call =
@@ -126,9 +127,54 @@ final class SessionTeardownTest {
         second.join();
 
         assertEquals(
-                List.of("rpc-closed", "lobby-closed"),
+                List.of("step", "rpc-closed", "lobby-closed"),
                 events,
-                "each teardown step must fire exactly once across concurrent callers");
+                "each teardown step, the owner's included, must fire exactly once across concurrent"
+                        + " callers");
+    }
+
+    /**
+     * The owner's step runs once the game is down and before the adapter is touched (#454): where
+     * the lifecycle reports the game's end, with the lobby still open.
+     */
+    @Test
+    void theAfterGameStepRunsBetweenTheGameAndTheAdapter() throws Exception {
+        SubprocessManager game = startSleeper();
+        SubprocessManager adapter = startSleeper();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerGameProcess(game);
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(
+                () ->
+                        events.add(
+                                "step: game "
+                                        + (game.isAlive() ? "alive" : "down")
+                                        + ", adapter "
+                                        + (adapter.isAlive() ? "alive" : "down")));
+
+        teardown.run();
+
+        assertEquals(
+                List.of("step: game down, adapter alive", "rpc-closed", "lobby-closed"), events);
+    }
+
+    /** A step that throws is the owner's defect, logged, and the rest of teardown still runs. */
+    @Test
+    void aThrowingAfterGameStepStillTearsDownTheRest() throws Exception {
+        SubprocessManager adapter = startSleeper();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(
+                () -> {
+                    throw new IllegalStateException("defect in the owner's step");
+                });
+
+        teardown.run();
+
+        assertFalse(adapter.isAlive(), "the adapter must still be terminated");
+        assertEquals(List.of("rpc-closed", "lobby-closed"), events);
     }
 
     /** An idle, lobby-only session tears down cleanly — unregistered handles are skipped. */

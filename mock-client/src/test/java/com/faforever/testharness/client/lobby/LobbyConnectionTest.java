@@ -295,6 +295,29 @@ final class LobbyConnectionTest {
         assertEquals("bye", captured.get().closeMessage());
     }
 
+    /**
+     * Closing a connection the server has already closed completes at once (WBS-3.1.2.6-fix, #454).
+     * The JDK answers the server's close itself and shuts its output, so a second close frame
+     * failed with "Output closed", which teardown logged as a WARN on every session whose lobby had
+     * already gone.
+     */
+    @Test
+    void closeAfterTheServerClosedCompletesQuietly() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        CountDownLatch disconnected = new CountDownLatch(1);
+        lobby.onDisconnect(event -> disconnected.countDown());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        server.closeAllClean(1000, "bye");
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener never fired");
+        // The server's side ends once it has the client's answer, and the JDK closes its output
+        // as it sends that answer.
+        server.awaitClose(2, TimeUnit.SECONDS);
+
+        lobby.close().get(2, TimeUnit.SECONDS);
+    }
+
     @Test
     void abruptCloseSurfacesAsAbruptCloseDisconnect() throws Exception {
         lobby = new LobbyConnection(server.uri());

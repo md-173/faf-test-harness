@@ -18,12 +18,16 @@ import org.slf4j.LoggerFactory;
  * adapter subprocesses and closes the lobby + adapter connections, so integration tests leave no
  * orphaned processes.
  *
- * <p><b>Order (deterministic):</b> mock-game → ICE adapter → adapter RPC close → lobby close.
- * Subprocesses go first so the adapter is never left relaying for a dead game; connections close
- * last and tolerate the peer already being gone. This mirrors the official FAF client's teardown
- * (game exit → {@code iceAdapter.stop()} → notify server; {@code GameRunner} in
- * downlords-faf-client). Each step is exception-isolated — a failing step is logged and the
- * sequence continues.
+ * <p><b>Order (deterministic):</b> mock-game → the owner's step → ICE adapter → adapter RPC close →
+ * lobby close. Subprocesses go first so the adapter is never left relaying for a dead game;
+ * connections close last and tolerate the peer already being gone. The owner's step is the
+ * session's own work between the two, registered by its lifecycle through {@link
+ * #registerAfterGameStep}: it runs once the game is down, while the lobby is still open, which is
+ * where the session reports the game's end to the server (WBS-3.1.2.6-fix, #454). The official FAF
+ * client does the same things in a slightly different order ({@code GameRunner} in
+ * downlords-faf-client stops the adapter once the game exits, then notifies the server); here the
+ * report comes before the adapter step, and either way it reaches the lobby before the close. Each
+ * step is exception-isolated: a failing step is logged and the sequence continues.
  *
  * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
  * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
@@ -75,6 +79,9 @@ public final class SessionTeardown {
     /** Mock game subprocess handle; {@code null} until registered. */
     private volatile SubprocessManager gameProcess;
 
+    /** The owner's step between the game and the adapter; a no-op until one is registered. */
+    private volatile Runnable afterGameStep = () -> {};
+
     /**
      * True once {@link #run()} has executed. Volatile so the lock-free read in {@link
      * #warnIfDone(String)} is guaranteed to see a completed teardown.
@@ -122,6 +129,23 @@ public final class SessionTeardown {
     }
 
     /**
+     * Registers the owner's step, which {@link #run()} takes once the game is down and before it
+     * touches the adapter (WBS-3.1.2.6-fix, #454).
+     *
+     * <p>It runs on every path into teardown, whoever starts it: the lifecycle's TERMINATED entry
+     * hook, the CLI's signal hook, a direct {@link #run()}. That is the point of taking it here
+     * rather than in the lifecycle's own hook, since the signal hook reaches teardown without the
+     * lifecycle's state machine. It runs at most once, under this instance's lock, and a throw from
+     * it is logged and the rest of teardown still runs.
+     *
+     * @param step what to do between the game and the adapter; must not be {@code null}
+     */
+    public void registerAfterGameStep(final Runnable step) {
+        this.afterGameStep = Objects.requireNonNull(step, "step");
+        warnIfDone("step after the game");
+    }
+
+    /**
      * Best-effort warning for a handle registered after teardown already ran — it will not be torn
      * down by this instance (the JVM-exit registry hook still covers processes). Lock-free so a
      * registration never blocks; a registration racing {@link #run()} may still miss the warning,
@@ -148,9 +172,10 @@ public final class SessionTeardown {
     }
 
     /**
-     * Runs the teardown sequence once: terminate game, terminate adapter, close the adapter RPC
-     * connection, close the lobby connection. Unregistered handles are skipped; a failing step is
-     * logged and does not stop the rest. Subsequent (or concurrent) calls are no-ops.
+     * Runs the teardown sequence once: terminate game, run the owner's step, terminate adapter,
+     * close the adapter RPC connection, close the lobby connection. Unregistered handles are
+     * skipped; a failing step is logged and does not stop the rest. Subsequent (or concurrent)
+     * calls are no-ops.
      */
     public synchronized void run() {
         if (done) {
@@ -159,10 +184,24 @@ public final class SessionTeardown {
         done = true;
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
+        runAfterGameStep();
         terminateAdapter();
         closeAdapterRpc();
         closeLobby();
         LOG.info("session teardown complete");
+    }
+
+    /**
+     * Runs the step registered through {@link #registerAfterGameStep}. A throw is a defect in the
+     * owner rather than a teardown failure, so it is logged at ERROR with its trace, and the
+     * adapter and connections are still torn down.
+     */
+    private void runAfterGameStep() {
+        try {
+            afterGameStep.run();
+        } catch (RuntimeException e) {
+            LOG.error("teardown step after the game threw; continuing", e);
+        }
     }
 
     /**

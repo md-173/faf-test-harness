@@ -44,6 +44,8 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +74,12 @@ public final class MockClientLifecycle {
      * rather than guessing at it.
      */
     private static final int GAME_ADAPTER_LOST_EXIT = 69;
+
+    /**
+     * Bound on writing {@code GameState Ended} at teardown (#454), the same bound {@code
+     * SessionTeardown} gives the lobby close that follows it.
+     */
+    private static final Duration GAME_STATE_ENDED_SEND_TIMEOUT = Duration.ofSeconds(5);
 
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
@@ -340,6 +348,10 @@ public final class MockClientLifecycle {
         // otherwise a harness reading the log would never see the state the client starts in
         // (WBS-3.1.6.2).
         logStateEntry(ClientState.CONNECTING);
+
+        // Teardown's step once the game is down, on every path into teardown (#454). Registered
+        // last, so a teardown that starts early finds no step rather than a half-built lifecycle.
+        teardown.registerAfterGameStep(this::sendGameStateEnded);
     }
 
     private void setupStateMachine() {
@@ -910,13 +922,12 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * {@link #gameExit} completion handler (#211): classifies the exit locally, then — unless the
-     * game already sent one itself — gives the lobby the generic {@code GameState Ended} frame the
-     * real client sends on every termination (clean or crashed; see faf-client's {@code
-     * GameRunner.notifyGameEnded}), before posting {@link GameExited} so the frame leaves before
-     * teardown closes the connection. Crash detail itself never reaches the server — only this
-     * local log line carries it, per the card's source verification (no crash-report command exists
-     * in the protocol).
+     * {@link #gameExit} completion handler (#211): classifies the exit locally, then posts {@link
+     * GameExited}. Crash detail never reaches the server; only this local log line carries it, per
+     * the card's source verification (no crash-report command exists in the protocol). The generic
+     * {@code GameState Ended} frame the real client sends on every termination is teardown's to
+     * send, once the game is down and before the lobby closes ({@link #sendGameStateEnded},
+     * WBS-3.1.2.6-fix, #454). Sent from here, it raced that close.
      *
      * <p>Classification is {@link #classifyGameExit}, which reads the exit code against the
      * observed clean-end signal; see there for the full table and its reasoning.
@@ -924,11 +935,7 @@ public final class MockClientLifecycle {
      * @param exitCode the game process's exit code.
      */
     private void onGameProcessExit(int exitCode) {
-        boolean cleanEnd = cleanEndSeen.get();
-        classifyGameExit(exitCode, cleanEnd, matchStarted.get());
-        if (!cleanEnd) {
-            sendGameStateEnded();
-        }
+        classifyGameExit(exitCode, cleanEndSeen.get(), matchStarted.get());
         machine.receiveEvent(new GameExited(exitCode));
     }
 
@@ -1022,41 +1029,58 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby — the
-     * exact envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send
-     * for a {@code GameState Ended} GPGNet frame. This is the fallback for the case the forwarder
-     * cannot cover: a crashed or killed game process never emits the frame to the adapter at all.
+     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby, the exact
+     * envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send for a
+     * {@code GameState Ended} GPGNet frame. This is the fallback for the case the forwarder cannot
+     * cover: a crashed or killed game process never emits the frame to the adapter at all.
      *
-     * <p>The caller gates it on {@link #cleanEndSeen} rather than sending unconditionally, because
-     * since R72 was wired into {@code launchGame} (#218) a clean end produces the frame twice —
-     * mock-game emits {@code GameEnded} then {@code GameState Ended}, the adapter relays both
-     * (every frame reaches {@code onGpgNetMessageReceived}; verified in the 3.3.14 jar), and the
-     * forwarder sends them on. faf-server routes {@code GameState "Ended"} to {@code
-     * on_connection_closed()} and drops the repeat silently ({@code lobbyconnection.py}: {@code if
-     * not self.game_connection: return}), so the duplicate is harmless — but the real client never
-     * sends it, and this harness exists to be wire-faithful. The gate is exact because {@code
-     * GameEnded} precedes {@code GameState Ended} on the wire, and it degrades safely: a process
-     * that dies before the adapter relays {@code GameEnded} leaves the flag false and still gets
-     * the frame from here.
+     * <p>Teardown's step once the game is down (WBS-3.1.2.6-fix, #454), so it runs once per
+     * session, whoever started teardown, and its write completes before the lobby close that
+     * follows. The game-exit handler used to send it, racing that close, which {@code
+     * LobbyConnection} writes directly rather than through its send chain: when the close won, the
+     * frame was lost with a WARN. The real client sends the same frame once its game process has
+     * ended, killed or not ({@code GameRunner} in downlords-faf-client).
      *
-     * <p>Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
-     * ignored, since a dead lobby connection surfaces through the connection's own disconnect
-     * listener.
+     * <p>Only for a game that was launched, and gated on {@link #cleanEndSeen} rather than sent
+     * unconditionally, because since R72 was wired into {@code launchGame} (#218) a clean end
+     * produces the frame twice: mock-game emits {@code GameEnded} then {@code GameState Ended}, the
+     * adapter relays both (every frame reaches {@code onGpgNetMessageReceived}; verified in the
+     * 3.3.14 jar), and the forwarder sends them on. faf-server routes {@code GameState "Ended"} to
+     * {@code on_connection_closed()} and drops the repeat silently ({@code lobbyconnection.py}:
+     * {@code if not self.game_connection: return}), so the duplicate is harmless, but the real
+     * client never sends it, and this harness exists to be wire-faithful. The gate is exact because
+     * {@code GameEnded} precedes {@code GameState Ended} on the wire, and it degrades safely: a
+     * process that dies before the adapter relays {@code GameEnded} leaves the flag false and still
+     * gets the frame from here.
+     *
+     * <p>A lobby that is already gone is skipped at DEBUG, and a failed send is a WARN only while
+     * the lobby is still up. Nothing escapes: teardown carries on either way.
      */
     private void sendGameStateEnded() {
+        if (!gameLaunched.isDone() || cleanEndSeen.get()) {
+            return;
+        }
+        if (session.disconnectEvent().isPresent()) {
+            LOG.debug("lobby connection already closed; GameState Ended not sent");
+            return;
+        }
         ObjectNode envelope = mapper.createObjectNode();
         envelope.put("command", "GameState");
         envelope.put("target", "game");
         envelope.putArray("args").add("Ended");
-        lobby.send(envelope)
-                .whenComplete(
-                        (ok, error) -> {
-                            if (error != null) {
-                                LOG.warn(
-                                        "failed to send GameState Ended to lobby: {}",
-                                        error.getMessage());
-                            }
-                        });
+        try {
+            lobby.send(envelope)
+                    .get(GAME_STATE_ENDED_SEND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException | RuntimeException e) {
+            String reason = SessionFailures.describe(SessionFailures.unwrap(e));
+            if (session.disconnectEvent().isPresent()) {
+                LOG.debug("GameState Ended not sent, the lobby connection closed: {}", reason);
+            } else {
+                LOG.warn("failed to send GameState Ended to lobby: {}", reason);
+            }
+        }
     }
 
     /**
