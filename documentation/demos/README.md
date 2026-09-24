@@ -177,7 +177,8 @@ game plays out its match and self-exits 0, and teardown leaves no process behind
 
 It is a live-tagged test rather than a CLI run, because the checkpoints have to be asserted, not
 eyeballed: [`ClientGameLifecycleLiveTest`](../../mock-client/src/test/java/com/faforever/testharness/client/state/ClientGameLifecycleLiveTest.java).
-Excluded from `./gradlew :mock-client:test` and from CI — it needs the local adapter binary.
+Excluded from `./gradlew :mock-client:test`, since it needs the adapter binary. CI runs it on every
+pull request, in `ci.yml`'s `live-tests` job, which downloads the pinned adapter first.
 
 **Deliberately lobby-independent.** Client↔lobby integration is already proven (see the demo
 above), so this one isolates the previously-unproven client↔adapter↔game seam: it posts the three
