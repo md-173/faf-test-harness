@@ -74,10 +74,10 @@ EOF
 ```
 
 `downloadIceAdapter` is idempotent: a re-run verifies the existing jar's SHA-256 and skips the
-download. It is deliberately **not** wired into `build`/`check`, so neither downloads it; run it
-explicitly, as `ci.yml`'s `live-tests` job does. The jar lands at `./faf-ice-adapter.jar`, which
-is the launcher's default `--ice-adapter-binary-path`, so `launch-ice` / `run` find it with no
-extra config.
+download. It is deliberately **not** wired into `build`/`check`, because it hits the network and
+only the live tests need the jar; run it explicitly, as `ci.yml`'s `live-tests` job does. The jar
+lands at `./faf-ice-adapter.jar`, which is the launcher's default `--ice-adapter-binary-path`, so
+`launch-ice` / `run` find it with no extra config.
 
 `launch-ice` needs no lobby or OAuth flags: it opens no lobby connection, so it validates only the
 adapter settings (WBS-3.1.5.2-fix, #308). It does attach a JSON-RPC peer and hold it open for the
@@ -170,7 +170,7 @@ below):
 - **Telemetry phone-home:** on launch the adapter opens a websocket to
   `ice-telemetry.faforever.com`. 3.3.14 has **no clean disable** — `--telemetry-server=""` just
   fails with `unknown scheme: null`, and an unreachable host errors too; either way telemetry
-  failure is **non-blocking** (the adapter still binds and answers `status`). In offline CI it
+  failure is **non-blocking** (the adapter still binds and answers `status`). Offline, it
   logs an error and continues. Left as-is — a flag that only changes which error is logged isn't
   worth plumbing.
 - Runtime reports `Version: SNAPSHOT` — a cosmetic upstream build-stamp quirk; the artifact is the

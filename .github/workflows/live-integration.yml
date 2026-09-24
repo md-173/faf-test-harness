@@ -94,7 +94,8 @@ jobs:
       # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
       # would leave its --tests pattern matching nothing while the others still ran, and the job
       # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
-      # would have failed in never existed. Check the JUnit XML instead.
+      # would have failed in never existed. Check the JUnit XML instead. ci.yml's live-tests job
+      # carries a copy of this check, so a fix to either belongs in both.
       - name: Check every expected live test ran
         if: success()
         timeout-minutes: 2
