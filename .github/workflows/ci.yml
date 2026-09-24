@@ -93,11 +93,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    # TEMPORARY (#451): ten legs per run to measure runtime and flake rate. Reverted before review.
-    strategy:
-      fail-fast: false
-      matrix:
-        sample: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
     env:
       # Every prerequisite this job provisions is therefore a failure when absent, not a skip.
@@ -190,7 +185,7 @@ jobs:
       uses: actions/upload-artifact@v7
       timeout-minutes: 5
       with:
-        name: live-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.sample }}
+        name: live-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
         path: |
           **/build/reports/tests
           **/build/test-results
