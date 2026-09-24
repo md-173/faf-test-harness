@@ -10,6 +10,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.client.state.SessionVerdictsFixture;
 import java.net.URI;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
@@ -26,7 +27,9 @@ import org.slf4j.LoggerFactory;
  * <p>The precedence is the part worth pinning. {@code RunCommand.call()} builds a real {@link
  * com.faforever.testharness.client.lobby.LobbyConnection} and cannot be driven from a unit test,
  * which is why #357 left its own {@code 71} mapping uncovered; the ordering lives in a static
- * method so it can be exercised without a session at all.
+ * method so it can be exercised without a session at all. That method takes the lifecycle's {@code
+ * SessionVerdicts} whole, so which verdict feeds which code is pinned here too; {@link
+ * SessionVerdictsFixture} builds them.
  *
  * <p>Several rows below are rare or unreachable. The ones with both a lost adapter and a crashed
  * game need a genuine double race: on the ordinary adapter route {@code classifyGameExit} takes its
@@ -116,7 +119,10 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 expected,
                 RunCommand.sessionExitCode(
-                        false, lobbyDropped, launchFailed, adapterLost, gameCrashed, false, log));
+                        false,
+                        lobbyDropped,
+                        SessionVerdictsFixture.of(launchFailed, adapterLost, gameCrashed, false),
+                        log));
     }
 
     /**
@@ -130,13 +136,15 @@ final class RunCommandExitCodeTest {
     void aLostAdapterOutranksACrashedGame() {
         assertEquals(
                 ExitCodes.ADAPTER_LOST,
-                RunCommand.sessionExitCode(false, false, false, true, true, false, log));
+                RunCommand.sessionExitCode(
+                        false, false, SessionVerdictsFixture.of(false, true, true, false), log));
     }
 
     /** A clean session says nothing: the log surface is a documented interface. */
     @Test
     void aCleanSessionLogsNothing() {
-        RunCommand.sessionExitCode(false, false, false, false, false, false, log);
+        RunCommand.sessionExitCode(
+                false, false, SessionVerdictsFixture.of(false, false, false, false), log);
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -144,7 +152,8 @@ final class RunCommandExitCodeTest {
     /** Each reported verdict names itself once, at WARN, so a run's log says which one it was. */
     @Test
     void aLostAdapterIsReportedAtWarn() {
-        RunCommand.sessionExitCode(false, false, false, true, false, false, log);
+        RunCommand.sessionExitCode(
+                false, false, SessionVerdictsFixture.of(false, true, false, false), log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -159,7 +168,8 @@ final class RunCommandExitCodeTest {
     void aFailedLaunchIsReportedAtWarn() {
         assertEquals(
                 ExitCodes.RUNTIME,
-                RunCommand.sessionExitCode(false, false, true, false, false, false, log));
+                RunCommand.sessionExitCode(
+                        false, false, SessionVerdictsFixture.of(true, false, false, false), log));
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -175,7 +185,8 @@ final class RunCommandExitCodeTest {
      */
     @Test
     void aLobbyDropOutranksAFailedLaunch() {
-        RunCommand.sessionExitCode(false, true, true, false, false, false, log);
+        RunCommand.sessionExitCode(
+                false, true, SessionVerdictsFixture.of(true, false, false, false), log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         assertTrue(
@@ -193,19 +204,24 @@ final class RunCommandExitCodeTest {
     void aSignalledRunNamesNoVerdict() {
         assertEquals(
                 ExitCodes.RUNTIME,
-                RunCommand.sessionExitCode(true, false, true, false, false, false, log));
+                RunCommand.sessionExitCode(
+                        true, false, SessionVerdictsFixture.of(true, false, false, false), log));
         assertEquals(
                 ExitCodes.ADAPTER_LOST,
-                RunCommand.sessionExitCode(true, false, false, true, false, false, log));
+                RunCommand.sessionExitCode(
+                        true, false, SessionVerdictsFixture.of(false, true, false, false), log));
         assertEquals(
                 ExitCodes.RUNTIME,
-                RunCommand.sessionExitCode(true, true, false, false, false, false, log));
+                RunCommand.sessionExitCode(
+                        true, true, SessionVerdictsFixture.of(false, false, false, false), log));
         assertEquals(
                 ExitCodes.GAME_CRASHED,
-                RunCommand.sessionExitCode(true, false, false, false, true, false, log));
+                RunCommand.sessionExitCode(
+                        true, false, SessionVerdictsFixture.of(false, false, true, false), log));
         assertEquals(
                 ExitCodes.RUNTIME,
-                RunCommand.sessionExitCode(true, false, false, false, false, true, log));
+                RunCommand.sessionExitCode(
+                        true, false, SessionVerdictsFixture.of(false, false, false, true), log));
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -240,7 +256,10 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 expected,
                 RunCommand.sessionExitCode(
-                        false, lobbyDropped, launchFailed, adapterLost, gameCrashed, true, log));
+                        false,
+                        lobbyDropped,
+                        SessionVerdictsFixture.of(launchFailed, adapterLost, gameCrashed, true),
+                        log));
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);

@@ -378,7 +378,7 @@ final class LifecycleSetupTest {
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
-        iceConn.setupCallFail(method);
+        iceConn.setupCallFail(method, new IceRpcException(-32000, "refused"));
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,

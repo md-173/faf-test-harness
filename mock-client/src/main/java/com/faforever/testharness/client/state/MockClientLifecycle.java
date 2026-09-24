@@ -1445,7 +1445,9 @@ public final class MockClientLifecycle {
      * connection failure that the harness would have to attribute by hand. A frame that parses but
      * whose RPC then fails ends the session too, asynchronously; see the comment on the call. Both
      * record {@link SessionVerdicts#sessionFailed()} (WBS-3.1.3.3-fix, #445), except a call that
-     * failed because the adapter's connection closed, which is the adapter's finding.
+     * failed because the adapter's connection closed, which is the adapter's finding. An unchecked
+     * throw anywhere in it is a defect that ends the session with that verdict as well, logged at
+     * ERROR with its trace, as in {@link #hostGame} and {@link #joinGame} (#439).
      *
      * <p><b>Blast radius, deliberately session-wide (#218 review).</b> Unlike {@link #hostGame} and
      * {@link #joinGame}, which fire once at role assignment, this edge fires once per peer as the
@@ -1457,9 +1459,26 @@ public final class MockClientLifecycle {
      * carrying on in a state nothing can describe.
      *
      * @param message the {@link ConnectToPeer} event; guaranteed by registration.
-     * @throws FailedTransitionException if the frame is malformed.
+     * @throws FailedTransitionException if the frame is malformed, or on an unchecked throw.
      */
     private void connectToPeer(Event message) throws FailedTransitionException {
+        try {
+            requestPeerRelay(message);
+        } catch (RuntimeException e) {
+            // As in hostGame and joinGame (#439). Contained by Transition, the throw would leave
+            // the session in HOSTING or JOINING without this peer's relay and with no verdict.
+            throw failures.sessionDefect("connect to a peer", e);
+        }
+    }
+
+    /**
+     * The body of {@link #connectToPeer}: reads the frame and asks the adapter for the peer's
+     * relay. Split out so that method can catch an unchecked throw from any of it (#439).
+     *
+     * @param message the {@link ConnectToPeer} event
+     * @throws FailedTransitionException if the frame is malformed
+     */
+    private void requestPeerRelay(Event message) throws FailedTransitionException {
         if (!(message instanceof ConnectToPeer)) {
             throw new AssertionError(
                     "connectToPeer method called without a ConnectToPeer event, should be"

@@ -99,15 +99,23 @@ public final class SessionVerdicts {
      * Whether this session failed after its ICE adapter and game came up (WBS-3.1.3.3-fix, #445;
      * WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or {@code ConnectToPeer} frame
      * it could not read, an adapter that answered one of those calls with an error or not within
-     * its timeout, or a match the server cancelled after {@code game_launch}.
+     * its timeout, or a match the server cancelled after {@code game_launch} and before the game
+     * started.
      *
      * <p>Not recorded when one of those calls failed because the adapter's connection closed. The
-     * adapter is gone then, and its own exit is the finding (#406, #438), not the call. Never
-     * recorded once {@code SessionTeardown} has started, the same rule as {@link #launchFailed()}.
+     * adapter is gone then, and its own exit is the finding (#406, #438), not the call. A live
+     * adapter whose RPC stream stopped parsing fails its calls the same way, which is #452's; see
+     * {@link SessionFailures#call}. Never recorded once {@code SessionTeardown} has started, the
+     * same rule as {@link #launchFailed()}.
      *
-     * <p>Recorded inside the transition action that ends the session, or, for {@code
-     * connectToPeer}'s asynchronous failure, just before the event that ends it is posted, so it is
-     * ordered before {@code RunCommand}'s read either way.
+     * <p>Recorded inside the transition action that ends the session, which orders it before {@code
+     * RunCommand}'s read. {@code connectToPeer}'s asynchronous failure is the exception: it records
+     * the verdict and then posts the {@code ShutdownRequested} that ends the session, which orders
+     * it the same way only when that event is what ends it. If another route commits TERMINATED
+     * first, such as the server closing the lobby or the game exiting, the verdict can land after
+     * the read, and a run with no other finding exits {@code 0}. The window is the few instructions
+     * between the teardown check and the record, which is why the record comes before the line that
+     * names it.
      *
      * @return {@code true} if the session failed after it came up, before session teardown began
      */

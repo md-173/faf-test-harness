@@ -55,16 +55,17 @@ public final class ExitCodes {
      * (WBS-3.1.3.3-fix, #445, and WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or
      * {@code ConnectToPeer} frame it could not read, an adapter that answered one of those calls
      * with an error or not within its timeout, or a match the server cancelled after {@code
-     * game_launch}. Read from {@code SessionVerdicts.sessionFailed()}. That session did run, but no
-     * subprocess died under it, which is what the two codes below are for. A call that failed
-     * because the adapter's connection closed is not this: the adapter is gone, which is {@link
-     * #ADAPTER_LOST}'s finding, although a run that such a failure ends still exits {@code 0} until
-     * that code can see it (#438).
+     * game_launch} and before the game started. Read from {@code SessionVerdicts.sessionFailed()}.
+     * That session did run, but no subprocess died under it, which is what the two codes below are
+     * for. A call that failed because the adapter's connection closed is not this: the adapter is
+     * gone, which is {@link #ADAPTER_LOST}'s finding, although a run that such a failure ends still
+     * exits {@code 0} until that code can see it (#438). A live adapter whose RPC stream stopped
+     * parsing fails its calls the same way, and until #452 that run exits {@code 0} too.
      *
      * <p>An unexpected exception in the bring-up is a defect rather than a finding, and ends the
      * run here too instead of leaving it waiting (WBS-3.1.3.3-fix, #439): as a launch that never
      * came up when it is thrown in the launch, and as a failed session when it is thrown in the
-     * host or join step.
+     * host, join or peer-connect step.
      */
     public static final int RUNTIME = 70;
 

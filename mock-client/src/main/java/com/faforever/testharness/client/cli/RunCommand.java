@@ -87,9 +87,9 @@ public final class RunCommand implements Callable<Integer> {
      *     adapter call answered with an error or not at all, a match the server cancelled); {@link
      *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
      *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
-     *     for. When more than one applies, {@link #sessionExitCode(boolean, boolean, boolean,
-     *     boolean, boolean, boolean, Logger)} orders them. Superseded by the signal's own exit code
-     *     whenever a signal is what ended the run, and then no verdict is logged.
+     *     for. When more than one applies, {@link #sessionExitCode(boolean, boolean,
+     *     SessionVerdicts, Logger)} orders them. Superseded by the signal's own exit code whenever
+     *     a signal is what ended the run, and then no verdict is logged.
      */
     @Override
     public Integer call() {
@@ -215,15 +215,7 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
-        SessionVerdicts verdicts = lifecycle.verdicts();
-        return sessionExitCode(
-                shuttingDown.get(),
-                lobbyDropped,
-                verdicts.launchFailed(),
-                verdicts.adapterLost(),
-                verdicts.gameCrashed(),
-                verdicts.sessionFailed(),
-                log);
+        return sessionExitCode(shuttingDown.get(), lobbyDropped, lifecycle.verdicts(), log);
     }
 
     /**
@@ -276,52 +268,44 @@ public final class RunCommand implements Callable<Integer> {
      * SessionTeardown} starts, and its death would then read as a finding (#437). The verdicts are
      * still computed, since the caller returns the code either way.
      *
-     * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
-     * takes the logger instead of holding one because this class obtains its logger only after
-     * {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
+     * <p>Static, so the precedence can be tested without a live session. It takes the lifecycle's
+     * verdicts whole rather than one flag each, so those tests also cover which verdict feeds which
+     * code. It takes the logger instead of holding one because this class obtains its logger only
+     * after {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
      *
      * @param shuttingDown whether the JVM is already shutting down, which while a run is live can
      *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
-     * @param launchFailed whether the session's ICE adapter or game never came up; {@link
-     *     SessionVerdicts#launchFailed()}
-     * @param adapterLost whether the ICE adapter died unaccounted for; {@link
-     *     SessionVerdicts#adapterLost()}
-     * @param gameCrashed whether the game process died unaccounted for; {@link
-     *     SessionVerdicts#gameCrashed()}
-     * @param sessionFailed whether the session failed after its adapter and game came up; {@link
-     *     SessionVerdicts#sessionFailed()}
+     * @param verdicts what the session's lifecycle found: a launch that never came up, a lost
+     *     adapter, a crashed game, a session that failed after it came up
      * @param log the configured logger, for the single line naming what is reported
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */
     static int sessionExitCode(
             final boolean shuttingDown,
             final boolean lobbyDropped,
-            final boolean launchFailed,
-            final boolean adapterLost,
-            final boolean gameCrashed,
-            final boolean sessionFailed,
+            final SessionVerdicts verdicts,
             final Logger log) {
         Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
             verdict.warn("lobby connection dropped unexpectedly");
             return ExitCodes.RUNTIME;
         }
-        if (launchFailed) {
+        if (verdicts.launchFailed()) {
             verdict.warn(
                     "the ICE adapter or game never came up; reporting it in this run's exit code");
             return ExitCodes.RUNTIME;
         }
-        if (adapterLost) {
+        if (verdicts.adapterLost()) {
             verdict.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
             return ExitCodes.ADAPTER_LOST;
         }
-        if (gameCrashed) {
+        if (verdicts.gameCrashed()) {
             verdict.warn(
                     "the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
         }
-        if (sessionFailed) {
+        if (verdicts.sessionFailed()) {
             verdict.warn(
                     "the session failed after its ICE adapter and game came up; reporting it in"
                             + " this run's exit code");

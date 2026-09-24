@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -150,6 +151,16 @@ final class PeerSessionWiringTest {
      */
     private ListAppender<ILoggingEvent> captured;
 
+    /**
+     * Captures the lifecycle's own lines, for the failures that must name themselves once; {@link
+     * #lines} reads it. {@link #captured} takes every logger's, for {@link #awaitLogged}.
+     */
+    private ListAppender<ILoggingEvent> appender;
+
+    private Logger lifecycleLogger;
+
+    private Level originalLevel;
+
     // The dummy launchers spawn a real placeholder subprocess; tests that stop short of TERMINATED
     // never reap them through SessionTeardown, so they are tracked and terminated here.
     private final List<DummyGameLauncher> gameLaunchers = new ArrayList<>();
@@ -157,6 +168,18 @@ final class PeerSessionWiringTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        // Pinned to DEBUG so the INFO line asserted below is logged whatever level the build or an
+        // earlier class left, and restored afterwards.
+        lifecycleLogger = context.getLogger(MockClientLifecycle.class);
+        originalLevel = lifecycleLogger.getLevel();
+        lifecycleLogger.setLevel(Level.DEBUG);
+        appender = new ListAppender<>();
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.setContext(context);
+        appender.start();
+        lifecycleLogger.addAppender(appender);
+
         server = new ScriptedWebSocketServer();
         server.startAndAwait();
 
@@ -164,7 +187,6 @@ final class PeerSessionWiringTest {
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
-        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         root = context.getLogger(Logger.ROOT_LOGGER_NAME);
         captured = new ListAppender<>();
         captured.list = new CopyOnWriteArrayList<>();
@@ -175,6 +197,9 @@ final class PeerSessionWiringTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        lifecycleLogger.detachAppender(appender);
+        appender.stop();
+        lifecycleLogger.setLevel(originalLevel);
         if (captured != null) {
             captured.stop();
             root.detachAppender(captured);
@@ -265,14 +290,18 @@ final class PeerSessionWiringTest {
         assertTrue(
                 failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
                 "a frame the client cannot read fails the session before TERMINATED (#445)");
+        assertEquals(
+                1,
+                lines(Level.WARN, "Could not connect to a peer").size(),
+                "one WARN must name the frame (#445): " + lines(Level.WARN, ""));
     }
 
     /**
      * The adapter refusing to set up the relay, with an error answer or none in time, is not
      * recoverable here: this session can never reach that peer, so it ends rather than sitting in
      * HOSTING looking healthy while the other side waits for candidates that will never come. The
-     * adapter was still connected, so it is a finding (#445), recorded before the asynchronous
-     * failure posts the event that ends the session.
+     * adapter was still connected, so it is a finding (#445), named by one WARN and recorded before
+     * the asynchronous failure posts the event that ends the session.
      *
      * @param errorAnswer whether the adapter answers with an error, rather than not in time
      */
@@ -291,11 +320,19 @@ final class PeerSessionWiringTest {
         assertTrue(
                 failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
                 "the verdict must be recorded before the session ends");
+        List<String> relayWarnings = relayWarnings();
+        assertEquals(1, relayWarnings.size(), "one WARN, for one failure (#445): " + relayWarnings);
+        assertTrue(
+                relayWarnings
+                        .get(0)
+                        .startsWith("Could not set up the peer relay for id=" + PEER_ID),
+                "the WARN must name the call: " + relayWarnings);
     }
 
     /**
      * A {@code connectToPeer} that fails because the adapter's connection closed still ends the
      * session, but records nothing (#445): the adapter is gone, and its own exit is the finding.
+     * The call is named at INFO, and no WARN comes without a verdict.
      */
     @Test
     void aClosedAdapterConnectionEndsTheSessionWithoutAVerdict() throws Exception {
@@ -310,6 +347,34 @@ final class PeerSessionWiringTest {
         assertFalse(
                 failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
                 "a closed connection is the adapter's finding, not the call's");
+        assertEquals(List.of(), relayWarnings(), "no WARN without a verdict (#445)");
+        assertEquals(
+                1,
+                lines(Level.INFO, "Could not set up the peer relay for id=" + PEER_ID).size(),
+                "one INFO line must still name the call: " + lines(Level.INFO, "Could not"));
+    }
+
+    /**
+     * An unchecked throw in {@code connectToPeer} ends the session too (#439), as one in {@code
+     * hostGame} or {@code joinGame} does. Contained by {@code Transition}, it left the session in
+     * HOSTING without this peer's relay and without a verdict, so this test would time out.
+     */
+    @Test
+    void anUncheckedThrowInConnectToPeerEndsTheSession() throws Exception {
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        adapter.setupCallThrow("connectToPeer", new IllegalStateException("boom"));
+        CompletableFuture<Boolean> failedAtCommit = sessionFailedAtCommit(lifecycle);
+
+        server.broadcastText(connectToPeer(PEER_LOGIN, PEER_ID, true) + "\n");
+
+        awaitState(lifecycle, ClientState.TERMINATED);
+        assertTrue(
+                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                "the throw must end the session with a verdict, not leave it in HOSTING");
+        assertEquals(
+                1,
+                lines(Level.ERROR, "Could not connect to a peer").size(),
+                "the defect must be logged once at ERROR: " + lines(Level.ERROR, ""));
     }
 
     @Test
@@ -424,7 +489,7 @@ final class PeerSessionWiringTest {
     @Test
     void adapterRejectingDisconnectFromPeerLeavesTheSessionRunning() throws Exception {
         MockClientLifecycle lifecycle = hostingLifecycle();
-        adapter.setupCallFail("disconnectFromPeer");
+        adapter.setupCallFail("disconnectFromPeer", new IceRpcException(-32000, "refused"));
 
         server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
 
@@ -654,6 +719,25 @@ final class PeerSessionWiringTest {
                 MAPPER.readTree(frame).path("command").asText(),
                 "unexpected frame reached the lobby: " + frame);
         return frame;
+    }
+
+    /**
+     * The lifecycle's lines at {@code level} that start with {@code prefix}, from any thread. Not
+     * filtered to this test's thread as {@code LifecycleSetupTest} filters its own: frames here
+     * arrive on the lobby connection's reader thread, and a failed call is judged on the async
+     * executor. No other unit test sends {@code ConnectToPeer}, so none logs these lines.
+     */
+    private List<String> lines(final Level level, final String prefix) {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == level)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(m -> m.startsWith(prefix))
+                .toList();
+    }
+
+    /** Every WARN about a peer relay, whatever its wording, so an extra one cannot hide. */
+    private List<String> relayWarnings() {
+        return lines(Level.WARN, "").stream().filter(m -> m.contains("peer relay")).toList();
     }
 
     /**

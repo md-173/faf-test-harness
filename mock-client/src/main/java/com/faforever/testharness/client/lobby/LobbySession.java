@@ -169,15 +169,6 @@ public final class LobbySession {
     }
 
     /**
-     * Whether the session's connection has already disconnected.
-     *
-     * @return {@code true} once a disconnect (of any kind) has fired
-     */
-    public boolean isDisconnected() {
-        return disconnected.getCount() == 0;
-    }
-
-    /**
      * The disconnect event, if the session has ended.
      *
      * @return the disconnect event, or empty if the connection is still live

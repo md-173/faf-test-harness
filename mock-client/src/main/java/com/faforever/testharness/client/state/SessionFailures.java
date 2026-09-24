@@ -187,8 +187,11 @@ final class SessionFailures {
         if (teardown.hasRun()) {
             LOG.debug("Could not {} during session teardown ({})", what, reason);
         } else {
-            LOG.warn("Could not {} ({})", what, reason);
+            // Recorded before the line, not after: connectToPeer's continuation gets here outside
+            // the FSM, where another route can end the session meanwhile. See
+            // SessionVerdicts.sessionFailed().
             verdict.run();
+            LOG.warn("Could not {} ({})", what, reason);
         }
         return new FailedTransitionException(reason, terminated);
     }

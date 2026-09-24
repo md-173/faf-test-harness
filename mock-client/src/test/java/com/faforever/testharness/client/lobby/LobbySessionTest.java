@@ -121,7 +121,6 @@ final class LobbySessionTest {
         LobbyConnection.DisconnectEvent event = session.awaitDisconnect();
 
         assertEquals(LobbyConnection.DisconnectReason.CLEAN_CLOSE, event.reason());
-        assertTrue(session.isDisconnected());
     }
 
     @Test
@@ -132,7 +131,6 @@ final class LobbySessionTest {
         LobbyConnection.DisconnectEvent event = session.awaitDisconnect();
 
         assertEquals(LobbyConnection.DisconnectReason.LOCAL_CLOSE, event.reason());
-        assertTrue(session.isDisconnected());
     }
 
     @Test

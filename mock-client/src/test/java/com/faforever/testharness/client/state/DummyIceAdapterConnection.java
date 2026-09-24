@@ -52,14 +52,6 @@ class DummyIceAdapterConnection extends IceAdapterConnection {
     }
 
     /**
-     * A {@link #call(final String method, final Object... params)} with {@code method} will result
-     * in an exceptional future.
-     */
-    public void setupCallFail(String method) {
-        setupCallFail(method, new IOException("Bad call"));
-    }
-
-    /**
      * A {@link #call(final String method, final Object... params)} with {@code method} will fail
      * with {@code failure}, the way the real connection fails it: an {@code IceRpcException} for an
      * error answer, a {@code TimeoutException} for none in time, an {@code IOException} for a
