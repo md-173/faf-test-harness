@@ -270,6 +270,7 @@ final class GpgNetConnectionLiveSmokeTest {
             awaitConstructorTail(adapterOutput);
 
             GpgNetSender sender = new GpgNetSender(conn);
+            sender.gameState("Idle");
 
             GpgNetFrame createLobby = awaitCreateLobby();
             // The 5th arg is hardcoded to 1 upstream (natTraversalProvider), so it is logged with
