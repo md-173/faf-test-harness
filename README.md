@@ -19,6 +19,20 @@ ICE signalling. **Mock Game** stands in for the Supreme Commander binary, the on
 component FAF has never replaced: it speaks the real GPGNet wire protocol to the adapter,
 simulates a match, and reports a result. Both are driven by flags and exit codes.
 
+## Contents
+
+- [What it can test](#what-it-can-test)
+- [How it fits together](#how-it-fits-together)
+- [Quick start](#quick-start)
+  - [Without a FAF account](#without-a-faf-account)
+  - [With FAF accounts: a full session](#with-faf-accounts-a-full-session)
+- [Running it in CI](#running-it-in-ci)
+- [Requirements and compatibility](#requirements-and-compatibility)
+- [Building from source](#building-from-source)
+- [Repository layout](#repository-layout)
+- [Documentation](#documentation)
+- [Contributing, licence and support](#contributing-licence-and-support)
+
 ## What it can test
 
 Every row is a shipped command or flag. The account column is what the row needs, not
@@ -57,10 +71,10 @@ flowchart LR
     MC <-->|"JSON-RPC, loopback"| IA
     MG <-->|"GPGNet, loopback"| IA
     IA <==>|"the games' UDP traffic, tunnelled"| PEER
-    LOBBY -.->|"ICE candidate relay"| PEER
+    LOBBY -.->|"ICE message relay"| PEER
 ```
 
-Every player's machine runs those same three processes. The lobby relays ICE candidates
+Every player's machine runs those same three processes. The lobby relays ICE messages
 during negotiation and never sees game traffic. The full symmetric version is in
 [`documentation/diagrams/architecture.md`](documentation/diagrams/architecture.md).
 
@@ -170,8 +184,12 @@ exit codes are [its own table](mock-client/README.md#exit-codes);
 
 ## Running it in CI
 
-The session above is the job a component maintainer runs unattended. This repository runs
-it on every dispatch in
+The session above is the job a component maintainer runs unattended. A scheduled run needs a
+credential that is still valid when it fires: a pre-signed access token minted by FAF's Hydra
+to outlive the schedule works, because the harness reads no expiry of its own, but an
+ordinary access token lasts about an hour and a refresh token is spent on first use (runbook
+[§11, The job](documentation/operations/harness-runbook.md#the-job)). This repository runs
+the session on every dispatch in
 [`.github/workflows/live-integration.yml`](.github/workflows/live-integration.yml), and
 [runbook §11](documentation/operations/harness-runbook.md#11-a-session-in-a-consumers-ci-wbs-421)
 is that job with the repository-specific parts removed, ready to copy. Two things differ
@@ -220,8 +238,13 @@ that makes it rather than the next release.
 
 ## Documentation
 
-- **Start here.** Setup, the no-lobby path, credentials, and running one client
-  session: [documentation/operations/harness-runbook.md](documentation/operations/harness-runbook.md)
+- **Start here.** Setup, the no-lobby path, credentials, running one client session,
+  troubleshooting ([§7](documentation/operations/harness-runbook.md#7-when-it-does-not-work)),
+  two-peer sessions ([§9](documentation/operations/harness-runbook.md#9-two-peer-sessions-wbs-431)),
+  fault injection ([§10](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52))
+  and a consumer's CI job
+  ([§11](documentation/operations/harness-runbook.md#11-a-session-in-a-consumers-ci-wbs-421)):
+  [documentation/operations/harness-runbook.md](documentation/operations/harness-runbook.md)
 - What can be tested in isolation, and which command or Gradle filter proves each
   seam: [documentation/operations/component-isolation.md](documentation/operations/component-isolation.md)
 - Mock Client subcommands, flags, config keys and exit codes:

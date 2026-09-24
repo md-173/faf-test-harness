@@ -85,7 +85,7 @@ flowchart LR
   which a run authenticating from a pre-signed access token never makes.
 - **Thick bidirectional arrow** (`IA <==> PIA`) carries the actual UDP
   game-simulation traffic. The lobby server deliberately never sees game
-  traffic — it only relays ICE candidates during negotiation.
+  traffic; it only relays ICE messages during negotiation.
 - **Peer node is drawn symmetrically** so it's visually obvious that the
   same three local components exist on every player's machine. A real
   session has N ≥ 1 peer nodes; only one is shown for readability.
