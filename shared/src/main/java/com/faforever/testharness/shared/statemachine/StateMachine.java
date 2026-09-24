@@ -78,6 +78,13 @@ public class StateMachine implements EventListener {
      * Gives a future that completes when the state is reached. If the state machine's current state
      * is {@code s} then the future completes immediately.
      *
+     * <p><b>Not resolved by {@link #cancel()}.</b> If {@code s} is never reached — including
+     * because {@link #cancel()} has stopped the time-based scheduling that would have reached it —
+     * the future returned here is left pending forever; {@code cancel()} does not complete, cancel,
+     * or otherwise resolve it. A caller that blocks on this future (e.g. with {@code get()}) must
+     * have some other bound, such as a timeout, if the state it names might not be reached
+     * (WBS-2.3.7-fix, #260).
+     *
      * @param s state to wait for.
      * @return a future that only completes when the state is reached.
      */
@@ -210,6 +217,16 @@ public class StateMachine implements EventListener {
      * shutdown path — it is terminal, so a later {@link #setTimeout(long, State)} arms nothing and
      * returns rather than throwing on the dead timer. Event-driven transitions via {@link
      * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     *
+     * <p><b>Does not touch {@link #awaitedStates}.</b> A future already handed out by {@link
+     * #stateReached(State)} for a state this machine never reaches is left pending forever — this
+     * method neither completes nor cancels it, and no future one taken after this call is resolved
+     * either. This is a known, deliberate gap (WBS-2.3.7-fix, #260): closing it by cancelling those
+     * futures here regressed the ordinary shutdown path (a JVM shutdown hook calling this from a
+     * thread with no transition in flight, racing the thread still parked on {@link
+     * #stateReached(State)}), so the omission is documented rather than papered over. Callers that
+     * block on a {@link #stateReached(State)} future for a state that might never be reached must
+     * bound that wait themselves.
      */
     public synchronized void cancel() {
         cancelled = true;
