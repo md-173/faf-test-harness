@@ -53,9 +53,10 @@ jobs:
 
       # A release is dispatched against an arbitrary commit, so nothing guarantees ci.yml ever ran
       # green on it: a release cut between a bad merge and its CI run used to ship unverified jars
-      # (#375). This applies the verification ci.yml applies to every pull request (`check` is the
-      # verification half of ci's `build`) at the moment it decides what ships. A failing step ends
-      # the job, so the checksum and release steps below never run and no draft or asset appears.
+      # (#375). This applies the verification ci.yml's build job applies to every pull request
+      # (`check` is the verification half of `build`) at the moment it decides what ships. A failing
+      # step ends the job, so the checksum and release steps below never run and no draft or asset
+      # appears.
       # FAForever does the same upstream: downlords-faf-client runs `check` before building its
       # release media, and java-ice-adapter, which this workflow is modelled on, runs its checks
       # before the shadowJar steps.

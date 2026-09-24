@@ -1,8 +1,9 @@
 # Live integration checks against the FAF test environment (WBS-2.3.3.1, #364).
 #
-# ci.yml runs ./gradlew build, which excludes every @Tag("integration") test, so nothing there
-# shows the client, adapter and game path working on a GitHub runner. This workflow does, and it is
-# the shape of the job a consumer (first: the java-ice-adapter maintainer) runs in their own CI.
+# ci.yml's build excludes every @Tag("integration") test, and its live-tests job (WBS-2.3.3.4) runs
+# only the four that need no lobby, so nothing there shows a session through the live lobby. This
+# workflow does, and it is the shape of the job a consumer (first: the java-ice-adapter maintainer)
+# runs in their own CI.
 # Two steps differ for them, and #87's runbook section carries that variant: they download the
 # mock-client and mock-game jars from releases/latest instead of building them here, and they point
 # --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
@@ -75,7 +76,9 @@ jobs:
       # authHandshakeYieldsTerminalReply) read .secrets/refresh_token*.txt: a refresh token rotates
       # on every use, so using one here would spend a developer's local copy. connectSucceeds needs
       # no credential and is worth running: it separates "this runner cannot reach the lobby at all"
-      # from a credential failure in the session job.
+      # from a credential failure in the session job. The four also run on every pull request, in
+      # ci.yml's live-tests job; they stay here so that one dispatch covers every live test CI runs,
+      # on any ref. Keep this list and that job's in step.
       - name: Run the live tests that need no account
         timeout-minutes: 20
         run: |

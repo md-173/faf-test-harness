@@ -78,7 +78,8 @@ subprojects {
 
 // --- faf-ice-adapter provisioning (WBS 3.1.4.4) ---
 // Fetches the pinned, headless (-nojfx) adapter jar that IceAdapterLauncher spawns. Deliberately
-// NOT wired into `build`/`check` so CI stays offline; run it explicitly on a fresh checkout:
+// NOT wired into `build`/`check`, so neither downloads it; run it explicitly on a fresh checkout,
+// as ci.yml's live-tests job does:
 //   ./gradlew downloadIceAdapter
 // The jar lands at ./faf-ice-adapter.jar — the launcher's default --ice-adapter-binary-path — and
 // is gitignored. See documentation/operations/ice-adapter-setup.md.

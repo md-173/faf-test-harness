@@ -105,23 +105,24 @@ The `mock-game` `test` task clamps the level instead (set in `mock-game/build.gr
 
 ### What CI runs on every PR
 
-Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
+Three GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
 - **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
+- **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
-Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
+`build` and `dependency-submission` are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
 
 ### The live integration workflow (manual, advisory)
 
 `.github/workflows/live-integration.yml` runs what `build` excludes: the `integration`-tagged tests that hit the live FAF test environment and launch the real `faf-ice-adapter`. It runs **only on manual dispatch** (`gh workflow run "Live integration (advisory)"`) and is **never a required check**, because the shared test lobby's availability is outside our control, so a failure there is a finding rather than a merge blocker. It is also the job a consumer (first: the java-ice-adapter maintainer) copies into their own CI.
 
-- **`live-tests`** provisions the pinned adapter jar and runs the live tests that need no FAF account: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest`, `LobbyConnectionLiveSmokeTest.connectSucceeds` and mock-game's `GpgNetConnectionLiveSmokeTest`. It then checks the JUnit XML, because Gradle fails a `--tests` filter only when *no* pattern matched anything, so a renamed class would otherwise be skipped silently.
+- **`live-tests`** provisions the pinned adapter jar and runs the live tests that need no FAF account: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest`, `LobbyConnectionLiveSmokeTest.connectSucceeds` and mock-game's `GpgNetConnectionLiveSmokeTest`. It then checks the JUnit XML, because Gradle fails a `--tests` filter only when *no* pattern matched anything, so a renamed class would otherwise be skipped silently. All but `connectSucceeds` also run on every pull request, in `ci.yml`'s `live-tests` job; they stay here so that one dispatch covers every live test CI runs, on any ref.
 - **`session`** runs `mock-client session --peers=2` from the release jars, one CI-only account per peer: the whole client, adapter and game path in a single verdict.
 
 Two things are worth knowing before you touch it:
 
-- **`FAF_LIVE_REQUIRED=true` turns a self-skip into a failure.** The live tests skip when a binary or credential is missing, which would let a misprovisioned CI run pass having tested nothing; under that variable each one fails instead, naming what it lacks. The workflow sets it. Leave it unset locally and `./gradlew integrationTest` keeps skipping exactly as before.
+- **`FAF_LIVE_REQUIRED=true` turns a self-skip into a failure.** The live tests skip when a binary or credential is missing, which would let a misprovisioned CI run pass having tested nothing; under that variable each one fails instead, naming what it lacks. Both workflows set it. Leave it unset locally and `./gradlew integrationTest` keeps skipping exactly as before.
 - **Credentials are per-peer and CI-only.** CI's accounts are never used by a local live run, because a second login as the same account signs the first out, fatally; the `concurrency` group is keyed on those accounts rather than on the branch for the same reason.
   - The job reads `FAF_CI_ACCESS_TOKEN_C` and `FAF_CI_ACCESS_TOKEN_D`, one pre-signed access token per peer, and passes each to `session --peer-access-token-file`. Nothing is exchanged at runtime, so the workflow passes no OAuth endpoint or client flag at all. Set them with `scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name>` right before a dispatch; its `--dry-run` prints the token's subject, scopes and expiry without setting anything. Minting spends one Hydra rotation, but the script writes the rotated refresh token back to your file before it sets the secret, so the accounts do not need re-bootstrapping after a run the way they did when the runner consumed them. If a response ever carries no rotated token the script says so and leaves your file alone, which is the one case that still costs a bootstrap.
   - **Mint after the queue clears, not before.** A token is short-lived, and the script and the job both print its real expiry rather than leaving you to assume one. The `concurrency` group allows one running and one pending dispatch, so a run that waits behind another can outlive the token it was given. The job's first step decodes each token's `exp` and refuses an already-expired one in seconds, naming the secret and how long ago it lapsed; under fifteen minutes it warns and continues, since the session does not log in until after the build. One that expires mid-run still fails at the lobby, with the rejection in the evidence step.
@@ -351,10 +352,10 @@ assets.
    file: `workflow_dispatch` runs the copy of `release.yml` on the branch selected, so a branch whose
    copy predates a change simply runs the older workflow, gate and all.
 3. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
-   -Pversion=<version> check`, the verification `ci.yml` applies to every pull request (`check` is
-   the verification half of ci's `build`), because a release is dispatched at an arbitrary commit and
-   nothing else guarantees CI ran green on it. If it fails, no draft and no assets are created, so
-   re-running the failed job is safe: nothing was tagged or published.
+   -Pversion=<version> check`, the verification `ci.yml`'s `build` job applies to every pull
+   request (`check` is the verification half of `build`), because a release is dispatched at an
+   arbitrary commit and nothing else guarantees CI ran green on it. If it fails, no draft and no
+   assets are created, so re-running the failed job is safe: nothing was tagged or published.
    A red gate is not to be worked around. If it is a known flake rather than a real failure (the
    lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
    its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.

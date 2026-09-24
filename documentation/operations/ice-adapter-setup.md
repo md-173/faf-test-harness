@@ -74,9 +74,10 @@ EOF
 ```
 
 `downloadIceAdapter` is idempotent: a re-run verifies the existing jar's SHA-256 and skips the
-download. It is deliberately **not** wired into `build`/`check`, so CI stays offline; run it
-explicitly. The jar lands at `./faf-ice-adapter.jar`, which is the launcher's default
-`--ice-adapter-binary-path`, so `launch-ice` / `run` find it with no extra config.
+download. It is deliberately **not** wired into `build`/`check`, so neither downloads it; run it
+explicitly, as `ci.yml`'s `live-tests` job does. The jar lands at `./faf-ice-adapter.jar`, which
+is the launcher's default `--ice-adapter-binary-path`, so `launch-ice` / `run` find it with no
+extra config.
 
 `launch-ice` needs no lobby or OAuth flags: it opens no lobby connection, so it validates only the
 adapter settings (WBS-3.1.5.2-fix, #308). It does attach a JSON-RPC peer and hold it open for the
@@ -187,7 +188,10 @@ below):
 
 STUN/TURN configuration (`setIceServers`, arrives later), actual ICE negotiation / peer
 connectivity (needs peers — R71 / multi-peer), and CI integration of the adapter (decide
-separately). This task only provisions the binary and proves it binds + answers `status` headless.
+separately: now done, and
+[`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#3-local-formatting-and-verification) says which live
+tests run on pull requests and which on dispatch). This task only provisions the binary and proves
+it binds + answers `status` headless.
 
 ## Sources
 
