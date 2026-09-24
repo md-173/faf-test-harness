@@ -84,12 +84,13 @@ public final class RunCommand implements Callable<Integer> {
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
      *     could not be established, its ICE adapter or game never came up, the connection dropped
      *     unexpectedly, or the session failed after it came up (a lobby frame it could not read, an
-     *     adapter call answered with an error or not at all, a match the server cancelled); {@link
-     *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
-     *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
-     *     for. When more than one applies, {@link #sessionExitCode(boolean, boolean,
-     *     SessionVerdicts, Logger)} orders them. Superseded by the signal's own exit code whenever
-     *     a signal is what ended the run, and then no verdict is logged.
+     *     adapter call answered with an error or not at all, an adapter still running without its
+     *     JSON-RPC link, a match the server cancelled); {@link ExitCodes#ADAPTER_LOST} if the
+     *     session ran but its ICE adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if
+     *     the session ran but its game process died unaccounted for. When more than one applies,
+     *     {@link #sessionExitCode(boolean, boolean, SessionVerdicts, Logger)} orders them.
+     *     Superseded by the signal's own exit code whenever a signal is what ended the run, and
+     *     then no verdict is logged.
      */
     @Override
     public Integer call() {
