@@ -84,6 +84,14 @@ jobs:
   # server cannot fail them. No FAF account, lobby or secret decides the verdict, so the job runs
   # on every pull request, forks included.
   #
+  # Treated as a gate: under CONTRIBUTING.md section 4 a pull request is ready to merge only when
+  # every CI check is green, this one included. It was measured first, on #458 (2026-09-24): 30 of
+  # 30 runs passed, each 49 to 75 s beside build's roughly 4 minutes. That still allows a flake rate
+  # of up to about 6.7% (one-sided 95%, counting 13 earlier passes of live-integration.yml's
+  # live-tests), so if this job goes red on two pull requests for reasons unrelated to their
+  # change, it becomes advisory (continue-on-error, and CONTRIBUTING.md section 3 says so) and the
+  # flake gets a fix card.
+  #
   # live-integration.yml runs the same four on dispatch too, so that one dispatch still covers
   # every live test CI runs, on any ref. Keep its class list and the ones below in step: a list
   # left stale after a rename fails that workflow's check.
