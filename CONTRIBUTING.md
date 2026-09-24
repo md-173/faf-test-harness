@@ -108,7 +108,7 @@ The `mock-game` `test` task clamps the level instead (set in `mock-game/build.gr
 Three GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
 - **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
-- **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. To reproduce it locally, run `./gradlew downloadIceAdapter` once, then the Gradle command from the job's `Run the live tests that need no lobby` step with `FAF_LIVE_REQUIRED=true` in the environment. Without that variable a missing jar skips all four and the run still looks green. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days. Under [Section 4](#4-pull-requests) a PR is ready to merge only when every CI check is green, `live-tests` included. It was measured before it gated: 30 of 30 job runs passed on #458 (2026-09-24), in three rounds of ten legs, each taking 49 to 75 s beside `build`'s roughly 4 minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of the live integration workflow's `live-tests` (one-sided 95%), so if it goes red on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory, with a job-level `continue-on-error` and a note here exempting it from Section 4's all-green rule, and the flake gets a fix card.
+- **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. To reproduce it locally, run `./gradlew downloadIceAdapter` once, then the Gradle command from the job's `Run the live tests that need no lobby` step with `FAF_LIVE_REQUIRED=true` in the environment. Without that variable a missing jar skips all four and the run still looks green. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days. The Release workflow runs the same job before it builds anything ([Section 8](#8-releases)). Under [Section 4](#4-pull-requests) a PR is ready to merge only when every CI check is green, `live-tests` included. It was measured before it gated: 30 of 30 job runs passed on #458 (2026-09-24), in three rounds of ten legs, each taking 49 to 75 s beside `build`'s roughly 4 minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of the live integration workflow's `live-tests` (one-sided 95%), so if it goes red on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory, with a job-level `continue-on-error` and a note here exempting it from Section 4's all-green rule, and the flake gets a fix card.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
 `build` and `dependency-submission` are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
@@ -336,9 +336,10 @@ assets.
    (advisory) → Run workflow, with "Use workflow from" set to that branch, and the two
    access-token secrets minted beforehand and deleted after (§ 3). `workflow_dispatch` takes a
    branch or a tag, never a bare commit, so confirm the tip is still the commit you mean and
-   re-dispatch if it moves before step 2. The gate in step 3 runs `check`, which excludes the
-   `integration` tag, so nothing else in this procedure says whether the client, adapter and game
-   still complete a session against the real lobby. It builds its own snapshot jars from source
+   re-dispatch if it moves before step 2. The gate in step 3 runs `check` and the four lobby-free
+   live tests, none of which reach the lobby, so nothing else in this procedure says whether the
+   client, adapter and game still complete a session against the real lobby. It builds its own
+   snapshot jars from source
    rather than the release assets, so it does not replace the draft checks in step 4. Green alone is
    not the verdict: the evidence step must emit no warning, which is what shows two `faf-uid` lines
    and two distinct logins. A red run stops the cut until you know which kind it is: the shared lobby
@@ -353,12 +354,15 @@ assets.
    copy predates a change simply runs the older workflow, gate and all.
 3. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
    -Pversion=<version> check`, the verification `ci.yml`'s `build` job applies to every pull
-   request (`check` is the verification half of `build`), because a release is dispatched at an
-   arbitrary commit and nothing else guarantees CI ran green on it. If it fails, no draft and no
-   assets are created, so re-running the failed job is safe: nothing was tagged or published.
-   A red gate is not to be worked around. If it is a known flake rather than a real failure (the
-   lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
-   its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.
+   request (`check` is the verification half of `build`), and, in a read-only `live-tests` job the
+   release job waits on, the four lobby-free live tests that `ci.yml`'s `live-tests` job runs. A
+   release is dispatched at an arbitrary commit and nothing else guarantees CI ran green on it. If
+   either fails, no draft and no assets are created, so re-running is safe: nothing was tagged or
+   published. A red gate is not to be worked around. If it is a known flake rather than a real
+   failure (the lobby tests occasionally time out waiting for a frame, see § 3; the live tests'
+   first-frame race, see the triage note in `ci.yml`), re-run the failed jobs and let them pass on
+   their own; a skipped release job re-runs with them. Both jobs upload their evidence on failure,
+   as `ci.yml` does.
 4. **Check the draft before publishing.** It must carry exactly four assets:
    `mock-client-<version>-all.jar`, `mock-game-<version>-all.jar`, and a `.sha256` for each. Download
    them and confirm the checksums:
