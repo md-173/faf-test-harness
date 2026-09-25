@@ -29,6 +29,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -194,6 +196,10 @@ final class LaunchIceCommandTest {
     }
 
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void stubAdapterRunsForTheWindowThenTerminatesAndLogsExitCode() throws Exception {
         Path stub = createSleepingStub();
 
@@ -215,6 +221,10 @@ final class LaunchIceCommandTest {
      * it is reported and attributed rather than logged at INFO alongside a healthy-looking run.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void theAttachedRpcPeerIsReported() throws Exception {
         Path stub = createSleepingStub();
 
@@ -233,6 +243,10 @@ final class LaunchIceCommandTest {
      * that connects to it.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterWithNoRpcPortExitsRuntime() throws Exception {
         Path stub = createSleepingStub();
 
@@ -270,6 +284,10 @@ final class LaunchIceCommandTest {
      * tie passes; a reordering moves the close after process teardown and is caught.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void thePeerIsClosedBeforeTheAdapterIsTerminated() throws Exception {
         Path pidFile = tempDir.resolve("stub.pid");
         // Takes a second to die on SIGTERM, so "the adapter was still alive" has a wide margin
@@ -309,6 +327,10 @@ final class LaunchIceCommandTest {
      * exit code is the defect.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterThatDiesBeforeThePeerAttachesReportsItsExitCode() throws Exception {
         Path stub = createStub("#!/bin/sh\necho ICE-ADAPTER-STUB-UP\nexit 3\n");
 

@@ -13,6 +13,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * Covers {@link SessionTeardown}'s quit-first adapter termination (WBS-3.1.2.5): while the RPC
@@ -26,6 +28,9 @@ import org.junit.jupiter.api.Timeout;
  * test tell "died because quit landed" apart from "died because SIGTERM landed".
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class SessionTeardownAdapterQuitTest {
 
     private ScriptedJsonRpcServer server;

@@ -28,6 +28,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -38,6 +40,9 @@ import org.slf4j.MDC;
  * verified directly; spawn / capture / terminate are exercised against the stub.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class MockGameLauncherTest {
 
     private static final int AWAIT_SECONDS = 10;
