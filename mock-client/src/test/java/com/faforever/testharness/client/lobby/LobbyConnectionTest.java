@@ -296,6 +296,67 @@ final class LobbyConnectionTest {
     }
 
     @Test
+    void closeAfterTheServerClosedCompletesNormally() throws Exception {
+        // #390: the live lobby answers a placeholder unique_id with {"command":"invalid"} and
+        // closes. The JDK replies to that Close frame on its own, so this side's output is already
+        // shut by the time the caller closes, and sendClose fails with "Output closed".
+        lobby = new LobbyConnection(server.uri());
+        List<DisconnectEvent> disconnects = new CopyOnWriteArrayList<>();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        lobby.onDisconnect(
+                event -> {
+                    disconnects.add(event);
+                    disconnected.countDown();
+                });
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        server.broadcastText("{\"command\":\"invalid\"}");
+        server.closeAllClean(1000, "");
+        // Both, because neither implies the other. The server sees the connection close only once
+        // the client's own Close frame arrives, so past the first the client's output is shut; the
+        // second is the client's listener having seen the server's close. Waiting on both makes
+        // the close below the caller who arrives after everything, which is the #390 shape.
+        server.awaitFirstClientGone();
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener never fired");
+
+        lobby.close().get(2, TimeUnit.SECONDS);
+
+        // Not relabelled LOCAL_CLOSE, and not fired twice: the server's close is what happened.
+        assertEquals(1, disconnects.size(), "expected exactly one disconnect: " + disconnects);
+        assertEquals(DisconnectReason.CLEAN_CLOSE, disconnects.get(0).reason());
+    }
+
+    @Test
+    void closeIsIdempotent() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        lobby.close().get(2, TimeUnit.SECONDS);
+        // The first close shut the output, so this one has nothing to send.
+        lobby.close().get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void closeWithAnInvalidStatusCodeStillFails() throws Exception {
+        // The already-closed tolerance must not swallow every failure. The WebSocket API rejects
+        // 1005 as an outgoing code before touching the output, so the output is still open and
+        // the rejection has to reach the caller.
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        ExecutionException thrown =
+                assertThrows(
+                        ExecutionException.class,
+                        () -> lobby.close(1005, "").get(2, TimeUnit.SECONDS));
+        assertTrue(
+                thrown.getCause() instanceof IllegalArgumentException,
+                "expected the status-code rejection, got: " + thrown.getCause());
+    }
+
+    @Test
     void abruptCloseSurfacesAsAbruptCloseDisconnect() throws Exception {
         lobby = new LobbyConnection(server.uri());
         CountDownLatch disconnected = new CountDownLatch(1);
