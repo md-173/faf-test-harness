@@ -399,9 +399,7 @@ single-line error and exit code `70` — no stack trace.
 Obtain the JAR by building it from upstream
 [`FAForever/java-ice-adapter`](https://github.com/FAForever/java-ice-adapter)
 or downloading a release artifact, then either drop it next to the Mock Client
-as `faf-ice-adapter.jar` (the default) or point the config at it. In the Docker
-workspace the image is expected to bake it in (`subprocess-orchestration-spec`
-§2.2).
+as `faf-ice-adapter.jar` (the default) or point the config at it.
 
 ### Providing the mock-game binary
 
@@ -416,8 +414,8 @@ error and exit code `70`.
 
 Build the binary from the repo root with `./gradlew :mock-game:installDist`;
 the harness then "just works" when invoked from the repo root with the default.
-Override the path only when the layout differs (e.g. a Docker image baking the
-binary in at a fixed location).
+Override the path only when the layout differs (e.g. pointing it at the
+`mock-game` release jar).
 
 ### `launch-ice` — spawn faf-ice-adapter and hold it up
 
