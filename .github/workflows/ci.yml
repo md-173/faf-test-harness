@@ -13,6 +13,12 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# One run per pull request at a time: a newer push cancels the run of the commit it replaces. A push
+# to main is keyed on its own commit and never cancels, so every merge still gets its own full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
 
@@ -78,7 +84,8 @@ jobs:
   # because its session needs access tokens minted by hand, and is advisory, because the shared
   # lobby it logs into is outside our control. These four need neither. The adapter jar is pinned
   # and checksummed, ClientGameLifecycleLiveTest runs its own scripted lobby, and the other three
-  # open no lobby connection at all. The adapter does dial FAF's telemetry server, but only after
+  # open no lobby connection at all. The adapter does dial a telemetry server, FAF's test one
+  # (IceAdapterLauncher passes --telemetry-server wss://ice-telemetry.faforever.xyz), but only after
   # its GPGNet and RPC servers start, and it drops its telemetry debugger if that connect fails
   # (3.3.14: IceAdapter.start, TelemetryDebugger.startupComplete), so an unreachable telemetry
   # server cannot fail them. No FAF account, lobby or secret decides the verdict, so the job runs
@@ -174,13 +181,16 @@ jobs:
           mock-client:com.faforever.testharness.client.state.ClientGameLifecycleLiveTest \
           mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
 
-    # Failure only, as for build: a green run has nothing to explain. The JSONL logs are what makes
-    # a live failure readable (the adapter's and the game's captured output next to the client's
-    # own lines), and the glob keeps rolled archives (.jsonl.<date>.<n>.gz) too, since mock-client's
-    # integrationTest logs at DEBUG. Not build's test-reports-* name: artifact names are unique
-    # within a run, so if both jobs failed, the second upload would be refused.
+    # On failure or cancellation: a green run has nothing to explain, but a job that hits its own
+    # timeout-minutes ends cancelled rather than failed, and a hang is where the evidence matters
+    # most. The step timeouts add up to more than the job's, so that cap can fire first. The JSONL
+    # logs are what makes a live failure readable (the adapter's and the game's captured output
+    # next to the client's own lines), and the glob keeps rolled archives (.jsonl.<date>.<n>.gz)
+    # too, since mock-client's integrationTest logs at DEBUG. Not build's test-reports-* name:
+    # artifact names are unique within a run, so if both jobs failed, the second upload would be
+    # refused.
     - name: Upload test reports and JSONL logs
-      if: failure()
+      if: failure() || cancelled()
       uses: actions/upload-artifact@v7
       timeout-minutes: 5
       with:

@@ -109,13 +109,14 @@ jobs:
             mock-client:com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest \
             mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
 
-      # Failure only, as in ci.yml: a green run has nothing to explain. The JSONL logs are what
+      # On failure or cancellation, as in ci.yml: a green run has nothing to explain, and a job that
+      # hits its own timeout-minutes ends cancelled rather than failed. The JSONL logs are what
       # makes a live failure readable (the adapter's and the game's captured output next to the
       # client's own lines), and the runner is destroyed with them otherwise. The glob keeps rolled
       # archives (.jsonl.<date>.<n>.gz) too, since this task logs at DEBUG. Nothing in this job
       # holds a credential: the tests it runs have no account.
       - name: Upload test reports and JSONL logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
@@ -468,9 +469,10 @@ jobs:
 
       # Only the session's own JSONL logs: the client's lines with every adapter's and game's
       # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are
-      # deleted above, so no path here can reach them.
+      # deleted above, so no path here can reach them. Cancellation counts, as in the runbook's
+      # consumer job: a run that hits the job's timeout-minutes ends cancelled, not failed.
       - name: Upload the session logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
