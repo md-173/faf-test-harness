@@ -18,9 +18,12 @@ final class StateMachineCancelTest {
         State a = new State("A");
         State c = new State("C");
         StateMachine machine = new StateMachine(a);
-        machine.setTimeout(150, c);
-
-        machine.cancel();
+        // Armed and cancelled under the machine's monitor, which UpdateStateTask.run also takes, so
+        // the timeout cannot fire first however late this thread runs (#380).
+        synchronized (machine) {
+            machine.setTimeout(150, c);
+            machine.cancel();
+        }
 
         Thread.sleep(300); // well past the 150ms timeout — it must not have fired
         assertSame(a, machine.getState(), "cancel() should stop the scheduled timeout");

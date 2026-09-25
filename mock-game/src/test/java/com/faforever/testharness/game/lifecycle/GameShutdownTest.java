@@ -153,9 +153,12 @@ final class GameShutdownTest {
         State idle = new State("A");
         State ended = new State("B");
         StateMachine fsm = new StateMachine(idle);
-        fsm.setTimeout(150, ended);
-
-        new GameShutdown(fsm, null).run();
+        // Armed and shut down under the machine's monitor, which the timer thread needs in order to
+        // commit, so the timeout cannot fire first however late this thread runs (#380).
+        synchronized (fsm) {
+            fsm.setTimeout(150, ended);
+            new GameShutdown(fsm, null).run();
+        }
 
         Thread.sleep(300); // past the 150ms timeout — it must not fire after shutdown
         assertSame(idle, fsm.getState(), "shutdown must cancel the FSM's scheduled timeout");
