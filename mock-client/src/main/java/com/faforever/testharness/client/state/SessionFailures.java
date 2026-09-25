@@ -100,7 +100,8 @@ final class SessionFailures {
     }
 
     /**
-     * A launch that never came up (#437), recorded as {@link SessionVerdicts#launchFailed()}.
+     * A launch that never came up (#437), a {@code game_launch} the client could not use among them
+     * (#457), recorded as {@link SessionVerdicts#launchFailed()}.
      *
      * @param what the action that failed, for the log line
      * @param reason why it failed

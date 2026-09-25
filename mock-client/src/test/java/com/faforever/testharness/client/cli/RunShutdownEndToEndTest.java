@@ -78,6 +78,12 @@ final class RunShutdownEndToEndTest {
             "{\"command\":\"welcome\",\"me\":{\"id\":7,\"login\":\"MockPlayer\"},"
                     + "\"current_time\":\"2026-09-23T00:00:00Z\"}";
 
+    /** A custom game's launch whose args carry a slash flag the client does not allow (#457). */
+    private static final String UNUSABLE_GAME_LAUNCH =
+            "{\"command\":\"game_launch\",\"uid\":4243,\"mod\":\"faf\",\"name\":\"unusable\","
+                    + "\"game_type\":\"custom\",\"rating_type\":\"global\",\"init_mode\":0,"
+                    + "\"args\":[\"/numgames\",0,\"/newflag\"]}";
+
     /** A custom game's launch, carrying every field the handler requires. */
     private static final String GAME_LAUNCH =
             "{\"command\":\"game_launch\",\"uid\":4242,\"mod\":\"faf\",\"name\":\"shutdown"
@@ -195,6 +201,44 @@ final class RunShutdownEndToEndTest {
                 "nothing may warn about the handshake once the session has ended: " + warnings);
         assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
         assertEquals(List.of(), verdicts(records), "a session that never opened names no verdict");
+    }
+
+    /**
+     * A {@code game_launch} the client cannot use ends the run with {@code 70} (WBS-3.1.1.6-fix,
+     * #457), where the frame used to be dropped with a WARN and the run left idle until killed. One
+     * line names what is wrong with the frame, the launch's verdict follows, nothing is logged at
+     * ERROR, and teardown closes the lobby cleanly.
+     */
+    @Test
+    void aGameLaunchTheClientCannotUseExits70() throws Exception {
+        startRunAndReachIdle();
+
+        lobby.broadcastText(UNUSABLE_GAME_LAUNCH);
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(
+                List.of(
+                        "Could not read the game_launch frame (game_launch.args contains unknown"
+                                + " slash-flag: /newflag)"),
+                messages(records).stream().filter(m -> m.startsWith("Could not")).toList(),
+                "one line must name what is wrong with the frame: " + messages(records));
+        assertEquals(
+                List.of(
+                        "the ICE adapter or game never came up; reporting it in this run's exit"
+                                + " code"),
+                verdicts(records),
+                "exactly one verdict, the launch's: " + messages(records));
+        assertTrue(
+                messagesAt(records, "WARN").stream()
+                        .noneMatch(m -> m.startsWith("No matching transitions")),
+                "no stray WARN: " + messages(records));
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+        assertNoErrors(records);
+        assertEquals(
+                1000,
+                lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
+                "teardown must close the lobby cleanly");
     }
 
     /**

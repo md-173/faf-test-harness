@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -37,6 +38,7 @@ final class GameLaunchWiringTest {
     @Test
     void handlerRegisteredOnConnectionReceivesGameConfig() throws Exception {
         AtomicReference<GameConfig> sink = new AtomicReference<>();
+        AtomicReference<String> rejection = new AtomicReference<>();
         CountDownLatch fired = new CountDownLatch(1);
 
         lobby = new LobbyConnection(server.uri());
@@ -45,6 +47,10 @@ final class GameLaunchWiringTest {
                         MAPPER,
                         cfg -> {
                             sink.set(cfg);
+                            fired.countDown();
+                        },
+                        reason -> {
+                            rejection.set(reason);
                             fired.countDown();
                         });
         lobby.registerHandler("game_launch", handler);
@@ -64,6 +70,7 @@ final class GameLaunchWiringTest {
                         + "}\n");
 
         assertTrue(fired.await(3, TimeUnit.SECONDS), "handler sink never fired");
+        assertNull(rejection.get(), "a valid frame must not be rejected");
         GameConfig cfg = sink.get();
         assertEquals(11, cfg.uid());
         assertEquals("faf", cfg.mod());

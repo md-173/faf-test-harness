@@ -396,6 +396,7 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendConfiguredIntentOnFirstIdle);
         registerMatchmakingQueueTransitions();
+        registerLaunchRejectedTransitions();
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -570,6 +571,33 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * Registers the edges for a {@code game_launch} this client cannot use (WBS-3.1.1.6-fix, #457):
+     * one that fails to decode, or that {@link
+     * com.faforever.testharness.client.lobby.GameLaunchValidator} refuses. It ends the session as a
+     * failed launch from the two states a {@code game_launch} is accepted in, IDLE after {@code
+     * game_host} or {@code game_join} and SEARCHING for a matched game.
+     *
+     * <p>The frame used to be dropped with a WARN and nothing else, leaving the run waiting for a
+     * launch it had already received: in IDLE for good, and in SEARCHING until faf-server's {@code
+     * wait_hosted(60)} or {@code wait_launched} timed out and its {@code match_cancelled} returned
+     * the client to IDLE. A lobby that answers with a {@code game_launch} the client cannot use has
+     * regressed, and a run gating on the exit status has to see it.
+     *
+     * <p>No other state gets the edge, as none gets one for {@link LaunchGame}: faf-server writes
+     * {@code game_launch} only to a player who is idle or starting a matched game.
+     */
+    private void registerLaunchRejectedTransitions() {
+        for (var s : List.of(ClientState.IDLE, ClientState.SEARCHING)) {
+            states.get(s)
+                    .registerTransition(
+                            LaunchRejected.class,
+                            states.get(ClientState.TERMINATED),
+                            this::rejectLaunch,
+                            null);
+        }
+    }
+
+    /**
      * Registers the peer-setup edges (#218): a {@code ConnectToPeer} from the lobby is accepted
      * while hosting and while joining alike.
      *
@@ -735,6 +763,10 @@ public final class MockClientLifecycle {
      * CONNECTING to TERMINATED by the time the handshake's failure is posted, and it used to log
      * the framework's WARN after the session had ended. It is a self-loop as well, so it cannot
      * re-run teardown either.
+     *
+     * <p>{@link MatchCancelled} does too (WBS-3.1.1.6-fix, #457): a matched guest whose launch
+     * failed, or that rejected its {@code game_launch}, has already ended its session when
+     * faf-server's cancellation arrives; see {@link #logMatchCancelledAfterTeardown}.
      */
     private void registerPostTeardownExitTransitions() {
         states.get(ClientState.TERMINATED)
@@ -755,6 +787,12 @@ public final class MockClientLifecycle {
                         states.get(ClientState.TERMINATED),
                         this::logHandshakeFailureAfterTeardown,
                         null);
+        states.get(ClientState.TERMINATED)
+                .registerTransition(
+                        MatchCancelled.class,
+                        states.get(ClientState.TERMINATED),
+                        this::logMatchCancelledAfterTeardown,
+                        null);
     }
 
     /**
@@ -766,7 +804,9 @@ public final class MockClientLifecycle {
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         GameLaunchHandler launchHandler =
                 new GameLaunchHandler(
-                        mapper, message -> machine.receiveEvent(new LaunchGame(message)));
+                        mapper,
+                        message -> machine.receiveEvent(new LaunchGame(message)),
+                        reason -> machine.receiveEvent(new LaunchRejected(reason)));
         lobby.registerHandler("game_launch", launchHandler::onMessage);
         lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
         lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
@@ -1424,6 +1464,22 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * TERMINATED no-op action for {@link MatchCancelled} (WBS-3.1.1.6-fix, #457). When a match's
+     * host fails to host in time, faf-server's {@code launch_match} still sends each guest its
+     * {@code game_launch}, from a {@code finally}, and then {@code match_cancelled}. A guest whose
+     * launch failed, or that rejected the frame, has already ended its session, and its failure is
+     * the one reported. Logged at debug level only, and does not re-run teardown.
+     *
+     * @param message the {@link MatchCancelled} event; guaranteed by registration, never anything
+     *     else.
+     */
+    private void logMatchCancelledAfterTeardown(Event message) {
+        LOG.debug(
+                "match_cancelled after the session ended (game_id={})",
+                ((MatchCancelled) message).command().path("game_id").asText("null"));
+    }
+
+    /**
      * TERMINATED no-op action for {@link AdapterExited} (#252): teardown kills the ICE adapter,
      * whose exit is then reported on a session that has already torn down. Logged at debug level
      * only and does not re-run teardown.
@@ -1816,6 +1872,19 @@ public final class MockClientLifecycle {
     private void onMatchCancelledAfterLaunch(Event message) {
         JsonNode command = ((MatchCancelled) message).command();
         failures.matchCancelled(command.path("game_id").asText("null"));
+    }
+
+    /**
+     * {@link LaunchRejected} transition action from IDLE and SEARCHING (WBS-3.1.1.6-fix, #457):
+     * fails the launch through {@link SessionFailures#launch}, which records {@link
+     * SessionVerdicts#launchFailed()} and names the reason in one WARN, or only logs it at DEBUG
+     * once teardown has started. Nothing has been launched, so teardown only closes the lobby.
+     *
+     * @param event the {@link LaunchRejected} event; guaranteed by registration.
+     * @throws FailedTransitionException always, which takes the session to TERMINATED.
+     */
+    private void rejectLaunch(Event event) throws FailedTransitionException {
+        throw failures.launch("read the game_launch frame", ((LaunchRejected) event).reason());
     }
 
     /**

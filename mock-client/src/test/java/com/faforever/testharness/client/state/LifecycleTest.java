@@ -291,6 +291,31 @@ final class LifecycleTest {
     }
 
     /**
+     * A {@code match_cancelled} that arrives once a rejected {@code game_launch} has ended the
+     * session is not a warning (#457). faf-server sends a matched guest both frames back to back
+     * when the host did not host in time: {@code launch_match} launches the guests from a {@code
+     * finally}, then cancels the match.
+     */
+    @Test
+    void aMatchCancelledAfterARejectedLaunchIsNotAWarning() throws Throwable {
+        MockClientLifecycle lifecycle = defaultLifecycle();
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        lifecycle.post(new SearchStarted(MAPPER.createObjectNode().put("state", "start")));
+        lifecycle.post(new LaunchRejected("game_launch.mapname invalid for matchmaker: null"));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        List<String> warnings =
+                warningsWhile(
+                        () ->
+                                lifecycle.post(
+                                        new MatchCancelled(
+                                                MAPPER.createObjectNode().put("game_id", 502))));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertEquals(List.of(), warnings);
+    }
+
+    /**
      * A handshake failure that arrives once the lobby's disconnect has ended the session is not a
      * warning (#455). A connection that fails fires its disconnect first, and the failure used to
      * land after the session had ended as "Handshake could not be completed" and the framework's
