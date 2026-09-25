@@ -1,11 +1,13 @@
 package com.faforever.testharness.shared.statemachine;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +44,8 @@ final class StateMachineTimeoutTest {
     private static final long CANCELLED_TIMEOUT_MS = 10_000;
 
     private final class AToB implements Event {}
+
+    private final class BToC implements Event {}
 
     /** Every machine a test built, so {@link #stopTimers()} can shut its timer thread down. */
     private final List<StateMachine> machines = new ArrayList<>();
@@ -164,5 +168,89 @@ final class StateMachineTimeoutTest {
         // reached, reachedC is incomplete whether or not c's timeout was cancelled (#381).
         Thread.sleep(TIMEOUT_MS * 2);
         assertFalse(reachedC.isDone(), "reaching b must have cancelled the pending timeout into c");
+    }
+
+    /**
+     * A timeout armed by a transition's own action belongs to the state that transition moves into,
+     * so the transition's commit keeps it (#259).
+     */
+    @Test
+    void aTimeoutArmedInATransitionActionSurvivesItsCommit() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        State later = new State("LATER");
+        StateMachine machine = machineFrom(a);
+        a.registerTransition(AToB.class, b, ignored -> machine.setTimeout(TIMEOUT_MS, later), null);
+        CompletableFuture<Void> reachedLater = machine.stateReached(later);
+
+        machine.receiveEvent(new AToB());
+
+        reachedLater.get(AWAIT_SECONDS, TimeUnit.SECONDS);
+        assertSame(later, machine.getState());
+    }
+
+    /**
+     * A timeout armed in the target state's entry hook fires out of that state, running its exit
+     * hooks rather than a second round of those for the state the transition left (#259).
+     */
+    @Test
+    void aTimeoutArmedInAnEntryHookFiresOutOfTheStateItWasArmedFor() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        State later = new State("LATER");
+        StateMachine machine = machineFrom(a);
+        List<String> exits = new CopyOnWriteArrayList<>();
+        a.registerTransition(AToB.class, b);
+        a.onExit(() -> exits.add("A"));
+        b.onExit(() -> exits.add("B"));
+        b.onEntry(() -> machine.setTimeout(TIMEOUT_MS, later));
+        CompletableFuture<Void> reachedLater = machine.stateReached(later);
+
+        machine.receiveEvent(new AToB());
+
+        reachedLater.get(AWAIT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(List.of("A", "B"), exits, "the timeout must leave B, not leave A again");
+    }
+
+    /**
+     * The same holds when the transition is a timeout's own: one armed by a firing timeout's action
+     * survives that timeout's commit (#259).
+     */
+    @Test
+    void aTimeoutArmedByATimeoutsActionSurvivesItsCommit() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        State later = new State("LATER");
+        StateMachine machine = machineFrom(a);
+        CompletableFuture<Void> reachedLater = machine.stateReached(later);
+
+        machine.setTimeout(EARLIER_TIMEOUT_MS, b, ignored -> machine.setTimeout(TIMEOUT_MS, later));
+
+        reachedLater.get(AWAIT_SECONDS, TimeUnit.SECONDS);
+        assertSame(later, machine.getState());
+    }
+
+    /**
+     * The exemption covers only the transition in progress: a timeout armed on the way into a state
+     * is disarmed by the next transition out of it, like any other (#259).
+     */
+    @Test
+    void aTimeoutArmedDuringATransitionIsCancelledByTheNextOne() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        State c = new State("C");
+        State later = new State("LATER");
+        StateMachine machine = machineFrom(a);
+        a.registerTransition(AToB.class, b, ignored -> machine.setTimeout(TIMEOUT_MS, later), null);
+        b.registerTransition(BToC.class, c);
+
+        // Both transitions under the machine's monitor; see the class javadoc.
+        synchronized (machine) {
+            machine.receiveEvent(new AToB());
+            machine.receiveEvent(new BToC());
+        }
+
+        Thread.sleep(TIMEOUT_MS * 2); // past the deadline: a timeout still armed would have fired
+        assertSame(c, machine.getState(), "leaving b must cancel the timeout armed on the way in");
     }
 }

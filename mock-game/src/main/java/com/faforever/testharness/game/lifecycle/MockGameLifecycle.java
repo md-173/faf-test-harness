@@ -617,16 +617,17 @@ public final class MockGameLifecycle {
      * was asked is indistinguishable from one killed for hanging. Given the timer, the game exits
      * through the normal path with {@link ExitStatus#LOBBY_TIMEOUT}.
      *
-     * <p>Cancellation is the state machine's, not ours: {@code commitTransition} disarms every
-     * pending timeout on any state change, so a game driven into HOSTING or JOINING — or dropped
-     * into ENDED by a disconnect — never trips this. That is the whole reason it uses {@code
-     * setTimeout} rather than the lifecycle's own scheduler, which would need cancelling at each of
-     * the four ways out of LOBBY.
+     * <p>Cancellation is the state machine's, not ours: on every state change, {@code
+     * commitTransition} disarms each timeout already pending when that change began, so a game
+     * driven into HOSTING or JOINING, or dropped into ENDED by a disconnect, never trips this. That
+     * is the whole reason it uses {@code setTimeout} rather than the lifecycle's own scheduler,
+     * which would need cancelling at each of the four ways out of LOBBY.
      *
-     * <p>It is armed from a {@link StateMachine#stateReached} callback rather than from LOBBY's
-     * entry hook or the transition action, and that is load-bearing: both of those run
-     * <em>before</em> {@code commitTransition}, which then clears every pending timeout — including
-     * one they had just armed. The callback runs inside the same commit, after the clear.
+     * <p>It is armed from a {@link StateMachine#stateReached} callback, which runs inside the
+     * commit into LOBBY. Until WBS-2.3.7-fix (#259) that was load-bearing: LOBBY's entry hook and
+     * the transition action both run before {@code commitTransition}, which then discarded every
+     * pending timeout, including one they had just armed. The commit now keeps a timeout armed
+     * during its own transition, so LOBBY's entry hook would serve as well.
      */
     private void armLobbyTimeout() {
         Optional<Duration> lobbyTimeout = config.lobbyTimeout();
