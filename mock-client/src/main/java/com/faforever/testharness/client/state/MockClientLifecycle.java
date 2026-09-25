@@ -484,9 +484,9 @@ public final class MockClientLifecycle {
         // has installed STARTING_GAME as the current state — receiveEvent is synchronized and
         // publishes the new state before releasing its lock, so hopping to the common pool here
         // guarantees this continuation cannot run until that transition has actually completed.
-        // It also keeps GameExited's TERMINATED entry hook, which runs teardown and can block for
-        // a termination grace, off the common-pool thread that completed this exit (the JDK's
-        // handleAsync, not the reaper), a thread the pool needs to complete other exits.
+        // It does not spare the common pool (labelledAsync is that pool): GameExited's TERMINATED
+        // entry hook holds this continuation's thread for the whole teardown, which is why
+        // teardown waits on the reaper's exit record (SubprocessManager.waitFor), not a future.
         gameExit.thenAcceptAsync(this::onGameProcessExit, labelledAsync);
     }
 
@@ -1042,33 +1042,33 @@ public final class MockClientLifecycle {
     /**
      * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby, the exact
      * envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send for a
-     * {@code GameState Ended} GPGNet frame. This is the fallback for the case the forwarder cannot
-     * cover: a crashed or killed game process never emits the frame to the adapter at all.
+     * {@code GameState Ended} GPGNet frame. This is the fallback for the cases the forwarder cannot
+     * cover: a crashed or killed game never emits the frame, and a failed launch has no game.
      *
      * <p>Teardown's step once the game is down (WBS-3.1.2.6-fix, #454), so it runs once per
      * session, whoever started teardown, and its write completes before the lobby close that
      * follows. The game-exit handler used to send it, racing that close, which {@code
      * LobbyConnection} writes directly rather than through its send chain: when the close won, the
-     * frame was lost with a WARN. The real client sends the same frame once its game process has
-     * ended, killed or not ({@code GameRunner} in downlords-faf-client).
+     * frame was lost with a WARN. The real client sends it after every outcome of a {@code
+     * game_launch}, a failed launch included ({@code GameRunner.startOnlineGame}'s {@code
+     * whenComplete}), so this follows every one the lifecycle acted on (#462).
      *
-     * <p>Only for a game that was launched, and gated on {@link #cleanEndSeen} rather than sent
-     * unconditionally, because since R72 was wired into {@code launchGame} (#218) a clean end
-     * produces the frame twice: mock-game emits {@code GameEnded} then {@code GameState Ended}, the
-     * adapter relays both (every frame reaches {@code onGpgNetMessageReceived}; verified in the
-     * 3.3.14 jar), and the forwarder sends them on. faf-server routes {@code GameState "Ended"} to
-     * {@code on_connection_closed()} and drops the repeat silently ({@code lobbyconnection.py}:
-     * {@code if not self.game_connection: return}), so the duplicate is harmless, but the real
-     * client never sends it, and this harness exists to be wire-faithful. The gate is exact because
-     * {@code GameEnded} precedes {@code GameState Ended} on the wire, and it degrades safely: a
-     * process that dies before the adapter relays {@code GameEnded} leaves the flag false and still
-     * gets the frame from here.
+     * <p>Gated on {@link #cleanEndSeen} rather than sent unconditionally, because since R72 was
+     * wired into {@code launchGame} (#218) a clean end produces the frame twice: mock-game emits
+     * {@code GameEnded} then {@code GameState Ended}, the adapter relays both (every frame reaches
+     * {@code onGpgNetMessageReceived}; verified in the 3.3.14 jar), and the forwarder sends them
+     * on. faf-server routes {@code GameState "Ended"} to {@code on_connection_closed()} and drops
+     * the repeat silently ({@code lobbyconnection.py}: {@code if not self.game_connection:
+     * return}), so the duplicate is harmless, but the real client never sends it, and this harness
+     * exists to be wire-faithful. The gate is exact because {@code GameEnded} precedes {@code
+     * GameState Ended} on the wire, and it degrades safely: a process that dies before the adapter
+     * relays {@code GameEnded} leaves the flag false and still gets the frame from here.
      *
      * <p>A lobby that is already gone is skipped at DEBUG, and a failed send is a WARN only while
      * the lobby is still up. Nothing escapes: teardown carries on either way.
      */
     private void sendGameStateEnded() {
-        if (!gameLaunched.isDone() || cleanEndSeen.get()) {
+        if (!verdicts.launchStarted() || cleanEndSeen.get()) {
             return;
         }
         if (session.disconnectEvent().isPresent()) {
@@ -1208,6 +1208,7 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "launchGame method called without a LaunchGame event, should be impossible");
         }
+        verdicts.recordLaunchStarted();
         try {
             GameConfig gameConfig = ((LaunchGame) message).config();
             // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults.
@@ -1227,13 +1228,13 @@ public final class MockClientLifecycle {
             // #214: the FSM's adapter-death subscriber reads the shared signal instead of the
             // process directly, the way 3.1.2.6 reads R26's game signal (gameExit()).
             //
-            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run on the
-            // common-pool thread that completes it (the JDK's handleAsync; only the exit record
-            // behind isAlive() and waitFor is the reaper's), and this event's handling can block
-            // there (TERMINATED's entry hook runs SessionTeardown, which can wait out a termination
-            // grace). A synchronous thenAccept would hold that thread for the whole teardown,
-            // taking it from the pool other exits complete on. thenAcceptAsync moves the event
-            // post off it.
+            // Async is load-bearing, for ordering: an adapter that exits at once can have completed
+            // adapterExit by this line, and a synchronous thenAccept would then post AdapterExited
+            // on this thread, inside the LaunchGame transition and before STARTING_GAME is
+            // installed (the hazard setupStateMachine documents for gameExit). It does not spare
+            // the common pool: labelledAsync is that pool, and TERMINATED's entry hook holds
+            // whichever pool thread runs it for the whole teardown, which is why teardown waits on
+            // the reaper's exit record (SubprocessManager.waitFor) instead.
             adapterExit()
                     .thenAcceptAsync(
                             exitCode -> machine.receiveEvent(new AdapterExited(exitCode)),

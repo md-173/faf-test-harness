@@ -46,11 +46,16 @@ final class SessionFailures {
      * to exit, before reading it as alive (WBS-3.1.2.8-fix, #438, #452).
      *
      * <p>Measured against the pinned 3.3.14 over 80 kills, one RPC client each: the exit followed
-     * the socket's close within 0.9 ms of a SIGKILL, and within 330 ms of a SIGTERM, whose shutdown
-     * closes the socket first. Its own orderly {@code IceAdapter.close(status)} stops the RPC
-     * server and calls {@code System.exit} two 250 ms steps later. Two seconds clears all of those
-     * several times over, and only an adapter that is still alive waits it out, so a dying adapter
-     * reads as lost ({@code 72}) rather than as one that dropped its link ({@code 70}).
+     * the socket's close by at most 0.9 ms after a SIGKILL, and by at most 330 ms after a SIGTERM,
+     * whose shutdown closes the socket first. Two seconds clears both several times over, and only
+     * an adapter that is still alive waits it out, so a dying adapter reads as lost ({@code 72})
+     * rather than as one that dropped its link ({@code 70}).
+     *
+     * <p>The adapter's own {@code IceAdapter.close(status)} is not one of these routes. It would
+     * stop the RPC server and call {@code System.exit} two 250 ms steps later, but on a box with no
+     * system tray, CI's included, it throws at {@code TrayIcon.close()} before it schedules the
+     * exit (see {@code SessionTeardown}'s quit note). After a {@code quit} the pinned adapter kept
+     * its client's socket open and was still running 20 s later.
      */
     private static final Duration ADAPTER_EXIT_WAIT = Duration.ofSeconds(2);
 
@@ -202,7 +207,7 @@ final class SessionFailures {
      */
     void adapterAtTeardown(final Optional<DisconnectEvent> link) {
         Optional<SubprocessManager> adapter = teardown.adapterProcess();
-        if (adapter.isEmpty() || teardown.signalled() || hasVerdict()) {
+        if (adapter.isEmpty() || teardown.signalled() || verdicts.any()) {
             return;
         }
         SubprocessManager process = adapter.get();
@@ -234,19 +239,6 @@ final class SessionFailures {
                     "ICE adapter JSON-RPC link dropped while the adapter kept running ({})",
                     error == null ? "end of stream" : describe(error));
         }
-    }
-
-    /**
-     * Whether the session already has a verdict, whose cause line {@link #adapterAtTeardown} would
-     * only repeat or contradict.
-     *
-     * @return {@code true} once any verdict has been recorded
-     */
-    private boolean hasVerdict() {
-        return verdicts.launchFailed()
-                || verdicts.adapterLost()
-                || verdicts.gameCrashed()
-                || verdicts.sessionFailed();
     }
 
     /**

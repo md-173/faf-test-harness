@@ -361,7 +361,8 @@ final class AdapterVerdictAtTeardownTest {
     /**
      * A launch whose adapter died before its JSON-RPC port accepted a connection keeps its one
      * cause line (#437, #438): teardown finds that adapter dead with a non-zero code too, and must
-     * not name it a second time.
+     * not name it a second time. The lobby still gets one {@code GameState Ended} before the close,
+     * as the real client sends after every {@code game_launch} it acted on (#462).
      */
     @Test
     void aFailedLaunchKeepsItsOneCauseLine() throws Exception {
@@ -379,6 +380,9 @@ final class AdapterVerdictAtTeardownTest {
         assertEquals(new Found(true, false, false), atCommit.get(15, TimeUnit.SECONDS));
         assertEquals(1, warnings("Could not "), "one cause line: " + warnings());
         assertEquals(0, warnings(ADAPTER_LOST_LINE), warnings());
+        assertEquals(
+                1, gameStateEndedBeforeClose(), "a failed launch still reports the game's end");
+        assertEquals(0, warnings("failed to send GameState Ended"), warnings());
     }
 
     /**
@@ -556,6 +560,31 @@ final class AdapterVerdictAtTeardownTest {
      */
     private static JsonNode frame(final String command, final Object... args) {
         return MAPPER.valueToTree(Map.of("command", command, "target", "game", "args", args));
+    }
+
+    /**
+     * How many {@code GameState Ended} frames the lobby received before teardown closed it. Waits
+     * for that close first: the server handles a connection's frames in order, so every frame sent
+     * before a clean close is queued by then.
+     *
+     * @return the count
+     * @throws Exception if the lobby did not close cleanly within five seconds
+     */
+    private long gameStateEndedBeforeClose() throws Exception {
+        assertEquals(1000, server.awaitClose(5, TimeUnit.SECONDS), "teardown closes the lobby");
+        long sent = 0;
+        while (true) {
+            JsonNode frame;
+            try {
+                frame = MAPPER.readTree(server.pollReceived(250, TimeUnit.MILLISECONDS));
+            } catch (AssertionError none) {
+                return sent;
+            }
+            if ("GameState".equals(frame.path("command").asText())
+                    && "Ended".equals(frame.path("args").path(0).asText())) {
+                sent++;
+            }
+        }
     }
 
     private List<ILoggingEvent> significantEvents() {

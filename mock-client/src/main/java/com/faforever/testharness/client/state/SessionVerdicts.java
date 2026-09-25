@@ -17,6 +17,9 @@ package com.faforever.testharness.client.state;
  * {@code get} that returns. {@link #gameCrashed()} is the exception, written on a continuation; see
  * there. Every field is {@code volatile} for the reads that do not follow that future, such as a
  * test calling a getter directly.
+ *
+ * <p>It also holds one fact that is not a verdict, {@link #launchStarted()}, kept here rather than
+ * in the lifecycle, whose length is budgeted.
  */
 public final class SessionVerdicts {
 
@@ -31,6 +34,9 @@ public final class SessionVerdicts {
 
     /** Backs {@link #sessionFailed()}. */
     private volatile boolean sessionFailed;
+
+    /** Backs {@link #launchStarted()}. */
+    private volatile boolean launchStarted;
 
     /** Created by the lifecycle, which owns the only reference that can record. */
     SessionVerdicts() {}
@@ -148,5 +154,33 @@ public final class SessionVerdicts {
     /** Records that the session failed after it came up; see {@link #sessionFailed()}. */
     void recordSessionFailed() {
         sessionFailed = true;
+    }
+
+    /**
+     * Whether any verdict has been recorded. Read by teardown's adapter check ({@link
+     * SessionFailures#adapterAtTeardown}), which must not add a second cause line; kept beside the
+     * fields so a verdict added later is counted here too.
+     *
+     * @return {@code true} once any verdict has been recorded
+     */
+    boolean any() {
+        return launchFailed || adapterLost || gameCrashed || sessionFailed;
+    }
+
+    /**
+     * Whether the lifecycle started launching a game for a {@code game_launch} (WBS-3.1.2.6-fix,
+     * #462), whether or not the launch came up. Not a verdict, so {@link #any()} leaves it out: it
+     * decides whether teardown owes the lobby a {@code GameState Ended}, which the real client
+     * sends after every outcome of a {@code game_launch}.
+     *
+     * @return {@code true} once a launch has started
+     */
+    boolean launchStarted() {
+        return launchStarted;
+    }
+
+    /** Records that the lifecycle started a launch; see {@link #launchStarted()}. */
+    void recordLaunchStarted() {
+        launchStarted = true;
     }
 }

@@ -152,7 +152,9 @@ final class RunShutdownEndToEndTest {
      * came up, because the adapter binary does not exist, exits 70 with its cause and its verdict
      * and without the signal line. Teardown closes the lobby before {@code call()} returns, and the
      * hook that {@code Main}'s {@code System.exit} starts found that close still unechoed, so the
-     * line used to follow the verdict. Also pins #437's 70 against the real process.
+     * line used to follow the verdict. Also pins #437's 70 against the real process, and #462: the
+     * lobby still gets one {@code GameState Ended} before the close, as the real client sends after
+     * every {@code game_launch} it acted on.
      */
     @Test
     void aLaunchThatNeverCameUpExits70AndNamesNoSignal() throws Exception {
@@ -173,11 +175,16 @@ final class RunShutdownEndToEndTest {
                 messages(records).stream()
                         .anyMatch(m -> m.startsWith("Could not launch the ICE adapter")),
                 "the cause must be named: " + messages(records));
+        assertTrue(
+                messages(records).stream()
+                        .noneMatch(m -> m.startsWith("failed to send GameState Ended")),
+                "the frame must go out cleanly: " + messages(records));
         assertNoErrors(records);
         assertEquals(
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
                 "teardown must close the lobby cleanly");
+        assertEquals(1, gameStateEndedSent(), "a failed launch still reports the game's end");
     }
 
     /**
@@ -220,11 +227,12 @@ final class RunShutdownEndToEndTest {
                 messages(records).stream()
                         .noneMatch(m -> m.startsWith("ICE adapter exited abnormally")),
                 "an adapter the signal killed is not a finding: " + messages(records));
-        assertTrue(receivedGameStateEnded(), "the lobby must hear GameState Ended");
         assertEquals(
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
-                "the WebSocket must close cleanly, after the frame");
+                "the WebSocket must close cleanly");
+        assertEquals(
+                1, gameStateEndedSent(), "the lobby must hear GameState Ended before the close");
     }
 
     /**
@@ -243,29 +251,32 @@ final class RunShutdownEndToEndTest {
     }
 
     /**
-     * Whether the child sent {@code GameState Ended}. Call once it has exited: every frame it sent
-     * is queued by then, so the first empty poll means there are no more.
+     * How many {@code GameState Ended} frames the child sent. Call once the lobby has seen its
+     * clean close: the server handles a connection's frames in order, so every frame sent before
+     * the close is queued by then, and the first empty poll means there are no more.
      *
-     * @return {@code true} if one of its remaining frames was it
+     * @return how many of its remaining frames were it
      */
-    private boolean receivedGameStateEnded() throws Exception {
+    private long gameStateEndedSent() throws Exception {
+        long sent = 0;
         while (true) {
             JsonNode frame;
             try {
                 frame = MAPPER.readTree(lobby.pollReceived(250, TimeUnit.MILLISECONDS));
             } catch (AssertionError none) {
-                return false;
+                return sent;
             }
             if ("GameState".equals(frame.path("command").asText())
                     && "Ended".equals(frame.path("args").path(0).asText())) {
-                return true;
+                sent++;
             }
         }
     }
 
     /**
-     * What a run a signal ended must show: the signal named once, no verdict (the code is the
-     * signal's own), nothing at ERROR, and a normal close frame at the lobby.
+     * What an idle run a signal ended must show: the signal named once, no verdict (the code is the
+     * signal's own), nothing at ERROR, a normal close frame at the lobby, and no {@code GameState
+     * Ended} before it.
      */
     private void assertEndedCleanlyBySignal() throws Exception {
         List<JsonNode> records = records();
@@ -279,6 +290,9 @@ final class RunShutdownEndToEndTest {
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
                 "the WebSocket must close cleanly");
+        // Teardown's step runs on every teardown, this idle one included, but no game_launch was
+        // acted on, so there is no game end to report (#454, #462).
+        assertEquals(0, gameStateEndedSent(), "an idle run has no game end to report");
     }
 
     /**
