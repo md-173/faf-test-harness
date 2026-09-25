@@ -103,6 +103,14 @@ Note that the `mock-client` `test` and `integrationTest` tasks run at `LOG_LEVEL
 
 The `mock-game` `test` task clamps the level instead (set in `mock-game/build.gradle`): `DEBUG` and `TRACE` pass through, anything higher becomes the `INFO` default. Several of its tests read the log and would otherwise fail, or pass without testing anything, in a shell that exported `LOG_LEVEL=WARN`.
 
+### Tests that spawn POSIX processes skip on Windows
+
+Some tests need a stand-in for a spawned binary, and they get one by writing a `#!/bin/sh` script or by running a POSIX utility (`sh -c`, `sleep`, `true`). Those tests are **POSIX-only by policy** (#302). Each is annotated `@EnabledOnOs(value = {OS.LINUX, OS.MAC}, disabledReason = …)`, on the class when nearly every test in it spawns one and on the method otherwise, so on Windows `./gradlew check` reports them as skipped rather than failing them as errors, and runs everything else.
+
+The reason is that CI runs on `ubuntu-latest` only. A Windows branch in every stub would be code no check ever runs, and `CrashRecoveryTest`'s `cmd` branch showed what that costs: it busy-spun instead of waiting, and nothing caught it until someone ran it on Windows by hand.
+
+If you add a test that spawns a shell script or a POSIX utility, give it the same annotation and `disabledReason`. If the test must run on Windows as well, launch a small Java `main` on the current JRE instead, the way `shared`'s `TestSupport.testChild` does.
+
 ### What CI runs on every PR
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:

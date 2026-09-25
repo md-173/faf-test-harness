@@ -39,6 +39,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -48,6 +50,9 @@ import org.slf4j.LoggerFactory;
  * {@code GameProcessTest} pattern) so exit codes and teardown are observed for real, not mocked.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class AdapterCrashRecoveryTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
