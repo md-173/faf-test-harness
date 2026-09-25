@@ -2,13 +2,17 @@ package com.faforever.testharness.client.lobby;
 
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectionKey;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import org.java_websocket.WebSocket;
+import org.java_websocket.WebSocketImpl;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
 import org.slf4j.Logger;
@@ -30,11 +34,18 @@ import org.slf4j.LoggerFactory;
  * log — enabled for the test task, see {@code mock-client/build.gradle} — put both ends of every
  * exchange in the Gradle test report a failing run uploads. The budgets are deliberately unchanged:
  * a longer timeout would hide the case worth knowing about.
+ *
+ * <p>#415's capture answered it: the frame was queued but not written until the next write on its
+ * connection, stranded by a race in Java-WebSocket's selector. So every send here returns only once
+ * its frame is on the socket; see {@link #awaitWritten}.
  */
 public final class ScriptedWebSocketServer extends WebSocketServer {
 
     /** Logger instance for this class. */
     private static final Logger LOG = LoggerFactory.getLogger(ScriptedWebSocketServer.class);
+
+    /** How long {@link #awaitWritten} gives a queued frame to reach the socket. */
+    private static final long WRITE_TIMEOUT_SECONDS = 5;
 
     private final CountDownLatch started = new CountDownLatch(1);
     private final CountDownLatch firstClientConnected = new CountDownLatch(1);
@@ -96,16 +107,12 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     public void broadcastText(final String text) {
         // The connection count is the first line, before any send: #261 lost a `welcome` the
         // server believed it had broadcast, and a broadcast to zero connections is silent today.
-        //
-        // "queued", not "sent": WebSocketImpl.send(String) appends to its outQueue and returns,
-        // and the socket write happens later on the selector thread. Claiming the write returned
-        // would be the wrong first hypothesis baked into the instrumentation — someone reading it
-        // would rule out the send side while the frame was still sitting behind a stalled writer.
         LOG.debug("scripted server broadcasting to {} connection(s): {}", connections.size(), text);
         for (WebSocket c : connections) {
+            // send() only queues the frame, and the selector can strand it there (#415). Waiting
+            // for the write means the test's next step starts with the frame on the socket.
             c.send(text);
-            LOG.debug(
-                    "scripted server queued for write to {}: {}", c.getRemoteSocketAddress(), text);
+            awaitWritten(c, text);
         }
     }
 
@@ -118,6 +125,8 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
                     code,
                     reason);
             c.close(code, reason);
+            // The close frame goes through the same queue, so it can be stranded the same way.
+            awaitWritten(c, "close frame (code=" + code + ")");
         }
     }
 
@@ -178,5 +187,67 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
                 "scripted server error on {}: {}",
                 conn == null ? "<no connection>" : conn.getRemoteSocketAddress(),
                 ex.toString());
+    }
+
+    /**
+     * Blocks until {@code conn} has written everything it queued, re-arming its write interest when
+     * Java-WebSocket's selector has dropped it (#415). Package-private for {@code
+     * ScriptedWebSocketServerTest}.
+     *
+     * <p>{@code WebSocketImpl.send} queues a frame, then sets the key's interest to {@code OP_READ
+     * | OP_WRITE} from the sending thread. {@code WebSocketServer.doWrite} drains the queue on the
+     * selector thread and, once it has seen it empty, sets the interest back to {@code OP_READ}.
+     * When the sender's update lands between those two steps it is overwritten. The window is
+     * narrow, but a scripted exchange aims at it: after a write-only selection the key keeps a
+     * stale write-ready bit, so the selector follows the next read with a no-op {@code doWrite},
+     * and that read is what wakes the test to reply. The read also took the key out of the selected
+     * set, so nothing but the next {@code OP_WRITE} on it writes the stranded frame. The code is
+     * the same in Java-WebSocket 1.5.7, 1.6.0 and master.
+     *
+     * <p>The "wrote" line is logged once the queue is seen empty, up to a millisecond after the
+     * write itself, so it can follow the client's own receive line.
+     *
+     * @param conn a connection of this server
+     * @param what the frame, for the log and the failure message
+     */
+    static void awaitWritten(final WebSocket conn, final String what) {
+        WebSocketImpl impl = (WebSocketImpl) conn;
+        SelectionKey key = impl.getSelectionKey();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WRITE_TIMEOUT_SECONDS);
+        while (!impl.outQueue.isEmpty() && key.isValid()) {
+            try {
+                // Checked twice: a write that finished after the loop test also leaves OP_READ.
+                if ((key.interestOps() & SelectionKey.OP_WRITE) == 0 && !impl.outQueue.isEmpty()) {
+                    LOG.debug(
+                            "scripted server re-arming a write the selector dropped, to {}: {}",
+                            conn.getRemoteSocketAddress(),
+                            what);
+                    key.interestOps(SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                    key.selector().wakeup();
+                }
+            } catch (CancelledKeyException e) {
+                break; // the connection closed under us; reported below
+            }
+            if (System.nanoTime() - deadline > 0) {
+                throw new AssertionError(
+                        "scripted server could not write to "
+                                + conn.getRemoteSocketAddress()
+                                + " within "
+                                + WRITE_TIMEOUT_SECONDS
+                                + "s: "
+                                + what);
+            }
+            LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+        }
+        // "wrote" only while the key is valid: a send to an already-cancelled key empties the
+        // queue without writing (WebSocketServer.onWriteDemand), and a close cancels the key.
+        if (key.isValid()) {
+            LOG.debug("scripted server wrote to {}: {}", conn.getRemoteSocketAddress(), what);
+        } else if (!impl.outQueue.isEmpty()) {
+            LOG.debug(
+                    "scripted server lost {} before it could write: {}",
+                    conn.getRemoteSocketAddress(),
+                    what);
+        }
     }
 }
