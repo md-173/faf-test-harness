@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -99,6 +100,12 @@ final class PeerResultAgreementTest {
     /** Root logger the capture appender is attached to. */
     private Logger root;
 
+    /** The logger whose "New peer" line the barrier waits on. */
+    private Logger lifecycleLogger;
+
+    /** That logger's own level before {@link #setUp()} raised it, normally null (inherited). */
+    private Level previousLifecycleLevel;
+
     /** Captures both games' log records, for the registration barrier; they share one logger. */
     private ListAppender<ILoggingEvent> captured;
 
@@ -163,6 +170,15 @@ final class PeerResultAgreementTest {
         captured.start();
         root.addAppender(captured);
 
+        // The barrier reads an INFO line, so this raises the logger that emits it rather than
+        // trusting the ambient level. That is what lets the class run the same way from Gradle,
+        // which pins LOG_LEVEL for this module, and from a runner that does not. Restores the
+        // logger's own level, normally null (inherited), not its effective one, which would pin
+        // INFO on it. LifecycleTrafficWiringTest does the same for GameUdpSender.
+        lifecycleLogger = context.getLogger(MockGameLifecycle.class);
+        previousLifecycleLevel = lifecycleLogger.getLevel();
+        lifecycleLogger.setLevel(Level.INFO);
+
         // Both lobby ports stay reserved until both games exist, and are released for their
         // lifecycles to bind on CreateLobby. Taken one at a time, the joiner's relay or its lobby
         // port could land on the port just released for the host's, and a bind would then fail.
@@ -175,14 +191,21 @@ final class PeerResultAgreementTest {
 
     @AfterEach
     void tearDown() {
-        if (joiner != null) {
-            joiner.close();
+        try {
+            if (joiner != null) {
+                joiner.close();
+            }
+            if (host != null) {
+                host.close();
+            }
+        } finally {
+            // Unwound even if a close throws. The appender sits on the root logger, so leaving it
+            // attached would have every later test class in this JVM append into a list nobody
+            // drains, and the raised level would outlive the class that wanted it.
+            lifecycleLogger.setLevel(previousLifecycleLevel);
+            captured.stop();
+            root.detachAppender(captured);
         }
-        if (host != null) {
-            host.close();
-        }
-        captured.stop();
-        root.detachAppender(captured);
     }
 
     @ParameterizedTest(name = "{0} players")
@@ -288,9 +311,7 @@ final class PeerResultAgreementTest {
                         + " at "
                         + game.relayAddress()
                         + " within "
-                        + FRAME_TIMEOUT
-                        + ". No 'New peer' line at all, outside Gradle, can mean LOG_LEVEL is"
-                        + " above INFO, which mock-game's build pins for its tests.");
+                        + FRAME_TIMEOUT);
     }
 
     /** Launches and ends the game's match, returning every frame the game sent, in order. */
@@ -328,6 +349,11 @@ final class PeerResultAgreementTest {
         Map<Integer, Integer> armyByPlayer = playerOption(hostFrames, "Army");
         Map<Integer, Integer> teamByPlayer = playerOption(hostFrames, "Team");
         assertEquals(players, armyByPlayer.size(), "the host should assign every player an army");
+        // Checked as well as the armies, because a missing Team would otherwise pass silently: the
+        // army would get a null team, read as "not the winning team", and land in the expectation
+        // as a defeat. At two players that is what gameEnds emits anyway, so the case would pass on
+        // incomplete host data.
+        assertEquals(players, teamByPlayer.size(), "the host should assign every player a team");
 
         Map<Integer, Integer> teamByArmy = new TreeMap<>();
         armyByPlayer.forEach((player, army) -> teamByArmy.put(army, teamByPlayer.get(player)));
