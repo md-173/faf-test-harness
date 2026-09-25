@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import ch.qos.logback.classic.Level;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import java.io.IOException;
@@ -68,6 +69,11 @@ final class GpgNetConnectionTest {
         return c;
     }
 
+    /**
+     * Every attempt failing with no close requested is a genuine failure: {@code CONNECT_FAILED},
+     * logged at WARN. The WARN is asserted because a close during the last attempt is now logged at
+     * DEBUG instead (#404), and nothing else would notice a genuine failure going quiet too.
+     */
     @Test
     void connectFailsAfterRetriesWhenNothingListens() throws Exception {
         GpgNetConnection c = new GpgNetConnection(UNBOUND_PORT, 3, Duration.ofMillis(20));
@@ -79,11 +85,16 @@ final class GpgNetConnectionTest {
                     disconnected.countDown();
                 });
 
-        CompletableFuture<Void> connectFuture = c.connect();
+        try (LogCapture log = new LogCapture(GpgNetConnection.class)) {
+            CompletableFuture<Void> connectFuture = c.connect();
 
-        assertThrows(ExecutionException.class, () -> connectFuture.get(5, TimeUnit.SECONDS));
-        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
-        assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
+            assertThrows(ExecutionException.class, () -> connectFuture.get(5, TimeUnit.SECONDS));
+            assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect listener should fire");
+            assertEquals(DisconnectReason.CONNECT_FAILED, event.get().reason());
+            assertTrue(
+                    log.contains(Level.WARN, event.get().error().getMessage()),
+                    "a genuine connect failure should be logged at WARN: " + log.events());
+        }
     }
 
     /**
@@ -97,8 +108,8 @@ final class GpgNetConnectionTest {
      *
      * <p>The reason assertion pins intent without reproducing the race it guards: with no socket
      * yet, {@code close()} fires {@code LOCAL_CLOSE} itself and usually wins. The interleaving
-     * where the connect thread reports first is a few instructions wide and not reachable from a
-     * test.
+     * where the connect thread reports first is a few instructions wide, so {@code
+     * GpgNetConnectionCloseRaceTest} forces it through package-private seams instead.
      */
     @Test
     void closeDuringRetryAbandonsTheConnectWindowAsLocalClose() throws Exception {

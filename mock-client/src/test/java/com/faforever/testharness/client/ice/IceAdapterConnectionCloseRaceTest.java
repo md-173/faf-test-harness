@@ -2,9 +2,13 @@ package com.faforever.testharness.client.ice;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import java.io.IOException;
@@ -12,8 +16,10 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,9 +44,27 @@ import org.junit.jupiter.api.Timeout;
  * <p>The window is two instructions wide and has no observable edge, so the middle case here drives
  * it through the {@code socketPublished()} seam rather than by racing threads and hoping. The two
  * cases either side of it need no seam and are here to pin that the fix did not disturb them.
+ *
+ * <p><b>The connect thread reporting first while no socket exists</b> (WBS-3.2.2.1-fix, #404).
+ * {@code close()} fires {@code LOCAL_CLOSE} itself there and usually first, so the {@code
+ * closeFlagSet()} seam holds it after it sets the flag and short of its own fire. The connect
+ * thread's report must then be {@code LOCAL_CLOSE} too, whether the close stopped the retrying or
+ * landed after the last in-loop check; the second used to report {@code CONNECT_FAILED} and log a
+ * WARN claiming the adapter was never reachable. The last case goes the other way: a caller that
+ * closes because the connect failed, as {@code LaunchIceCommand} does, must leave a genuine failure
+ * reported and logged as one, because the failure catch logs and fires before it fails the future.
+ * These mirror mock-game's {@code GpgNetConnectionCloseRaceTest}.
  */
 @Timeout(30)
 final class IceAdapterConnectionCloseRaceTest {
+
+    /**
+     * A port nothing can be listening on, below every platform's ephemeral range, so no {@code
+     * bind(0)} in this JVM can be handed it, as in {@code IceAdapterConnectionTest}. An environment
+     * that drops the connect rather than refusing it costs at most the 1 s connect timeout per
+     * attempt.
+     */
+    private static final int UNBOUND_PORT = 1;
 
     /** Short, since every case here either connects to a live fixture or is closed at once. */
     private static final int ATTEMPTS = 20;
@@ -157,14 +181,12 @@ final class IceAdapterConnectionCloseRaceTest {
     @Test
     void aCloseBeforeTheSocketExistsFiresLocalCloseExactlyOnce() throws Exception {
         List<DisconnectEvent> fired = new CopyOnWriteArrayList<>();
-        // A port with no listener, so the connect is still retrying when close lands. Freeing the
-        // fixture's own port is the idiom the sibling file uses three times, and is sturdier than
-        // a hardcoded low port: port 1 relies on the environment answering with a fast
-        // ECONNREFUSED, and one that DROPs instead would block new Socket() until the OS connect
-        // timeout and blow this class's 30s @Timeout.
-        int deadPort = server.port();
-        server.stop();
-        conn = new IceAdapterConnection(deadPort, ATTEMPTS, Duration.ofMillis(100), CALL_TIMEOUT);
+        // A port with no listener, so the connect is still retrying when close lands. Not the
+        // fixture's own port freed for the purpose: a released port can be handed to the next
+        // bind(0) in this JVM, which is what UNBOUND_PORT exists to rule out.
+        conn =
+                new IceAdapterConnection(
+                        UNBOUND_PORT, ATTEMPTS, Duration.ofMillis(100), CALL_TIMEOUT);
         conn.onDisconnect(fired::add);
 
         CompletableFuture<Void> connected = conn.connect();
@@ -198,6 +220,185 @@ final class IceAdapterConnectionCloseRaceTest {
                 "the read loop must report the local close it was ended by");
         assertEquals(1, fired.size(), "still exactly once: " + fired);
         assertEquals(DisconnectReason.LOCAL_CLOSE, fired.get(0).reason());
+    }
+
+    /**
+     * A close that stops the retrying is reported by the connect thread as {@code LOCAL_CLOSE}. The
+     * 20 s budget (200 x 100 ms) leaves the retrying under way when the close lands, so its next
+     * in-loop check abandons it; the close is held in the seam until that report is out.
+     *
+     * <p>The general failure catch would also report {@code LOCAL_CLOSE} here, since it reads the
+     * flag too, so the reason alone does not show the abandon path ran. What that path adds is
+     * asserted instead: no connect error attached, and its own DEBUG line.
+     */
+    @Test
+    void aCloseThatStopsTheRetryingIsReportedByTheConnectThreadAsLocalClose() throws Exception {
+        Thread closer = Thread.currentThread();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        AtomicReference<Thread> firedOn = new AtomicReference<>();
+        IceAdapterConnection racing =
+                new IceAdapterConnection(UNBOUND_PORT, 200, Duration.ofMillis(100), CALL_TIMEOUT) {
+                    @Override
+                    void closeFlagSet() {
+                        // On the closing thread: hold close() short of its own fire.
+                        awaitQuietly(disconnected);
+                    }
+                };
+        conn = racing;
+        racing.onDisconnect(
+                e -> {
+                    event.set(e);
+                    firedOn.set(Thread.currentThread());
+                    disconnected.countDown();
+                });
+
+        try (LogCapture log = new LogCapture(IceAdapterConnection.class)) {
+            CompletableFuture<Void> connected = racing.connect();
+            racing.close();
+
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertNotSame(closer, firedOn.get(), "the connect thread must report, not close()");
+            assertEquals(
+                    DisconnectReason.LOCAL_CLOSE,
+                    event.get().reason(),
+                    "a close that stopped the retrying is a local close");
+            assertNull(
+                    event.get().error(),
+                    "the abandon path reports no connect error: " + event.get().error());
+            assertTrue(
+                    log.contains(
+                            Level.DEBUG,
+                            "ICE adapter connect abandoned: close requested while retrying"),
+                    "the abandon path should log its own DEBUG line: " + log.events());
+            assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    /**
+     * A close that lands after the last in-loop check, while the final attempt fails, is reported
+     * by the connect thread as {@code LOCAL_CLOSE}, not {@code CONNECT_FAILED}, and logged at DEBUG
+     * rather than as an unreachable adapter. {@code connectFailed()} signals that the connect
+     * thread is in its failure catch, past the one in-loop check a single attempt makes, so the
+     * close cannot stop the retrying instead; it then holds that thread until the flag is set.
+     */
+    @Test
+    void aCloseRacingTheFinalFailedAttemptIsReportedAsAQuietLocalClose() throws Exception {
+        Thread closer = Thread.currentThread();
+        CountDownLatch inFailureCatch = new CountDownLatch(1);
+        CountDownLatch flagSet = new CountDownLatch(1);
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        AtomicReference<Thread> firedOn = new AtomicReference<>();
+        IceAdapterConnection racing =
+                new IceAdapterConnection(UNBOUND_PORT, 1, Duration.ofMillis(20), CALL_TIMEOUT) {
+                    @Override
+                    void closeFlagSet() {
+                        // On the closing thread: the flag is set, and close() is held short of its
+                        // own fire until the connect thread has fired.
+                        flagSet.countDown();
+                        awaitQuietly(disconnected);
+                    }
+
+                    @Override
+                    void connectFailed() {
+                        // On the connect thread, before it reads the flag.
+                        inFailureCatch.countDown();
+                        awaitQuietly(flagSet);
+                    }
+                };
+        conn = racing;
+        racing.onDisconnect(
+                e -> {
+                    event.set(e);
+                    firedOn.set(Thread.currentThread());
+                    disconnected.countDown();
+                });
+
+        try (LogCapture log = new LogCapture(IceAdapterConnection.class)) {
+            CompletableFuture<Void> connected = racing.connect();
+            assertTrue(inFailureCatch.await(5, TimeUnit.SECONDS), "the single attempt must fail");
+            racing.close();
+
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertThrows(ExecutionException.class, () -> connected.get(5, TimeUnit.SECONDS));
+            assertNotSame(closer, firedOn.get(), "the connect thread must report, not close()");
+            assertNotNull(
+                    event.get().error(),
+                    "the report must come from the failure catch, which carries the connect error");
+            assertEquals(
+                    DisconnectReason.LOCAL_CLOSE,
+                    event.get().reason(),
+                    "a close requested before the failure was reported is a local close");
+            String failure = event.get().error().getMessage();
+            assertFalse(
+                    log.contains(Level.WARN, failure),
+                    "our own close is not an unreachable adapter: " + log.events());
+            assertTrue(
+                    log.contains(Level.DEBUG, "close landed in the last attempt (" + failure + ")"),
+                    "the close should be logged at DEBUG instead: " + log.events());
+        }
+    }
+
+    /**
+     * A caller that closes because the connect failed, as {@code LaunchIceCommand} and {@code
+     * IceReachabilityCheck} do, must not relabel a genuine failure. The failure is logged at WARN
+     * and reported as {@code CONNECT_FAILED} before the future fails, so a close made in reaction
+     * comes too late to change either. {@code connectFailed()} holds the connect thread until the
+     * reaction is registered, so the reaction runs as the future fails. Two attempts rather than
+     * one keep this failure's message distinct from the case above.
+     */
+    @Test
+    void aCloseMadeBecauseTheConnectFailedLeavesItAConnectFailure() throws Exception {
+        CountDownLatch inFailureCatch = new CountDownLatch(1);
+        CountDownLatch reactionRegistered = new CountDownLatch(1);
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<DisconnectEvent> event = new AtomicReference<>();
+        IceAdapterConnection failing =
+                new IceAdapterConnection(UNBOUND_PORT, 2, Duration.ofMillis(20), CALL_TIMEOUT) {
+                    @Override
+                    void connectFailed() {
+                        inFailureCatch.countDown();
+                        awaitQuietly(reactionRegistered);
+                    }
+                };
+        conn = failing;
+        failing.onDisconnect(
+                e -> {
+                    event.set(e);
+                    disconnected.countDown();
+                });
+
+        try (LogCapture log = new LogCapture(IceAdapterConnection.class)) {
+            CompletableFuture<Void> connected = failing.connect();
+            assertTrue(inFailureCatch.await(5, TimeUnit.SECONDS), "both attempts must fail");
+            CompletableFuture<Void> reaction =
+                    connected.whenComplete((ignored, error) -> failing.close());
+            reactionRegistered.countDown();
+
+            // The reaction's own future completes only once close() has run.
+            assertThrows(ExecutionException.class, () -> reaction.get(5, TimeUnit.SECONDS));
+            assertTrue(disconnected.await(5, TimeUnit.SECONDS), "the listener must fire");
+            assertEquals(
+                    DisconnectReason.CONNECT_FAILED,
+                    event.get().reason(),
+                    "a close made after the failure must not relabel it");
+            assertTrue(
+                    log.contains(Level.WARN, event.get().error().getMessage()),
+                    "a genuine failure must still be logged at WARN: " + log.events());
+        }
+    }
+
+    /**
+     * Waits up to five seconds. A timeout is not reported here: it lets the held side go on, and
+     * the test's own assertions then say which side fired.
+     */
+    private static void awaitQuietly(final CountDownLatch latch) {
+        try {
+            latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /** Polls {@code condition} for up to five seconds. */
