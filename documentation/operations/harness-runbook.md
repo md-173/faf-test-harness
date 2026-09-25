@@ -1575,7 +1575,8 @@ either way. A `schedule` needs a credential that is still valid when it
 fires. An ordinary access token lasts about an hour and a refresh token is
 spent on first use, so neither works; a pre-signed access token minted to
 outlive the schedule does, since nothing in the harness reads its expiry, but
-only FAF's Hydra can sign one. §3 has the detail.
+only FAF's Hydra can sign one, and its normal flow does not issue one, so it
+has to be arranged with FAF. §3 has the detail.
 
 ```yaml
 name: FAF harness session (advisory)

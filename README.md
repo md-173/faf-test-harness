@@ -186,8 +186,9 @@ exit codes are [its own table](mock-client/README.md#exit-codes);
 
 The session above is the job a component maintainer runs unattended. A scheduled run needs a
 credential that is still valid when it fires: a pre-signed access token minted by FAF's Hydra
-to outlive the schedule works, because the harness reads no expiry of its own, but an
-ordinary access token lasts about an hour and a refresh token is spent on first use (runbook
+to outlive the schedule works, because the harness reads no expiry of its own. Hydra's normal
+flow does not issue one, so it has to be arranged with FAF; an ordinary access token lasts
+about an hour, and a refresh token is spent on first use (runbook
 [§11, The job](documentation/operations/harness-runbook.md#the-job)). This repository runs
 the session on every dispatch in
 [`.github/workflows/live-integration.yml`](.github/workflows/live-integration.yml), and
