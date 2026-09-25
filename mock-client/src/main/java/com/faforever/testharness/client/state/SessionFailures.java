@@ -3,16 +3,14 @@ package com.faforever.testharness.client.state;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,9 +35,6 @@ final class SessionFailures {
 
     /** The lifecycle's logger, not this class's; see the class javadoc. */
     private static final Logger LOG = LoggerFactory.getLogger(MockClientLifecycle.class);
-
-    /** How deep {@link #describe} follows a cause chain, so one that loops cannot hang a line. */
-    private static final int MAX_CAUSE_DEPTH = 16;
 
     /**
      * How long {@link #adapterAtTeardown} gives an adapter whose JSON-RPC link closed from its side
@@ -323,50 +318,24 @@ final class SessionFailures {
     }
 
     /**
-     * Strips the {@link ExecutionException} and {@link CompletionException} wrappers a future adds,
-     * so a failure is judged by what actually caused it.
+     * Strips the wrappers a future adds; the lifecycle's name for {@link Failures#unwrap}, which
+     * the lobby's lines share (#455).
      *
      * @param failure the failure as a future reported it
      * @return the first cause that is not such a wrapper
      */
     static Throwable unwrap(final Throwable failure) {
-        Throwable cause = failure;
-        while ((cause instanceof ExecutionException || cause instanceof CompletionException)
-                && cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        return cause;
+        return Failures.unwrap(failure);
     }
 
     /**
-     * Names a failure for a log line: its type, which carries the meaning, then its message when it
-     * has one (the {@code TimeoutException} a call's timer completes it with has none), then the
-     * failure at the bottom of its cause chain, when there is one. That last part is what tells a
-     * closed connection's kinds apart: nothing for a clean end of the stream, a {@code
-     * SocketException} for a reset, a {@code JsonProcessingException} for a stream that stopped
-     * parsing.
+     * Names a failure for a log line; the lifecycle's name for {@link Failures#describe}, which the
+     * lobby's lines share (#455).
      *
      * @param cause the failure to name
      * @return its simple class name and message, and its root cause's when it has one
      */
     static String describe(final Throwable cause) {
-        Throwable root = cause;
-        for (int depth = 0; depth < MAX_CAUSE_DEPTH && root.getCause() != null; depth++) {
-            root = root.getCause();
-        }
-        return root == cause ? name(cause) : name(cause) + ", caused by " + name(root);
-    }
-
-    private static String name(final Throwable failure) {
-        // A Jackson error's getMessage() puts its source location on a second line, which would
-        // split the one line naming it; its original message is the cause on its own, as
-        // LobbyConnection logs a malformed frame.
-        String message =
-                failure instanceof JsonProcessingException json
-                        ? json.getOriginalMessage()
-                        : failure.getMessage();
-        return message == null
-                ? failure.getClass().getSimpleName()
-                : failure.getClass().getSimpleName() + ": " + message;
+        return Failures.describe(cause);
     }
 }
