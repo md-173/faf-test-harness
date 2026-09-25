@@ -238,10 +238,16 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
      * "\nUsage:"} would forge the boundary between the error and picocli's usage block for anything
      * reading stderr.
      *
-     * <p>Every caller-controlled value interpolated into one of these messages goes through here,
-     * not just the path: an underlying library's message is no more trustworthy than the filename
-     * that produced it, and one unescaped operand reopens the hole for all of them. Values drawn
-     * from fixed sets, such as the stale-key names, are exempt.
+     * <p>Every caller-controlled value interpolated into one of this class's messages goes through
+     * here, not just the path: an underlying library's message is no more trustworthy than the
+     * filename that produced it, and one unescaped operand reopens the hole for all of them. Values
+     * drawn from fixed sets, such as the stale-key names, are exempt.
+     *
+     * <p>This covers only the diagnostics raised while the {@code CommandLine} is being built,
+     * which is all this class produces. The single-line property holds for the whole CLI because
+     * the two handlers {@code ConfigLoader.newCommandLine} installs apply the same escaping to
+     * everything reported from inside {@code execute}: {@code ParameterExceptionHandler} to parse
+     * errors (#307) and {@code ExecutionExceptionHandler} to exceptions escaping a subcommand.
      *
      * @param value the value to interpolate — a {@link Path}, or a message from a caught exception
      * @return the value's text with every line terminator replaced by a literal {@code \n}

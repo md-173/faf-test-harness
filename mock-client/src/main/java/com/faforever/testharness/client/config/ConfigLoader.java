@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.config;
 
 import com.faforever.testharness.client.cli.ExecutionExceptionHandler;
+import com.faforever.testharness.client.cli.ParameterExceptionHandler;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -19,9 +20,9 @@ import picocli.CommandLine.ParseResult;
  *
  * <ul>
  *   <li>{@link #newCommandLine(String[], Map)} — builds the {@link CommandLine} with the {@link
- *       LayeredDefaultProvider} and the {@link ExecutionExceptionHandler} attached. Used by {@code
- *       Main} to drive {@link CommandLine#execute(String...)}, and by tests that want to exercise
- *       the subcommand tree.
+ *       LayeredDefaultProvider}, the {@link ExecutionExceptionHandler} and the {@link
+ *       ParameterExceptionHandler} attached. Used by {@code Main} to drive {@link
+ *       CommandLine#execute(String...)}, and by tests that want to exercise the subcommand tree.
  *   <li>{@link #load(String[], Map)} — parses {@code args} and returns a validated config (or
  *       {@link Optional#empty()} on {@code --help}/{@code --version}). The headless test seam used
  *       by all existing {@code ConfigLoader*Test} classes — its contract is stable and must not
@@ -106,6 +107,10 @@ public final class ConfigLoader {
         // subcommand sets that property later, inside call(). A logger here would pin the whole
         // process at INFO and silently disable --log-level. See ExecutionExceptionHandler.
         commandLine.setExecutionExceptionHandler(new ExecutionExceptionHandler());
+        // Its parse-error counterpart, for the same reason and under the same constraint: picocli's
+        // default prints the offending argument raw, so an argv with a newline in it could forge
+        // the Usage: line (#307). See ParameterExceptionHandler.
+        commandLine.setParameterExceptionHandler(new ParameterExceptionHandler());
         commandLine.setExecutionStrategy(ConfigLoader::applyLoggingThenRun);
 
         try {
