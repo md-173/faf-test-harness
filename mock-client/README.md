@@ -493,7 +493,8 @@ before paying for a full session test, and to tell "the adapter never came up"
 apart from "the session logic is wrong".
 
 The adapter itself is less abstemious: on every launch `faf-ice-adapter` 3.3.14
-opens a telemetry WebSocket to `ice-telemetry.faforever.com`, which it has no
+opens a telemetry WebSocket, which the harness points at FAF's test service
+`ice-telemetry.faforever.xyz` rather than production, and which it has no
 flag to disable (`json-rpc-spec.md` §8). The verdict does not depend on it — a
 refused connection makes the adapter unregister its telemetry debugger and carry
 on — but on a network that blackholes rather than refuses, expect the adapter's

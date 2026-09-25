@@ -275,7 +275,8 @@ processes.
 
 - `[ICEAdapter] … TelemetryDebugger - Error on sending message object: …
   WebsocketNotConnectedException` — the adapter phones home to
-  `ice-telemetry.faforever.com` and 3.3.14 has no working off switch
+  FAF's test service `ice-telemetry.faforever.xyz`, where the harness points it, and 3.3.14
+  has no working off switch
   ([`ice-adapter-setup.md`](../operations/ice-adapter-setup.md)). Harmless.
 - `[ICEAdapter] … Error while communicating with FA (input), assuming shutdown … EOFException` —
   this is the adapter noticing the game closed its GPGNet socket on the way out, i.e. the clean

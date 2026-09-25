@@ -104,19 +104,29 @@ tasks.register('downloadIceAdapter') {
         logger.lifecycle("Downloading faf-ice-adapter ${iceAdapterVersion} from ${url}")
         // Up to three attempts: ci.yml's live-tests gate runs this on every pull request, and one
         // transient error from GitHub's release CDN would otherwise fail a PR it has nothing to do
-        // with. The checksum below is still checked once, on whichever attempt completed.
-        for (int attempt = 1; ; attempt++) {
-            try {
-                downloadFollowingRedirects(url, target)
-                break
-            } catch (IOException | GradleException e) {
-                if (attempt == 3) {
-                    throw e
+        // with. Only a network error or a 5xx or 429 is retried: downloadFollowingRedirects throws
+        // those as IOException, and anything else will not change on a second try, so it ends the
+        // task at once. Whatever ends it, the partial file goes too. Every live test finds the
+        // adapter with Files.isRegularFile, so a truncated jar would fail them as a corrupt jar
+        // rather than as the missing one it is. The checksum below is checked once, on whichever
+        // attempt completed.
+        try {
+            for (int attempt = 1; ; attempt++) {
+                try {
+                    downloadFollowingRedirects(url, target)
+                    break
+                } catch (IOException e) {
+                    if (attempt == 3) {
+                        throw e
+                    }
+                    logger.warn("Download attempt ${attempt} of 3 failed (${e.message}); " +
+                            "retrying in ${5 * attempt} s")
+                    Thread.sleep(5000L * attempt)
                 }
-                logger.warn("Download attempt ${attempt} of 3 failed (${e.message}); " +
-                        "retrying in ${5 * attempt} s")
-                Thread.sleep(5000L * attempt)
             }
+        } catch (Exception e) {
+            target.delete()
+            throw e
         }
         def actual = sha256Hex(target)
         if (actual != iceAdapterSha256) {
@@ -146,11 +156,23 @@ def downloadFollowingRedirects(String urlStr, File dest) {
         }
         if (code != 200) {
             conn.disconnect()
+            // A 5xx or a 429 is the server saying "not now", so it goes up as the IOException the
+            // caller retries. Any other status, such as a 404 from a mistyped version, is final.
+            if (code >= 500 || code == 429) {
+                throw new IOException("HTTP ${code} downloading ${urlStr}")
+            }
             throw new GradleException("HTTP ${code} downloading ${urlStr}")
         }
         dest.parentFile?.mkdirs()
         dest.withOutputStream { out -> conn.inputStream.withCloseable { input -> out << input } }
+        long expected = conn.contentLengthLong
         conn.disconnect()
+        // HttpURLConnection reports a body cut short by a clean close as an ordinary end of stream,
+        // so compare with the length the server declared: a short body is a dropped transfer, which
+        // the caller retries like any other network error.
+        if (expected >= 0 && dest.length() != expected) {
+            throw new IOException("Got ${dest.length()} of ${expected} bytes downloading ${urlStr}")
+        }
         return
     }
     throw new GradleException("Too many redirects downloading ${urlStr}")

@@ -480,7 +480,8 @@ implied: `ClientGameLifecycleLiveTest` needs no account and no credentials, and
 requires no network of its own, so `./gradlew downloadIceAdapter` followed by
 the command above takes a clean clone to a completed handshake against the real
 adapter. ("Requires" is the operative word: the adapter subprocess still opens a
-telemetry websocket to `ice-telemetry.faforever.com`, which 3.3.14 offers no way
+telemetry websocket, to FAF's test service `ice-telemetry.faforever.xyz` since
+the harness passes it `--telemetry-server`, and 3.3.14 offers no way
 to disable. It is non-blocking — off-network it logs an error and the run
 proceeds — so treat that noise as expected, not as a broken harness. See
 [`ice-adapter-setup.md`](ice-adapter-setup.md).)

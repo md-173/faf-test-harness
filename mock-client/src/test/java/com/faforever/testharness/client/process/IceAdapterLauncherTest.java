@@ -122,6 +122,8 @@ final class IceAdapterLauncherTest {
         assertEquals("7236", valueAfter(argv, "--rpc-port"));
         assertEquals("7237", valueAfter(argv, "--gpgnet-port"));
         assertEquals("7238", valueAfter(argv, "--lobby-port"));
+        // Pinned as a literal, so pointing it back at production fails here rather than in review.
+        assertEquals("wss://ice-telemetry.faforever.xyz", valueAfter(argv, "--telemetry-server"));
     }
 
     @Test

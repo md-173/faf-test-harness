@@ -17,7 +17,10 @@
 #       mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
 #
 # Run it from the repository root after the integrationTest tasks, locally as well as in CI. It
-# checks every class before exiting, so one run names every class that is missing or skipped.
+# reads whatever results are there, so run it straight after them, as the workflows do. Gradle
+# deletes a test task's old TEST-*.xml files every time the task runs, and renaming a class always
+# reruns it, so a renamed class leaves no stale result behind to pass on. The script checks every
+# class before exiting, so one run names every class that is missing or skipped.
 # Problems are printed as GitHub `::error::` annotations, which read as plain lines outside Actions.
 set -euo pipefail
 
