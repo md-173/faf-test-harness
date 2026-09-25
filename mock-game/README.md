@@ -30,7 +30,7 @@ described under [Logging](#logging).
 | Flag | Required | Default | What it is |
 | :--- | :--- | :--- | :--- |
 | `--gpgnet-port <port>` | yes | — | The adapter's GPGNet TCP port, the one it was started with as `--gpgnet-port`. This is what the game connects *out* to. |
-| `--lobby-port <port>` | yes | — | The UDP port the game announces as its lobby port. Peer traffic arrives here. |
+| `--lobby-port <port>` | yes | — | A fallback UDP port for peer traffic. The game binds the port the adapter announces in `CreateLobby`, logging a warning if the two differ, and binds this one only when that frame carries no usable port. |
 | `--player-id <id>` | yes | — | FAF player id of the owning session. |
 | `--player-login <login>` | yes | — | FAF player login. Must not be blank. |
 | `--game-uid <uid>` | yes | — | Lobby game uid. `0` means no orchestrated session, which is what a standalone run passes. |

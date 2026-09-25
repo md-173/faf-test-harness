@@ -204,6 +204,9 @@ only when run directly. Under `mock-client run`, which is the example above,
 even that does not apply: `MockGameLauncher` and `IceAdapterLauncher` each
 overwrite `LOG_LEVEL` in the child they spawn with `mock-client`'s own resolved
 level, so an orchestrated run comes up at that level in all three processes.
+The adapter is included only when it is launched from a `.jar`: upstream reads
+no `LOG_LEVEL`, and the level reaches it through the headless logback config the
+launcher injects on that path alone (`subprocess-orchestration-spec.md` §2.3).
 `LOG_LEVEL=DEBUG mock-client run …` gives `INFO` everywhere.
 
 ### Environment variable convention
@@ -307,15 +310,18 @@ The mock client uses OAuth2 refresh-token rotation against the seeded
    exchange the resulting authorization code for a refresh token. Persist the
    token to `oauthRefreshTokenFile`. Full procedure in
    `documentation/research/lobby-protocol-spec.md` §2.
-2. **Steady-state** (headless, runtime): on startup or when the access token
-   nears expiry, POST to the token endpoint with `grant_type=refresh_token`.
-   Hydra rotates the refresh token on every use — the loader caller must
-   rewrite `oauthRefreshTokenFile` atomically *before* treating the refresh as
+2. **Steady-state** (headless, runtime): once per run, after the lobby
+   WebSocket opens and before `ask_session`, POST to the token endpoint with
+   `grant_type=refresh_token`. Nothing refreshes near expiry. Hydra rotates the
+   refresh token on every use, so the loader caller must rewrite
+   `oauthRefreshTokenFile` atomically *before* treating the refresh as
    successful.
 
-The `oauthAccessToken` / `oauthTokenFile` fields are auxiliary: they accept the
-bootstrap's access-token output directly, which is convenient for one-shot
-smoke tests but does not survive an access-token expiry (~1 hour).
+The other channel is `oauthAccessTokenFile` (`--oauth-access-token-file`): a
+pre-signed access token sent as-is, with no Hydra call and no rotation. It is
+what the live CI job uses, and it stops working when that token expires. See
+[`harness-runbook.md`
+§3](../documentation/operations/harness-runbook.md#the-other-credential-channel-a-pre-signed-access-token).
 
 ### Secrets
 
@@ -551,7 +557,7 @@ itself without a rerun:
 | `RPC_UNREACHABLE` | Nothing accepted a JSON-RPC connection within the budget. |
 | `RPC_SILENT` | The socket opened but the adapter never answered a request on it. |
 | `GPGNET_UNREACHABLE` | The GPGNet port refused the probe. |
-| `GPGNET_UNCONFIRMED` | The GPGNet port accepted, but the adapter never announced it over RPC — the two halves are not wired together. |
+| `GPGNET_UNCONFIRMED` | The GPGNet port accepted, but the adapter never announced it over RPC: the two halves are not wired together. Or, on a port conflict, a leftover adapter that already had a client holds the ports ([runbook §2a](../documentation/operations/harness-runbook.md#2a-the-jar-only-path-no-clone)). |
 | `INTERRUPTED` | The thread running the check was interrupted. Not what `Ctrl-C` does: SIGINT ends the JVM at exit `130` with no verdict line at all (the adapter is still reaped, by the subprocess shutdown hook). This verdict is for programmatic callers of `IceReachabilityCheck`. |
 
 What a pass proves: the binary launches, its JSON-RPC endpoint parses and answers

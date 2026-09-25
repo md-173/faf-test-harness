@@ -8,8 +8,10 @@ the IPC wire protocol on `127.0.0.1:7236`).
 Scope: process lifecycle only — launch, output capture, health, teardown.
 The JSON-RPC traffic itself is out of scope here.
 
-> **Source of truth.** CLI flags and the example startup sequence are taken
-> from the upstream [`java-ice-adapter` README][readme]. The supervision
+> **Source of truth.** CLI flags are checked against the pinned 3.3.14
+> adapter's `IceOptions` (the upstream [`java-ice-adapter` README][readme]
+> option list is stale at that version, see §2.6); the example startup
+> sequence is taken from that README. The supervision
 > pattern is informed by the real client's
 > [`IceAdapterImpl.java`][downlords-iceadapter] in `downlords-faf-client`.
 
@@ -99,20 +101,37 @@ Mirroring `IceAdapterImpl`:
 
 `ProcessBuilder.environment()` starts as a copy of the parent. We:
 
-- set `LOG_DIR` to a per-child directory under `${LOG_DIR:-logs}/<child>/`;
-  the adapter's README documents `LOG_DIR` as the supported way to redirect
-  its file output (the `--log-directory` flag is deprecated upstream).
-- pass `LOG_LEVEL` through unchanged so children inherit the harness log
-  level (see `LoggingSetup`).
+- set `LOG_DIR`, for the adapter only, to the fixed directory
+  `logs/ice-adapter/`; the adapter's README documents `LOG_DIR` as the
+  supported way to redirect its file output. No parent `LOG_DIR` is read: the
+  harness's own output path comes from `LOG_FILE` (`LoggingSetup`). On the
+  `.jar` path it redirects nothing, because the injected config below has no
+  file appender.
+- set `LOG_LEVEL` to the harness's own resolved level, overwriting any
+  inherited value, so a child logs at the level mock-client resolved (see
+  `LoggingSetup` for that precedence). Upstream does not read it: the pinned
+  3.3.14 adapter's bundled `logback.xml` hardcodes `<root level="DEBUG">` and
+  substitutes `${LOG_DIR}` only, and neither its README nor its `IceOptions`
+  mentions a log level. It takes effect only because the launcher injects a
+  console-only logback config whose root level is `${LOG_LEVEL:-INFO}`, and
+  that injection happens on the `.jar` path alone. Against a non-jar adapter
+  `LOG_LEVEL` is inert. For the adapter the two variables are mirror images:
+  `LOG_LEVEL` works only on the jar path, `LOG_DIR` only off it. mock-game,
+  our own component, honours `LOG_LEVEL` on every path.
 - do **not** scrub other env vars. The children run as the same OS user as
   the Mock Client, so they gain nothing it does not already have.
 
 ### 2.4 Working directory
 
-`ProcessBuilder.directory(...)` is set to a per-session scratch directory
-(e.g. `/tmp/harness/<sessionId>/<child>/`), created before launch. This
-isolates any files the adapter writes (its own log fallback, dump files)
-from the harness CWD.
+**Intended, not implemented.** The design is a per-session scratch directory
+(e.g. `/tmp/harness/<sessionId>/<child>/`), created before launch and set with
+`ProcessBuilder.directory(...)`, isolating what a child writes (its own log
+fallback, dump files) from the harness CWD.
+
+No launcher calls `directory(...)` today, so every child inherits the harness's
+working directory, and the relative paths in §2.3 resolve against it: two
+harness instances started in one directory share `logs/ice-adapter/`.
+`IceAdapterLauncher`'s javadoc records the same gap and points back here.
 
 ### 2.5 Stream wiring
 
@@ -128,20 +147,26 @@ from the harness CWD.
 
 ### 2.6 ICE adapter CLI arguments
 
-Verbatim from [the upstream README's "Commandline invocation"][readme].
-Bold flags are passed by the Mock Client on every launch.
+The adapter's options at the pinned 3.3.14, checked against its `IceOptions`
+class. The [upstream README's "Commandline invocation"][readme] list is stale
+at that version: it omits `--game-id`, `--ping-count`, `--acceptable-latency`
+and `--telemetry-server`, and still lists `--log-directory`, which 3.3.14 does
+not have. Bold flags are passed by the Mock Client on every launch.
 
 | Flag | Default | Required | Notes |
 |---|---|---|---|
 | **`--id <int>`** | — | yes | Local player id. Sourced from `welcome.me.id` cached at lobby auth time (json-rpc-spec §8.1). |
 | **`--login <string>`** | — | yes | Local player login. Sourced from `welcome.me.login`. |
 | **`--game-id <int>`** | — | yes | Game id. **Required by adapter 3.3.x** — it prints usage and exits without it. Sourced from `game_launch.uid`; a placeholder (`iceAdapterGameId`, default 0) for the standalone diagnostics. |
-| **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. Allocated dynamically (§3) so multiple harness instances on one host do not collide. |
+| **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. The configured value, `7236` unless moved; only `session` allocates a free port per peer (§3), so two other harness commands on one host collide unless one is moved (runbook §2a, **Ports**). |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
-| `--log-directory <path>` | unset | no | Deprecated upstream — use `LOG_DIR` env var instead (§2.3). |
+| `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
+| `--ping-count <int>` | `1` | no | Pings sent to each ICE server to measure its round-trip time; `0` skips the measurement. Not set by the Mock Client. |
+| `--acceptable-latency <double>` | `250.0` | no | Round-trip-time threshold: ICE servers measured below it, or not measured, are tried first (`IceServer.hasAcceptableLatency`). Upstream's `--help` text for this flag repeats `--ping-count`'s. Not set by the Mock Client. |
+| `--telemetry-server <url>` | `wss://ice-telemetry.faforever.com` | no | Websocket the adapter opens to FAF's ICE telemetry service on launch. No clean disable at 3.3.14 (json-rpc-spec §8). The Mock Client never passes it, so every harness launch connects there. |
 | `--help` | — | no | Diagnostic only. |
 
 The Mock Client emits `--id` and `--login` first, with `--game-id`
@@ -197,8 +222,8 @@ The example below mirrors json-rpc-spec §9 phases A–B.
      "--rpc-port",    rpcPort,
      "--gpgnet-port", gpgnetPort,
      "--lobby-port",  lobbyUdpPort ]
-   env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<inherited>
-   cwd   = <session scratch dir>
+   env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<mock-client's resolved level>
+   cwd   = <inherited from the harness; see §2.4>
    redirectErrorStream(false)
 
 3. SubprocessManager ice = SubprocessManager.start(pb, "ICEAdapter", grace);
@@ -276,7 +301,7 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
 ```text
 [ mockGameBin,
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
-  "--lobby-port",  lobbyUdpPort,  // UDP, must match adapter
+  "--lobby-port",  lobbyUdpPort,  // UDP, fallback only; CreateLobby's port wins
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
   "--game-uid",    game_launch.uid,
@@ -370,7 +395,8 @@ two ports it shares with the adapter.
 
 ## 3. Port allocation
 
-To avoid collisions between harness instances sharing one host:
+**Implemented by `session` only, and without the retry.** To avoid
+collisions between harness instances sharing one host, the design is:
 
 - Open a `ServerSocket(0)` (TCP) or `DatagramSocket(0)` (UDP), read
   `getLocalPort()`, close, pass the integer to the child.
@@ -379,6 +405,14 @@ To avoid collisions between harness instances sharing one host:
   error; cap retries at 3.
 - Ports are **per session**, not pooled. The Mock Client never holds a port
   binding alongside the child.
+
+`session` does the first and last of these for every peer
+(`MultiPeerSession.freeAdapterPorts`, the one free-port allocator in main
+source), but nothing retries with a fresh port, so a collision in that window
+fails the run. `run`, `launch-ice` and `ice-smoke` allocate nothing: they pass
+the configured ports, which default to `7236`, `7237` and `7238`, so two of
+them on one host collide unless one is moved by hand (runbook §2a,
+**Ports**).
 
 ## 4. stdout / stderr capture
 

@@ -43,8 +43,11 @@ import org.slf4j.LoggerFactory;
  *
  * <p>If the configured binary path ends in {@code .jar} it is launched via {@code java -jar} on the
  * same JRE as the parent (spec §2.2); otherwise it is executed directly. Log level is passed to the
- * child through the {@code LOG_LEVEL} environment variable, not a CLI flag — the adapter has no
- * log-level flag and reads {@code LOG_LEVEL} per its upstream README (spec §2.3).
+ * child through the {@code LOG_LEVEL} environment variable, not a CLI flag, because the adapter has
+ * no log-level flag. Upstream does not read the variable either: its bundled {@code logback.xml}
+ * hardcodes a {@code DEBUG} root level. {@code LOG_LEVEL} takes effect only through the
+ * console-only config below, whose root level is {@code ${LOG_LEVEL:-INFO}}, so it has no effect on
+ * a non-jar adapter (spec §2.3).
  *
  * <p>For a {@code .jar} adapter the launcher also injects {@code -Dlogback.configurationFile}
  * pointing at a console-only config it writes under {@link #LOG_DIR}. The upstream {@code -nojfx}
@@ -174,8 +177,9 @@ public class IceAdapterLauncher {
         List<String> argv = buildArgv(binary, identity);
 
         ProcessBuilder pb = new ProcessBuilder(argv);
-        // Spec §2.3: per-child LOG_DIR, and LOG_LEVEL sourced from the harness config so the
-        // adapter logs at the same level as the Mock Client.
+        // Spec §2.3: per-child LOG_DIR, and LOG_LEVEL set from the harness config, overwriting
+        // any inherited value, so a .jar adapter logs at the same level as the Mock Client. Only
+        // a .jar adapter: the level reaches it through the headless config written below.
         pb.environment().put("LOG_DIR", LOG_DIR + "/");
         pb.environment().put(LoggingSetup.LOG_LEVEL_ENV, settings.logLevel());
         // Note: redirectErrorStream is intentionally NOT set — SubprocessManager keeps stdout and

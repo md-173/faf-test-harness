@@ -21,7 +21,9 @@ Refs: WBS 2.2.4 — FAF Component Overview Diagrams.
 - **Protocol labels.** Transport names match the Communication Channels table
   in [`../research/project-briefing.md`](../research/project-briefing.md)
   verbatim. If a label here disagrees with the briefing, the briefing wins and
-  this folder should be updated.
+  this folder should be updated. That table covers session traffic only, so
+  credential edges drawn to Ory Hydra have no row in it and follow the Mock
+  Client's steady-state token exchange in `sequence-full-session.md` instead.
 - **Mock vs real.** `[MOCK]` suffix and the orange fill indicate components
   authored in this repo. `[REAL]` suffix and the blue fill indicate components
   from upstream FAForever that we reuse (notably `faf-ice-adapter` and the

@@ -62,8 +62,8 @@ between players thru the ICE adapter. When the game ends, the client sends the r
 
 | Channel             | Between                 | Protocol               | Carries                                                            |
 | ------------------- | ----------------------- | ---------------------- | ------------------------------------------------------------------ |
-| Lobby connection    | Client and Lobby Server | Line-delimited JSON over TCP (SimpleJsonProtocol; the server also supports a legacy QDataStream binary format)          | Auth, game listings, session setup, ICE candidate relay            |
-| ICE adapter control | Client and ICE Adapter  | JSON-RPC over TCP      | Instructions: who to connect to, ICE candidates                    |
+| Lobby connection    | Client and Lobby Server | Line-delimited JSON over TCP (SimpleJsonProtocol; the server also supports a legacy QDataStream binary format)          | Auth, game listings, session setup, ICE message relay              |
+| ICE adapter control | Client and ICE Adapter  | JSON-RPC over TCP      | Instructions: who to connect to, ICE messages                      |
 | GPGNet              | Game and ICE Adapter    | Custom binary over TCP | Game lifecycle events: lobby ready, game started, player connected |
 | Game traffic        | Game and Game (via ICE) | UDP peer-to-peer       | Live game data: unit movement, commands, game state                |
 

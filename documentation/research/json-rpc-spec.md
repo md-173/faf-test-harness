@@ -306,21 +306,25 @@ lobby server performs.
 
 ## 8. Adapter command-line arguments
 
-Verbatim from the README; arguments relevant to the Mock Client are bold.
+The adapter's options at the pinned 3.3.14, checked against its `IceOptions`
+class rather than the upstream README, whose list is stale at that version;
+arguments relevant to the Mock Client are bold.
 
 | Flag | Default | Notes |
 |---|---|---|
 | **`--id <int>`** | required | Local player id. Sourced from `welcome.me.id` cached at lobby auth time, OR `game_launch.uid` if we want per-game ids — see §8.1. |
 | **`--login <string>`** | required | Local player login. Sourced from `welcome.me.login`. |
 | **`--game-id <int>`** | required | Game id. **Required by 3.3.x — the adapter prints usage and exits without it.** Sourced from `game_launch.uid`; a placeholder for the standalone diagnostics. |
-| **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client allocates a free port and passes it explicitly so multiple harness instances do not collide. |
+| **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client passes it explicitly: the configured value, `7236` unless moved, or a free port per peer under `session` (subprocess-orchestration-spec §3). |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
-| `--log-directory <path>` | env `LOG_DIR` | Deprecated; use the `LOG_DIR` env var instead. |
+| `--log-directory <path>` | unset | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var. |
 | `--force-relay` | off | Forces TURN-only candidates; useful for fault-injection later (WBS 3.x). |
 | `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
 | `--info-window` | off | Same. |
 | `--delay-ui <ms>` | 0 | Same. |
+| `--ping-count <int>` | `1` | Pings sent to each ICE server to measure its round-trip time; `0` skips the measurement. |
+| `--acceptable-latency <double>` | `250.0` | Round-trip-time threshold: ICE servers measured below it, or not measured, are tried first. Upstream's `--help` text for this flag repeats `--ping-count`'s. |
 | `--telemetry-server <url>` | FAF telemetry | On launch the adapter opens a websocket to `ice-telemetry.faforever.com`. **No clean disable in 3.3.14** — an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. |
 | `--help` | — | Print usage and exit. |
 
@@ -349,7 +353,7 @@ must implement.
 | Boot | 2 | MC → IA | TCP connect to `127.0.0.1:P` | Mock Client is the TCP client. |
 | Setup | 3 | MC → IA | `setLobbyInitMode("normal" \| "auto")` | "auto" iff matchmaker game. |
 | Setup | 4 | MC → IA | `setIceServers([…])` | Required before `joinGame` / `connectToPeer`. STUN/TURN config from lobby (or static dev config). |
-| Setup | 5 | (CLI) | launch `mock-game` with `--gpgnet-port`, `--lobby-port` matching adapter | Subprocess launch. See WBS 2.2.8. |
+| Setup | 5 | (CLI) | launch `mock-game` with `--gpgnet-port` matching the adapter, and `--lobby-port` as a fallback for the port `CreateLobby` announces | Subprocess launch. See WBS 2.2.8. |
 | Setup | 6 | IA → MC | `onConnectionStateChanged("Connected")` | Mock-game has connected to the adapter's GPGNet TCP server. |
 | Setup | 7 | IA → MC | `onGpgNetMessageReceived("GameState", ["Idle"])` | Mock-game emitted its first frame. Mock Client wraps and forwards to lobby. |
 | Setup | 8 | IA → MC | `onGpgNetMessageReceived("GameState", ["Lobby"])` | Same. |
