@@ -33,10 +33,11 @@ import org.slf4j.LoggerFactory;
  * <p><b>What counts as proof.</b> Five phases, each with its own bounded wait:
  *
  * <ol>
- *   <li><b>port pre-flight</b> — bind the JSON-RPC and GPGNet ports before spawning anything. A
- *       port already in use means a stale or foreign adapter is listening there, and every later
- *       phase would then be probing <em>that</em> process: a pass that says nothing about the
- *       binary under test. Failing here converts a false success into a clear error.
+ *   <li><b>port pre-flight</b> — bind the JSON-RPC and GPGNet ports, and try to connect to each on
+ *       loopback, before spawning anything. A port already in use means a stale or foreign adapter
+ *       is listening there, and every later phase would then be probing <em>that</em> process: a
+ *       pass that says nothing about the binary under test. Failing here converts a false success
+ *       into a clear error.
  *   <li><b>launch</b> — {@link IceAdapterLauncher}, which fails fast on a missing binary.
  *   <li><b>RPC connect</b> — a TCP connect with retry while the adapter JVM is still binding.
  *   <li><b>RPC round-trip</b> — {@code setLobbyInitMode("normal")}, boot step 3 of {@code
@@ -84,6 +85,14 @@ public final class IceReachabilityCheck {
 
     /** Bound on the {@code setLobbyInitMode} round-trip once the socket is open. */
     private static final Duration RPC_CALL_TIMEOUT = Duration.ofSeconds(2);
+
+    /**
+     * Bound on the pre-flight's loopback connect to each port. Loopback answers a connect at once,
+     * either accepting or refusing it, so this only bites where something silently drops SYNs on
+     * loopback; the port then counts as free, which is what the pre-flight concluded before the
+     * connect existed.
+     */
+    private static final Duration PORT_PROBE_CONNECT_TIMEOUT = Duration.ofMillis(500);
 
     /** Bound on the GPGNet TCP connect, which is either immediate or refused. */
     private static final Duration GPGNET_CONNECT_TIMEOUT = Duration.ofSeconds(2);
@@ -218,16 +227,36 @@ public final class IceReachabilityCheck {
      * Phase 1 — the two TCP ports the adapter will bind must be free, so that whatever answers
      * later is the process this check started.
      *
+     * <p>Two tests per port, because neither is enough on every platform (#376):
+     *
+     * <ul>
+     *   <li><b>A wildcard bind</b>, which is what catches a listener on any address on Linux. It
+     *       cannot be trusted on its own on macOS: {@code ServerSocket} sets {@code SO_REUSEADDR},
+     *       and on Darwin and the BSDs that is enough for a second listening bind to succeed
+     *       alongside an existing one (measured against {@code 0.0.0.0:7236}). Linux needs {@code
+     *       SO_REUSEPORT} for that, which {@code ServerSocket} never sets, so there the bind is
+     *       refused. Turning {@code SO_REUSEADDR} off would close the macOS gap but open another:
+     *       on Linux it makes the bind fail while a previous run's connections sit in {@code
+     *       TIME_WAIT}, reporting a free port as busy.
+     *   <li><b>A connect to {@code 127.0.0.1}</b>, the address every later phase probes. If
+     *       anything accepts, a listener already owns the endpoint this check is about to rely on,
+     *       whatever the bind said. This is the test that holds on macOS. It is guarded against TCP
+     *       self-connect, where a connect to a free port in the ephemeral range can be answered by
+     *       its own socket.
+     * </ul>
+     *
+     * <p>Only IPv4 loopback is probed, because that is where the adapter is reached. A listener
+     * bound solely to some other address can still slip past the connect on macOS; it is not where
+     * a stale adapter listens.
+     *
      * @return a {@link Verdict#PORTS_IN_USE} result naming the busy port, or {@code null} if both
      *     are free
      */
     private Result checkPortsFree() {
         for (PortRole role : PortRole.values()) {
             int port = role.portOf(settings);
-            try (ServerSocket probe = new ServerSocket(port)) {
-                LOG.debug(
-                        "port pre-flight: {} port {} is free", role.label(), probe.getLocalPort());
-            } catch (IOException e) {
+            String busy = whyPortIsBusy(port);
+            if (busy != null) {
                 return new Result(
                         Verdict.PORTS_IN_USE,
                         "port pre-flight: "
@@ -235,12 +264,55 @@ public final class IceReachabilityCheck {
                                 + " port "
                                 + port
                                 + " is already in use ("
-                                + e.getMessage()
+                                + busy
                                 + "). Another ICE adapter is probably still running; stop it, or "
                                 + "pass different ports.");
             }
+            LOG.debug("port pre-flight: {} port {} is free", role.label(), port);
         }
         return null;
+    }
+
+    /**
+     * Runs both of {@link #checkPortsFree()}'s tests against one port.
+     *
+     * @param port the TCP port to test
+     * @return why the port is busy, for the verdict line, or {@code null} if both tests passed
+     */
+    private static String whyPortIsBusy(final int port) {
+        try {
+            // Bound and released at once: the connect below must find nothing of ours on the port.
+            new ServerSocket(port).close();
+        } catch (IOException e) {
+            return e.getMessage();
+        }
+        return acceptsOnLoopback(port)
+                ? "a listener on " + LOOPBACK + ":" + port + " accepted a connection"
+                : null;
+    }
+
+    /**
+     * Whether something is listening on {@code 127.0.0.1:port}, judged by whether it accepts a
+     * connection.
+     *
+     * <p>A connection that turns out to be its own peer is TCP self-connect, not a listener: with
+     * nothing bound, a connect to a port in the ephemeral range can be assigned that same port as
+     * its source and complete a simultaneous open with itself. Rare, but a test that borrows a free
+     * port from the OS is in exactly that range.
+     *
+     * @param port the TCP port to try
+     * @return {@code true} if another socket accepted the connection
+     */
+    static boolean acceptsOnLoopback(final int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(
+                    new InetSocketAddress(LOOPBACK, port),
+                    (int) PORT_PROBE_CONNECT_TIMEOUT.toMillis());
+            return socket.getLocalPort() != port;
+        } catch (IOException e) {
+            // Refused, or no answer within the bound: either way nothing accepted.
+            return false;
+        }
     }
 
     /**
