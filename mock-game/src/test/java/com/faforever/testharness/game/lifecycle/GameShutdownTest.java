@@ -25,6 +25,7 @@ import java.net.Socket;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -56,6 +57,9 @@ final class GameShutdownTest {
 
     /** Safety cap on the stall loop — 64MB, far past any plausible loopback buffer pair. */
     private static final int STALL_FRAME_CAP = 128;
+
+    /** Upper bound on each lifecycle state wait, not an expectation of how long it takes. */
+    private static final int STATE_TIMEOUT_SECONDS = 5;
 
     private static final String STILL_WRITING = "still-writing";
     private static final String WRITE_FAILED = "write-failed";
@@ -164,9 +168,16 @@ final class GameShutdownTest {
         assertSame(idle, fsm.getState(), "shutdown must cancel the FSM's scheduled timeout");
     }
 
+    /**
+     * Teardown stops the lifecycle's own scheduler, so a launch pending in HOSTING never fires. The
+     * launch delay is far longer than the test, so nothing here races it; what is checked is that
+     * the scheduler holding the launch was stopped. Watching LIVE never arrive instead would need
+     * the delay to elapse, and the test would then have to reach teardown within that delay of
+     * HOSTING committing, however late its own thread ran.
+     */
     @Test
     void stopsLifecycleScheduledDelay() throws Exception {
-        Duration launchDelay = Duration.ofSeconds(1);
+        Duration launchDelay = Duration.ofMinutes(1);
         MockGameConfig defaultConfig =
                 new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
@@ -181,19 +192,21 @@ final class GameShutdownTest {
             gpgnet.start();
             lifecycle.start();
             gpgnet.awaitClient();
-            lifecycle.stateReached(GameState.IDLE).get(1, TimeUnit.SECONDS);
+            lifecycle.stateReached(GameState.IDLE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            // Each wait is taken before the frame that causes it. stateReached is edge triggered,
+            // so a wait asked for after its state was entered and left would never complete (#250).
+            CompletableFuture<Void> lobby = lifecycle.stateReached(GameState.LOBBY);
             gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
-            lifecycle.stateReached(GameState.LOBBY).get(1, TimeUnit.SECONDS);
+            lobby.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
             gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-            lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
+            hosting.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             lifecycle.shutdown().run();
 
-            // Because shutdown was run, the launch delay scheduled future should have been
-            // cancelled
-            // and LIVE should never be reached.
-            // Sleeping 2 seconds vs the 1 second launch delay.
-            Thread.sleep(launchDelay.toMillis() * 2);
+            assertTrue(
+                    lifecycle.schedulesStopped(),
+                    "shutdown must stop the scheduler holding the pending launch");
             assertEquals(GameState.HOSTING, lifecycle.getState());
         } finally {
             // Make sure gpgnet server is always stopped.

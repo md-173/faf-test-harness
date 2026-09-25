@@ -418,6 +418,17 @@ public final class MockGameLifecycle {
     }
 
     /**
+     * Whether {@link #stopSchedules()} has run. Package-private for {@code GameShutdownTest}, which
+     * checks that teardown stopped the scheduler holding a pending launch rather than sleeping past
+     * the launch delay: {@code shutdownNow()} drains a task that has not started, so it never runs.
+     *
+     * @return {@code true} once the scheduler has been shut down.
+     */
+    /* package-private */ boolean schedulesStopped() {
+        return scheduler.isShutdown();
+    }
+
+    /**
      * Gives a future that completes when the state is reached.
      *
      * <p>Guarded against a pre-{@link #start()} call, matching {@link #getExitStatus()}. Nothing
