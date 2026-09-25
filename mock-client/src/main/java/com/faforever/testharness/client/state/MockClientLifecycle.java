@@ -461,22 +461,7 @@ public final class MockClientLifecycle {
         // Teardown subprocesses and connections.
         states.get(ClientState.TERMINATED).onEntry(() -> teardown.run());
 
-        // Adapt lobby events to state events.
-        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
-        GameLaunchHandler launchHandler =
-                new GameLaunchHandler(
-                        mapper, message -> machine.receiveEvent(new LaunchGame(message)));
-        lobby.registerHandler("game_launch", launchHandler::onMessage);
-        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
-        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
-        lobby.registerHandler(
-                "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
-        lobby.registerHandler("search_info", this::onSearchInfo);
-        lobby.registerHandler("match_found", this::onMatchFound);
-        lobby.registerHandler(
-                "match_cancelled", message -> machine.receiveEvent(new MatchCancelled(message)));
-        lobby.registerHandler("search_timeout", this::onSearchTimeout);
-        lobby.registerHandler("matchmaker_info", this::onMatchmakerInfo);
+        registerLobbyHandlers();
 
         // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
         // #214): a game that exits near-instantly can complete gameExit on the same thread that
@@ -754,6 +739,29 @@ public final class MockClientLifecycle {
                         states.get(ClientState.TERMINATED),
                         this::logGameExitAfterTeardown,
                         null);
+    }
+
+    /**
+     * Adapts the lobby's events to state events: its disconnect, and every frame this client acts
+     * on. Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
+     * limit.
+     */
+    private void registerLobbyHandlers() {
+        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
+        GameLaunchHandler launchHandler =
+                new GameLaunchHandler(
+                        mapper, message -> machine.receiveEvent(new LaunchGame(message)));
+        lobby.registerHandler("game_launch", launchHandler::onMessage);
+        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
+        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+        lobby.registerHandler(
+                "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
+        lobby.registerHandler("search_info", this::onSearchInfo);
+        lobby.registerHandler("match_found", this::onMatchFound);
+        lobby.registerHandler(
+                "match_cancelled", message -> machine.receiveEvent(new MatchCancelled(message)));
+        lobby.registerHandler("search_timeout", this::onSearchTimeout);
+        lobby.registerHandler("matchmaker_info", this::onMatchmakerInfo);
     }
 
     /**
