@@ -40,7 +40,9 @@ import org.slf4j.LoggerFactory;
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
  * IceAdapterConnection#close()} is a synchronous socket close; the lobby close is awaited for at
- * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely.
+ * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely. The
+ * owner's step runs under this instance's lock and has to bound itself: the lifecycle's waits at
+ * most five seconds for its lobby send and two for a dying adapter.
  *
  * <p><b>Idempotent and convergent:</b> the first {@link #run()} wins; later calls (and concurrent
  * ones, which block until the first finishes) are no-ops. The signal hook and the FSM's TERMINATED
@@ -95,8 +97,9 @@ public final class SessionTeardown {
 
     /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
-     * are registered later, as they come into existence. No signal ever reaches it: for a session
-     * whose owner has no signal hook of its own.
+     * are registered later, as they come into existence. Its {@link #signalled()} never reports a
+     * signal, which suits an owner that does not tell teardown about one, such as {@code session},
+     * whose own hook stops its peers through their state machines.
      *
      * @param lobby the session's lobby connection; must not be {@code null}
      */
@@ -160,7 +163,9 @@ public final class SessionTeardown {
      */
     public void registerAfterGameStep(final Runnable step) {
         this.afterGameStep = Objects.requireNonNull(step, "step");
-        warnIfDone("step after the game");
+        if (done) {
+            LOG.warn("step after the game registered after teardown already ran; it will not run");
+        }
     }
 
     /**

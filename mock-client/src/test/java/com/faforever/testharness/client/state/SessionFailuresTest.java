@@ -3,6 +3,7 @@ package com.faforever.testharness.client.state;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -20,6 +21,8 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
 import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.net.SocketException;
 import java.net.URI;
@@ -160,10 +163,10 @@ final class SessionFailuresTest {
     }
 
     /**
-     * A call that failed because the adapter's connection closed records nothing: the adapter is
-     * gone, and its own exit is the finding (#406, #438). The line is INFO, since no verdict comes
-     * with it, and the session still ends. Unwrapped whether the future's wrapper was an {@code
-     * ExecutionException} or a {@code CompletionException}.
+     * A call that failed because the adapter's connection closed records nothing: teardown's check
+     * decides that, as a lost adapter or a dropped link (#438, #452). The line is INFO, since no
+     * verdict comes with it, and the session still ends. Unwrapped whether the future's wrapper was
+     * an {@code ExecutionException} or a {@code CompletionException}.
      */
     @Test
     void aCallWhoseConnectionClosedRecordsNothing() {
@@ -348,6 +351,33 @@ final class SessionFailuresTest {
                                 + " (JsonParseException: Unexpected character ('}' (code 125)):"
                                 + " expected a value)"),
                 lines());
+    }
+
+    /**
+     * A real parse error is named on one line. Jackson's {@code getMessage()} adds the source
+     * location on a second line, which a stand-in exception built without a parser never shows.
+     */
+    @Test
+    void aParseErrorIsNamedOnOneLine() throws Exception {
+        JsonProcessingException parseError =
+                assertThrows(
+                        JsonProcessingException.class,
+                        () -> new ObjectMapper().readTree("{\"jsonrpc\":\"2.0\",\"result\":}"));
+        assertTrue(parseError.getMessage().contains("\n"), "the premise: Jackson adds a line");
+        liveAdapter();
+
+        waitingFailures(Duration.ofMillis(100)).adapterAtTeardown(linkDropped(parseError));
+
+        String warning = lines().get(lines().size() - 1);
+        assertFalse(warning.contains("\n"), "one line: " + warning);
+        assertTrue(
+                warning.endsWith(
+                        "("
+                                + parseError.getClass().getSimpleName()
+                                + ": "
+                                + parseError.getOriginalMessage()
+                                + ")"),
+                warning);
     }
 
     /** A live adapter that closed its end cleanly is named for that: the stream simply ended. */
@@ -555,16 +585,20 @@ final class SessionFailuresTest {
     }
 
     /**
-     * Blocks every common-pool thread until {@code release} opens, taking one task per thread the
-     * pool already has when that exceeds its parallelism.
+     * Blocks as many common-pool threads as the pool runs tasks on at once, its parallelism, until
+     * {@code release} opens. Spare threads an earlier test's blocking {@code get()} left behind
+     * stay idle while that many run, and the pool does not wake them for queued work, the work this
+     * holds back included. One blocker per spare is queued too, for a spare still busy with earlier
+     * work to take once it is free.
      *
      * @param release opened by the caller to let the pool go
      * @throws InterruptedException if interrupted while the pool fills
      */
     private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
         ForkJoinPool pool = ForkJoinPool.commonPool();
-        int threads = Math.max(ForkJoinPool.getCommonPoolParallelism(), pool.getPoolSize());
-        CountDownLatch occupied = new CountDownLatch(threads);
+        int parallelism = ForkJoinPool.getCommonPoolParallelism();
+        int threads = Math.max(parallelism, pool.getPoolSize());
+        CountDownLatch occupied = new CountDownLatch(parallelism);
         for (int i = 0; i < threads; i++) {
             pool.execute(
                     () -> {
@@ -577,7 +611,8 @@ final class SessionFailuresTest {
                     });
         }
         assertTrue(
-                occupied.await(10, TimeUnit.SECONDS), "could not occupy every common-pool thread");
+                occupied.await(10, TimeUnit.SECONDS),
+                "could not occupy the common pool's " + parallelism + " threads");
     }
 
     /**

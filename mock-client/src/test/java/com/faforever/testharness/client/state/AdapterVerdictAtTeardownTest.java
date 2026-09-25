@@ -224,13 +224,13 @@ final class AdapterVerdictAtTeardownTest {
     }
 
     /**
-     * An adapter that dies while a {@code connectToPeer} call is in flight is lost (#438). That
-     * call is not awaited, so its failure and the adapter's exit race to end the session, in the
-     * order a real death produces them. Either way the run reads 72 at commit with one WARN, which
-     * is the point: before, the call winning read 0.
+     * An adapter that dies while a {@code connectToPeer} call is in flight is lost, whichever event
+     * ends the session (#438). That call is not awaited, so its failure and the adapter's exit
+     * race, in the order a real death produces them. Either way the run reads 72 at commit with one
+     * WARN, not two. The next case pins the route where the call's failure ends the session.
      */
     @Test
-    void anAdapterThatDiesWithConnectToPeerInFlightIsLost() throws Exception {
+    void anAdapterThatDiesWithConnectToPeerInFlightIsLostWhicheverEventWins() throws Exception {
         ScriptedAdapterConnection rpc = new ScriptedAdapterConnection("connectToPeer");
         MockClientLifecycle lifecycle = hosted(rpc, new SessionTeardown(lobby));
         CompletableFuture<Found> atCommit = foundAtCommit(lifecycle);
@@ -243,6 +243,28 @@ final class AdapterVerdictAtTeardownTest {
 
         assertEquals(new Found(false, true, false), atCommit.get(15, TimeUnit.SECONDS));
         assertEquals(1, warnings(ADAPTER_LOST_LINE + " (code=" + code + ")"), warnings());
+    }
+
+    /**
+     * The {@code connectToPeer} route through teardown's check itself (#438): the call fails while
+     * the adapter is still alive, so its {@code ShutdownRequested} is the only event that can end
+     * the session, and the adapter is killed the moment the check says it is waiting. Only the
+     * check can record 72 here; before it, this route read 0.
+     */
+    @Test
+    void anAdapterDyingAsItsConnectToPeerFailsIsFoundByTeardown() throws Exception {
+        ScriptedAdapterConnection rpc = new ScriptedAdapterConnection("connectToPeer");
+        MockClientLifecycle lifecycle = hosted(rpc, new SessionTeardown(lobby));
+        CompletableFuture<Found> atCommit = foundAtCommit(lifecycle);
+        onCheckWaiting = () -> iceLauncher.getSubprocess().terminate();
+
+        lifecycle.post(new ConnectToPeer(frame("ConnectToPeer", "Peer", 2, true)));
+        CompletableFuture<JsonNode> call = rpc.held("connectToPeer");
+        rpc.dropLink(null);
+        call.completeExceptionally(closed(null));
+
+        assertEquals(new Found(false, true, false), atCommit.get(15, TimeUnit.SECONDS));
+        assertEquals(1, warnings(ADAPTER_LOST_LINE), warnings());
     }
 
     /**
@@ -564,8 +586,11 @@ final class AdapterVerdictAtTeardownTest {
 
         private final CompletableFuture<Void> connected;
         private final Set<String> held;
-        private final Map<String, CompletableFuture<JsonNode>> heldCalls =
+
+        /** Per held method: completes with the call's own future once the lifecycle makes it. */
+        private final Map<String, CompletableFuture<CompletableFuture<JsonNode>>> heldCalls =
                 new ConcurrentHashMap<>();
+
         private volatile DisconnectEvent ended;
 
         ScriptedAdapterConnection(final String... held) {
@@ -589,7 +614,7 @@ final class AdapterVerdictAtTeardownTest {
                 return CompletableFuture.completedFuture(null);
             }
             CompletableFuture<JsonNode> call = new CompletableFuture<>();
-            heldCalls.put(method, call);
+            heldCalls.computeIfAbsent(method, ignored -> new CompletableFuture<>()).complete(call);
             return call;
         }
 
@@ -612,17 +637,12 @@ final class AdapterVerdictAtTeardownTest {
          *
          * @param method the call's method
          * @return its future, for the test to fail
-         * @throws InterruptedException if interrupted while waiting for the call
+         * @throws Exception if the lifecycle does not make the call within ten seconds
          */
-        CompletableFuture<JsonNode> held(final String method) throws InterruptedException {
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (!heldCalls.containsKey(method)) {
-                if (System.nanoTime() > deadline) {
-                    throw new AssertionError("the lifecycle never called " + method);
-                }
-                Thread.sleep(10);
-            }
-            return heldCalls.get(method);
+        CompletableFuture<JsonNode> held(final String method) throws Exception {
+            return heldCalls
+                    .computeIfAbsent(method, ignored -> new CompletableFuture<>())
+                    .get(10, TimeUnit.SECONDS);
         }
 
         /**

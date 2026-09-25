@@ -434,9 +434,10 @@ final class LifecycleSetupTest {
     }
 
     /**
-     * A call that failed because the adapter's connection closed records nothing (#445): the
-     * adapter is gone, and its own exit is the finding. The session still ends, and no WARN comes
-     * without a verdict.
+     * A call that failed because the adapter's connection closed records nothing itself (#445):
+     * teardown's check decides the adapter (#438, #452), and this stand-in reports no disconnect,
+     * so the check records nothing either. What this pins is the call's own rule: the session still
+     * ends, and no WARN comes without a verdict.
      *
      * @param method the call whose connection closes under it
      */

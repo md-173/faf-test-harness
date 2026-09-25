@@ -573,7 +573,7 @@ final class IceAdapterConnectionTest {
     /**
      * The reset half of the guarantee above: an adapter whose socket goes away with a TCP reset, as
      * a killed process's can, also fails a later call fast with an {@link IOException}. The reader
-     * ends on the reset without closing the socket, and the write then hits a broken pipe.
+     * ends on the reset and records the disconnect, so the later call fails on it before any write.
      */
     @Test
     void aCallAfterTheAdapterResetTheConnectionFailsFast() throws Exception {

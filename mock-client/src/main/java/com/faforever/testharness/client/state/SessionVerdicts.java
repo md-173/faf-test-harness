@@ -11,11 +11,12 @@ package com.faforever.testharness.client.state;
  * two write them, through the package-private recorders.
  *
  * <p>Read them once {@code stateReached(TERMINATED)} has completed. A verdict written inside the
- * transition action that drives TERMINATED is ordered before that read: the action runs before
- * {@code commitTransition} completes the future {@code RunCommand} waits on, and {@code
- * CompletableFuture.complete} happens-before the {@code get} that returns. {@link #gameCrashed()}
- * is the exception, written on a continuation; see there. Every field is {@code volatile} for the
- * reads that do not follow that future, such as a test calling a getter directly.
+ * transition action that drives TERMINATED, or inside TERMINATED's entry hook where teardown's
+ * check writes, is ordered before that read: both run before {@code commitTransition} completes the
+ * future {@code RunCommand} waits on, and {@code CompletableFuture.complete} happens-before the
+ * {@code get} that returns. {@link #gameCrashed()} is the exception, written on a continuation; see
+ * there. Every field is {@code volatile} for the reads that do not follow that future, such as a
+ * test calling a getter directly.
  */
 public final class SessionVerdicts {
 

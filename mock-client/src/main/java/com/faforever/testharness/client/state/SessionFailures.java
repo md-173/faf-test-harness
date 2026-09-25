@@ -6,6 +6,7 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
@@ -365,7 +366,13 @@ final class SessionFailures {
     }
 
     private static String name(final Throwable failure) {
-        String message = failure.getMessage();
+        // A Jackson error's getMessage() puts its source location on a second line, which would
+        // split the one line naming it; its original message is the cause on its own, as
+        // LobbyConnection logs a malformed frame.
+        String message =
+                failure instanceof JsonProcessingException json
+                        ? json.getOriginalMessage()
+                        : failure.getMessage();
         return message == null
                 ? failure.getClass().getSimpleName()
                 : failure.getClass().getSimpleName() + ": " + message;

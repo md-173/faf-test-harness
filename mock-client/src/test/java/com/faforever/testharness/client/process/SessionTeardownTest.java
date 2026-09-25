@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.LobbyConnection;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -220,6 +222,21 @@ final class SessionTeardownTest {
 
         assertFalse(rpc.quitCalled, "quit must not be sent over an RPC connection that isn't open");
         assertFalse(adapter.isAlive(), "adapter must still be terminated via SIGTERM/SIGKILL");
+    }
+
+    /**
+     * {@link SessionTeardown#signalled()} reads the supplier it was built with (#438), and a
+     * teardown built without one never reports a signal.
+     */
+    @Test
+    void signalledFollowsItsSupplier() {
+        AtomicBoolean flag = new AtomicBoolean();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby(), flag::get);
+
+        assertFalse(teardown.signalled());
+        flag.set(true);
+        assertTrue(teardown.signalled());
+        assertFalse(new SessionTeardown(recordingLobby()).signalled(), "no supplier, no signal");
     }
 
     /** Adapter-connection stub: never connects, runs the given action when closed. */

@@ -94,17 +94,20 @@ class SubprocessManagerTerminateTest {
     }
 
     /**
-     * Blocks every common-pool thread until {@code release} opens. It takes one task per thread the
-     * pool already has when that exceeds its parallelism, so a spare an earlier test left idle
-     * cannot run the work this holds back.
+     * Blocks as many common-pool threads as the pool runs tasks on at once, its parallelism, until
+     * {@code release} opens. Spare threads an earlier test's blocking {@code get()} left behind
+     * stay idle while that many run, and the pool does not wake them for queued work, the work this
+     * holds back included. One blocker per spare is queued too, for a spare still busy with earlier
+     * work to take once it is free.
      *
      * @param release opened by the caller to let the pool go
      * @throws InterruptedException if interrupted while the pool fills
      */
     private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
         ForkJoinPool pool = ForkJoinPool.commonPool();
-        int threads = Math.max(ForkJoinPool.getCommonPoolParallelism(), pool.getPoolSize());
-        CountDownLatch occupied = new CountDownLatch(threads);
+        int parallelism = ForkJoinPool.getCommonPoolParallelism();
+        int threads = Math.max(parallelism, pool.getPoolSize());
+        CountDownLatch occupied = new CountDownLatch(parallelism);
         for (int i = 0; i < threads; i++) {
             pool.execute(
                     () -> {
@@ -118,6 +121,6 @@ class SubprocessManagerTerminateTest {
         }
         assertTrue(
                 occupied.await(AWAIT_SECONDS, TimeUnit.SECONDS),
-                "could not occupy every common-pool thread");
+                "could not occupy the common pool's " + parallelism + " threads");
     }
 }
