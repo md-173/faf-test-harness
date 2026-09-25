@@ -90,18 +90,27 @@ public class StateMachine implements EventListener {
     }
 
     /**
-     * Gives a future that completes when the state is reached. If the state machine's current state
-     * is {@code s} then the future completes immediately.
+     * Gives a future that completes the next time the machine enters {@code s}, or at once if
+     * {@code s} is the current state. The wait is edge triggered: it observes entries that happen
+     * after this call, and the machine keeps no record of the states it has passed through.
      *
-     * <p><b>Not resolved by {@link #cancel()}.</b> If {@code s} is never reached — including
-     * because {@link #cancel()} has stopped the time-based scheduling that would have reached it —
-     * the future returned here is left pending forever; {@code cancel()} does not complete, cancel,
-     * or otherwise resolve it. A caller that blocks on this future (e.g. with {@code get()}) must
-     * have some other bound, such as a timeout, if the state it names might not be reached
-     * (WBS-2.3.7-fix, #260).
+     * <p><b>When the future stays pending.</b> There are two cases, and a caller that blocks on
+     * this future (e.g. with {@code get()}) must bound that wait, with a timeout for instance, if
+     * either can happen:
+     *
+     * <ul>
+     *   <li>{@code s} was entered and left before this call. The future waits for the next entry,
+     *       which may never come (WBS-2.3.7-fix, #250). A caller that drives a run through several
+     *       states must therefore take every future it needs before posting the event that starts
+     *       the run.
+     *   <li>{@code s} is never reached, including because {@link #cancel()} has stopped the
+     *       time-based scheduling that would have reached it. {@code cancel()} does not complete,
+     *       cancel, or otherwise resolve this future (WBS-2.3.7-fix, #260).
+     * </ul>
      *
      * @param s state to wait for.
-     * @return a future that only completes when the state is reached.
+     * @return a future that completes on the next entry to {@code s}, already complete if {@code s}
+     *     is the current state.
      */
     public synchronized CompletableFuture<Void> stateReached(State s) {
         if (state == s) {
