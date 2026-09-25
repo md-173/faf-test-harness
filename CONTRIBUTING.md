@@ -95,7 +95,7 @@ From the repository root, run:
 What this does:
 
 - `spotlessApply` — rewrites source files to Google Java Format (AOSP).
-- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, `spotlessCheck`, and the release asset-name assertion (see [Section 8](#8-releases)).
+- `check` — runs the full Gradle verification lifecycle: compile, JUnit tests, Checkstyle, `spotlessCheck`, the release asset-name assertion (see [Section 8](#8-releases)), and the markdown link check (see the `build` bullet below).
 
 After the command completes, run `git status` / `git diff` so any formatter-driven changes are reviewed and committed intentionally.
 
@@ -106,6 +106,8 @@ Note that the `mock-client` `test` and `integrationTest` tasks run at `LOG_LEVEL
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
 - **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
+
+  `build` also runs `verifyMarkdownLinks`, from the root `build.gradle`, which fails on any relative link in the repository's markdown whose file does not exist, or whose `#anchor` names no heading or `<a id>` in the markdown file it points at. Each failure names the file, the line and the target. Anchors follow GitHub's rule: lowercase, punctuation dropped, and one hyphen per space, so `` ### `ice-smoke` — is a local adapter reachable? `` anchors as `#ice-smoke--is-a-local-adapter-reachable`, with two hyphens. External URLs are not checked, on purpose: that would bring the network, with its rate limits and flaky hosts, into a required check, whose verdict could then change without a commit. Run it alone with `./gradlew verifyMarkdownLinks`.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
 Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
