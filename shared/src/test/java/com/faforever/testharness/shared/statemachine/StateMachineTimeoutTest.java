@@ -2,7 +2,6 @@ package com.faforever.testharness.shared.statemachine;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -22,11 +21,11 @@ import org.junit.jupiter.api.Test;
  * keeps the same guarantee — determinism comes from the budget being an upper bound rather than an
  * expectation.
  *
- * <p>{@link #timeoutGetsCancelled()} still sleeps, deliberately: there is nothing to await for an
- * event that must never arrive. That is not the same as being load-proof. Its first sleep is an
- * upper bound rather than a lower one, because the event has to beat the timeout armed before it,
- * and if that sleep overshoots, the machine is already in C and the IGNORE policy drops the event.
- * Fixing that needs a different technique, tracked separately.
+ * <p>The cases that assert a timeout did <em>not</em> fire still sleep past its deadline,
+ * deliberately: there is nothing to await for a timeout that must never fire, and it is only
+ * observable once its deadline has passed. Load cannot fail them either. Each arms its timeouts and
+ * does what must beat them under the machine's own monitor, which {@code UpdateStateTask.run} also
+ * takes, so the timer thread cannot commit in between however late the test thread runs (#380).
  */
 final class StateMachineTimeoutTest {
 
@@ -87,33 +86,24 @@ final class StateMachineTimeoutTest {
     }
 
     @Test
-    void timeoutGetsCancelled() {
+    void timeoutGetsCancelled() throws Exception {
         State a = new State("A");
         State b = new State("B");
         State c = new State("C");
-        Event aToB = new AToB();
 
         a.registerTransition(AToB.class, b);
         StateMachine machine = machineFrom(a);
-        assertTrue(machine.getState() == a);
+        assertSame(a, machine.getState());
 
-        machine.setTimeout(200, c);
-        try {
-            Thread.sleep(100); // 0.1 second, not enough time for timeout.
-        } catch (InterruptedException e) {
-            System.out.println(e.getMessage());
+        // Armed and beaten under the machine's monitor; see the class javadoc.
+        synchronized (machine) {
+            machine.setTimeout(TIMEOUT_MS, c);
+            machine.receiveEvent(new AToB());
         }
 
-        // Should transition to B
-        machine.receiveEvent(aToB);
-
-        try {
-            Thread.sleep(300); // 0.3 second to ensure timeout would have triggered.
-        } catch (InterruptedException e) {
-            System.out.println(e.getMessage());
-        }
-
-        assertTrue(machine.getState() == b);
+        Thread.sleep(TIMEOUT_MS * 2); // past the deadline: a timeout still armed would have fired
+        assertSame(
+                b, machine.getState(), "the event into b must have cancelled the timeout into c");
     }
 
     /**
@@ -158,8 +148,8 @@ final class StateMachineTimeoutTest {
 
         // Two timeouts, the one to b should execute first and cancel the one to c. Armed under
         // the machine's own monitor so the timer thread cannot commit into b partway through: if
-        // it did, the timeout into c would be armed against an already-cleared list, nothing would
-        // cancel it, and both assertions below would still hold while meaning nothing.
+        // it did, the timeout into c would be armed after b's commit, nothing would cancel it, and
+        // the test would fail spuriously.
         CompletableFuture<Void> reachedC;
         synchronized (machine) {
             machine.setTimeout(EARLIER_TIMEOUT_MS, b);
@@ -168,11 +158,11 @@ final class StateMachineTimeoutTest {
         }
 
         machine.stateReached(b).get(AWAIT_SECONDS, TimeUnit.SECONDS);
-
         assertSame(b, machine.getState());
-        // Not a race against the wall clock: the machine schedules both tasks on one Timer thread,
-        // so b's runs to completion — cancelling c's before it can start — and the assertion is
-        // settled by the time the await above returns, whenever that is.
+
+        // A timeout that must not fire is only observable after its deadline: the moment b is
+        // reached, reachedC is incomplete whether or not c's timeout was cancelled (#381).
+        Thread.sleep(TIMEOUT_MS * 2);
         assertFalse(reachedC.isDone(), "reaching b must have cancelled the pending timeout into c");
     }
 }
