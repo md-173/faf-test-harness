@@ -382,7 +382,11 @@ public final class MockClientLifecycle {
                         this::onWelcomeReceived,
                         null);
         states.get(ClientState.CONNECTING)
-                .registerTransition(AuthFailed.class, states.get(ClientState.TERMINATED));
+                .registerTransition(
+                        AuthFailed.class,
+                        states.get(ClientState.TERMINATED),
+                        this::onHandshakeFailed,
+                        null);
 
         states.get(ClientState.IDLE)
                 .registerTransition(
@@ -725,6 +729,12 @@ public final class MockClientLifecycle {
      * them uninteresting. Same treatment {@link Disconnected} already gets, and for the same reason
      * — a deliberate debug-level no-op beats the framework's generic WARN. Self-loops skip entry
      * hooks, so neither can re-run teardown.
+     *
+     * <p>{@link AuthFailed} gets it too (WBS-3.1.1.4-fix, #455). A lobby connection that fails
+     * fires its disconnect before the session's future fails, so {@link Disconnected} has taken
+     * CONNECTING to TERMINATED by the time the handshake's failure is posted, and it used to log
+     * the framework's WARN after the session had ended. It is a self-loop as well, so it cannot
+     * re-run teardown either.
      */
     private void registerPostTeardownExitTransitions() {
         states.get(ClientState.TERMINATED)
@@ -738,6 +748,12 @@ public final class MockClientLifecycle {
                         GameExited.class,
                         states.get(ClientState.TERMINATED),
                         this::logGameExitAfterTeardown,
+                        null);
+        states.get(ClientState.TERMINATED)
+                .registerTransition(
+                        AuthFailed.class,
+                        states.get(ClientState.TERMINATED),
+                        this::logHandshakeFailureAfterTeardown,
                         null);
     }
 
@@ -767,7 +783,9 @@ public final class MockClientLifecycle {
     /**
      * Opens the session (connect + handshake + welcome hydration), which sets the entire lifecycle
      * in motion: success posts {@code WelcomeReceived} (CONNECTING → IDLE), failure posts {@code
-     * AuthFailed} (CONNECTING → TERMINATED).
+     * AuthFailed} (CONNECTING → TERMINATED). A connection that fails ends the session first,
+     * through the lobby's disconnect, and the failure then lands in TERMINATED as a DEBUG line
+     * (#455).
      *
      * @param source a source for OAuth tokens for the handshake.
      * @return the session's future, completing with the hydrated identity or exceptionally with the
@@ -781,7 +799,6 @@ public final class MockClientLifecycle {
                     if (err == null) {
                         machine.receiveEvent(new WelcomeReceived(state));
                     } else {
-                        LOG.warn("Handshake could not be completed");
                         machine.receiveEvent(
                                 new AuthFailed(err.getCause() != null ? err.getCause() : err));
                     }
@@ -1162,6 +1179,19 @@ public final class MockClientLifecycle {
     }
 
     /**
+     * CONNECTING to TERMINATED transition action for {@link AuthFailed}: the handshake's failure is
+     * what ended the session, so it is named ahead of {@code state entry: TERMINATED}. Logged here
+     * rather than where the failure is posted (WBS-3.1.1.4-fix, #455), because a connection that
+     * fails ends the session first, through the lobby's disconnect, and the line then landed after
+     * the session had already ended. The caller of {@link #start} names the cause either way.
+     *
+     * @param event the {@link AuthFailed} event that triggered this transition.
+     */
+    private void onHandshakeFailed(Event event) {
+        LOG.warn("Handshake could not be completed");
+    }
+
+    /**
      * Waits for the adapter's JSON-RPC socket, giving up the moment the adapter process dies
      * (WBS-3.1.3.3-fix, #266).
      *
@@ -1375,6 +1405,22 @@ public final class MockClientLifecycle {
     private void logSelfInflictedDisconnect(Event message) {
         Disconnected disconnected = (Disconnected) message;
         LOG.debug("Disconnected from lobby after session teardown ({})", disconnected.event());
+    }
+
+    /**
+     * TERMINATED no-op action for {@link AuthFailed} (WBS-3.1.1.4-fix, #455): the lobby's
+     * disconnect ended the session first, as it does whenever the connection itself fails, and the
+     * caller of {@link #start} names the failure. Logged at debug level only, and does not re-run
+     * teardown.
+     *
+     * @param message the {@link AuthFailed} event; guaranteed by registration, never anything else.
+     */
+    private void logHandshakeFailureAfterTeardown(Event message) {
+        // The cause goes through the placeholder rather than Failures.describe: an AuthFailed may
+        // carry none, and a throw here would turn a DEBUG line into the transition's own ERROR.
+        LOG.debug(
+                "Handshake could not be completed after the session ended ({})",
+                ((AuthFailed) message).cause());
     }
 
     /**
