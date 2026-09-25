@@ -14,6 +14,9 @@ import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -145,6 +148,53 @@ final class RunShutdownEndToEndTest {
 
         assertExitCode(130);
         assertEndedCleanlyBySignal();
+    }
+
+    /**
+     * A lobby that refuses the connection ends the run with {@code 70} and one ERROR naming the
+     * failure's type and the lobby, where it used to read {@code lobby session failed: null}
+     * (WBS-3.1.1.4-fix, #455). The lobby's disconnect ends the session before the handshake's
+     * failure is posted, and neither that failure nor the framework may then warn about it. The
+     * port is bound and never listened on, so the connect is refused and nothing can take it
+     * meanwhile. The root cause is left unasserted, since it is the JDK's to choose.
+     */
+    @Test
+    void aRefusedConnectExits70NamingTheLobbyOnce() throws Exception {
+        String lobbyUrl;
+        try (Socket reserved = new Socket()) {
+            reserved.bind(new InetSocketAddress("127.0.0.1", 0));
+            lobbyUrl = "ws://127.0.0.1:" + reserved.getLocalPort();
+            startRun(URI.create(lobbyUrl), List.of());
+
+            assertExitCode(ExitCodes.RUNTIME);
+        }
+
+        List<JsonNode> records = records();
+        List<String> errors = messagesAt(records, "ERROR");
+        List<String> warnings = messagesAt(records, "WARN");
+        String failure = lobbyUrl + " failed: ConnectException";
+        assertEquals(1, errors.size(), "exactly one ERROR: " + messages(records));
+        assertTrue(
+                errors.get(0).startsWith("lobby session with " + failure),
+                "the ERROR must name the failure and the lobby: " + errors);
+        assertTrue(
+                warnings.stream()
+                        .anyMatch(m -> m.startsWith("lobby WebSocket connect to " + failure)),
+                "the connect WARN must name the failure and the lobby: " + warnings);
+        assertTrue(
+                errors.stream().noneMatch(m -> m.endsWith("null"))
+                        && warnings.stream().noneMatch(m -> m.endsWith("null")),
+                "no line may name the failure as null: " + messages(records));
+        assertTrue(
+                warnings.stream()
+                        .noneMatch(
+                                m ->
+                                        m.startsWith("No matching transitions")
+                                                || m.startsWith(
+                                                        "Handshake could not be completed")),
+                "nothing may warn about the handshake once the session has ended: " + warnings);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+        assertEquals(List.of(), verdicts(records), "a session that never opened names no verdict");
     }
 
     /**
@@ -312,6 +362,22 @@ final class RunShutdownEndToEndTest {
      * @param sessionArgs the adapter and game options, binary paths included
      */
     private void startRunAndReachIdle(final List<String> sessionArgs) throws Exception {
+        startRun(lobby.uri(), sessionArgs);
+        assertEquals("ask_session", nextFrame().path("command").asText());
+        lobby.broadcastText("{\"command\":\"session\",\"session\":42}");
+        assertEquals("auth", nextFrame().path("command").asText());
+        lobby.broadcastText(WELCOME);
+        awaitLogged(IDLE_LINE);
+    }
+
+    /**
+     * Starts {@code run} in a child JVM against {@code lobbyUrl}, with a placeholder access token
+     * and unique id, logging to {@link #jsonl()}.
+     *
+     * @param lobbyUrl the lobby the child connects to
+     * @param sessionArgs the child's other options, such as its binary paths
+     */
+    private void startRun(final URI lobbyUrl, final List<String> sessionArgs) throws Exception {
         Path token = Files.writeString(dir.resolve("access-token"), "placeholder-token");
         List<String> command =
                 new ArrayList<>(
@@ -321,7 +387,7 @@ final class RunShutdownEndToEndTest {
                                 System.getProperty("java.class.path"),
                                 Main.class.getName(),
                                 "run",
-                                "--lobby-websocket-url=" + lobby.uri(),
+                                "--lobby-websocket-url=" + lobbyUrl,
                                 "--oauth-access-token-file=" + token,
                                 "--unique-id=00000000-0000-0000-0000-000000000000",
                                 "--log-file=" + jsonl()));
@@ -337,12 +403,6 @@ final class RunShutdownEndToEndTest {
         pb.redirectErrorStream(true);
         pb.redirectOutput(console().toFile());
         child = pb.start();
-
-        assertEquals("ask_session", nextFrame().path("command").asText());
-        lobby.broadcastText("{\"command\":\"session\",\"session\":42}");
-        assertEquals("auth", nextFrame().path("command").asText());
-        lobby.broadcastText(WELCOME);
-        awaitLogged(IDLE_LINE);
     }
 
     /**
@@ -445,6 +505,13 @@ final class RunShutdownEndToEndTest {
 
     private static List<String> messages(final List<JsonNode> records) {
         return records.stream().map(r -> r.path("message").asText()).toList();
+    }
+
+    private static List<String> messagesAt(final List<JsonNode> records, final String level) {
+        return records.stream()
+                .filter(r -> level.equals(r.path("level").asText()))
+                .map(r -> r.path("message").asText())
+                .toList();
     }
 
     private static List<String> verdicts(final List<JsonNode> records) {

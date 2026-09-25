@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -237,10 +238,10 @@ public final class LobbyConnection {
     private Void completeHandshake(final WebSocket socket, final Throwable error) {
         if (error != null) {
             Throwable cause = error instanceof CompletionException ? error.getCause() : error;
+            // Named by type and root cause (#455): java.net.http gives a refused connect or an
+            // unknown host no message at all, and the root cause is what tells them apart.
             LOG.warn(
-                    "lobby WebSocket connect failed: {}: {}",
-                    cause.getClass().getSimpleName(),
-                    cause.getMessage());
+                    "lobby WebSocket connect to {} failed: {}", endpoint, Failures.describe(cause));
             fireDisconnect(new DisconnectEvent(DisconnectReason.CONNECT_FAILED, 0, null, cause));
             throw new CompletionException(cause);
         }
