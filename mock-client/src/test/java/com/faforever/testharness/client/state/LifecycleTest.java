@@ -464,17 +464,14 @@ final class LifecycleTest {
     private static List<String> warningsWhile(final Executable action) throws Throwable {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         Logger root = context.getLogger(Logger.ROOT_LOGGER_NAME);
-        Level originalLevel = root.getLevel();
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.list = new CopyOnWriteArrayList<>();
         appender.setContext(context);
         appender.start();
         root.addAppender(appender);
-        root.setLevel(Level.INFO);
         try {
             action.execute();
         } finally {
-            root.setLevel(originalLevel);
             root.detachAppender(appender);
             appender.stop();
         }

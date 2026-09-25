@@ -44,15 +44,25 @@ public final class Failures {
      * JSON-RPC connection nothing for a clean end of the stream, a {@code SocketException} for a
      * reset, a {@code JsonProcessingException} for a stream that stopped parsing.
      *
+     * <p>A Jackson error is named by its original message, without the source location Jackson adds
+     * on a second line, and once: {@code ObjectMapper.convertValue} rethrows one as an {@code
+     * IllegalArgumentException} carrying the same message, and that wrapper is looked through, as a
+     * welcome frame that fails to decode shows.
+     *
      * @param cause the failure to name
      * @return its simple class name and message, and its root cause's when it has one
      */
     public static String describe(final Throwable cause) {
-        Throwable root = cause;
+        Throwable named =
+                cause instanceof IllegalArgumentException
+                                && cause.getCause() instanceof JsonProcessingException jackson
+                        ? jackson
+                        : cause;
+        Throwable root = named;
         for (int depth = 0; depth < MAX_CAUSE_DEPTH && root.getCause() != null; depth++) {
             root = root.getCause();
         }
-        return root == cause ? name(cause) : name(cause) + ", caused by " + name(root);
+        return root == named ? name(named) : name(named) + ", caused by " + name(root);
     }
 
     private static String name(final Throwable failure) {
