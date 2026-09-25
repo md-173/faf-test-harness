@@ -647,13 +647,12 @@ public final class MockGameLifecycle {
                                                     lobbyTimeout.get().toSeconds());
                                             status = ExitStatus.LOBBY_TIMEOUT;
                                         }))
-                // Observed, not discarded — the same reason start()'s chain carries one. A throw
-                // in the arming lambda would otherwise be captured into a future nobody holds:
-                // the timer would silently never arm and nothing would say so. Reachable today:
-                // GameShutdown.run() calls fsm.cancel() after closing the socket, and a
-                // CreateLobby already blocked on the StateMachine monitor still commits
-                // IDLE -> LOBBY afterwards, so setTimeout throws "Timer already cancelled".
-                // Benign — the JVM is halting — but silence is the part worth fixing.
+                // Observed, not discarded, for the same reason start()'s chain carries one: a throw
+                // in the arming lambda would otherwise be captured into a future nobody holds, and
+                // the timer would silently never arm. Nothing in the lambda throws today. A
+                // CreateLobby that commits IDLE -> LOBBY after GameShutdown.run() has cancelled the
+                // FSM's scheduling reaches setTimeout, which then arms nothing and returns rather
+                // than throwing (#312, #328).
                 .whenComplete(
                         (ignored, error) -> {
                             if (error != null) {

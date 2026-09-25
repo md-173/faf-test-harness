@@ -37,14 +37,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * Unit tests for {@link GameShutdown}: the idempotent stop-schedules → close-connection → stop-fsm
+ * Unit tests for {@link GameShutdown}: the idempotent stop-schedules → stop-fsm → close-connection
  * → close-traffic sequence. Stopping the logging context is not part of it — the bootstrap owns
  * that step (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
  *
- * <p>The close sitting ahead of {@link StateMachine#cancel()} is load-bearing rather than cosmetic,
- * so it is covered twice: once directly, and once by {@link
- * #completesWhileATransitionActionIsStalledMidWrite()}, which reproduces the stall the order exists
- * to break (WBS-3.2.5.2 / #299).
+ * <p>Stopping FSM scheduling before the close is only safe because {@link StateMachine#cancel()}
+ * never waits for the StateMachine monitor (WBS-2.3.7-fix, #328). {@link
+ * #completesWhileATransitionActionIsStalledMidWrite()} pins that against the stall #299 hit, where
+ * the write holding that monitor can only be released by the close that comes after it.
  */
 final class GameShutdownTest {
 
@@ -66,7 +66,7 @@ final class GameShutdownTest {
     private static final String CAP_REACHED = "cap-reached";
 
     @Test
-    void runsStepsInOrderCloseConnectionThenStopFsmThenTraffic() throws Exception {
+    void runsStepsInOrderStopFsmThenCloseConnectionThenTraffic() throws Exception {
         // A never-connected GpgNetConnection closes synchronously (its disconnect fires on this
         // thread), so every step records its order deterministically.
         List<String> order = new CopyOnWriteArrayList<>();
@@ -88,11 +88,11 @@ final class GameShutdownTest {
         order.add(traffic.isClosed() ? "traffic-closed" : "traffic-never-closed");
 
         assertEquals(
-                List.of("close-connection", "traffic-still-open", "stop-fsm", "traffic-closed"),
+                List.of("stop-fsm", "close-connection", "traffic-still-open", "traffic-closed"),
                 order,
-                "the connection must close before StateMachine.cancel() so a transition action "
-                        + "stalled mid-write can release the monitor cancel() needs (#299), and "
-                        + "the traffic session must still be open while the connection closes");
+                "FSM scheduling must stop before the connection closes, so that no FSM timeout "
+                        + "starts a transition mid-teardown, and the traffic session must still be "
+                        + "open while the connection closes");
     }
 
     @Test
@@ -241,10 +241,11 @@ final class GameShutdownTest {
 
     @Test
     void secondCallerDoesNotBlockWhileTheFirstIsStillTearingDown() throws Exception {
-        // The lock-ordering regression this guards: the FSM thread enters run() from the ENDED
-        // entry hook while holding the StateMachine monitor, and the JVM shutdown hook calls run()
-        // concurrently. If run() took a monitor, the hook thread would hold it and then block in
-        // fsm.cancel() waiting for the StateMachine monitor the FSM thread already owns.
+        // Pins the lock-free once-guard. The FSM thread enters run() from the ENDED entry hook
+        // while holding the StateMachine monitor, and the JVM shutdown hook calls run()
+        // concurrently. A monitor on run() used to deadlock the two, while fsm.cancel() still
+        // waited for the StateMachine monitor (#328); it would still park the losing caller behind
+        // the winner's whole teardown, which is what this fails on.
         CountDownLatch insideFirstRun = new CountDownLatch(1);
         CountDownLatch releaseFirstRun = new CountDownLatch(1);
         StateMachine blockingFsm =
@@ -314,10 +315,11 @@ final class GameShutdownTest {
     }
 
     /**
-     * The defect itself (#299). A transition action blocked mid-write holds the StateMachine
-     * monitor; teardown on another thread must still return, because closing the socket is what
-     * releases that write. Reverting the close back behind {@link StateMachine#cancel()} makes this
-     * fail by assertion in about 8s rather than hanging — deliberate, as the repo has no global
+     * The stall #299 hit. A transition action blocked mid-write holds the StateMachine monitor, and
+     * teardown on another thread must still return. It stops FSM scheduling before it closes the
+     * socket that releases the write, so it returns only because {@link StateMachine#cancel()}
+     * never waits for that monitor (#328). Making {@code cancel()} synchronized again fails this by
+     * assertion in about 5.5 s rather than hanging, which is deliberate: the repo has no global
      * JUnit timeout, hence the explicit {@code @Timeout}, daemon threads and bounded joins.
      */
     @Test
@@ -341,7 +343,7 @@ final class GameShutdownTest {
             StateMachine fsm = new StateMachine(stalling);
 
             // receiveEvent is synchronized for its whole body, so once the action reports itself
-            // running the FSM thread provably holds the monitor cancel() needs.
+            // running the FSM thread provably holds the monitor that cancel() must not wait for.
             Thread fsmThread =
                     startDaemon(() -> fsm.receiveEvent(new StallEvent()), "stalled-transition");
             assertTrue(actionEntered.await(5, TimeUnit.SECONDS), "the action should be running");
@@ -369,71 +371,6 @@ final class GameShutdownTest {
                     outcome.get(),
                     "the stalled write should have failed, not caught up");
         }
-    }
-
-    /**
-     * The invariant this order trades away, confirmed rather than assumed. Modelled on the only
-     * timeout the mock game actually arms ({@code MockGameLifecycle}'s GPGNet connect timeout): its
-     * action writes nothing, it targets ENDED, and ENDED's entry hook is this same once-guarded
-     * sequence. Firing it in the window between the close and {@link StateMachine#cancel()} must
-     * therefore converge where teardown was already going, without tearing down twice.
-     */
-    @Test
-    @Timeout(30)
-    void timeoutFiringBetweenCloseAndCancelIsBenign() throws Exception {
-        // Ordered rather than merely counted: the point of the test is that the timeout fires
-        // inside the window, so the close has to be observably already done when it does.
-        List<String> order = new CopyOnWriteArrayList<>();
-        GpgNetConnection connection = new GpgNetConnection(1);
-        connection.onDisconnect(event -> order.add("close-connection"));
-
-        CountDownLatch timeoutFired = new CountDownLatch(1);
-        AtomicInteger entryHookRuns = new AtomicInteger();
-        State initializing = new State("INITIALIZING");
-        State ended = new State("ENDED");
-        // Not synchronized: UpdateStateTask.run takes this machine's monitor, so an override that
-        // held it while waiting would block the very timer thread expected to release the latch.
-        StateMachine fsm =
-                new StateMachine(initializing) {
-                    @Override
-                    public void cancel() {
-                        try {
-                            timeoutFired.await(5, TimeUnit.SECONDS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        super.cancel();
-                    }
-                };
-        GameShutdown shutdown = new GameShutdown(fsm, connection);
-        ended.onEntry(
-                () -> {
-                    entryHookRuns.incrementAndGet();
-                    shutdown.run(); // re-entrant; must no-op on the once-guard
-                });
-        fsm.setTimeout(
-                50,
-                ended,
-                ignored -> {
-                    order.add("timeout-fired");
-                    timeoutFired.countDown();
-                });
-
-        CountDownLatch teardownReturned = new CountDownLatch(1);
-        startDaemon(
-                () -> {
-                    shutdown.run();
-                    teardownReturned.countDown();
-                },
-                "teardown-with-armed-timeout");
-
-        assertTrue(teardownReturned.await(10, TimeUnit.SECONDS), "teardown must still return");
-        assertEquals(
-                List.of("close-connection", "timeout-fired"),
-                order,
-                "the timeout must fire after the close — otherwise this is not the traded window");
-        assertSame(ended, fsm.getState(), "a timeout in the window converges on its target state");
-        assertEquals(1, entryHookRuns.get(), "the target state was entered once");
     }
 
     /** Event with no meaning beyond triggering the stalling transition. */
