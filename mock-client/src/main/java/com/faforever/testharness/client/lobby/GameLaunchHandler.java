@@ -7,9 +7,7 @@ import com.faforever.testharness.shared.logging.Failures;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Objects;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 /**
  * Decodes a {@code game_launch} frame, validates it, and hands the result to one of two sinks: the
@@ -75,13 +73,13 @@ public final class GameLaunchHandler implements LobbyMessageHandler {
         if (json.getCause() instanceof IllegalArgumentException missing) {
             return missing.getMessage();
         }
-        String field =
-                json.getPath().stream()
-                        .map(JsonMappingException.Reference::getFieldName)
-                        .filter(Objects::nonNull)
-                        .collect(Collectors.joining("."));
-        return field.isEmpty()
+        // Only a top-level field can have the wrong type: args and game_options are read as raw
+        // JSON, so a path never goes deeper than one field.
+        return json.getPath().isEmpty()
                 ? json.getOriginalMessage()
-                : "game_launch." + field + ": " + json.getOriginalMessage();
+                : "game_launch."
+                        + json.getPath().get(0).getFieldName()
+                        + ": "
+                        + json.getOriginalMessage();
     }
 }

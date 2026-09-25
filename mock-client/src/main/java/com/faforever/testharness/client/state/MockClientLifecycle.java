@@ -385,7 +385,7 @@ public final class MockClientLifecycle {
                 .registerTransition(
                         AuthFailed.class,
                         states.get(ClientState.TERMINATED),
-                        this::onHandshakeFailed,
+                        failures::handshakeFailed,
                         null);
 
         states.get(ClientState.IDLE)
@@ -396,7 +396,14 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendConfiguredIntentOnFirstIdle);
         registerMatchmakingQueueTransitions();
-        registerLaunchRejectedTransitions();
+        for (var s : List.of(ClientState.IDLE, ClientState.SEARCHING)) {
+            states.get(s)
+                    .registerTransition(
+                            LaunchRejected.class,
+                            states.get(ClientState.TERMINATED),
+                            failures::launchRejected,
+                            null);
+        }
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -571,33 +578,6 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Registers the edges for a {@code game_launch} this client cannot use (WBS-3.1.1.6-fix, #457):
-     * one that fails to decode, or that {@link
-     * com.faforever.testharness.client.lobby.GameLaunchValidator} refuses. It ends the session as a
-     * failed launch from the two states a {@code game_launch} is accepted in, IDLE after {@code
-     * game_host} or {@code game_join} and SEARCHING for a matched game.
-     *
-     * <p>The frame used to be dropped with a WARN and nothing else, leaving the run waiting for a
-     * launch it had already received: in IDLE for good, and in SEARCHING until faf-server's {@code
-     * wait_hosted(60)} or {@code wait_launched} timed out and its {@code match_cancelled} returned
-     * the client to IDLE. A lobby that answers with a {@code game_launch} the client cannot use has
-     * regressed, and a run gating on the exit status has to see it.
-     *
-     * <p>No other state gets the edge, as none gets one for {@link LaunchGame}: faf-server writes
-     * {@code game_launch} only to a player who is idle or starting a matched game.
-     */
-    private void registerLaunchRejectedTransitions() {
-        for (var s : List.of(ClientState.IDLE, ClientState.SEARCHING)) {
-            states.get(s)
-                    .registerTransition(
-                            LaunchRejected.class,
-                            states.get(ClientState.TERMINATED),
-                            this::rejectLaunch,
-                            null);
-        }
-    }
-
-    /**
      * Registers the peer-setup edges (#218): a {@code ConnectToPeer} from the lobby is accepted
      * while hosting and while joining alike.
      *
@@ -756,17 +736,8 @@ public final class MockClientLifecycle {
      * genuinely matters in the other four states, so the events are real and only the timing makes
      * them uninteresting. Same treatment {@link Disconnected} already gets, and for the same reason
      * — a deliberate debug-level no-op beats the framework's generic WARN. Self-loops skip entry
-     * hooks, so neither can re-run teardown.
-     *
-     * <p>{@link AuthFailed} gets it too (WBS-3.1.1.4-fix, #455). A lobby connection that fails
-     * fires its disconnect before the session's future fails, so {@link Disconnected} has taken
-     * CONNECTING to TERMINATED by the time the handshake's failure is posted, and it used to log
-     * the framework's WARN after the session had ended. It is a self-loop as well, so it cannot
-     * re-run teardown either.
-     *
-     * <p>{@link MatchCancelled} does too (WBS-3.1.1.6-fix, #457): a matched guest whose launch
-     * failed, or that rejected its {@code game_launch}, has already ended its session when
-     * faf-server's cancellation arrives; see {@link #logMatchCancelledAfterTeardown}.
+     * hooks, so neither can re-run teardown. {@link AuthFailed} and {@link MatchCancelled} are
+     * no-ops too, without an action (#455, #457; see {@link SessionFailures}).
      */
     private void registerPostTeardownExitTransitions() {
         states.get(ClientState.TERMINATED)
@@ -781,25 +752,11 @@ public final class MockClientLifecycle {
                         states.get(ClientState.TERMINATED),
                         this::logGameExitAfterTeardown,
                         null);
-        states.get(ClientState.TERMINATED)
-                .registerTransition(
-                        AuthFailed.class,
-                        states.get(ClientState.TERMINATED),
-                        this::logHandshakeFailureAfterTeardown,
-                        null);
-        states.get(ClientState.TERMINATED)
-                .registerTransition(
-                        MatchCancelled.class,
-                        states.get(ClientState.TERMINATED),
-                        this::logMatchCancelledAfterTeardown,
-                        null);
+        State terminated = states.get(ClientState.TERMINATED);
+        terminated.registerTransition(AuthFailed.class, terminated);
+        terminated.registerTransition(MatchCancelled.class, terminated);
     }
 
-    /**
-     * Adapts the lobby's events to state events: its disconnect, and every frame this client acts
-     * on. Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
-     * limit.
-     */
     private void registerLobbyHandlers() {
         lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
         GameLaunchHandler launchHandler =
@@ -823,9 +780,7 @@ public final class MockClientLifecycle {
     /**
      * Opens the session (connect + handshake + welcome hydration), which sets the entire lifecycle
      * in motion: success posts {@code WelcomeReceived} (CONNECTING → IDLE), failure posts {@code
-     * AuthFailed} (CONNECTING → TERMINATED). A connection that fails ends the session first,
-     * through the lobby's disconnect, and the failure then lands in TERMINATED as a DEBUG line
-     * (#455).
+     * AuthFailed} (CONNECTING → TERMINATED).
      *
      * @param source a source for OAuth tokens for the handshake.
      * @return the session's future, completing with the hydrated identity or exceptionally with the
@@ -1219,19 +1174,6 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * CONNECTING to TERMINATED transition action for {@link AuthFailed}: the handshake's failure is
-     * what ended the session, so it is named ahead of {@code state entry: TERMINATED}. Logged here
-     * rather than where the failure is posted (WBS-3.1.1.4-fix, #455), because a connection that
-     * fails ends the session first, through the lobby's disconnect, and the line then landed after
-     * the session had already ended. The caller of {@link #start} names the cause either way.
-     *
-     * @param event the {@link AuthFailed} event that triggered this transition.
-     */
-    private void onHandshakeFailed(Event event) {
-        LOG.warn("Handshake could not be completed");
-    }
-
-    /**
      * Waits for the adapter's JSON-RPC socket, giving up the moment the adapter process dies
      * (WBS-3.1.3.3-fix, #266).
      *
@@ -1445,38 +1387,6 @@ public final class MockClientLifecycle {
     private void logSelfInflictedDisconnect(Event message) {
         Disconnected disconnected = (Disconnected) message;
         LOG.debug("Disconnected from lobby after session teardown ({})", disconnected.event());
-    }
-
-    /**
-     * TERMINATED no-op action for {@link AuthFailed} (WBS-3.1.1.4-fix, #455): the lobby's
-     * disconnect ended the session first, as it does whenever the connection itself fails, and the
-     * caller of {@link #start} names the failure. Logged at debug level only, and does not re-run
-     * teardown.
-     *
-     * @param message the {@link AuthFailed} event; guaranteed by registration, never anything else.
-     */
-    private void logHandshakeFailureAfterTeardown(Event message) {
-        // The cause goes through the placeholder rather than Failures.describe: an AuthFailed may
-        // carry none, and a throw here would turn a DEBUG line into the transition's own ERROR.
-        LOG.debug(
-                "Handshake could not be completed after the session ended ({})",
-                ((AuthFailed) message).cause());
-    }
-
-    /**
-     * TERMINATED no-op action for {@link MatchCancelled} (WBS-3.1.1.6-fix, #457). When a match's
-     * host fails to host in time, faf-server's {@code launch_match} still sends each guest its
-     * {@code game_launch}, from a {@code finally}, and then {@code match_cancelled}. A guest whose
-     * launch failed, or that rejected the frame, has already ended its session, and its failure is
-     * the one reported. Logged at debug level only, and does not re-run teardown.
-     *
-     * @param message the {@link MatchCancelled} event; guaranteed by registration, never anything
-     *     else.
-     */
-    private void logMatchCancelledAfterTeardown(Event message) {
-        LOG.debug(
-                "match_cancelled after the session ended (game_id={})",
-                ((MatchCancelled) message).command().path("game_id").asText("null"));
     }
 
     /**
@@ -1872,19 +1782,6 @@ public final class MockClientLifecycle {
     private void onMatchCancelledAfterLaunch(Event message) {
         JsonNode command = ((MatchCancelled) message).command();
         failures.matchCancelled(command.path("game_id").asText("null"));
-    }
-
-    /**
-     * {@link LaunchRejected} transition action from IDLE and SEARCHING (WBS-3.1.1.6-fix, #457):
-     * fails the launch through {@link SessionFailures#launch}, which records {@link
-     * SessionVerdicts#launchFailed()} and names the reason in one WARN, or only logs it at DEBUG
-     * once teardown has started. Nothing has been launched, so teardown only closes the lobby.
-     *
-     * @param event the {@link LaunchRejected} event; guaranteed by registration.
-     * @throws FailedTransitionException always, which takes the session to TERMINATED.
-     */
-    private void rejectLaunch(Event event) throws FailedTransitionException {
-        throw failures.launch("read the game_launch frame", ((LaunchRejected) event).reason());
     }
 
     /**

@@ -15,7 +15,6 @@ import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.client.state.SessionVerdicts;
 import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.logging.LoggingSetup;
-import java.net.URI;
 import java.time.Duration;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -143,14 +142,7 @@ public final class RunCommand implements Callable<Integer> {
                                         () -> teardownOnShutdown(callFinished, teardown, log)),
                                 "mc-shutdown"));
         try {
-            return runSession(
-                    tokens,
-                    session,
-                    config.lobbyWebSocketUrl(),
-                    teardown,
-                    lifecycle,
-                    shuttingDown,
-                    log);
+            return runSession(tokens, session, teardown, lifecycle, shuttingDown, log);
         } finally {
             callFinished.set(true);
         }
@@ -163,7 +155,6 @@ public final class RunCommand implements Callable<Integer> {
      *
      * @param tokens the session's access tokens
      * @param session the lobby session to open
-     * @param lobbyUrl the lobby it connects to, which a failure to reach it names
      * @param teardown the session's teardown, shared with the hook
      * @param lifecycle the lifecycle driving the session
      * @param shuttingDown raised by the hook, first thing, when the JVM starts shutting down
@@ -173,7 +164,6 @@ public final class RunCommand implements Callable<Integer> {
     private static int runSession(
             final TokenSource tokens,
             final LobbySession session,
-            final URI lobbyUrl,
             final SessionTeardown teardown,
             final MockClientLifecycle lifecycle,
             final AtomicBoolean shuttingDown,
@@ -185,14 +175,19 @@ public final class RunCommand implements Callable<Integer> {
                     .stateReached(ClientState.IDLE)
                     .get(FSM_SYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("lobby session with {} timed out before welcome", lobbyUrl);
+            log.error(
+                    "lobby session with {} timed out before welcome",
+                    session.connection().endpoint());
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (ExecutionException e) {
             // Named by type and root cause (#455): the message alone is null for a refused
             // connect, an unknown host or a refused upgrade, and this is the line read first.
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            log.error("lobby session with {} failed: {}", lobbyUrl, Failures.describe(cause));
+            log.error(
+                    "lobby session with {} failed: {}",
+                    session.connection().endpoint(),
+                    Failures.describe(cause));
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {

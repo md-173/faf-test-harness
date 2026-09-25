@@ -178,6 +178,15 @@ public final class LobbyConnection {
     }
 
     /**
+     * The lobby this connection opens, for a line that has to name it (#455).
+     *
+     * @return the WebSocket URI it was built with
+     */
+    public URI endpoint() {
+        return endpoint;
+    }
+
+    /**
      * Register a handler for messages with the given {@code command} value. Multiple handlers may
      * register against the same command; each is invoked in registration order on the listener
      * thread when a matching frame arrives.

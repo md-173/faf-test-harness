@@ -667,7 +667,14 @@ final class LifecycleSetupTest {
                                 + "\"game_type\":\"matchmaker\",\"rating_type\":\"ladder_1v1\","
                                 + "\"team\":2,\"faction\":1,\"expected_players\":2,"
                                 + "\"map_position\":1}",
-                        "game_launch.mapname invalid for matchmaker: null"));
+                        "game_launch.mapname invalid for matchmaker: null"),
+                Arguments.of(
+                        "SEARCHING, a matched game that fails to decode",
+                        true,
+                        "{\"command\":\"game_launch\",\"uid\":502,\"mod\":\"ladder1v1\","
+                                + "\"name\":\"ladder1 Vs ladder2\",\"game_type\":\"matchmaker\","
+                                + "\"rating_type\":\"ladder_1v1\",\"team\":\"two\"}",
+                        "game_launch.team: Cannot deserialize value of type"));
     }
 
     /**

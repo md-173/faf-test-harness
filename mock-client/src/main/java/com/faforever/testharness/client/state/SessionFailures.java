@@ -5,6 +5,7 @@ import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReaso
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.process.SubprocessManager;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
 import java.io.IOException;
@@ -254,6 +255,36 @@ final class SessionFailures {
                         + " terminating",
                 gameId);
         verdicts.recordSessionFailed();
+    }
+
+    /**
+     * The CONNECTING to TERMINATED action for {@code AuthFailed} (WBS-3.1.1.4-fix, #455): the
+     * handshake's failure ended the session, so it is named ahead of {@code state entry:
+     * TERMINATED}. A connection that fails ends the session first, through the lobby's disconnect,
+     * and the failure then reaches TERMINATED's no-op instead of a WARN after the session had
+     * ended. The caller of {@code start} names the cause either way.
+     *
+     * @param event the {@code AuthFailed} event
+     */
+    void handshakeFailed(final Event event) {
+        LOG.warn("Handshake could not be completed");
+    }
+
+    /**
+     * The IDLE and SEARCHING action for a {@code game_launch} the client cannot use
+     * (WBS-3.1.1.6-fix, #457): a launch that never came up, recorded as {@link #launch}. The frame
+     * used to be dropped with a WARN, leaving the run waiting for a launch it had already received,
+     * in IDLE for good or in SEARCHING until faf-server's {@code match_cancelled}. faf-server
+     * writes {@code game_launch} only to a player who is idle or starting a matched game, so no
+     * other state has the edge, as none has one for {@code LaunchGame}. When a match's host fails
+     * to host in time, faf-server still sends each guest its {@code game_launch}, then {@code
+     * match_cancelled}, which then reaches TERMINATED's no-op.
+     *
+     * @param event the {@link LaunchRejected} event
+     * @throws FailedTransitionException always, which takes the session to TERMINATED
+     */
+    void launchRejected(final Event event) throws FailedTransitionException {
+        throw launch("read the game_launch frame", ((LaunchRejected) event).reason());
     }
 
     /**

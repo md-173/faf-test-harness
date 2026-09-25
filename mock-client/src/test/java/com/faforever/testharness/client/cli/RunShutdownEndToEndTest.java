@@ -32,7 +32,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * How the real {@code run} ends, when a signal stops it and when it stops on its own
- * (WBS-3.1.5.2-fix, #297, and WBS-3.1.3.2-fix, #446).
+ * (WBS-3.1.5.2-fix, #297, and WBS-3.1.3.2-fix, #446), a lobby it cannot reach (#455) and a {@code
+ * game_launch} it cannot use (#457) among them.
  *
  * <p>{@code mock-client/README.md} documents that {@code Ctrl-C} or {@code SIGTERM} closes the
  * WebSocket cleanly and exits 130 or 143. {@code SignalExitCodeEndToEndTest} pins the JDK behaviour
@@ -158,11 +159,12 @@ final class RunShutdownEndToEndTest {
 
     /**
      * A lobby that refuses the connection ends the run with {@code 70} and one ERROR naming the
-     * failure's type and the lobby, where it used to read {@code lobby session failed: null}
-     * (WBS-3.1.1.4-fix, #455). The lobby's disconnect ends the session before the handshake's
-     * failure is posted, and neither that failure nor the framework may then warn about it. The
-     * port is bound and never listened on, so the connect is refused and nothing can take it
-     * meanwhile. The root cause is left unasserted, since it is the JDK's to choose.
+     * failure's type, its root cause and the lobby, where it used to read {@code lobby session
+     * failed: null} (WBS-3.1.1.4-fix, #455). The lobby's disconnect ends the session before the
+     * handshake's failure is posted, and neither that failure nor the framework may then warn about
+     * it. The port is bound and never listened on, so the connect is refused and nothing can take
+     * it meanwhile. A refused connect has a root cause because {@code java.net.http} retries it on
+     * the channel the refusal closed; which class that is, the JDK chooses, so it is not asserted.
      */
     @Test
     void aRefusedConnectExits70NamingTheLobbyOnce() throws Exception {
@@ -178,15 +180,18 @@ final class RunShutdownEndToEndTest {
         List<JsonNode> records = records();
         List<String> errors = messagesAt(records, "ERROR");
         List<String> warnings = messagesAt(records, "WARN");
-        String failure = lobbyUrl + " failed: ConnectException";
+        String error = "lobby session with " + lobbyUrl + " failed: ";
         assertEquals(1, errors.size(), "exactly one ERROR: " + messages(records));
         assertTrue(
-                errors.get(0).startsWith("lobby session with " + failure),
+                errors.get(0).startsWith(error + "ConnectException"),
                 "the ERROR must name the failure and the lobby: " + errors);
+        String failure = errors.get(0).substring(error.length());
         assertTrue(
-                warnings.stream()
-                        .anyMatch(m -> m.startsWith("lobby WebSocket connect to " + failure)),
-                "the connect WARN must name the failure and the lobby: " + warnings);
+                failure.contains(", caused by "),
+                "the ERROR must name the failure's root cause: " + errors);
+        assertTrue(
+                warnings.contains("lobby WebSocket connect to " + lobbyUrl + " failed: " + failure),
+                "the connect WARN must name the same failure and the lobby: " + warnings);
         assertTrue(
                 errors.stream().noneMatch(m -> m.endsWith("null"))
                         && warnings.stream().noneMatch(m -> m.endsWith("null")),

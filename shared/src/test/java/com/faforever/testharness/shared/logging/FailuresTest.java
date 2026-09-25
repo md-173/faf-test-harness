@@ -1,10 +1,14 @@
 package com.faforever.testharness.shared.logging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.TextNode;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.nio.channels.ClosedChannelException;
@@ -49,6 +53,25 @@ final class FailuresTest {
                 assertTimeoutPreemptively(Duration.ofSeconds(5), () -> Failures.describe(first));
 
         assertTrue(line.startsWith("Exception: first"), line);
+    }
+
+    /**
+     * A Jackson error is named once and on one line (#455), although Jackson puts its source
+     * location on a second line and {@code convertValue} rethrows it wrapped, with the same
+     * message.
+     */
+    @Test
+    void aJacksonErrorIsNamedOnceOnOneLine() {
+        IllegalArgumentException failure =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new ObjectMapper().convertValue(new TextNode("abc"), Integer.class));
+
+        String line = Failures.describe(failure);
+
+        assertTrue(line.startsWith("InvalidFormatException: Cannot deserialize value of"), line);
+        assertFalse(line.contains("\n"), line);
+        assertFalse(line.contains("caused by"), line);
     }
 
     @Test
