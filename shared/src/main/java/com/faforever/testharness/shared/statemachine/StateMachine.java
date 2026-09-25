@@ -121,6 +121,7 @@ public class StateMachine implements EventListener {
                     event.getClass().getSimpleName());
             for (var t : transitions) {
                 if (t.guard(event)) {
+                    List<TimerTask> armedBefore = List.copyOf(timeouts);
                     State newState = t.transition(event);
                     if (newState == null) {
                         // The event was handled but no transition occurred, so none of the
@@ -136,7 +137,7 @@ public class StateMachine implements EventListener {
                                 state.getName(),
                                 newState.getName(),
                                 event);
-                        commitTransition(newState);
+                        commitTransition(newState, armedBefore);
                     }
                     // Stop trying more transitions.
                     return;
@@ -149,21 +150,29 @@ public class StateMachine implements EventListener {
     }
 
     /**
-     * Adopts the result of a transition that actually changed state: makes it current, disarms
-     * every pending timeout (a state change is exactly what timeouts wait for) and releases
-     * anything blocked on {@link #stateReached(State)} for the new state. Only ever called with a
-     * genuine new state; see {@link Transition#transition(Event)} for when there isn't one.
+     * Adopts the result of a transition that actually changed state: makes it current, disarms the
+     * timeouts that were pending when the transition began (a state change is exactly what they
+     * wait for) and releases anything blocked on {@link #stateReached(State)} for the new state.
+     * Only ever called with a genuine new state; see {@link Transition#transition(Event)} for when
+     * there isn't one.
+     *
+     * <p>A timeout armed during the transition itself, by its action or by an exit or entry hook,
+     * is not in {@code armedBefore} and stays armed: it belongs to the state the machine lands in,
+     * a failure state included, and the next commit disarms it (WBS-2.3.7-fix, #259). So does one
+     * armed by a {@link #stateReached(State)} callback during this commit. Clearing the whole list
+     * here used to discard such a timeout silently.
      *
      * <p>The caller must already hold this machine's monitor.
      *
      * @param newState the state the machine has just moved into.
+     * @param armedBefore the timeouts that were pending when the transition began.
      */
-    private void commitTransition(State newState) {
+    private void commitTransition(State newState, List<TimerTask> armedBefore) {
         state = newState;
-        for (var timeout : timeouts) {
+        for (var timeout : armedBefore) {
             timeout.cancel();
         }
-        timeouts.clear();
+        timeouts.removeAll(armedBefore);
         // `awaitedStates` never holds an entry for the current state, which is why nothing can be
         // left waiting on a state the machine is already in. Three things guarantee it and all
         // three must be kept: `state` is written only here and in the constructor, this removal is
@@ -189,6 +198,12 @@ public class StateMachine implements EventListener {
     /**
      * Sets up a timeout that will cause a transition to state {@code to} if no other transition
      * after {@code millis} elapses. This transition causes {@code action} to fire.
+     *
+     * <p>The clock starts now, and any transition that commits after this call disarms the timeout
+     * except the one in progress when it is armed: a timeout armed from a transition's action, or
+     * from an exit or entry hook, belongs to the state that transition lands in and survives its
+     * commit (WBS-2.3.7-fix, #259). A deadline meant to run from entry to a state is therefore
+     * armed in that state's entry hook.
      *
      * @param millis the time in milliseconds to wait before changing states.
      * @param to the new state to go to.
@@ -238,14 +253,15 @@ public class StateMachine implements EventListener {
     }
 
     private class UpdateStateTask extends TimerTask {
-        /** Transition to fire when the timeout finishes. */
-        private final Transition transition;
+        /** The state the timeout moves the machine to. */
+        private final State to;
+
+        /** The action to run on the way, or {@code null} for none. */
+        private final TransitionAction action;
 
         UpdateStateTask(State to, TransitionAction action) {
-            // Wrap state in a transition so that entry and exit hooks are performed correctly.
-            // The captured `state` is only a valid `from` while this task is still pending, which
-            // run() re-checks under the monitor before doing anything with it.
-            this.transition = new Transition(state, to, action, null);
+            this.to = to;
+            this.action = action;
         }
 
         @Override
@@ -255,16 +271,23 @@ public class StateMachine implements EventListener {
                 // TimerTask.cancel() cannot stop a task the timer thread has already dequeued: it
                 // runs anyway and blocks here until the thread that cancelled it releases the
                 // monitor. Membership of `timeouts` settles whether that happened, because every
-                // commit clears the list. Without this, a cancelled timeout would commit a
-                // transition out of a `from` state the machine has already left.
+                // commit removes the timeouts that were pending when it began. Without this, a
+                // timeout cancelled by a commit would still fire, moving the machine out of a state
+                // it was not armed in.
                 // Removing it here also keeps `timeouts` meaning "pending": this task has now run.
                 // Note this only covers cancellation. It is checked before the action runs, so an
                 // action that moves the machine itself (by calling receiveEvent) still leaves the
-                // captured `from` stale.
+                // `from` below stale.
                 if (!timeouts.remove(this)) {
                     LOG.debug("Timeout fired after being cancelled, ignoring");
                     return;
                 }
+                List<TimerTask> armedBefore = List.copyOf(timeouts);
+                // Built now rather than when armed, so that exit hooks run for the state actually
+                // being left. A timeout armed during a transition is created while `state` still
+                // names the state being left, and it outlives that transition's commit (#259). For
+                // a timeout still pending, the current state is the one it belongs to.
+                Transition transition = new Transition(state, to, action, null);
                 // No need to check guard and no actual event that triggered this.
                 State newState;
                 try {
@@ -290,7 +313,7 @@ public class StateMachine implements EventListener {
                     return;
                 }
                 LOG.debug("Timeout fired, new state is {}", newState.getName());
-                commitTransition(newState);
+                commitTransition(newState, armedBefore);
             }
         }
     }
