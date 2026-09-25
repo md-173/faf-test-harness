@@ -25,17 +25,32 @@ public class StateMachine implements EventListener {
     /** Timer used for timeouts. */
     private final Timer timeoutTimer;
 
-    /** Collection of tasks scheduled, kept to cancel them later if necessary. */
+    /**
+     * Timeouts armed and not yet fired or disarmed, guarded by this machine's monitor. {@link
+     * #cancel()} leaves it alone, since {@link Timer#cancel()} already discards everything
+     * scheduled, so afterwards it can still hold tasks that will never run.
+     */
     private final List<TimerTask> timeouts;
 
     /** A map from states to a future that should be completed when the state is reached. */
     private final Map<State, CompletableFuture<Void>> awaitedStates;
 
     /**
-     * Whether {@link #cancel()} has run. Guarded by the same monitor as {@link #setTimeout(long,
-     * State, TransitionAction)}, which reads it to become a no-op rather than throwing.
+     * Orders {@link #cancel()} against the arming step of {@link #setTimeout(long, State,
+     * TransitionAction)}, so a timeout is never handed to a timer {@code cancel()} has already
+     * stopped. It is held only around that check and a single {@link Timer} call, never across a
+     * transition or a log call, which is what lets {@code cancel()} return while a transition
+     * action holds this machine's monitor (WBS-2.3.7-fix, #328).
      */
-    private boolean cancelled;
+    private final Object schedulingLock = new Object();
+
+    /**
+     * Whether {@link #cancel()} has run. Written under {@link #schedulingLock}, where {@link
+     * #setTimeout(long, State, TransitionAction)} reads it to become a no-op rather than throwing.
+     * Volatile because a timeout the timer has already dequeued reads it under this machine's
+     * monitor instead.
+     */
+    private volatile boolean cancelled;
 
     /**
      * Initializes the machine with its initial state and policy.
@@ -210,28 +225,49 @@ public class StateMachine implements EventListener {
      * @param action the action to fire when the timeout occurs.
      */
     public synchronized void setTimeout(long millis, State to, TransitionAction action) {
-        if (cancelled) {
+        UpdateStateTask task = new UpdateStateTask(to, action);
+        boolean armed;
+        // The check and the schedule are one step as far as cancel() is concerned. It no longer
+        // takes this machine's monitor (#328), so without the lock it could stop the timer between
+        // the two, and Timer.schedule would then throw. Nothing else runs under it, logging
+        // included.
+        synchronized (schedulingLock) {
+            armed = !cancelled;
+            if (armed) {
+                timeoutTimer.schedule(task, millis);
+            }
+        }
+        if (!armed) {
             // The machine is shutting down and the timer is dead, so Timer.schedule would throw
             // IllegalStateException. Silently arming nothing is the honest reading of the request:
             // cancel() means no scheduled transition may fire after it, and this is one. It also
-            // stops a caller having to know the ordering — a SIGTERM landing between the shutdown
+            // stops a caller having to know the ordering: a SIGTERM landing between the shutdown
             // hook being installed and a lifecycle arming its first timeout used to take the
             // process down with an uncaught throw instead of an exit code.
             LOG.debug("Ignoring timeout into {}; scheduling is already cancelled", to.getName());
             return;
         }
-        LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
-        UpdateStateTask task = new UpdateStateTask(to, action);
+        // Added after scheduling but still under this machine's monitor, which the task's run()
+        // must take before it looks for itself here.
         timeouts.add(task);
-        timeoutTimer.schedule(task, millis);
+        LOG.debug("Setting up timeout for {}ms into {}", millis, to.getName());
     }
 
     /**
-     * Stops the machine's time-based scheduling: cancels every pending timeout and shuts down the
-     * timer thread, so no scheduled transition can fire after this returns. Intended for the
-     * shutdown path — it is terminal, so a later {@link #setTimeout(long, State)} arms nothing and
-     * returns rather than throwing on the dead timer. Event-driven transitions via {@link
+     * Stops the machine's time-based scheduling: shuts down the timer thread, so once this returns
+     * no timeout goes on to take this machine's monitor and start a transition, including one the
+     * timer has already dequeued and that is waiting for the monitor. A timeout that already holds
+     * the monitor when this is called runs to completion and commits, as an event-driven transition
+     * does, and that includes one whose own transition calls this: stopping one after its hooks
+     * have run but before its commit would leave the machine half-transitioned (#258). Intended for
+     * the shutdown path: it is terminal, so a later {@link #setTimeout(long, State)} arms nothing
+     * and returns rather than throwing on the dead timer. Event-driven transitions via {@link
      * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     *
+     * <p><b>Never waits for a transition</b> (WBS-2.3.7-fix, #328). It takes only {@link
+     * #schedulingLock}, never this machine's monitor, so it returns at once even while a transition
+     * action holds the monitor, blocked on I/O, a lock or a sleep. It used to be {@code
+     * synchronized}, which put the mock game's teardown behind a stalled GPGNet write (#299).
      *
      * <p><b>Does not touch {@link #awaitedStates}.</b> A future already handed out by {@link
      * #stateReached(State)} for a state this machine never reaches is left pending forever — this
@@ -243,13 +279,11 @@ public class StateMachine implements EventListener {
      * block on a {@link #stateReached(State)} future for a state that might never be reached must
      * bound that wait themselves.
      */
-    public synchronized void cancel() {
-        cancelled = true;
-        for (var timeout : timeouts) {
-            timeout.cancel();
+    public void cancel() {
+        synchronized (schedulingLock) {
+            cancelled = true;
+            timeoutTimer.cancel();
         }
-        timeouts.clear();
-        timeoutTimer.cancel();
     }
 
     private class UpdateStateTask extends TimerTask {
@@ -268,6 +302,13 @@ public class StateMachine implements EventListener {
         public void run() {
             // Synchronize with receiveEvent by using the outer class instance as monitor.
             synchronized (StateMachine.this) {
+                if (cancelled) {
+                    // Dequeued before cancel() stopped the timer, then parked on the monitor.
+                    // cancel() never takes this monitor and leaves `timeouts` alone (#328), so
+                    // this flag is the only thing that stops the task here.
+                    LOG.debug("Timeout fired after scheduling was cancelled, ignoring");
+                    return;
+                }
                 // TimerTask.cancel() cannot stop a task the timer thread has already dequeued: it
                 // runs anyway and blocks here until the thread that cancelled it releases the
                 // monitor. Membership of `timeouts` settles whether that happened, because every
