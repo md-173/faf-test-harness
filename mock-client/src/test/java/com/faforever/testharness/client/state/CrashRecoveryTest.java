@@ -39,6 +39,8 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +51,9 @@ import org.slf4j.LoggerFactory;
  * lobby on every exit, and that the pre-existing clean-exit / late-{@link GameExited} behaviour
  * from #192/#193 is unchanged.
  */
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class CrashRecoveryTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -172,11 +177,9 @@ final class CrashRecoveryTest {
         server.stop(1000);
     }
 
-    /** Cross-platform child process argv that exits with {@code code} and nothing else. */
+    /** Child process argv that exits with {@code code} and nothing else. */
     private static ProcessBuilder exitingWith(int code) {
-        return System.getProperty("os.name").toLowerCase().contains("win")
-                ? new ProcessBuilder("cmd", "/c", "exit", String.valueOf(code))
-                : new ProcessBuilder("sh", "-c", "exit " + code);
+        return new ProcessBuilder("sh", "-c", "exit " + code);
     }
 
     /**
@@ -203,22 +206,12 @@ final class CrashRecoveryTest {
      * @return a builder for a child that exits with {@code code} on cue
      */
     private ProcessBuilder exitingOnCue(int code) {
-        String path = exitCue.toString();
-        return System.getProperty("os.name").toLowerCase().contains("win")
-                ? new ProcessBuilder(
-                        "cmd",
-                        "/c",
-                        "for /l %i in (0,0,1) do @(if exist \""
-                                + path
-                                + "\" exit "
-                                + code
-                                + " & timeout /t 1 /nobreak >nul)")
-                : new ProcessBuilder(
-                        "sh",
-                        "-c",
-                        "while [ ! -e \"$1\" ]; do sleep 0.05; done; exit " + code,
-                        "sh",
-                        path);
+        return new ProcessBuilder(
+                "sh",
+                "-c",
+                "while [ ! -e \"$1\" ]; do sleep 0.05; done; exit " + code,
+                "sh",
+                exitCue.toString());
     }
 
     /**

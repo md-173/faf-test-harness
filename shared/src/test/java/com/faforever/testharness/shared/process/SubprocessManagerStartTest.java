@@ -23,6 +23,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.slf4j.LoggerFactory;
 
 /** Exercises {@link SubprocessManager#start} and the read-only accessors it sets up. */
@@ -189,6 +191,10 @@ class SubprocessManagerStartTest {
      * disagree about where it lives (#227).
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
         SubprocessManager m =
                 SubprocessManager.start(TestSupport.fastExitingNativeChild(), TAG, GRACE);

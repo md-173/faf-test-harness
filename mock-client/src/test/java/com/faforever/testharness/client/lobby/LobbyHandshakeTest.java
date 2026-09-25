@@ -2,13 +2,11 @@ package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -16,6 +14,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /** Unit tests for {@link LobbyHandshake} running against {@link ScriptedWebSocketServer}. */
@@ -159,10 +159,11 @@ final class LobbyHandshakeTest {
     }
 
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void uidBinaryOutputBecomesUniqueId(@TempDir final Path dir) throws Exception {
-        assumeTrue(
-                !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
-                "POSIX-only: uses a shell script as a stand-in faf-uid binary");
         // A stand-in 'faf-uid' that echoes a session-derived token, proving the handshake runs the
         // binary with the lobby session and sends its stdout as unique_id.
         Path fakeUid = dir.resolve("fake-uid.sh");
@@ -186,10 +187,11 @@ final class LobbyHandshakeTest {
     }
 
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void failingUidBinaryFallsBackToStaticUniqueId(@TempDir final Path dir) throws Exception {
-        assumeTrue(
-                !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
-                "POSIX-only: uses a shell script as a stand-in faf-uid binary");
         // A stand-in 'faf-uid' that writes an error to stderr and exits non-zero, proving the
         // handshake falls back to the static unique_id when the tool fails after starting.
         Path fakeUid = dir.resolve("failing-uid.sh");

@@ -16,6 +16,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * Unit tests for {@link SessionTeardown}. The subprocess handles are real {@link
@@ -59,6 +61,10 @@ final class SessionTeardownTest {
 
     /** One call kills both processes, then closes the connections, adapter RPC before lobby. */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void runTerminatesProcessesThenClosesConnections() throws Exception {
         SubprocessManager game = startSleeper();
         SubprocessManager adapter = startSleeper();
@@ -160,6 +166,10 @@ final class SessionTeardownTest {
      * and terminate the adapter the same way it always has.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void rpcNeverOpenedSkipsQuitAndTerminatesAsBefore() throws Exception {
         SubprocessManager adapter = startSleeper();
         RecordingAdapterConnection rpc =

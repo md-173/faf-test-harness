@@ -27,6 +27,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * Covers game-process ownership (WBS-3.1.2.4): the lifecycle owns the launched game and exposes a
@@ -34,6 +36,9 @@ import org.junit.jupiter.api.Test;
  * {@link SessionTeardown} at launch. Uses real short-lived child processes (the {@code
  * SessionTeardownTest} pattern) so exit codes and termination are observed for real, not mocked.
  */
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class GameProcessTest {
 
     private static final MockClientConfig MINIMAL_CONFIG =
