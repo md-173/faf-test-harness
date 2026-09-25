@@ -73,11 +73,17 @@ import org.slf4j.MDC;
  * old high: bounded, about a second per ten datagrams already sent, but it can eat most of {@link
  * #TRAFFIC_TIMEOUT}. WBS-4.3.4 will hit the same shape deliberately when a peer rejoins.
  *
- * <p><b>Auto-launch is off on every peer</b> ({@code mockGameLaunchDelaySeconds = -1}, WBS-4.3.1).
- * faf-server accepts a {@code game_join} only while the game is in {@code GameState.LOBBY} and
- * leaves that state the moment the host reports {@code GameState Launching}, so a host on a timer
- * would make itself unjoinable while a joiner is still booting two JVMs. The peer links are
- * established during the lobby phase, so nothing is lost.
+ * <p><b>Auto-launch is off on every peer by default</b> ({@code mockGameLaunchDelaySeconds = -1},
+ * WBS-4.3.1). faf-server accepts a {@code game_join} only while the game is in {@code
+ * GameState.LOBBY} and leaves that state the moment the host reports {@code GameState Launching},
+ * so a host on a timer would make itself unjoinable while a joiner is still booting two JVMs. The
+ * peer links are established during the lobby phase, so nothing is lost.
+ *
+ * <p>The host alone can be given a delay, through the three-argument constructor, for a caller that
+ * needs the session to leave its lobby phase (WBS-4.3.4): no other lever exists, since only the
+ * host reporting {@code Launching} moves the server's game to LIVE. Joiners never auto-launch
+ * whatever is asked, and the delay is floored by {@link #minHostLaunchDelaySeconds(int)}, which
+ * grows with the peer count, so the reasoning above still holds.
  *
  * <p><b>The host uses {@code friends} visibility</b> (WBS-4.3.3). faf-server's {@code
  * command_game_join} checks foes, lobby state, init mode and password but never visibility, which
@@ -121,6 +127,22 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /** {@code mockGameLaunchDelaySeconds} value that disables auto-launch. */
     static final int LAUNCH_DISABLED = -1;
+
+    /**
+     * The shortest host launch delay a caller may ask for at {@link #MIN_PEERS}, before the
+     * per-joiner allowance below. The host's timer starts when its own game enters HOSTING and
+     * every joiner's bring-up has to finish inside it, so this is comfortably above the 20 to 40 s
+     * an observed two-peer session takes and leaves room for a slower runner.
+     */
+    static final Duration MIN_HOST_LAUNCH_DELAY = Duration.ofSeconds(90);
+
+    /**
+     * Added to {@link #MIN_HOST_LAUNCH_DELAY} for each joiner beyond the first. Joiners start
+     * serially, each only once the previous reached JOINING, so the bring-up the host has to stay
+     * joinable through grows with the peer count; a floor calibrated at two peers would otherwise
+     * bless a delay that leaves later joiners refused with {@code game_not_ready}.
+     */
+    static final Duration PER_JOINER_LAUNCH_ALLOWANCE = Duration.ofSeconds(30);
 
     /**
      * Budget for the whole session, from the first login to the full mesh. Every named wait draws
@@ -197,6 +219,9 @@ public final class MultiPeerSession implements AutoCloseable {
     /** Title the host advertises. */
     private final String hostTitle;
 
+    /** Seconds the host's game waits before launching, or {@link #LAUNCH_DISABLED} for never. */
+    private final int hostLaunchDelaySeconds;
+
     /**
      * Every peer built so far, host first. Written by {@link #run()} and read by {@link #close()},
      * possibly on another thread.
@@ -230,6 +255,46 @@ public final class MultiPeerSession implements AutoCloseable {
      *     or the log level is above INFO
      */
     public MultiPeerSession(final List<MockClientConfig> peerBases, final String hostTitle) {
+        this(peerBases, hostTitle, LAUNCH_DISABLED);
+    }
+
+    /**
+     * As {@link #MultiPeerSession(List, String)}, with the host allowed to launch its match on a
+     * timer (WBS-4.3.4).
+     *
+     * <p>Only a caller that needs the session to leave its lobby phase should pass a delay: a
+     * post-launch scenario cannot be reached any other way, because faf-server's {@code
+     * handle_game_state} moves a game to LIVE only on the <em>host</em> reporting {@code GameState
+     * Launching}. Joiners never auto-launch, whatever is passed here, so each joiner's own match
+     * timer cannot end its session on a schedule the caller did not choose.
+     *
+     * <p>The delay is floored at {@link #MIN_HOST_LAUNCH_DELAY} rather than trusted, because the
+     * invariant it relaxes is load-bearing: the host must stay joinable until every joiner is in,
+     * and a host that launches first makes itself unjoinable, which surfaces as a joiner's {@code
+     * game_join} being refused with {@code game_not_ready}.
+     *
+     * @param peerBases one validated config per peer, as above
+     * @param hostTitle the title the host advertises
+     * @param hostLaunchDelaySeconds seconds the host's game waits before launching, or {@link
+     *     #LAUNCH_DISABLED} for the default of never
+     * @throws IllegalArgumentException for the reasons above, or if the delay is anything other
+     *     than {@link #LAUNCH_DISABLED} below the floor for this peer count
+     */
+    public MultiPeerSession(
+            final List<MockClientConfig> peerBases,
+            final String hostTitle,
+            final int hostLaunchDelaySeconds) {
+        if (hostLaunchDelaySeconds != LAUNCH_DISABLED
+                && hostLaunchDelaySeconds < minHostLaunchDelaySeconds(peerBases.size())) {
+            throw new IllegalArgumentException(
+                    "a host launch delay must be at least "
+                            + minHostLaunchDelaySeconds(peerBases.size())
+                            + "s at "
+                            + peerBases.size()
+                            + " peers so the game stays joinable through bring-up, got "
+                            + hostLaunchDelaySeconds
+                            + "s");
+        }
         if (peerBases.size() < MIN_PEERS || peerBases.size() > MAX_PEERS) {
             throw new IllegalArgumentException(
                     "a session needs "
@@ -241,6 +306,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         this.bases = List.copyOf(peerBases);
         this.hostTitle = hostTitle;
+        this.hostLaunchDelaySeconds = hostLaunchDelaySeconds;
         List<TokenSource> resolved = new ArrayList<>();
         Map<Path, String> owners = new HashMap<>();
         Map<String, String> accounts = new HashMap<>();
@@ -540,7 +606,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         MockClientConfig config =
                 hostUid == null
-                        ? hostConfig(bases.get(index), ports, hostTitle)
+                        ? hostConfig(bases.get(index), ports, hostTitle, hostLaunchDelaySeconds)
                         : joinConfig(bases.get(index), ports, hostUid);
         SessionPeer peer = new SessionPeer(label, role, config);
         peers.add(peer);
@@ -983,6 +1049,19 @@ public final class MultiPeerSession implements AutoCloseable {
     }
 
     /**
+     * The shortest host launch delay that keeps a session of this size joinable throughout.
+     *
+     * @param peerCount how many peers the session runs
+     * @return the floor, in seconds
+     */
+    static long minHostLaunchDelaySeconds(final int peerCount) {
+        int joinersBeyondFirst = Math.max(0, peerCount - MIN_PEERS);
+        return MIN_HOST_LAUNCH_DELAY
+                .plus(PER_JOINER_LAUNCH_ALLOWANCE.multipliedBy(joinersBeyondFirst))
+                .toSeconds();
+    }
+
+    /**
      * The instance label for a peer position.
      *
      * @param index the peer's position, 0 for the host
@@ -1002,6 +1081,25 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     static MockClientConfig hostConfig(
             final MockClientConfig base, final AdapterPorts ports, final String title) {
+        return hostConfig(base, ports, title, LAUNCH_DISABLED);
+    }
+
+    /**
+     * As {@link #hostConfig(MockClientConfig, AdapterPorts, String)}, with an explicit auto-launch
+     * policy (WBS-4.3.4).
+     *
+     * @param base the host's base config
+     * @param ports its port set
+     * @param title the advertised game title
+     * @param launchDelaySeconds seconds its game waits before launching, or {@link
+     *     #LAUNCH_DISABLED} for never
+     * @return the validated config
+     */
+    static MockClientConfig hostConfig(
+            final MockClientConfig base,
+            final AdapterPorts ports,
+            final String title,
+            final int launchDelaySeconds) {
         GameHostConfig host =
                 new GameHostConfig(
                         title,
@@ -1012,7 +1110,7 @@ public final class MultiPeerSession implements AutoCloseable {
                         Optional.empty(),
                         false,
                         Map.of());
-        return peerConfig(base, ports, Optional.of(host), Optional.empty());
+        return peerConfig(base, ports, Optional.of(host), Optional.empty(), launchDelaySeconds);
     }
 
     /**
@@ -1029,7 +1127,8 @@ public final class MultiPeerSession implements AutoCloseable {
                 base,
                 ports,
                 Optional.empty(),
-                Optional.of(new GameJoinConfig(targetGameId, Optional.empty())));
+                Optional.of(new GameJoinConfig(targetGameId, Optional.empty())),
+                LAUNCH_DISABLED);
     }
 
     /**
@@ -1040,13 +1139,16 @@ public final class MultiPeerSession implements AutoCloseable {
      * @param ports its port set
      * @param host its host intent, if it hosts
      * @param join its join intent, if it joins
+     * @param launchDelaySeconds seconds its game waits before launching, or {@link
+     *     #LAUNCH_DISABLED} for never; only a host is ever given anything else
      * @return the validated copy
      */
     private static MockClientConfig peerConfig(
             final MockClientConfig base,
             final AdapterPorts ports,
             final Optional<GameHostConfig> host,
-            final Optional<GameJoinConfig> join) {
+            final Optional<GameJoinConfig> join,
+            final int launchDelaySeconds) {
         return new MockClientConfig(
                 base.lobbyWebSocketUrl(),
                 base.oauthTokenUrl(),
@@ -1066,7 +1168,7 @@ public final class MultiPeerSession implements AutoCloseable {
                 ports.gpgnet(),
                 ports.lobby(),
                 base.iceAdapterGameId(),
-                LAUNCH_DISABLED,
+                launchDelaySeconds,
                 base.logLevel(),
                 base.logFile(),
                 base.playerIdOverride(),
