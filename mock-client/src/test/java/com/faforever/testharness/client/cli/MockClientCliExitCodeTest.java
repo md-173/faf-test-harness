@@ -32,6 +32,7 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -101,6 +102,24 @@ final class MockClientCliExitCodeTest {
         int exitCode = Main.run(args, env, err);
         err.flush();
         return new MainOutcome(exitCode, stripAnsi(captured.toString(StandardCharsets.UTF_8)));
+    }
+
+    /**
+     * Drives {@link CommandLine#execute(String...)} on the production {@link CommandLine} and
+     * captures picocli's own error writer, which is where every parse error found inside {@code
+     * execute} is reported. {@link #runMain(String[])} cannot see those: {@link Main#run} writes
+     * only construction-time failures to the stream it is given.
+     *
+     * @param args raw command-line arguments
+     * @return the exit code and captured stderr
+     */
+    private static MainOutcome executeCapturingErr(final String[] args) {
+        CommandLine cmd = ConfigLoader.newCommandLine(args, Map.of());
+        StringWriter captured = new StringWriter();
+        cmd.setOut(new PrintWriter(new StringWriter()));
+        cmd.setErr(new PrintWriter(captured));
+        int exitCode = cmd.execute(args);
+        return new MainOutcome(exitCode, stripAnsi(captured.toString()));
     }
 
     /**
@@ -365,6 +384,44 @@ final class MockClientCliExitCodeTest {
                 "path was truncated at its newline: " + lines.get(0));
         assertTrue(outcome.err().contains("Usage: mock-client [-hV]"), "no real usage block");
         assertNoStackTrace(outcome.err());
+    }
+
+    /**
+     * Arguments that picocli quotes back in its parse error, each carrying a newline and a forged
+     * {@code Usage:} line: the two reproductions from #307, an unknown option and an option value
+     * that fails conversion, plus an unknown option on a subcommand, whose usage block is the
+     * subcommand's rather than the root's.
+     *
+     * @return the argv and the first words of the error line each should produce
+     */
+    static Stream<Arguments> argvForgingTheUsageLine() {
+        return Stream.of(
+                Arguments.of(new String[] {"--bogus\nUsage: FORGED"}, "Unknown option: "),
+                Arguments.of(
+                        new String[] {"--host-rating-max=zz\nUsage: FORGED"},
+                        "Invalid value for option '--host-rating-max': "),
+                Arguments.of(new String[] {"run", "--bogus\nUsage: FORGED"}, "Unknown option: "));
+    }
+
+    @ParameterizedTest
+    @MethodSource("argvForgingTheUsageLine")
+    void aNewlineInArgvCannotForgeTheUsageLine(final String[] args, final String errorPrefix) {
+        MainOutcome outcome = executeCapturingErr(args);
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        List<String> lines = errorLines(outcome.err());
+        assertEquals(1, lines.size(), "argv newline split the parse error: " + lines);
+        assertTrue(lines.get(0).startsWith(errorPrefix), "unexpected error line: " + lines.get(0));
+        // As with the --config case: one error line is not enough on its own, because unescaped,
+        // the forged line is itself what errorLines stops at. The escaped text must be on the
+        // error line, and no line may begin with the forgery.
+        assertTrue(
+                lines.get(0).contains("\\nUsage: FORGED"),
+                "the newline was not escaped onto the error line: " + lines.get(0));
+        assertTrue(
+                outcome.err().lines().noneMatch(line -> line.startsWith("Usage: FORGED")),
+                "a forged Usage: line reached stderr:\n" + outcome.err());
+        assertTrue(outcome.err().contains("Usage: mock-client"), "no real usage block");
     }
 
     @Test
