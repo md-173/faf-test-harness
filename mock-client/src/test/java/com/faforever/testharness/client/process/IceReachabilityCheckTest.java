@@ -133,6 +133,31 @@ final class IceReachabilityCheckTest {
     }
 
     @Test
+    void loopbackProbeSeesAListenerTheBindTestCanMissOnMacOs() throws Exception {
+        // #376: on Darwin a wildcard bind succeeds alongside an existing wildcard listener, so the
+        // pre-flight's connect to loopback is what reports the port. Linux refuses that bind, so
+        // this cannot be driven through run() here; the connect is tested on its own instead,
+        // against the same kind of listener the macOS measurement used.
+        try (ServerSocket wildcard = new ServerSocket(0)) {
+            int port = wildcard.getLocalPort();
+            assertTrue(
+                    IceReachabilityCheck.acceptsOnLoopback(port),
+                    "a wildcard listener must be seen on 127.0.0.1:" + port);
+        }
+    }
+
+    @Test
+    void loopbackProbeFindsNothingOnAFreePort() throws Exception {
+        int port;
+        try (ServerSocket borrowed = new ServerSocket(0)) {
+            port = borrowed.getLocalPort();
+        }
+        assertFalse(
+                IceReachabilityCheck.acceptsOnLoopback(port),
+                "nothing listens on " + port + ", so nothing may be reported");
+    }
+
+    @Test
     void adapterThatNeverListensIsUnreachable() throws Exception {
         FakeAdapterStub stub = FakeAdapterStub.create(tempDir, FakeIceAdapter.Mode.NO_LISTEN);
 
