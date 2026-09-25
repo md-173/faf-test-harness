@@ -42,7 +42,9 @@ public final class ExitCodes {
      * <p>For {@code run} that includes a session whose ICE adapter or game never came up
      * (WBS-3.1.3.3-fix, #437): a binary that could not be started, an adapter that exited or never
      * accepted its JSON-RPC connection, or one that refused a setup call. Read from {@code
-     * SessionVerdicts.launchFailed()}. Before that existed, such a run exited {@code 0}.
+     * SessionVerdicts.launchFailed()}. Before that existed, such a run exited {@code 0}. A {@code
+     * game_launch} frame it could not read or use is one too (WBS-3.1.1.6-fix, #457): nothing came
+     * up for it, and before that the run waited, until killed, for a launch it had dropped.
      *
      * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
      * name a subprocess that died under a session that was running, and a launch that never came up

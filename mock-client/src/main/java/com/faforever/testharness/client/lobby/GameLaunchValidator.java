@@ -1,22 +1,20 @@
 package com.faforever.testharness.client.lobby;
 
+import com.faforever.testharness.client.lobby.GameLaunchValidation.Accepted;
+import com.faforever.testharness.client.lobby.GameLaunchValidation.Rejected;
 import com.faforever.testharness.client.lobby.message.GameLaunchMessage;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
- * Validator implementing the §5 step-3 checks for {@code game_launch} payloads. Logs WARN and
- * returns {@code null} for invalid frames.
+ * Validator implementing the §5 step-3 checks for {@code game_launch} payloads. Returns the reason
+ * an invalid frame is refused rather than logging it (WBS-3.1.1.6-fix, #457), so the lifecycle can
+ * end the session on it and name the reason in the one line that reports it.
  */
 public final class GameLaunchValidator {
-    /** SLF4J logger for validation messages. */
-    private static final Logger LOG = LoggerFactory.getLogger(GameLaunchValidator.class);
-
     /** Pattern for allowed mod identifiers. */
     private static final Pattern MOD_PATTERN = Pattern.compile("^[A-Za-z0-9._-]+$");
 
@@ -43,37 +41,30 @@ public final class GameLaunchValidator {
     private GameLaunchValidator() {}
 
     /**
-     * Validate a decoded {@link GameLaunchMessage} and return a validated {@link GameConfig} or
-     * {@code null} if the message is invalid.
+     * Validate a decoded {@link GameLaunchMessage}.
      *
      * @param msg decoded message (presence-validated by its constructor)
-     * @return validated GameConfig or null on invalid input
+     * @return the validated config, or the one-line reason the frame cannot be used
      */
-    public static GameConfig validate(GameLaunchMessage msg) {
+    public static GameLaunchValidation validate(GameLaunchMessage msg) {
         try {
             if (msg.uid() == null || msg.uid() < 0) {
-                LOG.warn("game_launch.uid invalid: {}", msg.uid());
-                return null;
+                return new Rejected("game_launch.uid invalid: " + msg.uid());
             }
             if (msg.mod() == null || !MOD_PATTERN.matcher(msg.mod()).matches()) {
-                LOG.warn("game_launch.mod invalid: {}", msg.mod());
-                return null;
+                return new Rejected("game_launch.mod invalid: " + msg.mod());
             }
             if (msg.name() == null || msg.name().isBlank()) {
-                LOG.warn("game_launch.name invalid: {}", msg.name());
-                return null;
+                return new Rejected("game_launch.name invalid: " + msg.name());
             }
             if (msg.gameType() == null || !VALID_GAME_TYPES.contains(msg.gameType())) {
-                LOG.warn("game_launch.game_type invalid: {}", msg.gameType());
-                return null;
+                return new Rejected("game_launch.game_type invalid: " + msg.gameType());
             }
             if (msg.ratingType() == null || msg.ratingType().isBlank()) {
-                LOG.warn("game_launch.rating_type invalid: {}", msg.ratingType());
-                return null;
+                return new Rejected("game_launch.rating_type invalid: " + msg.ratingType());
             }
             if (msg.initMode() != null && msg.initMode() != 0 && msg.initMode() != 1) {
-                LOG.warn("game_launch.init_mode invalid: {}", msg.initMode());
-                return null;
+                return new Rejected("game_launch.init_mode invalid: " + msg.initMode());
             }
 
             // Validate args: allow slash flags from a whitelist, plain tokens, and numbers.
@@ -82,33 +73,32 @@ public final class GameLaunchValidator {
             if (msg.args() != null) {
                 for (JsonNode node : msg.args()) {
                     if (node == null || node.isNull()) {
-                        LOG.warn("game_launch.args contains null element");
-                        return null;
+                        return new Rejected("game_launch.args contains null element");
                     }
                     if (node.isTextual()) {
                         String s = node.textValue();
                         if (s.startsWith("-")) {
-                            LOG.warn("game_launch.args contains disallowed leading '-': {}", s);
-                            return null;
+                            return new Rejected(
+                                    "game_launch.args contains disallowed leading '-': " + s);
                         }
                         if (s.startsWith("/")) {
                             if (!ALLOWED_SLASH_ARGS.contains(s)) {
-                                LOG.warn("game_launch.args contains unknown slash-flag: {}", s);
-                                return null;
+                                return new Rejected(
+                                        "game_launch.args contains unknown slash-flag: " + s);
                             }
                             sanitizedArgs.add(s);
                         } else {
                             if (!ARG_TEXT.matcher(s).matches()) {
-                                LOG.warn("game_launch.args contains disallowed text: {}", s);
-                                return null;
+                                return new Rejected(
+                                        "game_launch.args contains disallowed text: " + s);
                             }
                             sanitizedArgs.add(s);
                         }
                     } else if (node.isNumber()) {
                         sanitizedArgs.add(node.asText());
                     } else {
-                        LOG.warn("game_launch.args contains unsupported element: {}", node);
-                        return null;
+                        return new Rejected(
+                                "game_launch.args contains unsupported element: " + node);
                     }
                 }
             }
@@ -130,56 +120,51 @@ public final class GameLaunchValidator {
                 mapPoolMapVersionId = msg.mapPoolMapVersionId();
 
                 if (mapname == null || !MAP_PATTERN.matcher(mapname).matches()) {
-                    LOG.warn("game_launch.mapname invalid for matchmaker: {}", mapname);
-                    return null;
+                    return new Rejected("game_launch.mapname invalid for matchmaker: " + mapname);
                 }
                 if (team == null || team < 0) {
-                    LOG.warn("game_launch.team invalid for matchmaker: {}", team);
-                    return null;
+                    return new Rejected("game_launch.team invalid for matchmaker: " + team);
                 }
                 if (faction == null || !VALID_FACTIONS.contains(faction)) {
-                    LOG.warn("game_launch.faction invalid for matchmaker: {}", faction);
-                    return null;
+                    return new Rejected("game_launch.faction invalid for matchmaker: " + faction);
                 }
                 if (mapPosition == null || mapPosition < 0) {
-                    LOG.warn("game_launch.map_position invalid for matchmaker: {}", mapPosition);
-                    return null;
+                    return new Rejected(
+                            "game_launch.map_position invalid for matchmaker: " + mapPosition);
                 }
                 if (expectedPlayers == null || expectedPlayers < 0) {
-                    LOG.warn(
-                            "game_launch.expected_players invalid for matchmaker: {}",
-                            expectedPlayers);
-                    return null;
+                    return new Rejected(
+                            "game_launch.expected_players invalid for matchmaker: "
+                                    + expectedPlayers);
                 }
                 if (mapPoolMapVersionId != null && mapPoolMapVersionId < 0) {
-                    LOG.warn(
-                            "game_launch.map_pool_map_version_id invalid for matchmaker: {}",
-                            mapPoolMapVersionId);
-                    return null;
+                    return new Rejected(
+                            "game_launch.map_pool_map_version_id invalid for matchmaker: "
+                                    + mapPoolMapVersionId);
                 }
             }
 
             JsonNode gameOptionsCopy =
                     msg.gameOptions() == null ? null : msg.gameOptions().deepCopy();
 
-            return new GameConfig(
-                    msg.uid(),
-                    msg.mod(),
-                    msg.name(),
-                    msg.initMode(),
-                    msg.gameType(),
-                    msg.ratingType(),
-                    List.copyOf(sanitizedArgs),
-                    mapname,
-                    team,
-                    faction,
-                    mapPosition,
-                    expectedPlayers,
-                    mapPoolMapVersionId,
-                    gameOptionsCopy);
+            return new Accepted(
+                    new GameConfig(
+                            msg.uid(),
+                            msg.mod(),
+                            msg.name(),
+                            msg.initMode(),
+                            msg.gameType(),
+                            msg.ratingType(),
+                            List.copyOf(sanitizedArgs),
+                            mapname,
+                            team,
+                            faction,
+                            mapPosition,
+                            expectedPlayers,
+                            mapPoolMapVersionId,
+                            gameOptionsCopy));
         } catch (Exception e) {
-            LOG.warn("Unexpected validation error: {}", e.toString());
-            return null;
+            return new Rejected("Unexpected validation error: " + e);
         }
     }
 }

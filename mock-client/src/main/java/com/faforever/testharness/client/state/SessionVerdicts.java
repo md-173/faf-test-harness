@@ -43,7 +43,8 @@ public final class SessionVerdicts {
 
     /**
      * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437): the ICE
-     * adapter or the game never came up.
+     * adapter or the game never came up. A {@code game_launch} the client could not use counts too,
+     * since it launches neither (WBS-3.1.1.6-fix, #457).
      *
      * <p>Never recorded once {@code SessionTeardown} has started, though a signal can still set it,
      * since a terminal's SIGINT reaches the adapter too. That is why {@code RunCommand} names no

@@ -10,6 +10,36 @@ import org.junit.jupiter.api.Test;
 public class GameLaunchHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /**
+     * What the handler did with one frame (#457): the config it passed on, or the reason it
+     * rejected the frame. Exactly one of the two is set.
+     *
+     * @param config the config the sink received, or {@code null}
+     * @param rejection the reason the rejection sink received, or {@code null}
+     */
+    private record Handled(GameConfig config, String rejection) {}
+
+    private Handled handle(String json) throws Exception {
+        AtomicReference<GameConfig> config = new AtomicReference<>();
+        AtomicReference<String> rejection = new AtomicReference<>();
+        new GameLaunchHandler(mapper, config::set, rejection::set).onMessage(mapper.readTree(json));
+        return new Handled(config.get(), rejection.get());
+    }
+
+    private GameConfig accepted(String json) throws Exception {
+        Handled handled = handle(json);
+        Assertions.assertNull(handled.rejection(), "a valid frame must not be rejected");
+        Assertions.assertNotNull(handled.config());
+        return handled.config();
+    }
+
+    private String rejected(String json) throws Exception {
+        Handled handled = handle(json);
+        Assertions.assertNull(handled.config(), "a rejected frame must not be launched");
+        Assertions.assertNotNull(handled.rejection());
+        return handled.rejection();
+    }
+
     @Test
     public void validCustomProducesConfig() throws Exception {
         String json =
@@ -22,13 +52,8 @@ public class GameLaunchHandlerTest {
                         + "\"args\": [\"/numgames\", 5]"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
+        GameConfig cfg = accepted(json);
 
-        handler.onMessage(mapper.readTree(json));
-
-        GameConfig cfg = sink.get();
-        Assertions.assertNotNull(cfg);
         Assertions.assertEquals(42, cfg.uid());
         Assertions.assertEquals("faf", cfg.mod());
         Assertions.assertEquals("Test Game", cfg.name());
@@ -54,13 +79,8 @@ public class GameLaunchHandlerTest {
                         + "\"expected_players\": 2"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
+        GameConfig cfg = accepted(json);
 
-        handler.onMessage(mapper.readTree(json));
-
-        GameConfig cfg = sink.get();
-        Assertions.assertNotNull(cfg);
         Assertions.assertEquals(7, cfg.uid());
         Assertions.assertEquals("island_map", cfg.mapname());
         Assertions.assertEquals(Integer.valueOf(2), cfg.faction());
@@ -82,12 +102,8 @@ public class GameLaunchHandlerTest {
                         + "\"expected_players\": 2"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNull(sink.get());
+        Assertions.assertEquals(
+                "game_launch.mapname invalid for matchmaker: weird;rm -rf", rejected(json));
     }
 
     @Test
@@ -102,12 +118,8 @@ public class GameLaunchHandlerTest {
                         + "\"args\": [\"--danger\"]"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNull(sink.get());
+        Assertions.assertEquals(
+                "game_launch.args contains disallowed leading '-': --danger", rejected(json));
     }
 
     @Test
@@ -123,14 +135,7 @@ public class GameLaunchHandlerTest {
                         + "\"args\": [\"/numgames\", 1]"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        GameConfig cfg = sink.get();
-        Assertions.assertNotNull(cfg);
-        Assertions.assertEquals(Integer.valueOf(1), cfg.initMode());
+        Assertions.assertEquals(Integer.valueOf(1), accepted(json).initMode());
     }
 
     @Test
@@ -146,12 +151,7 @@ public class GameLaunchHandlerTest {
                         + "\"args\": [\"/numgames\", 1]"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNull(sink.get());
+        Assertions.assertEquals("game_launch.init_mode invalid: 2", rejected(json));
     }
 
     @Test
@@ -170,12 +170,7 @@ public class GameLaunchHandlerTest {
                         + "\"expected_players\": 2"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNull(sink.get());
+        Assertions.assertEquals("game_launch.faction invalid for matchmaker: 9", rejected(json));
     }
 
     @Test
@@ -189,12 +184,7 @@ public class GameLaunchHandlerTest {
                         + "\"rating_type\": \"global\""
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNull(sink.get());
+        Assertions.assertEquals("game_launch.mapname invalid for matchmaker: null", rejected(json));
     }
 
     @Test
@@ -210,13 +200,7 @@ public class GameLaunchHandlerTest {
                         + "\"args\": [\"/numgames\", 1]"
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
-
-        handler.onMessage(mapper.readTree(json));
-
-        Assertions.assertNotNull(sink.get());
-        Assertions.assertEquals(Integer.valueOf(0), sink.get().initMode());
+        Assertions.assertEquals(Integer.valueOf(0), accepted(json).initMode());
     }
 
     @Test
@@ -232,22 +216,10 @@ public class GameLaunchHandlerTest {
                         + "\"mapname\": \"whatever\""
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        GameLaunchHandler handler = new GameLaunchHandler(mapper, sink::set);
+        GameConfig cfg = accepted(json);
 
-        handler.onMessage(mapper.readTree(json));
-
-        GameConfig cfg = sink.get();
-
-        Assertions.assertNotNull(cfg);
         Assertions.assertNull(cfg.faction());
         Assertions.assertNull(cfg.mapname());
-    }
-
-    private GameConfig handle(String json) throws Exception {
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        new GameLaunchHandler(mapper, sink::set).onMessage(mapper.readTree(json));
-        return sink.get();
     }
 
     private static String loadFixture(String path) throws Exception {
@@ -257,17 +229,17 @@ public class GameLaunchHandlerTest {
 
     @Test
     public void matchmakerKeepsAllFields() throws Exception {
-        GameConfig cfg = handle(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
+        GameConfig cfg = accepted(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
 
-        Assertions.assertNotNull(cfg);
         Assertions.assertEquals("scmp_015", cfg.mapname());
         Assertions.assertEquals(Integer.valueOf(1), cfg.faction());
         Assertions.assertEquals(Integer.valueOf(1), cfg.mapPoolMapVersionId());
         Assertions.assertEquals(Integer.valueOf(1), cfg.initMode());
     }
 
+    /** A frame missing a required field fails to decode, and is rejected with the field (#457). */
     @Test
-    void frameMissingRequiredFieldIsSwallowed() throws Exception {
+    void aFrameMissingARequiredFieldIsRejected() throws Exception {
         String json =
                 "{"
                         + "\"mod\":\"faf\","
@@ -276,9 +248,29 @@ public class GameLaunchHandlerTest {
                         + "\"rating_type\":\"global\""
                         + "}";
 
-        AtomicReference<GameConfig> sink = new AtomicReference<>();
-        new GameLaunchHandler(mapper, sink::set).onMessage(mapper.readTree(json));
+        Assertions.assertEquals("game_launch.uid is required", rejected(json));
+    }
 
-        Assertions.assertNull(sink.get());
+    /**
+     * A value of the wrong type fails to decode too, and its reason names the field on one line
+     * (#457). Jackson's own message puts its source location on a second line, which would split
+     * the one line that reports the rejection.
+     */
+    @Test
+    void aValueOfTheWrongTypeIsRejectedNamingItsField() throws Exception {
+        String json =
+                "{"
+                        + "\"uid\":\"abc\","
+                        + "\"mod\":\"faf\","
+                        + "\"name\":\"x\","
+                        + "\"game_type\":\"custom\","
+                        + "\"rating_type\":\"global\""
+                        + "}";
+
+        String reason = rejected(json);
+
+        Assertions.assertTrue(
+                reason.startsWith("game_launch.uid: Cannot deserialize value of type"), reason);
+        Assertions.assertFalse(reason.contains("\n"), reason);
     }
 }

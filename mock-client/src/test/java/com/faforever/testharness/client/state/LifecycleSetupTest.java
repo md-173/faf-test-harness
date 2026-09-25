@@ -34,11 +34,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
@@ -584,6 +588,123 @@ final class LifecycleSetupTest {
     }
 
     /**
+     * A {@code game_launch} the client cannot use fails the launch (WBS-3.1.1.6-fix, #457), from
+     * IDLE, where a host or a joiner waits for it, and from SEARCHING, where a matched game's
+     * arrives. It used to be dropped with a WARN, leaving the run waiting for a launch it had
+     * already received. The frame comes from the lobby through the real connection and handler, so
+     * the rejection is handled on the connection's thread, where one WARN must name it.
+     *
+     * @param route what the frame gets wrong, for the report
+     * @param searching whether a search is on when the frame arrives
+     * @param frame the {@code game_launch} frame
+     * @param reason how the reason for refusing it begins
+     */
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("unusableLaunches")
+    void aGameLaunchTheClientCannotUseFailsTheLaunch(
+            final String route, final boolean searching, final String frame, final String reason)
+            throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        if (searching) {
+            lifecycle.post(new SearchStarted(MAPPER.createObjectNode().put("state", "start")));
+        }
+        AtomicReference<String> committedOn = new AtomicReference<>();
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(
+                                reached -> {
+                                    committedOn.set(Thread.currentThread().getName());
+                                    return lifecycle.verdicts().launchFailed();
+                                });
+
+        server.broadcastText(frame);
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the rejection must be a failed launch before TERMINATED commits");
+        List<String> warnings = warningsOn(committedOn.get());
+        assertEquals(1, warnings.size(), "one WARN must name the reason: " + warnings);
+        assertTrue(
+                warnings.get(0).startsWith("Could not read the game_launch frame (" + reason),
+                warnings.get(0));
+        assertFalse(iceLauncher.subprocessStarted(), "nothing may be launched");
+        assertFalse(gameLauncher.subprocessStarted(), "nothing may be launched");
+    }
+
+    static Stream<Arguments> unusableLaunches() {
+        return Stream.of(
+                Arguments.of(
+                        "IDLE, a value the validator refuses",
+                        false,
+                        "{\"command\":\"game_launch\",\"uid\":42,\"mod\":\"faf\",\"name\":\"x\","
+                                + "\"game_type\":\"custom\",\"rating_type\":\"global\","
+                                + "\"args\":[\"--danger\"]}",
+                        "game_launch.args contains disallowed leading '-': --danger"),
+                Arguments.of(
+                        "IDLE, a frame that fails to decode",
+                        false,
+                        "{\"command\":\"game_launch\",\"uid\":\"abc\",\"mod\":\"faf\","
+                                + "\"name\":\"x\",\"game_type\":\"custom\","
+                                + "\"rating_type\":\"global\"}",
+                        "game_launch.uid: Cannot deserialize value of type"),
+                Arguments.of(
+                        "SEARCHING, a matched game with no map",
+                        true,
+                        "{\"command\":\"game_launch\",\"uid\":502,\"mod\":\"ladder1v1\","
+                                + "\"name\":\"ladder1 Vs ladder2\",\"init_mode\":1,"
+                                + "\"game_type\":\"matchmaker\",\"rating_type\":\"ladder_1v1\","
+                                + "\"team\":2,\"faction\":1,\"expected_players\":2,"
+                                + "\"map_position\":1}",
+                        "game_launch.mapname invalid for matchmaker: null"));
+    }
+
+    /**
+     * A rejected {@code game_launch} records nothing once teardown has started (#457), the rule
+     * every verdict shares: a signal's teardown can close the lobby while the frame is handled.
+     * This teardown closes a lobby the lifecycle does not listen to, so the session is still in
+     * IDLE when the rejection arrives, as it is until a signal's close comes back.
+     */
+    @Test
+    void aGameLaunchRejectedOnceTeardownHasStartedRecordsNothing() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        SessionTeardown teardown =
+                new SessionTeardown(new LobbyConnection(URI.create("ws://127.0.0.1:1")));
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyGameLauncher(MINIMAL_CONFIG),
+                        new DummyIceLauncher(MINIMAL_CONFIG),
+                        teardown);
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        teardown.run();
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().launchFailed());
+
+        lifecycle.post(new LaunchRejected("game_launch.uid invalid: -1"));
+
+        assertFalse(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "nothing may be recorded once teardown has started");
+        assertEquals(List.of(), warnings(), "its line drops to DEBUG");
+    }
+
+    /**
      * A lifecycle that has launched on {@code iceConn} and waits in STARTING_GAME for its role.
      *
      * @param iceConn the adapter connection, rigged by the caller
@@ -644,10 +765,20 @@ final class LifecycleSetupTest {
      * @return the WARN messages, in order
      */
     private List<String> warnings() {
-        String testThread = Thread.currentThread().getName();
+        return warningsOn(Thread.currentThread().getName());
+    }
+
+    /**
+     * The WARN lines the lifecycle logged on one thread: the lobby connection's, for a failure a
+     * frame from the server caused. See {@link #warnings()} for why only one thread's.
+     *
+     * @param thread the thread's name
+     * @return the WARN messages, in order
+     */
+    private List<String> warningsOn(final String thread) {
         return appender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
-                .filter(e -> testThread.equals(e.getThreadName()))
+                .filter(e -> thread.equals(e.getThreadName()))
                 .map(ILoggingEvent::getFormattedMessage)
                 .toList();
     }
