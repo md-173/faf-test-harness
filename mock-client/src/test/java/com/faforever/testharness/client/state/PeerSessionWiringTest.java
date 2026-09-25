@@ -430,6 +430,7 @@ final class PeerSessionWiringTest {
     @Test
     void malformedDisconnectFromPeerEndsTheSessionRatherThanGuessingWhoLeft() throws Exception {
         MockClientLifecycle lifecycle = hostingLifecycle();
+        CompletableFuture<Boolean> failedAtCommit = sessionFailedAtCommit(lifecycle);
 
         // No id. Treated exactly as a malformed ConnectToPeer is: the frame is machine-generated
         // with a fixed shape, so one we cannot read means our parsing or the server's has moved.
@@ -441,6 +442,13 @@ final class PeerSessionWiringTest {
         assertNull(
                 adapter.receivedMessage("disconnectFromPeer"),
                 "a frame we could not read must not produce an RPC for a guessed id");
+        assertTrue(
+                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                "a frame the client cannot read fails the session before TERMINATED (#445)");
+        assertEquals(
+                1,
+                lines(Level.WARN, "Could not disconnect from a peer").size(),
+                "one WARN must name the frame (#445): " + lines(Level.WARN, ""));
     }
 
     @Test

@@ -98,9 +98,9 @@ public final class SessionVerdicts {
     /**
      * Whether this session failed after its ICE adapter and game came up (WBS-3.1.3.3-fix, #445;
      * WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or {@code ConnectToPeer} frame
-     * it could not read, an adapter that answered one of those calls with an error or not within
-     * its timeout, or a match the server cancelled after {@code game_launch} and before the game
-     * started.
+     * it could not read, a {@code DisconnectFromPeer} one before the game started, an adapter that
+     * answered a host, join or peer-connect call with an error or not within its timeout, or a
+     * match the server cancelled after {@code game_launch} and before the game started.
      *
      * <p>Not recorded when one of those calls failed because the adapter's connection closed. The
      * adapter is gone then, and its own exit is the finding (#406, #438), not the call. A live

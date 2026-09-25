@@ -1582,10 +1582,10 @@ public final class MockClientLifecycle {
      * SearchStopped} and TERMINATED/{@code Disconnected} self-loops exist.
      *
      * <p>Everywhere else this edge is registered the match has not started, and a malformed frame
-     * fails the transition into TERMINATED, the same treatment {@link #hostGame}, {@link #joinGame}
-     * and {@link #connectToPeer} give theirs. The frame is machine-generated with a fixed
-     * single-int shape, so one we cannot read means either our parsing is wrong or the server's has
-     * moved, and both are findings a harness should surface rather than swallow.
+     * ends the session with {@link SessionVerdicts#sessionFailed()}, as {@link #hostGame}, {@link
+     * #joinGame} and {@link #connectToPeer} do for theirs (#445). The frame is machine-generated
+     * with a fixed single-int shape, so one we cannot read means either our parsing is wrong or the
+     * server's has moved, and both are findings a harness should surface rather than swallow.
      *
      * <p><b>A failed RPC does not end the session, and that asymmetry with {@link #connectToPeer}
      * is deliberate.</b> That method ends the session on failure because without its relay the peer
@@ -1621,9 +1621,9 @@ public final class MockClientLifecycle {
                 LOG.warn("ignoring malformed DisconnectFromPeer during a live match");
                 return;
             }
-            throw new FailedTransitionException(
-                    "int remote id argument not found in DisconnectFromPeer message",
-                    states.get(ClientState.TERMINATED));
+            throw failures.session(
+                    "disconnect from a peer",
+                    "int remote id argument not found in DisconnectFromPeer message");
         }
 
         int peerId = remoteId.asInt();
