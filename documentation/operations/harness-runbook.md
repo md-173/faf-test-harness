@@ -200,16 +200,22 @@ rather than `143` unless you pass `--preserve-status`.
 `PORTS_IN_USE` naming the port, which is the common case: another adapter left
 running by an earlier step.
 
-**On Linux, including GitHub's hosted runners, that pre-flight holds** and a busy
-port does report `PORTS_IN_USE`. On macOS the bind test can pass alongside an
-existing wildcard listener (measured against `0.0.0.0:7236`) — permitting a
-duplicate listening bind is BSD and Darwin behaviour, where `SO_REUSEADDR` is
-enough; on Linux that needs `SO_REUSEPORT`, which `ServerSocket` never sets. When
-it does slip through, the run fails later instead: usually `ADAPTER_EXITED`,
-because the adapter dies on its own failed bind and the liveness re-check catches
-it, or `RPC_SILENT` in the one phase that has no such check. Treat
-`ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` on a runner as "check the
-ports too", not only as "the adapter is broken".
+The pre-flight makes two tests per port: it binds the port, and it tries to
+connect to it on `127.0.0.1`. **On Linux, including GitHub's hosted runners,**
+the bind alone catches a busy port. On macOS it cannot: the bind can pass
+alongside an existing wildcard listener (measured against `0.0.0.0:7236`),
+because permitting a duplicate listening bind is BSD and Darwin behaviour, where
+`SO_REUSEADDR` is enough; on Linux that needs `SO_REUSEPORT`, which `ServerSocket`
+never sets. The loopback connect is there for that case: a wildcard listener
+accepts it, so the port is reported as `PORTS_IN_USE` on macOS too.
+
+What can still slip through on macOS is a listener bound only to some address
+other than loopback, which the connect never reaches. The run then fails later
+instead: usually `ADAPTER_EXITED`, because the adapter dies on its own failed
+bind and the liveness re-check catches it, or `RPC_SILENT` in the one phase that
+has no such check. So on a Mac, `ADAPTER_EXITED`, `RPC_SILENT` or
+`RPC_UNREACHABLE` can still mean "check the ports too", not only "the adapter is
+broken".
 
 **Exit `70` is ambiguous, and there is no way around it from the code alone.** It
 covers both "the binary is missing or would not start" and "the ports were busy",
@@ -835,7 +841,7 @@ and is not repeated here.**
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
 | `ice-smoke` exits `70` and you cannot tell why | `ice-smoke: FAIL [<verdict>] …` | `70` covers both a missing binary and busy ports. The verdict line distinguishes them: `PORTS_IN_USE` names the port to free, anything about the binary means the path is wrong. This is the no-account path's most common first failure. |
 | `ice-smoke` reports `PORTS_IN_USE` on a CI runner | `ice-smoke: FAIL [PORTS_IN_USE] port pre-flight: …` | Something else on the runner holds `7236` or `7237` — the pre-flight only tests those two TCP ports, never the UDP lobby port — often a previous step's adapter that outlived it. Free the port, or move all three with `--ice-adapter-rpc-port`, `--ice-adapter-gpg-net-port` and `--ice-adapter-lobby-port` (§2a). |
-| `ice-smoke` reports `ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` and the adapter looks fine | `ice-smoke: FAIL [ADAPTER_EXITED] …` | Check the ports before the adapter — **on macOS**. The pre-flight tests by binding, and on Darwin a bind can succeed alongside an existing wildcard listener (measured against `0.0.0.0:7236`), so a busy port surfaces here instead. On Linux, including hosted runners, the pre-flight catches it and you get `PORTS_IN_USE` above. `lsof -i :7236` settles it. |
+| `ice-smoke` reports `ADAPTER_EXITED`, `RPC_SILENT` or `RPC_UNREACHABLE` and the adapter looks fine | `ice-smoke: FAIL [ADAPTER_EXITED] …` | Check the ports before the adapter — **on macOS**. The pre-flight binds each port and connects to it on `127.0.0.1`, which reports a wildcard listener as `PORTS_IN_USE` on Linux and macOS alike (§2a). On Darwin, though, a listener bound only to a non-loopback address can pass both tests, and then a busy port surfaces here instead. On Linux, including hosted runners, the bind catches it and you get `PORTS_IN_USE` above. `lsof -i :7236` settles it. |
 | `mock-game` exits `143` from a run that looked fine | `mock game started: …` with no `mock game finished` line | Nothing drove the game out of the lobby, so it waited as designed and your step timeout killed it. That is not a harness failure — a game sitting in a lobby is what a real one does. Bound it yourself with `timeout 30 java -jar …` if you want the wait to be your own. |
 | The release jar you downloaded is not the one you expected | — | Verify it: releases cut after the checksum step landed carry a `.sha256` beside each jar (`sha256sum -c`), and the API exposes a per-asset `digest` for any release. If it is the wrong *version*, note that `releases/latest` skips drafts and prereleases — a release stays invisible to it until someone publishes the draft by hand, so a pipeline can keep pulling the previous one. |
 
