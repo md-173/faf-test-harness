@@ -1,6 +1,7 @@
 package com.faforever.testharness.shared.statemachine;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -19,8 +20,8 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Tests the two ways a scheduled timeout can misbehave once it has already been handed to the timer
- * thread: firing after it was cancelled, and throwing something other than {@link
- * FailedTransitionException}.
+ * thread: firing after it was cancelled, whether by a commit or by {@link StateMachine#cancel()},
+ * and throwing something other than {@link FailedTransitionException}.
  */
 final class StateMachineTimeoutRobustnessTest {
     private static final long TIMEOUT_MS = 100;
@@ -144,6 +145,38 @@ final class StateMachineTimeoutRobustnessTest {
         // The released task must notice it is no longer pending and do nothing.
         awaitLogged("Timeout fired after being cancelled");
         assertSame(b, machine.getState(), "a cancelled timeout must not commit a transition");
+    }
+
+    /**
+     * {@link StateMachine#cancel()} never takes the machine's monitor (WBS-2.3.7-fix, #328), so it
+     * cannot wait out a timeout the timer thread has already dequeued and parked on that monitor.
+     * Nothing else stops that task either: cancel() leaves the pending list alone, so the task
+     * still finds itself armed once released, and only the cancelled flag keeps it from committing.
+     */
+    @Test
+    void timeoutDequeuedBeforeCancelDoesNotCommitAfterIt() throws Exception {
+        State a = new State("A");
+        State doom = new State("DOOM");
+        StateMachine machine = new StateMachine(a);
+        Thread timer = timerThreadOf(machine, a);
+
+        // Parked exactly as in timeoutCancelledAfterBeingDequeuedDoesNotCommit, but released by
+        // cancel() rather than by a commit.
+        synchronized (machine) {
+            machine.setTimeout(0, doom);
+            awaitParkedOnMonitor(timer);
+            machine.cancel();
+        }
+
+        // cancel() stopped the timer, so its thread ends once the released task has returned.
+        timer.join(TimeUnit.SECONDS.toMillis(AWAIT_SECONDS));
+        assertFalse(timer.isAlive(), "the timer thread should end after its last task");
+        assertSame(a, machine.getState(), "a timeout dequeued before cancel() must not commit");
+        assertTrue(
+                logged("Timeout fired after scheduling was cancelled"),
+                () ->
+                        "the released task must stop on the cancelled flag; log was "
+                                + appender.list);
     }
 
     /**
