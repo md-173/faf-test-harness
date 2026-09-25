@@ -171,7 +171,9 @@ Caveat worth knowing when handling launch failures. On a usage error the
 adapter prints usage and exits **0**, because its `main` discards picocli's
 return value rather than calling `System.exit`. A missing `--game-id`
 therefore never shows up as a non-zero exit code. Detect a failed launch by
-the RPC connect timeout instead.
+the process exiting before its RPC port accepts a connection (§2.7, #341), or
+by the connect timeout when it stays up without binding. `run` reports either
+as a failed launch and exits `70` (#437).
 
 ### 2.7 ICE adapter startup sequence
 
@@ -614,8 +616,10 @@ wall-clock time is bounded by the longest single grace rather than their sum.
 
 | Symptom | Source | Detection | Response |
 |---|---|---|---|
-| Adapter exits non-zero immediately | bad CLI args, port in use, missing JAR | `onExit()` < 1 s after `start()` | Log args, abort session, surface to FSM as launch failure |
-| Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 5 exhausts | `destroyForcibly()`, abort session |
+| Adapter binary missing | wrong path | the launcher's regular-file check, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
+| Adapter exits immediately, with `0` either way | bad CLI args (§2.6), GPGNet port in use (`BindException`, then its own shutdown NPEs on the unstarted RPC server) | `onExit()` before the RPC connect completes (§2.7) | Log args, abort session, surface to FSM as launch failure; `run` exits `70` |
+| Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
+| Adapter's RPC port already held by another process | a stale process, or a port collision | the adapter logs `Could not start RPC server.`, its listener thread dies and it stays up serving GPGNet only, so the connect succeeds against whatever holds the port and the first setup call times out after 5 s | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |

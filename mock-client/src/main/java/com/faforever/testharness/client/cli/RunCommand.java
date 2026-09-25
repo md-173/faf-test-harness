@@ -18,8 +18,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.helpers.NOPLogger;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.ParentCommand;
@@ -79,12 +81,13 @@ public final class RunCommand implements Callable<Integer> {
      * class javadoc for why it is accepted rather than worked around.
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
-     *     could not be established or the connection dropped unexpectedly; {@link
-     *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
-     *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
-     *     for. The last three are ordered by {@link #sessionExitCode(boolean, boolean, boolean,
-     *     Logger)}. Superseded by the signal's own exit code whenever a signal is what ended the
-     *     run.
+     *     could not be established, its ICE adapter or game never came up, or the connection
+     *     dropped unexpectedly; {@link ExitCodes#ADAPTER_LOST} if the session ran but its ICE
+     *     adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if the session ran but its
+     *     game process died unaccounted for. A dropped connection, a launch that never came up, a
+     *     lost adapter and a crashed game are ordered by {@link #sessionExitCode(boolean, boolean,
+     *     boolean, boolean, boolean, Logger)}. Superseded by the signal's own exit code whenever a
+     *     signal is what ended the run, and then no verdict is logged.
      */
     @Override
     public Integer call() {
@@ -116,11 +119,17 @@ public final class RunCommand implements Callable<Integer> {
         // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
         // the main thread. No-op if the session has already disconnected (e.g. a server-initiated
         // close that let call() return normally), so a normal exit doesn't emit a spurious
-        // "shutdown signal" line.
+        // "shutdown signal" line. The flag it raises first is what tells the end of this method
+        // that a signal, not the session, ended the run; see shutdownHook for why that order is
+        // load bearing.
+        AtomicBoolean shuttingDown = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
                         new Thread(
-                                () -> teardownOnShutdown(session, teardown, log), "mc-shutdown"));
+                                shutdownHook(
+                                        shuttingDown,
+                                        () -> teardownOnShutdown(session, teardown, log)),
+                                "mc-shutdown"));
 
         SessionState me;
         try {
@@ -165,36 +174,77 @@ public final class RunCommand implements Callable<Integer> {
             // stateReached futures complete normally; nothing actionable on this teardown path.
         }
 
-        // Both verdicts are read from the lifecycle rather than re-derived from an exit code,
+        // The verdicts are read from the lifecycle rather than re-derived from an exit code,
         // because each judgement needs signals the classifier already weighed: the clean-end and
-        // teardown flags for the game, and whether teardown was running for the adapter. Testing
-        // teardown here would be useless anyway, since it has always run by this point (the
-        // TERMINATED entry hook performs it before the stateReached future above completes).
+        // teardown flags for the game, and whether teardown was running for the launch and the
+        // adapter. Testing teardown here would be useless anyway, since it has always run by this
+        // point (the TERMINATED entry hook performs it before the stateReached future above
+        // completes).
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
-        return sessionExitCode(lobbyDropped, lifecycle.adapterLost(), lifecycle.gameCrashed(), log);
+        return sessionExitCode(
+                shuttingDown.get(),
+                lobbyDropped,
+                lifecycle.launchFailed(),
+                lifecycle.adapterLost(),
+                lifecycle.gameCrashed(),
+                log);
     }
 
     /**
-     * Picks a finished session's exit code from the three verdicts it can carry, and logs the one
+     * The body of {@code run}'s shutdown hook: raise the flag, then tear the session down.
+     *
+     * <p>That order is load bearing, which is why this is a method with a test rather than a
+     * lambda. {@link com.faforever.testharness.client.process.SessionTeardown#run()} is
+     * synchronized, and on a signal during bring-up the launch thread reaches it too, through
+     * TERMINATED's entry hook. A hook that tore down first would block there with the flag still
+     * down, and the main thread, released as TERMINATED commits, would read it as a session that
+     * ended on its own and log a verdict for a run the signal ended (#437).
+     *
+     * @param shuttingDown the flag {@link #sessionExitCode} reads, raised before anything else
+     * @param teardown the coordinated teardown to run once it is raised
+     * @return the hook's body
+     */
+    static Runnable shutdownHook(final AtomicBoolean shuttingDown, final Runnable teardown) {
+        return () -> {
+            shuttingDown.set(true);
+            teardown.run();
+        };
+    }
+
+    /**
+     * Picks a finished session's exit code from the four verdicts it can carry, and logs the one
      * being reported.
      *
      * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
      * session is a different and more fundamental finding than anything that happened inside one,
-     * and it was here first. The adapter comes before the game because it is the verdict with an
-     * ordering against this read (#406 writes it in the transition action that drives TERMINATED,
-     * while {@code gameCrashed} is written on a continuation that may not have run yet), so
-     * consulting the game first would let a race pick the code for a run whose adapter died. It
-     * also matches cause and effect: an adapter dying is what makes the game react, and never the
-     * reverse, since java-ice-adapter closes the game's connection and keeps serving when the game
-     * dies.
+     * and it was here first. A launch that never came up is next (#437). It shares {@code RUNTIME}
+     * with the lobby drop, so between those two only the logged line differs, and in practice it
+     * never meets the two below it: no session ran for an adapter or a game to die in. The adapter
+     * comes before the game because it is the verdict with an ordering against this read (#406
+     * writes it in the transition action that drives TERMINATED, while {@code gameCrashed} is
+     * written on a continuation that may not have run yet), so consulting the game first would let
+     * a race pick the code for a run whose adapter died. It also matches cause and effect: an
+     * adapter dying is what makes the game react, and never the reverse, since java-ice-adapter
+     * closes the game's connection and keeps serving when the game dies.
+     *
+     * <p>A run a signal ended names no verdict at all. Its code is the signal's own (#334), so the
+     * one computed here is discarded and a line would only mislead. The lifecycle's own teardown
+     * check cannot promise that by itself: {@code SubprocessRegistry}'s shutdown hook, or the
+     * terminal's SIGINT to the whole process group, can kill the adapter before {@code
+     * SessionTeardown} starts, and its death would then read as a finding (#437). The verdicts are
+     * still computed, since the caller returns the code either way.
      *
      * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
      * takes the logger instead of holding one because this class obtains its logger only after
      * {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
      *
+     * @param shuttingDown whether the JVM is already shutting down, which while a run is live can
+     *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
+     * @param launchFailed whether the session's ICE adapter or game never came up; {@link
+     *     MockClientLifecycle#launchFailed()}
      * @param adapterLost whether the ICE adapter died unaccounted for; {@link
      *     MockClientLifecycle#adapterLost()}
      * @param gameCrashed whether the game process died unaccounted for; {@link
@@ -203,20 +253,29 @@ public final class RunCommand implements Callable<Integer> {
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */
     static int sessionExitCode(
+            final boolean shuttingDown,
             final boolean lobbyDropped,
+            final boolean launchFailed,
             final boolean adapterLost,
             final boolean gameCrashed,
             final Logger log) {
+        Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
-            log.warn("lobby connection dropped unexpectedly");
+            verdict.warn("lobby connection dropped unexpectedly");
+            return ExitCodes.RUNTIME;
+        }
+        if (launchFailed) {
+            verdict.warn(
+                    "the ICE adapter or game never came up; reporting it in this run's exit code");
             return ExitCodes.RUNTIME;
         }
         if (adapterLost) {
-            log.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
+            verdict.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
             return ExitCodes.ADAPTER_LOST;
         }
         if (gameCrashed) {
-            log.warn("the game process died unexpectedly; reporting it in this run's exit code");
+            verdict.warn(
+                    "the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
         }
         return ExitCodes.OK;
