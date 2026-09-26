@@ -76,6 +76,229 @@ subprojects {
     }
 }
 
+// --- Markdown link check (WBS-2.3.3, #428) ---
+// Every relative link in the repository's markdown must resolve: the path must exist, and a
+// #fragment into a markdown file must name a real heading or an explicit <a id> anchor there. A wrong
+// anchor is otherwise silent (GitHub scrolls to the top of the page) and a wrong path is a 404 the
+// author never sees, and the documented consumer route runs through exactly these cross-references.
+//
+// External URLs are deliberately out of scope. Checking them brings the network into `check`, and
+// with it rate limits, flaky hosts and a verdict that changes without a commit, which is what stops a
+// check from being a gate. Relative links are deterministic, so this one is: it fails the build.
+//
+// In-repo rather than an off-the-shelf action: no third-party pin to maintain (#403), it runs in
+// `./gradlew check` locally exactly as in CI, and the two rules that produced every false positive of
+// the 0.3.0 sweep are encoded here on purpose (see githubSlug and markdownAnchors).
+//
+// The root applies no plugins and so has no `check` of its own, so, like verifyReleaseAssetName, the
+// task hangs off each module's `check`; Gradle runs it once however many depend on it. No outputs are
+// declared, so it is never UP-TO-DATE: it reads a couple of dozen small files.
+def verifyMarkdownLinks = tasks.register('verifyMarkdownLinks') {
+    group = 'verification'
+    description = 'Fails on a relative markdown link whose file, or #anchor in a markdown file, does not exist.'
+    def repoRoot = rootDir
+    def markdown = fileTree(repoRoot) {
+        include '**/*.md'
+        exclude '**/build/**', '**/.gradle/**', '.git/**', '.idea/**', '**/node_modules/**'
+    }
+    inputs.files(markdown).withPropertyName('markdown')
+    doLast {
+        def anchorCache = [:]
+        def problems = []
+        int checked = 0
+        markdown.files.sort().each { File source ->
+            markdownLinks(source).findAll { !isExternalLink(it.target) }.each { link ->
+                def problem = brokenLinkReason(repoRoot, source, link.target, anchorCache)
+                checked++
+                if (problem != null) {
+                    def where = repoRoot.toPath().relativize(source.toPath()).toString().replace('\\', '/')
+                    problems << "${where}:${link.line}: (${link.target}) ${problem}"
+                }
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException(
+                    "${problems.size()} broken markdown link(s) (#428):\n  " + problems.join('\n  ')
+                            + "\nAnchors follow GitHub's rule: lowercase, drop punctuation, one hyphen "
+                            + "per space (so ' — ' becomes '--'); explicit <a id=\"...\"> anchors count too.")
+        }
+        logger.lifecycle("verifyMarkdownLinks: ${checked} relative links in ${markdown.files.size()} files resolve")
+    }
+}
+subprojects {
+    tasks.named('check') { dependsOn verifyMarkdownLinks }
+}
+
+// The lines of a markdown file outside fenced code blocks and YAML front matter, each at its 0-based
+// index. Those regions are blanked rather than dropped, so line numbers still match the file. Fences
+// are recognised at any indent, because a fence nested in a list item is indented with it.
+def markdownProse(File file) {
+    def lines = file.readLines('UTF-8')
+    def prose = []
+    String fence = null
+    boolean frontMatter = !lines.isEmpty() && lines[0].trim() == '---'
+    lines.eachWithIndex { String line, int i ->
+        if (frontMatter) {
+            if (i > 0 && line.trim() == '---') {
+                frontMatter = false
+            }
+            prose << ''
+            return
+        }
+        def marker = (line =~ /^\s*(`{3,}|~{3,})(.*)/)
+        if (fence == null && marker.find()) {
+            fence = marker.group(1)
+            prose << ''
+            return
+        }
+        if (fence != null) {
+            if (marker.find(0) && marker.group(2).trim().isEmpty() && marker.group(1)[0] == fence[0]
+                    && marker.group(1).length() >= fence.length()) {
+                fence = null
+            }
+            prose << ''
+            return
+        }
+        prose << line
+    }
+    return prose
+}
+
+// A line with every inline code span blanked out: a `[x](y)` or `<a id="z">` in backticks is text.
+def withoutCodeSpans(String line) {
+    return line.replaceAll(/(`+)(?:(?!\1).)+?\1/) { all, ticks -> ' ' * all.length() }
+}
+
+// Every link target in a markdown file: inline links and images, [text](target "title"), and
+// reference definitions, [label]: target. A [text][label] use is covered by checking its definition.
+// Matched over the whole text rather than line by line, because link text wraps with the prose around
+// it (mock-client/README.md has one); the line reported is the one the link starts on.
+def markdownLinks(File file) {
+    def text = markdownProse(file).collect { withoutCodeSpans(it) }.join('\n')
+    def inline = ~/!?\[(?:[^\[\]\n]|\n(?![ \t]*\n)|\[[^\[\]]*\])*\]\(\s*(<[^>\n]*>|[^)\s]+)(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/
+    def definition = ~/(?m)^ {0,3}\[[^\]\n]+\]:[ \t]*(<[^>\n]*>|\S+)/
+    def links = []
+    [inline, definition].each { pattern ->
+        def m = pattern.matcher(text)
+        while (m.find()) {
+            def target = m.group(1)
+            if (target.startsWith('<') && target.endsWith('>')) {
+                target = target.substring(1, target.length() - 1)
+            }
+            links << [line: text.substring(0, m.start()).count('\n') + 1, target: target]
+        }
+    }
+    return links.sort { it.line }
+}
+
+// Whether a link target carries a scheme (https:, mailto:) or is protocol-relative. Those are
+// external, and out of scope: see the comment on verifyMarkdownLinks.
+def isExternalLink(String target) {
+    return target ==~ /^[A-Za-z][A-Za-z0-9+.-]*:.*/ || target.startsWith('//')
+}
+
+// Why a relative link target does not resolve, or null if it does.
+def brokenLinkReason(File repoRoot, File source, String target, Map anchorCache) {
+    int hash = target.indexOf('#')
+    def path = percentDecode(hash < 0 ? target : target.substring(0, hash))
+    def fragment = hash < 0 ? null : percentDecode(target.substring(hash + 1))
+    def root = repoRoot.toPath().normalize()
+    def resolved = path.isEmpty()
+            ? source.toPath()
+            : (path.startsWith('/') ? root.resolve(path.substring(1)) : source.toPath().parent.resolve(path)).normalize()
+    if (!resolved.startsWith(root)) {
+        return 'points outside the repository'
+    }
+    def file = resolved.toFile()
+    if (!file.exists()) {
+        return 'no such file'
+    }
+    if (fragment == null || fragment.isEmpty() || !file.isFile() || !file.name.endsWith('.md')) {
+        return null // line anchors and the like on non-markdown targets are GitHub's to resolve
+    }
+    def anchors = anchorCache.computeIfAbsent(file.canonicalPath) { markdownAnchors(file) }
+    return anchors.contains(fragment) ? null : "no heading or <a id> anchor '#${fragment}' in ${file.name}"
+}
+
+// The fragment ids GitHub gives a markdown file: one per heading (ATX, and setext under a paragraph
+// line), numbered -1, -2 ... on repeats, plus every explicit id="..." or name="..." in its HTML. The
+// explicit ones matter: the research specs link to their own <a id="section-..."> anchors throughout.
+def markdownAnchors(File file) {
+    def anchors = [] as Set
+    def occurrences = [:]
+    def prose = markdownProse(file)
+    prose.eachWithIndex { String line, int i ->
+        def explicit = (withoutCodeSpans(line) =~ /<[A-Za-z][^>]*?\s(?:id|name)\s*=\s*["']([^"']+)["']/)
+        while (explicit.find()) {
+            anchors << explicit.group(1)
+        }
+        String text = null
+        def atx = (line =~ /^ {0,3}#{1,6}(?:\s+(.*?))?(?:\s+#+)?\s*$/)
+        if (atx.matches()) {
+            text = atx.group(1) ?: ''
+        } else if (i > 0 && line ==~ /^ {0,3}(?:=+|-+)\s*$/ && prose[i - 1].trim()
+                && !(prose[i - 1] =~ /^\s*(?:[#>|*+-]|\d+[.)])/).find()) {
+            text = prose[i - 1].trim()
+        }
+        if (text != null) {
+            def slug = githubSlug(renderedHeading(text))
+            def base = slug
+            while (occurrences.containsKey(slug)) {
+                occurrences[base] = occurrences[base] + 1
+                slug = "${base}-${occurrences[base]}".toString()
+            }
+            occurrences[slug] = 0
+            anchors << slug
+        }
+    }
+    return anchors
+}
+
+// The text GitHub renders for a heading, which is what it slugs: code spans keep their content and
+// lose the backticks, links keep their text, and HTML tags, entities and emphasis markers go.
+def renderedHeading(String markdown) {
+    def out = new StringBuilder()
+    def spans = (markdown =~ /(`+)((?:(?!\1).)+?)\1/)
+    int at = 0
+    while (spans.find()) {
+        out << renderedProse(markdown.substring(at, spans.start())) << spans.group(2)
+        at = spans.end()
+    }
+    out << renderedProse(markdown.substring(at))
+    return out.toString()
+}
+
+def renderedProse(String text) {
+    return text.replaceAll(/!?\[([^\]]*)\]\([^)]*\)/, '$1')
+            .replaceAll(/<[^>]+>/, '')
+            .replaceAll(/&#?[A-Za-z0-9]+;/, '')
+            .replaceAll(/(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])/, '')
+}
+
+// GitHub's heading slug: lowercase, drop everything but letters, digits, '-', '_' and spaces, then
+// one hyphen PER SPACE. Collapsing runs of whitespace is the classic mistake: "`ice-smoke` — is a
+// local adapter reachable?" loses the em dash but keeps both spaces around it, and so anchors as
+// ice-smoke--is-a-local-adapter-reachable, with two hyphens.
+def githubSlug(String text) {
+    def kept = new StringBuilder()
+    text.toLowerCase(Locale.ROOT).codePoints().each { int cp ->
+        if (Character.isLetterOrDigit(cp) || cp == ('-' as char) || cp == ('_' as char) || cp == (' ' as char)) {
+            kept.appendCodePoint(cp)
+        }
+    }
+    return kept.toString().replace(' ', '-')
+}
+
+// %XX-decodes a link path or fragment as UTF-8, leaving a '+' alone (URLDecoder alone would turn it
+// into a space). A malformed escape is left as written, and then simply fails to resolve.
+def percentDecode(String s) {
+    try {
+        return URLDecoder.decode(s.replace('+', '%2B'), 'UTF-8')
+    } catch (IllegalArgumentException ignored) {
+        return s
+    }
+}
+
 // --- faf-ice-adapter provisioning (WBS 3.1.4.4) ---
 // Fetches the pinned, headless (-nojfx) adapter jar that IceAdapterLauncher spawns. Deliberately
 // NOT wired into `build`/`check` so CI stays offline; run it explicitly on a fresh checkout:
