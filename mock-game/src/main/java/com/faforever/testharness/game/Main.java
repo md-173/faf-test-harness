@@ -42,16 +42,17 @@ import org.slf4j.LoggerFactory;
  * </ol>
  *
  * <p><b>The ENDED wait is not unconditionally hang-proof</b>, by design. The FSM arms one timeout,
- * into ENDED, in {@code start()}, and {@code StateMachine} clears pending timeouts on every
- * transition — so IDLE, which sits waiting on the adapter for {@code CreateLobby}, has no timeout
- * of its own, and LOBBY has one only when {@code --lobby-timeout-seconds} is set (WBS-3.2.1.3), in
- * which case it gives up and this class maps the outcome to {@code LOBBY_TIMEOUT}. Left unset, the
- * default, LOBBY waits forever as before. An adapter that accepts the socket and then goes quiet
- * leaves the game waiting, exactly as the real game would; state-diagram.md gives a timeout only
- * out of INITIALIZING and states that teardown of the game is always client-led. The card's no-hang
- * criterion is about the <em>unreachable</em> adapter, which the bounded connect retry settles in
- * about two seconds where the port refuses, and about twenty-two where it silently drops the
- * connect, still inside the default INITIALIZING timeout.
+ * into ENDED, in {@code start()}, and each {@code StateMachine} transition disarms the timeouts
+ * already pending when it began, so IDLE, which sits waiting on the adapter for {@code
+ * CreateLobby}, has no timeout of its own, and LOBBY has one only when {@code
+ * --lobby-timeout-seconds} is set (WBS-3.2.1.3), in which case it gives up and this class maps the
+ * outcome to {@code LOBBY_TIMEOUT}. Left unset, the default, LOBBY waits forever as before. An
+ * adapter that accepts the socket and then goes quiet leaves the game waiting, exactly as the real
+ * game would; state-diagram.md gives a timeout only out of INITIALIZING and states that teardown of
+ * the game is always client-led. The card's no-hang criterion is about the <em>unreachable</em>
+ * adapter, which the bounded connect retry settles in about two seconds where the port refuses, and
+ * about twenty-two where it silently drops the connect, still inside the default INITIALIZING
+ * timeout.
  *
  * <p>Stopping the logging context is the last thing this class does, on both exit paths. It is
  * process-global and one-way, so it belongs to whoever knows the process is ending — not to the
