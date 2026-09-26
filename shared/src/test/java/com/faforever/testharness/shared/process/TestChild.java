@@ -17,7 +17,12 @@ public final class TestChild {
             case "env" -> System.out.println(System.getenv(args[1]));
             case "lines" -> {
                 for (int i = 1; i < args.length; i++) {
-                    System.out.println(args[i]);
+                    String arg = args[i];
+                    if (arg.startsWith("err:")) {
+                        System.err.println(arg.substring("err:".length()));
+                    } else {
+                        System.out.println(arg);
+                    }
                 }
             }
             default -> {

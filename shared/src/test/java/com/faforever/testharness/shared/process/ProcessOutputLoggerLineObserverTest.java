@@ -1,20 +1,19 @@
-package com.faforever.testharness.shared.logging;
+package com.faforever.testharness.shared.process;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.faforever.testharness.shared.process.LineWaiter;
+import com.faforever.testharness.shared.logging.ProcessOutputLogger;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,13 +22,18 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Exercises {@link ProcessOutputLogger#captureAsync(Process, String, java.util.function.Consumer)}
- * against a real scripted child, covering the WBS 3.1.2.10 / #225 acceptance criteria: the observer
- * sees output as it arrives, and the existing SLF4J routing is neither duplicated nor lost.
+ * against a real scripted child, covering the WBS 3.1.2.10 / #225 acceptance criteria exactly: the
+ * observer sees output as it arrives, and the existing SLF4J routing is neither duplicated nor
+ * lost, with reader threads shut down on exit.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class ProcessOutputLoggerLineObserverTest {
 
     private static final String TAG = "ObservedChild";
+
+    /** Text of {@code ProcessOutputLogger}'s own line-observer-failure warning, unsubstituted. */
+    private static final String OBSERVER_THREW_MESSAGE =
+            "Subprocess line observer for {} threw; output capture continues";
 
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
@@ -54,9 +58,9 @@ class ProcessOutputLoggerLineObserverTest {
     }
 
     @Test
-    void observerSeesRawLinesAndSlf4jStillGetsThem() throws Exception {
+    void observerSeesRawLinesAndSlf4jLogsEachBlockExactlyOnce() throws Exception {
         Process process =
-                testChildCommand("lines", "one", "\tstack-frame-continuation", "two").start();
+                TestSupport.testChild("lines", "one", "\tstack-frame-continuation", "two").start();
         LineWaiter waiter = new LineWaiter();
         ExecutorService readers = ProcessOutputLogger.captureAsync(process, TAG, waiter);
         try {
@@ -71,59 +75,45 @@ class ProcessOutputLoggerLineObserverTest {
         } finally {
             readers.shutdown();
         }
+        assertTrue(readers.awaitTermination(5, TimeUnit.SECONDS), "readers did not finish");
 
-        // SLF4J still receives the merged block: "one" then the continuation line joined into it.
-        awaitLog(
-                e -> e.getMessage() != null && e.getMessage().contains("stack-frame-continuation"));
+        // SLF4J still receives "one" and its continuation joined into one block, and "two"
+        // separately — each exactly once, so this catches both a doubled block and a merge that
+        // stopped coalescing the continuation line.
+        List<String> logged = appender.list.stream().map(ILoggingEvent::getMessage).toList();
+        assertEquals(
+                1,
+                Collections.frequency(logged, "one\n\tstack-frame-continuation"),
+                logged.toString());
+        assertEquals(1, Collections.frequency(logged, "two"), logged.toString());
     }
 
     @Test
-    void observerExceptionDoesNotStopSlf4jRoutingOrTheOtherStream() throws Exception {
-        Process process = testChildCommand("lines", "will-still-log").start();
+    void observerExceptionDoesNotStopSlf4jRoutingOnEitherStream() throws Exception {
+        Process process =
+                TestSupport.testChild("lines", "stdout-a", "stdout-b", "err:stderr-a").start();
         ExecutorService readers =
                 ProcessOutputLogger.captureAsync(
                         process,
                         TAG,
                         line -> {
-                            throw new RuntimeException("observer boom for: " + line);
+                            throw new AssertionError("observer boom for: " + line);
                         });
         try {
             assertTrue(process.waitFor(10, TimeUnit.SECONDS), "child did not exit in time");
         } finally {
             readers.shutdown();
         }
+        assertTrue(readers.awaitTermination(5, TimeUnit.SECONDS), "readers did not finish");
 
-        awaitLog(e -> "will-still-log".equals(e.getMessage()));
-    }
-
-    /** Mirrors {@code TestSupport.forMain} (shared.process, package-private) for this package. */
-    private static ProcessBuilder testChildCommand(String... testChildArgs) {
-        String javaBin =
-                ProcessHandle.current()
-                        .info()
-                        .command()
-                        .orElse(System.getProperty("java.home") + "/bin/java");
-        List<String> cmd = new java.util.ArrayList<>();
-        cmd.add(javaBin);
-        cmd.add("-cp");
-        cmd.add(System.getProperty("java.class.path"));
-        cmd.add("com.faforever.testharness.shared.process.TestChild");
-        for (String arg : testChildArgs) {
-            cmd.add(arg);
-        }
-        return new ProcessBuilder(cmd);
-    }
-
-    private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5_000;
-        while (System.currentTimeMillis() < deadline) {
-            for (ILoggingEvent e : appender.list) {
-                if (matcher.test(e)) {
-                    return;
-                }
-            }
-            Thread.sleep(50);
-        }
-        fail("predicate never matched. captured: " + appender.list);
+        List<String> logged = appender.list.stream().map(ILoggingEvent::getMessage).toList();
+        // Both stdout lines and the stderr line still reach SLF4J exactly once each, proving an
+        // observer that throws on every line — on either stream — never stops capture of either.
+        assertEquals(1, Collections.frequency(logged, "stdout-a"), logged.toString());
+        assertEquals(1, Collections.frequency(logged, "stdout-b"), logged.toString());
+        assertEquals(1, Collections.frequency(logged, "stderr-a"), logged.toString());
+        // One observer failure per line, on both streams; catches a regression that wires one
+        // stream's reader to a no-op observer instead of the one under test.
+        assertEquals(3, Collections.frequency(logged, OBSERVER_THREW_MESSAGE), logged.toString());
     }
 }
