@@ -159,7 +159,12 @@ game with more `MULTI_TEAM` invalid). The end-of-match result is fixed by design
 `GameResult` per army, and an army's result is its team's, so the winning team's armies
 all report victory. The harness asserts on the shape and ordering of those closing frames,
 and a result that varied would make those assertions depend on configuration nothing
-has asked to vary.
+has asked to vary. Every game in a session sends the same set, the host and each joiner
+alike, just as real FA clients each report every army. The army numbers are the ones the
+host assigned in its `PlayerOption` frames, which faf-server accepts from no other game,
+and faf-server resolves each army's outcome by comparing what every player reported for
+it. Identical sets resolve every army unanimously; sets that disagree can leave the
+outcome ambiguous or wrong.
 
 Before WBS-4.3.3 each player was its own team (`Team` = its army number), so at one
 or two players the `Team` option changes: the first player now sends `Team 2`

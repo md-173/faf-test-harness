@@ -45,7 +45,15 @@ public final class MockGameLifecycle {
     private static final Duration DEFAULT_GPGNET_CONNECTION_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * A mapping of result strings to numerical scores.
+     * A mapping of result strings to numerical scores, as FA itself scores them: {@code
+     * VictoryForArmy}, {@code DefeatForArmy} and {@code DrawForArmy} in FA's {@code
+     * AbstractVictoryCondition.lua} send {@code "victory 10"}, {@code "defeat -10"} and {@code
+     * "draw 0"}.
+     *
+     * <p>The values are not decoration. faf-server decides a 1v1 matchmaker game by comparing the
+     * scores reported for its two armies rather than their outcomes ({@code
+     * LadderGame._outcome_override_hook}, on by default), so victory has to outscore defeat for the
+     * fixed result described below to be the one it records.
      *
      * <p>{@code draw} is carried for completeness of the mapping and is not reachable: the
      * end-of-match result is fixed: army 1's team wins and the other team loses (WBS-3.2.4.3-fix,
@@ -53,7 +61,7 @@ public final class MockGameLifecycle {
      * gap.
      */
     private static final Map<String, Integer> SCORES =
-            Map.of("victory", 10, "defeat", -10, "draw", 10);
+            Map.of("victory", 10, "defeat", -10, "draw", 0);
 
     /**
      * The numerical values for the teams in the match. We are not using team 1 since that is the
@@ -931,6 +939,31 @@ public final class MockGameLifecycle {
             // so every army reports its team's result (WBS-4.3.3). Army 1 is always on TEAMS[0].
             // Before teams existed this rule read "army 1 wins, every other army loses"; with two
             // teams that would have army 3 report defeat while its team wins.
+            //
+            // The host and every joiner send this same set, which is how FA itself reports: its
+            // sim declares a result for every army and UserSync.lua sends each one from every
+            // client. faf-server keeps each player's report per army and resolves each army across
+            // them, unanimously when they agree (GameResultReports._compute_outcome). Reporting
+            // from each game's own vantage, the alternative #384 raised, means nothing to
+            // faf-server, which reads every army id in the host's numbering (below) whoever sent
+            // it. A game whose set disagreed would split the vote for an army, which faf-server
+            // settles by majority where it can and otherwise marks CONFLICTING. That can leave the
+            // game unresolved, or draw a 1v1 matchmaker game, which is decided by score.
+            //
+            // The army ids are the host's: faf-server takes PlayerOption from no other game, and
+            // add_result drops any army the host did not give to a player present at launch. A
+            // joiner never learns its own army and does not need to. Every game runs this loop,
+            // and while nobody leaves every game holds the same number of peers, so the games
+            // always agree with each other. The risk is that together they stop matching the
+            // host's frames, if this loop and sendPlayerOptions (arrival order numbering, teams by
+            // teamForArmy) drift apart: nothing here fails, and faf-server can resolve the game
+            // wrongly or not at all. PeerResultAgreementTest derives its expectation from the
+            // host's frames to catch exactly that.
+            //
+            // The agreement between games depends on nobody leaving. peers is never pruned, so a
+            // departed player's army stays in the range of every game that knew them, but a player
+            // joining afterwards never hears of them and its range falls short. Playing on after a
+            // departure needs more than pruning peers, since the host does not renumber.
             for (int army = 1; army <= peers.size() + 1; army++) {
                 String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
                 gpgnetSender.gameResult(army, result, SCORES.get(result));
