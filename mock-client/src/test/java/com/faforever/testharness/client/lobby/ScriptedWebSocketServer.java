@@ -41,6 +41,9 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     private final BlockingQueue<String> received = new LinkedBlockingQueue<>();
     private final List<WebSocket> connections = new CopyOnWriteArrayList<>();
 
+    /** The close code of each connection that closed, in order; see {@link #awaitClose}. */
+    private final BlockingQueue<Integer> closes = new LinkedBlockingQueue<>();
+
     public ScriptedWebSocketServer() {
         super(new InetSocketAddress("127.0.0.1", 0));
         setReuseAddr(true);
@@ -74,6 +77,19 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
             throw new AssertionError("no message received within " + timeout + " " + unit);
         }
         return msg;
+    }
+
+    /**
+     * Wait for the next connection to close and return its close code: {@code 1000} for a client
+     * that sent a normal close frame, {@code 1006} for one that went away without one. Read it
+     * before {@link #stop}, which closes whatever is still open and so records codes of its own.
+     */
+    public int awaitClose(final long timeout, final TimeUnit unit) throws InterruptedException {
+        Integer code = closes.poll(timeout, unit);
+        if (code == null) {
+            throw new AssertionError("no connection closed within " + timeout + " " + unit);
+        }
+        return code;
     }
 
     /** Send a text frame to every connected client. */
@@ -129,6 +145,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     public void onClose(
             final WebSocket conn, final int code, final String reason, final boolean remote) {
         connections.remove(conn);
+        closes.add(code);
         // Dates the departure, so a later "broadcasting to 0 connection(s)" can be read against
         // the disconnect that caused it — #261 lost a welcome to an empty connection list.
         LOG.debug(

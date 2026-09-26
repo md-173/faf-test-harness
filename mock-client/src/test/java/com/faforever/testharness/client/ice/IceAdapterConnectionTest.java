@@ -37,6 +37,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
@@ -524,6 +526,71 @@ final class IceAdapterConnectionTest {
 
         Thread.sleep(100); // allow any erroneous second fire to surface
         assertEquals(1, fireCount.get(), "disconnect listener should fire exactly once");
+    }
+
+    /**
+     * A call made after the adapter dropped the connection fails fast with an {@link IOException},
+     * never with a timeout, whether the adapter closed cleanly or died partway through a frame
+     * (WBS-3.1.3.3-fix, #445).
+     *
+     * <p>The lifecycle's cause check relies on exactly this: an {@code IOException} means the
+     * adapter's socket is gone, and a {@code TimeoutException} means it stayed connected but did
+     * not answer. Nothing in this class enforces it explicitly. Jackson closes the socket when the
+     * reader reaches the end of its input, even mid-frame, and a peer reset breaks the pipe, so a
+     * later write fails at once. If the reader ever stopped doing that, a dead adapter's call would
+     * wait out its timeout and read as a live one, and this is the test that would say so. The 30 s
+     * call timeout keeps a timer-driven failure far outside the wait below.
+     *
+     * @param lastBytes what the adapter writes before it goes: nothing, or the start of a frame
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"", "{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\""})
+    void aCallAfterTheAdapterDroppedTheConnectionFailsFast(final String lastBytes)
+            throws Exception {
+        conn =
+                new IceAdapterConnection(
+                        server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(30));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        conn.onDisconnect(e -> disconnected.countDown());
+
+        if (!lastBytes.isEmpty()) {
+            server.send(lastBytes);
+        }
+        server.dropClient();
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire");
+
+        CompletableFuture<JsonNode> late = conn.call("hostGame", "scmp_007");
+
+        ExecutionException thrown =
+                assertThrows(ExecutionException.class, () -> late.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(IOException.class, thrown.getCause());
+    }
+
+    /**
+     * The reset half of the guarantee above: an adapter whose socket goes away with a TCP reset, as
+     * a killed process's can, also fails a later call fast with an {@link IOException}. The reader
+     * ends on the reset without closing the socket, and the write then hits a broken pipe.
+     */
+    @Test
+    void aCallAfterTheAdapterResetTheConnectionFailsFast() throws Exception {
+        conn =
+                new IceAdapterConnection(
+                        server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(30));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        conn.onDisconnect(e -> disconnected.countDown());
+
+        server.resetClient();
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire");
+
+        CompletableFuture<JsonNode> late = conn.call("hostGame", "scmp_007");
+
+        ExecutionException thrown =
+                assertThrows(ExecutionException.class, () -> late.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(IOException.class, thrown.getCause());
     }
 
     @Test

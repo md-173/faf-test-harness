@@ -42,7 +42,7 @@ public final class ExitCodes {
      * <p>For {@code run} that includes a session whose ICE adapter or game never came up
      * (WBS-3.1.3.3-fix, #437): a binary that could not be started, an adapter that exited or never
      * accepted its JSON-RPC connection, or one that refused a setup call. Read from {@code
-     * MockClientLifecycle.launchFailed()}. Before that existed, such a run exited {@code 0}.
+     * SessionVerdicts.launchFailed()}. Before that existed, such a run exited {@code 0}.
      *
      * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
      * name a subprocess that died under a session that was running, and a launch that never came up
@@ -50,6 +50,23 @@ public final class ExitCodes {
      * going. {@code session} reports the same failure as {@code 70} at its {@code game_launch}
      * checkpoint, and {@code launch-ice} and {@code launch-game} already use it for a binary they
      * cannot start. The line logged ahead of the verdict names which of them it was.
+     *
+     * <p>For {@code run} it also includes a session that failed after its adapter and game came up
+     * (WBS-3.1.3.3-fix, #445, and WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or
+     * {@code ConnectToPeer} frame it could not read, a {@code DisconnectFromPeer} one before the
+     * game started, an adapter that answered a host, join or peer-connect call with an error or not
+     * within its timeout, or a match the server cancelled after {@code game_launch} and before the
+     * game started. Read from {@code SessionVerdicts.sessionFailed()}. That session did run, but no
+     * subprocess died under it, which is what the two codes below are for. A call that failed
+     * because the adapter's connection closed is not this: the adapter is gone, which is {@link
+     * #ADAPTER_LOST}'s finding, although a run that such a failure ends still exits {@code 0} until
+     * that code can see it (#438). A live adapter whose RPC stream stopped parsing fails its calls
+     * the same way, and until #452 that run exits {@code 0} too.
+     *
+     * <p>An unexpected exception in the bring-up is a defect rather than a finding, and ends the
+     * run here too instead of leaving it waiting (WBS-3.1.3.3-fix, #439): as a launch that never
+     * came up when it is thrown in the launch, and as a failed session when it is thrown in the
+     * host, join or peer-connect step.
      */
     public static final int RUNTIME = 70;
 
@@ -84,10 +101,10 @@ public final class ExitCodes {
      *
      * <p>Distinct from {@link #RUNTIME}, which covers the ways a run fails without a subprocess
      * dying under a running session: a failed token exchange, a lobby handshake timeout, a setup
-     * failure, an abrupt lobby close, a launch that never came up. A game dying mid-session is the
-     * finding a pipeline most needs to tell from those, which is why it has a number of its own
-     * rather than a sixth share of {@code 70}. {@code 71} sits next to it deliberately: this is a
-     * runtime failure, and one with a known cause.
+     * failure, an abrupt lobby close, a launch that never came up, a session that failed after it
+     * came up. A game dying mid-session is the finding a pipeline most needs to tell from those,
+     * which is why it has a number of its own rather than another share of {@code 70}. {@code 71}
+     * sits next to it deliberately: this is a runtime failure, and one with a known cause.
      *
      * <p>Before this existed the harness exited {@code 0} when its game died, reporting success for
      * a run that failed.
@@ -128,18 +145,18 @@ public final class ExitCodes {
      * LaunchGame} transition into TERMINATED instead, and an adapter given a bad argument exits
      * {@code 0} while doing so (subprocess-orchestration-spec §2.6), so neither this flag nor its
      * exit code can speak for that case. That case is {@link #RUNTIME}, from {@code
-     * MockClientLifecycle.launchFailed()} (WBS-3.1.3.3-fix, #437).
+     * SessionVerdicts.launchFailed()} (WBS-3.1.3.3-fix, #437).
      *
      * <p>An adapter that quits cleanly under its own power, exit {@code 0}, is not this either: it
      * reads as the real client's "terminated normally" and leaves this run's code alone.
      *
      * <p>Distinct from {@link #RUNTIME}, which covers the ways a run fails without a subprocess
      * dying under a running session (a failed token exchange, a handshake timeout, a setup failure,
-     * an abrupt lobby close, a launch that never came up), and from {@link #GAME_CRASHED}, which is
-     * the game dying rather than the adapter underneath it. {@code 72} continues what those two
-     * started: a runtime failure, with a known cause. Deliberately not mock-game's {@code 69}: the
-     * client logs that as a lost adapter link and it contributes nothing to the run's code, so one
-     * number would mean two things in one log.
+     * an abrupt lobby close, a launch that never came up, a session that failed after it came up),
+     * and from {@link #GAME_CRASHED}, which is the game dying rather than the adapter underneath
+     * it. {@code 72} continues what those two started: a runtime failure, with a known cause.
+     * Deliberately not mock-game's {@code 69}: the client logs that as a lost adapter link and it
+     * contributes nothing to the run's code, so one number would mean two things in one log.
      *
      * <p>Before this existed the harness exited {@code 0} when its adapter died mid-session,
      * reporting success for a run that failed.

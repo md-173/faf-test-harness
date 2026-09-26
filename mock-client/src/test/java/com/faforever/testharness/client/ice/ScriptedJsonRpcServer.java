@@ -109,6 +109,18 @@ final class ScriptedJsonRpcServer {
         }
     }
 
+    /**
+     * Drop the client socket with a TCP reset rather than a clean close, the way a killed peer's
+     * socket can go: a zero linger turns the close into a reset.
+     */
+    void resetClient() throws IOException {
+        Socket current = client;
+        if (current != null) {
+            current.setSoLinger(true, 0);
+            current.close();
+        }
+    }
+
     /** Close the client (if any) and the listening socket. */
     void stop() {
         try {

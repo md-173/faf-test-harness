@@ -240,7 +240,7 @@ final class GameExitClassificationTest {
     /** Nothing has exited yet, so there is nothing to report. */
     @Test
     void noCrashIsReportedBeforeTheGameHasExited() {
-        assertFalse(lifecycle.gameCrashed(), "a running game has not crashed");
+        assertFalse(lifecycle.verdicts().gameCrashed(), "a running game has not crashed");
     }
 
     /**
@@ -257,7 +257,8 @@ final class GameExitClassificationTest {
         ILoggingEvent event = classify(69, false, true);
 
         assertFalse(
-                lifecycle.gameCrashed(), "a diagnosed adapter loss is not an unexplained death");
+                lifecycle.verdicts().gameCrashed(),
+                "a diagnosed adapter loss is not an unexplained death");
         assertEquals(Level.WARN, event.getLevel());
         assertTrue(
                 event.getFormattedMessage().contains("losing its GPGNet link"),
@@ -275,7 +276,7 @@ final class GameExitClassificationTest {
 
         ILoggingEvent event = classify(69, false, true);
 
-        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.verdicts().gameCrashed());
         assertTrue(
                 event.getFormattedMessage().contains("losing its GPGNet link"),
                 "teardown having run first must not change the reading: "
@@ -290,7 +291,7 @@ final class GameExitClassificationTest {
     void anAdapterLostExitAfterACleanEndIsReportedAsACleanEnd() {
         ILoggingEvent event = classify(69, true, true);
 
-        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.verdicts().gameCrashed());
         assertEquals(Level.INFO, event.getLevel());
         assertTrue(event.getFormattedMessage().contains("clean game end"));
     }
@@ -300,7 +301,9 @@ final class GameExitClassificationTest {
     void anAbnormalExitIsReportedAsACrash() {
         classify(70, false, true);
 
-        assertTrue(lifecycle.gameCrashed(), "the abnormal branch must drive the crash exit code");
+        assertTrue(
+                lifecycle.verdicts().gameCrashed(),
+                "the abnormal branch must drive the crash exit code");
     }
 
     /**
@@ -313,7 +316,9 @@ final class GameExitClassificationTest {
     void aGameThatDiedBeforeStartingCountsAsACrash() {
         classify(70, false, false);
 
-        assertTrue(lifecycle.gameCrashed(), "a game that never started still died unaccounted for");
+        assertTrue(
+                lifecycle.verdicts().gameCrashed(),
+                "a game that never started still died unaccounted for");
     }
 
     /** The exact case a naive teardown guard in RunCommand would have got wrong, inverted. */
@@ -323,7 +328,7 @@ final class GameExitClassificationTest {
         classify(143, false, true);
 
         assertFalse(
-                lifecycle.gameCrashed(),
+                lifecycle.verdicts().gameCrashed(),
                 "the harness's own SIGTERM must never be reported as a crash");
     }
 
@@ -332,7 +337,7 @@ final class GameExitClassificationTest {
     void aCleanExitIsNotACrash() {
         classify(0, true, true);
 
-        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.verdicts().gameCrashed());
     }
 
     /**
@@ -345,7 +350,7 @@ final class GameExitClassificationTest {
         classify(0, false, true);
 
         assertFalse(
-                lifecycle.gameCrashed(),
+                lifecycle.verdicts().gameCrashed(),
                 "a game that completed its own program did not crash, however little arrived");
     }
 
@@ -354,6 +359,6 @@ final class GameExitClassificationTest {
     void aNonZeroExitAfterAConfirmedCleanEndIsNotACrash() {
         classify(70, true, true);
 
-        assertFalse(lifecycle.gameCrashed());
+        assertFalse(lifecycle.verdicts().gameCrashed());
     }
 }

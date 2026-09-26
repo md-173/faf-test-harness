@@ -12,6 +12,7 @@ import com.faforever.testharness.client.lobby.TokenSources;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
+import com.faforever.testharness.client.state.SessionVerdicts;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
 import java.util.concurrent.Callable;
@@ -81,13 +82,14 @@ public final class RunCommand implements Callable<Integer> {
      * class javadoc for why it is accepted rather than worked around.
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
-     *     could not be established, its ICE adapter or game never came up, or the connection
-     *     dropped unexpectedly; {@link ExitCodes#ADAPTER_LOST} if the session ran but its ICE
-     *     adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if the session ran but its
-     *     game process died unaccounted for. A dropped connection, a launch that never came up, a
-     *     lost adapter and a crashed game are ordered by {@link #sessionExitCode(boolean, boolean,
-     *     boolean, boolean, boolean, Logger)}. Superseded by the signal's own exit code whenever a
-     *     signal is what ended the run, and then no verdict is logged.
+     *     could not be established, its ICE adapter or game never came up, the connection dropped
+     *     unexpectedly, or the session failed after it came up (a lobby frame it could not read, an
+     *     adapter call answered with an error or not at all, a match the server cancelled); {@link
+     *     ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter died unaccounted for;
+     *     {@link ExitCodes#GAME_CRASHED} if the session ran but its game process died unaccounted
+     *     for. When more than one applies, {@link #sessionExitCode(boolean, boolean,
+     *     SessionVerdicts, Logger)} orders them. Superseded by the signal's own exit code whenever
+     *     a signal is what ended the run, and then no verdict is logged.
      */
     @Override
     public Integer call() {
@@ -117,20 +119,50 @@ public final class RunCommand implements Callable<Integer> {
 
         // Graceful shutdown on Ctrl-C / SIGTERM: run the coordinated teardown synchronously before
         // the JVM exits. The lobby close's disconnect event drives the FSM to TERMINATED, releasing
-        // the main thread. No-op if the session has already disconnected (e.g. a server-initiated
-        // close that let call() return normally), so a normal exit doesn't emit a spurious
-        // "shutdown signal" line. The flag it raises first is what tells the end of this method
-        // that a signal, not the session, ended the run; see shutdownHook for why that order is
-        // load bearing.
+        // the main thread. The flag it raises first is what tells runSession that a signal, not
+        // the session, ended the run; see shutdownHook for why that order is load bearing.
+        //
+        // The hook runs on every JVM exit, a normal one included, so its "shutdown signal" line is
+        // guarded on callFinished, raised on every way out of this method. A hook that finds it
+        // down started while the run was still live, which only a signal does (#446). The lobby's
+        // disconnect, the guard before, lost a race on a normal exit: teardown's close returns
+        // once its frame is sent, before the server's echo marks the session disconnected.
         AtomicBoolean shuttingDown = new AtomicBoolean();
+        AtomicBoolean callFinished = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
                         new Thread(
                                 shutdownHook(
                                         shuttingDown,
-                                        () -> teardownOnShutdown(session, teardown, log)),
+                                        () -> teardownOnShutdown(callFinished, teardown, log)),
                                 "mc-shutdown"));
+        try {
+            return runSession(tokens, session, teardown, lifecycle, shuttingDown, log);
+        } finally {
+            callFinished.set(true);
+        }
+    }
 
+    /**
+     * The rest of {@link #call()}, from the moment the shutdown hook exists: opens the session,
+     * waits for it to end, and picks the exit code. A method of its own so that {@code call()} can
+     * mark every way out of it for the hook (#446).
+     *
+     * @param tokens the session's access tokens
+     * @param session the lobby session to open
+     * @param teardown the session's teardown, shared with the hook
+     * @param lifecycle the lifecycle driving the session
+     * @param shuttingDown raised by the hook, first thing, when the JVM starts shutting down
+     * @param log the configured logger
+     * @return the code {@code run} should exit with; see {@link #call()}
+     */
+    private static int runSession(
+            final TokenSource tokens,
+            final LobbySession session,
+            final SessionTeardown teardown,
+            final MockClientLifecycle lifecycle,
+            final AtomicBoolean shuttingDown,
+            final Logger log) {
         SessionState me;
         try {
             me = lifecycle.start(tokens).get(SETUP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
@@ -183,13 +215,7 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
-        return sessionExitCode(
-                shuttingDown.get(),
-                lobbyDropped,
-                lifecycle.launchFailed(),
-                lifecycle.adapterLost(),
-                lifecycle.gameCrashed(),
-                log);
+        return sessionExitCode(shuttingDown.get(), lobbyDropped, lifecycle.verdicts(), log);
     }
 
     /**
@@ -214,7 +240,7 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Picks a finished session's exit code from the four verdicts it can carry, and logs the one
+     * Picks a finished session's exit code from the five verdicts it can carry, and logs the one
      * being reported.
      *
      * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
@@ -229,6 +255,12 @@ public final class RunCommand implements Callable<Integer> {
      * adapter dying is what makes the game react, and never the reverse, since java-ice-adapter
      * closes the game's connection and keeps serving when the game dies.
      *
+     * <p>A session that failed after it came up is last (#445, #344): a lobby frame it could not
+     * read, an adapter call that failed while the adapter was still connected, or a match the
+     * server cancelled. {@code 71} and {@code 72} each name a subprocess that died under the
+     * session, and when one did, a failed call or a cancelled match is its consequence rather than
+     * its cause (faf-server cancels a match when a player's game closes).
+     *
      * <p>A run a signal ended names no verdict at all. Its code is the signal's own (#334), so the
      * one computed here is discarded and a line would only mislead. The lifecycle's own teardown
      * check cannot promise that by itself: {@code SubprocessRegistry}'s shutdown hook, or the
@@ -236,64 +268,69 @@ public final class RunCommand implements Callable<Integer> {
      * SessionTeardown} starts, and its death would then read as a finding (#437). The verdicts are
      * still computed, since the caller returns the code either way.
      *
-     * <p>Static, with plain booleans, so the precedence can be tested without a live session. It
-     * takes the logger instead of holding one because this class obtains its logger only after
-     * {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
+     * <p>Static, so the precedence can be tested without a live session. It takes the lifecycle's
+     * verdicts whole rather than one flag each, so those tests also cover which verdict feeds which
+     * code. It takes the logger instead of holding one because this class obtains its logger only
+     * after {@link LoggingSetup#configure} has run, and so must not keep one in a static field.
      *
      * @param shuttingDown whether the JVM is already shutting down, which while a run is live can
      *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
-     * @param launchFailed whether the session's ICE adapter or game never came up; {@link
-     *     MockClientLifecycle#launchFailed()}
-     * @param adapterLost whether the ICE adapter died unaccounted for; {@link
-     *     MockClientLifecycle#adapterLost()}
-     * @param gameCrashed whether the game process died unaccounted for; {@link
-     *     MockClientLifecycle#gameCrashed()}
+     * @param verdicts what the session's lifecycle found: a launch that never came up, a lost
+     *     adapter, a crashed game, a session that failed after it came up
      * @param log the configured logger, for the single line naming what is reported
      * @return the code {@code run} should exit with, or {@link ExitCodes#OK} if nothing was found
      */
     static int sessionExitCode(
             final boolean shuttingDown,
             final boolean lobbyDropped,
-            final boolean launchFailed,
-            final boolean adapterLost,
-            final boolean gameCrashed,
+            final SessionVerdicts verdicts,
             final Logger log) {
         Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
             verdict.warn("lobby connection dropped unexpectedly");
             return ExitCodes.RUNTIME;
         }
-        if (launchFailed) {
+        if (verdicts.launchFailed()) {
             verdict.warn(
                     "the ICE adapter or game never came up; reporting it in this run's exit code");
             return ExitCodes.RUNTIME;
         }
-        if (adapterLost) {
+        if (verdicts.adapterLost()) {
             verdict.warn("the ICE adapter died mid-session; reporting it in this run's exit code");
             return ExitCodes.ADAPTER_LOST;
         }
-        if (gameCrashed) {
+        if (verdicts.gameCrashed()) {
             verdict.warn(
                     "the game process died unexpectedly; reporting it in this run's exit code");
             return ExitCodes.GAME_CRASHED;
+        }
+        if (verdicts.sessionFailed()) {
+            verdict.warn(
+                    "the session failed after its ICE adapter and game came up; reporting it in"
+                            + " this run's exit code");
+            return ExitCodes.RUNTIME;
         }
         return ExitCodes.OK;
     }
 
     /**
-     * Shutdown-hook body: always run the coordinated session teardown — even when the lobby is
-     * already disconnected, later-registered handles (the game at launch, the adapter via R38/R59b)
-     * may still need tearing down. Only the "shutdown signal" line is guarded, so normal exits stay
-     * quiet.
+     * Shutdown-hook body: always run the coordinated session teardown, since even a session whose
+     * lobby is already disconnected may have later-registered handles (the game at launch, the
+     * adapter via R38/R59b) still to tear down. Only the "shutdown signal" line is guarded.
      *
-     * @param session the live lobby session, checked only to keep normal exits quiet
+     * <p>It is logged only while {@code call()} has not yet finished (#446). The hook runs on every
+     * JVM exit, and one that starts while the run is still live can only have been started by a
+     * signal. A run that ends on its own finishes {@code call()} before {@code Main}'s {@link
+     * System#exit(int)} starts the hook, so it never logs the line, whatever its exit code.
+     *
+     * @param callFinished raised once {@code call()} has its result, on every way out of it
      * @param teardown the session's teardown, shared with the FSM path (R59b)
      * @param log logger for the single "shutdown signal received" line
      */
-    private static void teardownOnShutdown(
-            final LobbySession session, final SessionTeardown teardown, final Logger log) {
-        if (!session.isDisconnected()) {
+    static void teardownOnShutdown(
+            final AtomicBoolean callFinished, final SessionTeardown teardown, final Logger log) {
+        if (!callFinished.get()) {
             log.info("shutdown signal received; tearing down session");
         }
         teardown.run();

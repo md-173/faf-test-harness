@@ -12,10 +12,10 @@ import java.util.concurrent.TimeUnit;
  * main thread then computes an exit code and calls {@link System#exit(int)} — from a thread, with
  * the JVM's shutdown sequence already in progress.
  *
- * <p>Deliberately not the real {@code Main}: driving {@code run} to the same point needs a live
- * lobby, a real OAuth exchange and two subprocess binaries, none of which can run in CI. Everything
- * this test is about happens after all of that, in the interaction between the hook and {@code
- * System.exit}, so the stand-in reproduces that interaction and nothing else.
+ * <p>Deliberately not the real {@code Main}: this pins the JDK's side of that shape, the hook and
+ * {@code System.exit}, with nothing else in the way. {@code RunShutdownEndToEndTest} drives the
+ * real {@code run} through the same path, against a scripted lobby with an access-token file, and
+ * pins the codes and log lines an operator sees.
  *
  * <p>Prints one line per step so the test can assert what did and did not run, and flushes each,
  * since the JVM is about to die in a way that skips ordinary stream cleanup.

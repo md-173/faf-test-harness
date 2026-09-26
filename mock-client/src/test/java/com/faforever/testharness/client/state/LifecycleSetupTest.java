@@ -5,16 +5,24 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.LaunchIdentity;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -22,12 +30,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 
 final class LifecycleSetupTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -105,8 +118,21 @@ final class LifecycleSetupTest {
     private final List<DummyGameLauncher> gameLaunchers = new ArrayList<>();
     private final List<DummyIceLauncher> iceLaunchers = new ArrayList<>();
 
+    /** Captures the lifecycle's own lines, for the failures that must name themselves once. */
+    private ListAppender<ILoggingEvent> appender;
+
+    private Logger lifecycleLogger;
+
     @BeforeEach
     void setUp() throws Exception {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        lifecycleLogger = context.getLogger(MockClientLifecycle.class);
+        appender = new ListAppender<>();
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.setContext(context);
+        appender.start();
+        lifecycleLogger.addAppender(appender);
+
         server = new ScriptedWebSocketServer();
         server.startAndAwait();
 
@@ -117,6 +143,8 @@ final class LifecycleSetupTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        lifecycleLogger.detachAppender(appender);
+        appender.stop();
         for (DummyGameLauncher launcher : gameLaunchers) {
             if (launcher.getSubprocess() != null) {
                 launcher.getSubprocess().terminate(Duration.ofSeconds(1));
@@ -169,7 +197,9 @@ final class LifecycleSetupTest {
         Object[] iceServers = iceConn.receivedMessage("setIceServers");
         assertTrue(iceServers != null);
         assertTrue(((Object[]) iceServers[0]).length == 0);
-        assertFalse(lifecycle.launchFailed(), "a launch that came up is not a failed launch");
+        assertFalse(
+                lifecycle.verdicts().launchFailed(),
+                "a launch that came up is not a failed launch");
     }
 
     @Test
@@ -283,7 +313,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "a game binary that cannot start fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "a game binary that cannot start fails the launch");
     }
 
     @Test
@@ -306,7 +338,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that cannot start fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that cannot start fails the launch");
     }
 
     @Test
@@ -329,7 +363,9 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that never connects fails the launch");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that never connects fails the launch");
     }
 
     @ParameterizedTest
@@ -342,7 +378,7 @@ final class LifecycleSetupTest {
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
                 new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
-        iceConn.setupCallFail(method);
+        iceConn.setupCallFail(method, new IceRpcException(-32000, "refused"));
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -356,6 +392,263 @@ final class LifecycleSetupTest {
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
 
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
-        assertTrue(lifecycle.launchFailed(), "an adapter that refuses " + method + " fails it too");
+        assertTrue(
+                lifecycle.verdicts().launchFailed(),
+                "an adapter that refuses " + method + " fails it too");
+    }
+
+    /**
+     * A {@code hostGame} or {@code joinGame} call the adapter answers with an error, or does not
+     * answer in time, fails the session with a verdict (WBS-3.1.3.3-fix, #445). The adapter was
+     * still connected, so the call is the finding, and one WARN names it. Sampled the moment
+     * TERMINATED commits, so a verdict written after the commit could not pass.
+     *
+     * @param method the call the adapter fails
+     * @param errorAnswer whether it answers with an error, rather than not in time
+     */
+    @ParameterizedTest
+    @CsvSource({"hostGame, true", "hostGame, false", "joinGame, true", "joinGame, false"})
+    void aHostOrJoinCallTheAdapterRejectedFailsTheSession(
+            final String method, final boolean errorAnswer) throws Exception {
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallFail(
+                method,
+                errorAnswer ? new IceRpcException(-32000, "refused") : new TimeoutException());
+        MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
+
+        lifecycle.post(roleFrame(method));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the verdict must be recorded before TERMINATED commits");
+        String action = "hostGame".equals(method) ? "host the game" : "join the game";
+        assertEquals(
+                1,
+                warnings().stream().filter(w -> w.startsWith("Could not " + action)).count(),
+                "one WARN must name the call: " + warnings());
+    }
+
+    /**
+     * A call that failed because the adapter's connection closed records nothing (#445): the
+     * adapter is gone, and its own exit is the finding. The session still ends, and no WARN comes
+     * without a verdict.
+     *
+     * @param method the call whose connection closes under it
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hostGame", "joinGame"})
+    void aHostOrJoinCallWhoseConnectionClosedLeavesItToTheAdapter(final String method)
+            throws Exception {
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallFail(
+                method, new IOException("ICE adapter connection closed (REMOTE_CLOSE)"));
+        MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
+
+        lifecycle.post(roleFrame(method));
+
+        assertFalse(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "a closed connection is the adapter's finding, not the call's");
+        assertEquals(ClientState.TERMINATED, lifecycle.getState(), "the session still ends");
+        // Only the call's own line. Teardown then kills the game, whose exit handler can race the
+        // lobby close and warn that GameState Ended could not be sent; that one is not this
+        // route's.
+        assertTrue(
+                warnings().stream().noneMatch(w -> w.startsWith("Could not")),
+                "the failed call must not warn without a verdict: " + warnings());
+    }
+
+    /**
+     * A {@code HostGame} or {@code JoinGame} frame the client cannot read fails the session with a
+     * verdict (#445), and one WARN names the frame. A number where the map, or the host's login,
+     * belongs: the shape #445 reproduced against the real adapter.
+     *
+     * @param command the frame that arrives malformed
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"HostGame", "JoinGame"})
+    void aHostOrJoinFrameTheClientCannotReadFailsTheSession(final String command) throws Exception {
+        MockClientLifecycle lifecycle =
+                launchedLifecycle(
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()));
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
+        ObjectNode frame = MAPPER.createObjectNode().put("command", command).put("target", "game");
+        frame.set("args", MAPPER.createArrayNode().add(42));
+
+        lifecycle.post("HostGame".equals(command) ? new HostGame(frame) : new JoinGame(frame));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the verdict must be recorded before TERMINATED commits");
+        assertEquals(
+                1,
+                warnings().stream().filter(w -> w.contains(command + " message")).count(),
+                "one WARN must name the frame: " + warnings());
+    }
+
+    /**
+     * An unchecked throw during the launch, once the adapter has started, ends the session instead
+     * of stranding it (WBS-3.1.3.3-fix, #439). Left to {@code Transition}, it was contained and the
+     * FSM stayed in IDLE with the adapter running and nothing to move it on, so this test would
+     * time out. Now it is a failed launch, TERMINATED's teardown reaps the adapter, and the trace
+     * is still logged at ERROR. {@code setIceServers} is the throw's site because it runs after the
+     * adapter has started and connected.
+     */
+    @Test
+    void anUncheckedThrowDuringTheLaunchEndsTheSessionInsteadOfStrandingIt() throws Exception {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallThrow("setIceServers", new IllegalStateException("boom"));
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().launchFailed());
+
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the throw must end the session as a failed launch, not leave it in IDLE");
+        // A bounded wait rather than an isAlive() probe: the wait failing is the assertion that
+        // teardown reaped the adapter the launch had started.
+        iceLauncher.getSubprocess().onExit().get(5, TimeUnit.SECONDS);
+        assertTrue(
+                errorsWithTrace().stream()
+                        .anyMatch(m -> m.startsWith("Could not launch the game session")),
+                "the defect must be logged at ERROR with its trace: " + errorsWithTrace());
+    }
+
+    /**
+     * An unchecked throw in {@code hostGame} or {@code joinGame} ends the session too (#439).
+     * Contained, it left the FSM in STARTING_GAME with the adapter up and the game waiting in LOBBY
+     * for a role that never comes. The adapter and game did come up, so it is #445's verdict.
+     *
+     * @param method the call that throws
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"hostGame", "joinGame"})
+    void anUncheckedThrowInHostOrJoinEndsTheSession(final String method) throws Exception {
+        DummyIceAdapterConnection iceConn =
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        iceConn.setupCallThrow(method, new IllegalStateException("boom"));
+        MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
+        CompletableFuture<Boolean> failedAtCommit =
+                lifecycle
+                        .stateReached(ClientState.TERMINATED)
+                        .thenApply(reached -> lifecycle.verdicts().sessionFailed());
+
+        lifecycle.post(roleFrame(method));
+
+        assertTrue(
+                failedAtCommit.get(5, TimeUnit.SECONDS),
+                "the throw must end the session with a verdict, not leave it in STARTING_GAME");
+        String action = "hostGame".equals(method) ? "host the game" : "join the game";
+        assertTrue(
+                errorsWithTrace().stream().anyMatch(m -> m.startsWith("Could not " + action)),
+                "the defect must be logged at ERROR with its trace: " + errorsWithTrace());
+        // Both came up for this one, so teardown must reap both. Bounded waits rather than
+        // isAlive() probes: failing to complete is the assertion that nothing was left running.
+        gameLaunchers
+                .get(gameLaunchers.size() - 1)
+                .getSubprocess()
+                .onExit()
+                .get(5, TimeUnit.SECONDS);
+        iceLaunchers.get(iceLaunchers.size() - 1).getSubprocess().onExit().get(5, TimeUnit.SECONDS);
+    }
+
+    /**
+     * A lifecycle that has launched on {@code iceConn} and waits in STARTING_GAME for its role.
+     *
+     * @param iceConn the adapter connection, rigged by the caller
+     * @return the lifecycle, in STARTING_GAME
+     */
+    private MockClientLifecycle launchedLifecycle(final DummyIceAdapterConnection iceConn) {
+        LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
+        DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
+        gameLaunchers.add(gameLauncher);
+        iceLaunchers.add(iceLauncher);
+        MockClientLifecycle lifecycle =
+                new MockClientLifecycle(
+                        MINIMAL_CONFIG,
+                        session,
+                        iceConn,
+                        gameLauncher,
+                        iceLauncher,
+                        new SessionTeardown(lobby));
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+        assertEquals(ClientState.STARTING_GAME, lifecycle.getState());
+        return lifecycle;
+    }
+
+    /**
+     * The lobby frame that makes the lifecycle issue {@code method}.
+     *
+     * @param method {@code hostGame} or {@code joinGame}
+     * @return the matching role event
+     */
+    private static Event roleFrame(final String method) {
+        return "hostGame".equals(method)
+                ? new HostGame(HOST_GAME_MESSAGE)
+                : new JoinGame(JOIN_GAME_MESSAGE);
+    }
+
+    /**
+     * The ERROR lines the lifecycle logged on this test's thread with a stack trace attached; see
+     * {@link #warnings()} for why only this thread's.
+     *
+     * @return the messages, in order
+     */
+    private List<String> errorsWithTrace() {
+        String testThread = Thread.currentThread().getName();
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR && e.getThrowableProxy() != null)
+                .filter(e -> testThread.equals(e.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
+    /**
+     * The WARN lines the lifecycle logged on this test's thread. Every failure here is decided
+     * synchronously inside {@code post}, and a lifecycle an earlier class left behind can log on
+     * another thread at any moment.
+     *
+     * @return the WARN messages, in order
+     */
+    private List<String> warnings() {
+        String testThread = Thread.currentThread().getName();
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN)
+                .filter(e -> testThread.equals(e.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 }

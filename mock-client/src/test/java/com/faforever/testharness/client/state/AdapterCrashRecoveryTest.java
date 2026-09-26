@@ -195,8 +195,12 @@ final class AdapterCrashRecoveryTest {
         assertTrue(
                 warn.getFormattedMessage().contains(String.valueOf(code)),
                 "WARN must carry the actual exit code; got: " + warn.getFormattedMessage());
-        assertTrue(lifecycle.adapterLost(), "an adapter killed while HOSTING is a lost adapter");
-        assertFalse(lifecycle.launchFailed(), "and not a failed launch: that one came up (#437)");
+        assertTrue(
+                lifecycle.verdicts().adapterLost(),
+                "an adapter killed while HOSTING is a lost adapter");
+        assertFalse(
+                lifecycle.verdicts().launchFailed(),
+                "and not a failed launch: that one came up (#437)");
     }
 
     @Test
@@ -221,7 +225,9 @@ final class AdapterCrashRecoveryTest {
         // The PLAYING edge carries the exit status too (WBS-3.1.2.8-fix, #406), not only the
         // warning. Both come from the one branch in onAdapterExited, so this pins that they stay
         // together.
-        assertTrue(lifecycle.adapterLost(), "an adapter killed while PLAYING is a lost adapter");
+        assertTrue(
+                lifecycle.verdicts().adapterLost(),
+                "an adapter killed while PLAYING is a lost adapter");
     }
 
     /**
@@ -253,7 +259,7 @@ final class AdapterCrashRecoveryTest {
         CompletableFuture<Boolean> atCommit =
                 lifecycle
                         .stateReached(ClientState.TERMINATED)
-                        .thenApply(reached -> lifecycle.adapterLost());
+                        .thenApply(reached -> lifecycle.verdicts().adapterLost());
 
         killAdapter();
 
@@ -262,7 +268,7 @@ final class AdapterCrashRecoveryTest {
                 "the adapter verdict must already be set when TERMINATED commits, not written"
                         + " afterwards. captured: "
                         + significantEvents());
-        assertTrue(lifecycle.adapterLost(), "and it must still read true afterwards");
+        assertTrue(lifecycle.verdicts().adapterLost(), "and it must still read true afterwards");
     }
 
     /**
@@ -309,7 +315,7 @@ final class AdapterCrashRecoveryTest {
                         + ") must not log a crash warning. captured: "
                         + significantEvents());
         assertFalse(
-                lifecycle.adapterLost(),
+                lifecycle.verdicts().adapterLost(),
                 "nor may it set the exit verdict, or every clean shutdown would report a lost"
                         + " adapter");
     }
@@ -354,7 +360,7 @@ final class AdapterCrashRecoveryTest {
                 "nor a crash warning, whatever the code it carries. captured: "
                         + significantEvents());
         assertFalse(
-                lifecycle.adapterLost(),
+                lifecycle.verdicts().adapterLost(),
                 "nor may it set the exit verdict after TERMINATED has already been observed, which"
                         + " is the race that removed the game-keyed code from #357");
     }

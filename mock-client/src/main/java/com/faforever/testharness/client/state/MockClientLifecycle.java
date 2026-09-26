@@ -167,48 +167,14 @@ public final class MockClientLifecycle {
             label.wrap(new CompletableFuture<Void>().defaultExecutor());
 
     /**
-     * Whether the game process died in a way nobody asked for (WBS-5.2), as decided by {@link
-     * #classifyGameExit}'s final branch. Read by {@code RunCommand} to pick the harness's own exit
-     * code; see {@link #gameCrashed()}.
-     *
-     * <p>Written on the {@link #gameExit} completion handler and read on the main thread, so the
-     * two sides need an ordering. On the {@code GameExited} route they have one independently of
-     * this field: the write precedes {@code machine.receiveEvent}, which completes the {@code
-     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
-     * {@code get} that releases {@code RunCommand}. The FSM's own monitor is not what publishes it,
-     * since the reading thread never acquires that monitor.
-     *
-     * <p>{@code volatile} is for the other routes into TERMINATED, a lobby disconnect or the
-     * adapter exiting, which carry no such edge. It is worth being precise about what that buys: on
-     * those routes the classification may simply not have run yet, so the honest answer is {@code
-     * false}, and volatile makes that a defined stale read rather than an undefined one. The
-     * residual window is narrow and benign. A lobby drop returns {@code RUNTIME} from the check
-     * above this one anyway, and source-verified against java-ice-adapter's {@code
-     * GPGNetServer.onGpgnetConnectionLost}, the adapter does not exit when the game dies: it closes
-     * the client, reports {@code Disconnected} over RPC and keeps accepting. So a crashed game
-     * reaches TERMINATED through {@code GameExited} and nothing else.
+     * What this session found, as the verdicts {@code RunCommand} turns into {@code run}'s exit
+     * code. Recorded only by this lifecycle and its {@link SessionFailures}, each in the same
+     * branch that logs its cause; see {@link SessionVerdicts} for the ordering each one relies on.
      */
-    private volatile boolean gameCrashed;
+    private final SessionVerdicts verdicts = new SessionVerdicts();
 
-    /**
-     * Whether the ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix, #406), as
-     * decided by {@link #onAdapterExited}'s final branch. Read by {@code RunCommand} to pick the
-     * harness's own exit code; see {@link #adapterLost()}.
-     *
-     * <p>Unlike {@link #gameCrashed} this needs no argument about stale reads on the route that
-     * matters. It is written inside the {@code AdapterExited} transition action, which runs before
-     * TERMINATED's entry hook and before {@code commitTransition} completes the {@code
-     * stateReached(TERMINATED)} future, and {@code CompletableFuture.complete} happens-before the
-     * {@code get} that releases {@code RunCommand}. That ordering is the point of the card: #357
-     * read a verdict written on a continuation thread and exited 69 or 0 run to run.
-     *
-     * <p>{@code volatile} for the reads that do not follow that future, such as a harness or a test
-     * calling {@link #adapterLost()} directly.
-     */
-    private volatile boolean adapterLost;
-
-    /** Backs {@link #launchFailed()}; written only by {@link #launchFailure}. */
-    private volatile boolean launchFailed;
+    /** How a failure ends this session: its one cause line and its verdict, decided together. */
+    private final SessionFailures failures;
 
     /** Backs the safety-net window; a daemon thread, one per lifecycle. */
     private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
@@ -363,6 +329,7 @@ public final class MockClientLifecycle {
         for (var s : ClientState.values()) {
             states.put(s, new State(s.toString()));
         }
+        failures = new SessionFailures(teardown, verdicts, states.get(ClientState.TERMINATED));
         machine =
                 new StateMachine(
                         states.get(ClientState.CONNECTING), InvalidTransitionPolicy.IGNORE);
@@ -828,55 +795,13 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Whether this session's game process died in a way nobody asked for (WBS-5.2): a non-zero exit
-     * with no {@code GameEnded} observed and no harness-initiated teardown.
+     * What this session found: the verdicts {@code RunCommand} reads once {@code
+     * stateReached(TERMINATED)} completes, to pick {@code run}'s exit code.
      *
-     * <p>A boolean rather than the exit code, because {@link #gameExit()} already exposes the code
-     * and a second accessor for the same number would be duplicated state. What a caller cannot get
-     * from the code alone is the <em>judgement</em>: whether that code was a fault or an expected
-     * consequence of the harness's own SIGTERM. {@link #classifyGameExit} makes that call once, and
-     * this reports it.
-     *
-     * <p>Only meaningful once the game has actually exited. Reading it earlier returns {@code
-     * false}, which is the right answer for a game that is still running and the reason {@code
-     * RunCommand} reads it only after TERMINATED.
-     *
-     * @return {@code true} if the game exit was classified as abnormal
+     * @return this session's verdicts, live rather than a snapshot
      */
-    public boolean gameCrashed() {
-        return gameCrashed;
-    }
-
-    /**
-     * Whether this session's ICE adapter process died in a way nobody asked for (WBS-3.1.2.8-fix,
-     * #406): a non-zero exit observed while the session was live, outside harness-initiated
-     * teardown.
-     *
-     * <p>A boolean rather than the exit code for the same reason as {@link #gameCrashed()}: {@link
-     * #adapterExit()} already exposes the code, and what a caller cannot get from the code alone is
-     * whether that code was a fault or the harness's own SIGTERM.
-     *
-     * <p>Readable as soon as {@code stateReached(TERMINATED)} completes on the route a dying
-     * adapter takes, because the verdict is written by the transition action that drives that
-     * state; see {@link #adapterLost} for the ordering and its limits. Reading it earlier returns
-     * {@code false}, which is the right answer for an adapter that is still running.
-     *
-     * @return {@code true} if the adapter's exit was classified as abnormal
-     */
-    public boolean adapterLost() {
-        return adapterLost;
-    }
-
-    /**
-     * Whether this session's game launch failed on the way up (WBS-3.1.3.3-fix, #437), readable
-     * once {@code stateReached(TERMINATED)} completes. Never written once {@link SessionTeardown}
-     * has started, though a signal can still set it, since SIGINT reaches the adapter too, which is
-     * why {@code RunCommand} names no verdict on a signalled run.
-     *
-     * @return {@code true} if the adapter or game never came up before session teardown began
-     */
-    public boolean launchFailed() {
-        return launchFailed;
+    public SessionVerdicts verdicts() {
+        return verdicts;
     }
 
     /**
@@ -1092,7 +1017,7 @@ public final class MockClientLifecycle {
             // that already decided this exit was unaccounted for, rather than re-derived by the
             // caller: one predicate, so the warning above and the exit code cannot disagree about
             // whether the game crashed.
-            gameCrashed = true;
+            verdicts.recordGameCrashed();
         }
     }
 
@@ -1147,11 +1072,11 @@ public final class MockClientLifecycle {
      * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
      * logs.
      *
-     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, setting {@link
-     * #adapterLost} in the same branch that warns, so the two cannot disagree. That makes the
-     * {@link SessionTeardown#hasRun()} branch above load bearing rather than cosmetic: it is what
-     * keeps a teardown-owned exit from setting the flag, on both routes that arrive here with
-     * teardown already run. One is the TERMINATED self-loop through {@link
+     * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, recording {@link
+     * SessionVerdicts#adapterLost()} in the same branch that warns, so the two cannot disagree.
+     * That makes the {@link SessionTeardown#hasRun()} branch above load bearing rather than
+     * cosmetic: it is what keeps a teardown-owned exit from setting the flag, on both routes that
+     * arrive here with teardown already run. One is the TERMINATED self-loop through {@link
      * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
      * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
      * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
@@ -1178,7 +1103,7 @@ public final class MockClientLifecycle {
             // re-derived by the reader, so the warning above and the exit code cannot disagree
             // about whether the adapter was lost. Same arrangement classifyGameExit has with
             // gameCrashed.
-            adapterLost = true;
+            verdicts.recordAdapterLost();
         }
     }
 
@@ -1250,13 +1175,14 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "launchGame method called without a LaunchGame event, should be impossible");
         }
-        GameConfig gameConfig = ((LaunchGame) message).config();
-        // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults. The
-        // adapter half is what matters, since faf-ice-adapter copies its --id and --login straight
-        // into the CreateLobby frame that tells the game who it is.
-        LaunchIdentity identity =
-                new LaunchIdentity(sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
         try {
+            GameConfig gameConfig = ((LaunchGame) message).config();
+            // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults.
+            // The adapter half is what matters, since faf-ice-adapter copies its --id and --login
+            // straight into the CreateLobby frame that tells the game who it is.
+            LaunchIdentity identity =
+                    new LaunchIdentity(
+                            sessionIdentity.id(), sessionIdentity.login(), gameConfig.uid());
             SubprocessManager iceAdapter = iceLauncher.start(identity);
             // Register adapter for teardown.
             teardown.registerAdapterProcess(iceAdapter);
@@ -1356,27 +1282,21 @@ public final class MockClientLifecycle {
             // leaves it pending and the FSM reaches TERMINATED instead.
             gameLaunched.complete(gameConfig);
         } catch (IceAdapterLaunchException e) {
-            throw launchFailure("launch the ICE adapter", e.getMessage());
+            throw failures.launch("launch the ICE adapter", e.getMessage());
         } catch (CancellationException | ExecutionException e) {
-            throw launchFailure("connect or setup the ICE adapter", e.getMessage());
+            throw failures.launch("connect or setup the ICE adapter", e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             // Named for the adapter: every interruptible wait above is its connect or a setup call.
-            throw launchFailure("connect or setup the ICE adapter", "interrupted");
+            throw failures.launch("connect or setup the ICE adapter", "interrupted");
         } catch (MockGameLaunchException e) {
-            throw launchFailure("launch game binary", e.getMessage());
+            throw failures.launch("launch game binary", e.getMessage());
+        } catch (RuntimeException e) {
+            // Last, after CancellationException above. Contained by Transition instead, the throw
+            // would leave the session in IDLE with the adapter, and perhaps the game, still
+            // running, and nothing that moves it on (#439).
+            throw failures.launchDefect("launch the game session", e);
         }
-    }
-
-    private FailedTransitionException launchFailure(final String what, final String reason) {
-        // The line and the verdict are decided together, as in onAdapterExited, so they agree.
-        if (teardown.hasRun()) {
-            LOG.debug("Could not {} during session teardown ({})", what, reason);
-        } else {
-            LOG.warn("Could not {} ({})", what, reason);
-            launchFailed = true;
-        }
-        return new FailedTransitionException(reason, states.get(ClientState.TERMINATED));
     }
 
     /**
@@ -1460,22 +1380,23 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "hostGame method called without a HostGame event, should be impossible");
         }
-        JsonNode command = ((HostGame) message).command();
-        JsonNode mapNode = command.path("args").path(0);
-        if (!mapNode.isTextual()) {
-            throw new FailedTransitionException(
-                    "textual map argument not found in HostGame message",
-                    states.get(ClientState.TERMINATED));
-        }
-
-        String map = mapNode.asText();
         try {
-            iceConnection.call("hostGame", map).get();
+            JsonNode command = ((HostGame) message).command();
+            JsonNode mapNode = command.path("args").path(0);
+            if (!mapNode.isTextual()) {
+                throw failures.session(
+                        "host the game", "textual map argument not found in HostGame message");
+            }
+            iceConnection.call("hostGame", mapNode.asText()).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.call("host the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.session("host the game", "interrupted");
+        } catch (RuntimeException e) {
+            // As in launchGame (#439). Contained by Transition, the throw would leave the session
+            // in STARTING_GAME, where the game waits in LOBBY for a role that never comes.
+            throw failures.sessionDefect("host the game", e);
         }
     }
 
@@ -1484,22 +1405,25 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "joinGame method called without a JoinGame event should be impossible");
         }
-        JsonNode command = ((JoinGame) message).command();
-        JsonNode remoteLogin = command.path("args").path(0);
-        JsonNode remoteID = command.path("args").path(1);
-        if (!remoteLogin.isTextual() || !remoteID.isInt()) {
-            throw new FailedTransitionException(
-                    "textual remote login and remote id arguments not found in JoinGame message",
-                    states.get(ClientState.TERMINATED));
-        }
-
         try {
+            JsonNode command = ((JoinGame) message).command();
+            JsonNode remoteLogin = command.path("args").path(0);
+            JsonNode remoteID = command.path("args").path(1);
+            if (!remoteLogin.isTextual() || !remoteID.isInt()) {
+                throw failures.session(
+                        "join the game",
+                        "textual remote login and remote id arguments not found in JoinGame"
+                                + " message");
+            }
             iceConnection.call("joinGame", remoteLogin.asText(), remoteID.asInt()).get();
         } catch (ExecutionException e) {
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.call("join the game", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FailedTransitionException(e.getMessage(), states.get(ClientState.TERMINATED));
+            throw failures.session("join the game", "interrupted");
+        } catch (RuntimeException e) {
+            // As in hostGame (#439).
+            throw failures.sessionDefect("join the game", e);
         }
     }
 
@@ -1519,7 +1443,11 @@ public final class MockClientLifecycle {
      * {@link #hostGame} and {@link #joinGame} give theirs: the peer link cannot be set up from a
      * frame we could not read, and a session that silently carries on without one would report a
      * connection failure that the harness would have to attribute by hand. A frame that parses but
-     * whose RPC then fails ends the session too, asynchronously — see the comment on the call.
+     * whose RPC then fails ends the session too, asynchronously; see the comment on the call. Both
+     * record {@link SessionVerdicts#sessionFailed()} (WBS-3.1.3.3-fix, #445), except a call that
+     * failed because the adapter's connection closed, which is the adapter's finding. An unchecked
+     * throw anywhere in it is a defect that ends the session with that verdict as well, logged at
+     * ERROR with its trace, as in {@link #hostGame} and {@link #joinGame} (#439).
      *
      * <p><b>Blast radius, deliberately session-wide (#218 review).</b> Unlike {@link #hostGame} and
      * {@link #joinGame}, which fire once at role assignment, this edge fires once per peer as the
@@ -1531,9 +1459,26 @@ public final class MockClientLifecycle {
      * carrying on in a state nothing can describe.
      *
      * @param message the {@link ConnectToPeer} event; guaranteed by registration.
-     * @throws FailedTransitionException if the frame is malformed.
+     * @throws FailedTransitionException if the frame is malformed, or on an unchecked throw.
      */
     private void connectToPeer(Event message) throws FailedTransitionException {
+        try {
+            requestPeerRelay(message);
+        } catch (RuntimeException e) {
+            // As in hostGame and joinGame (#439). Contained by Transition, the throw would leave
+            // the session in HOSTING or JOINING without this peer's relay and with no verdict.
+            throw failures.sessionDefect("connect to a peer", e);
+        }
+    }
+
+    /**
+     * The body of {@link #connectToPeer}: reads the frame and asks the adapter for the peer's
+     * relay. Split out so that method can catch an unchecked throw from any of it (#439).
+     *
+     * @param message the {@link ConnectToPeer} event
+     * @throws FailedTransitionException if the frame is malformed
+     */
+    private void requestPeerRelay(Event message) throws FailedTransitionException {
         if (!(message instanceof ConnectToPeer)) {
             throw new AssertionError(
                     "connectToPeer method called without a ConnectToPeer event, should be"
@@ -1544,10 +1489,10 @@ public final class MockClientLifecycle {
         JsonNode remoteId = command.path("args").path(1);
         JsonNode offer = command.path("args").path(2);
         if (!remoteLogin.isTextual() || !remoteId.isInt() || !offer.isBoolean()) {
-            throw new FailedTransitionException(
+            throw failures.session(
+                    "connect to a peer",
                     "textual remote login, int remote id, and boolean offer arguments not found in"
-                            + " ConnectToPeer message",
-                    states.get(ClientState.TERMINATED));
+                            + " ConnectToPeer message");
         }
 
         LOG.info(
@@ -1595,13 +1540,14 @@ public final class MockClientLifecycle {
                                 LOG.debug(
                                         "connectToPeer for id={} failed during teardown ({})",
                                         peerId,
-                                        error.getMessage());
+                                        SessionFailures.describe(SessionFailures.unwrap(error)));
                                 return;
                             }
-                            LOG.warn(
-                                    "peer relay setup failed for id={} ({}); ending session",
-                                    peerId,
-                                    error.getMessage());
+                            // Judged by cause, as hostGame and joinGame are (#445), and recorded
+                            // before the session is ended, so RunCommand reads it. The exception
+                            // it returns is for a transition action to throw; this is a
+                            // continuation, so the session ends through ShutdownRequested.
+                            failures.call("set up the peer relay for id=" + peerId, error);
                             machine.receiveEvent(new ShutdownRequested());
                         },
                         labelledAsync);
@@ -1636,10 +1582,10 @@ public final class MockClientLifecycle {
      * SearchStopped} and TERMINATED/{@code Disconnected} self-loops exist.
      *
      * <p>Everywhere else this edge is registered the match has not started, and a malformed frame
-     * fails the transition into TERMINATED, the same treatment {@link #hostGame}, {@link #joinGame}
-     * and {@link #connectToPeer} give theirs. The frame is machine-generated with a fixed
-     * single-int shape, so one we cannot read means either our parsing is wrong or the server's has
-     * moved, and both are findings a harness should surface rather than swallow.
+     * ends the session with {@link SessionVerdicts#sessionFailed()}, as {@link #hostGame}, {@link
+     * #joinGame} and {@link #connectToPeer} do for theirs (#445). The frame is machine-generated
+     * with a fixed single-int shape, so one we cannot read means either our parsing is wrong or the
+     * server's has moved, and both are findings a harness should surface rather than swallow.
      *
      * <p><b>A failed RPC does not end the session, and that asymmetry with {@link #connectToPeer}
      * is deliberate.</b> That method ends the session on failure because without its relay the peer
@@ -1675,9 +1621,9 @@ public final class MockClientLifecycle {
                 LOG.warn("ignoring malformed DisconnectFromPeer during a live match");
                 return;
             }
-            throw new FailedTransitionException(
-                    "int remote id argument not found in DisconnectFromPeer message",
-                    states.get(ClientState.TERMINATED));
+            throw failures.session(
+                    "disconnect from a peer",
+                    "int remote id argument not found in DisconnectFromPeer message");
         }
 
         int peerId = remoteId.asInt();
@@ -1773,14 +1719,15 @@ public final class MockClientLifecycle {
      *
      * <p>Teardown itself is not done here — TERMINATED's entry hook owns it, so this only reports.
      *
+     * <p>{@link SessionFailures#matchCancelled} logs it and records {@link
+     * SessionVerdicts#sessionFailed()} (WBS-3.1.1.9-fix, #344), so the run exits {@code 70} rather
+     * than reading an abandoned match as a pass.
+     *
      * @param message the {@link MatchCancelled} event; guaranteed by registration.
      */
     private void onMatchCancelledAfterLaunch(Event message) {
         JsonNode command = ((MatchCancelled) message).command();
-        LOG.warn(
-                "match_cancelled after game_launch (game_id={}); the matched game will not start,"
-                        + " terminating",
-                command.path("game_id").asText("null"));
+        failures.matchCancelled(command.path("game_id").asText("null"));
     }
 
     /**

@@ -29,7 +29,8 @@ import picocli.CommandLine;
  * parks the calling thread until the JVM dies, and the JVM then exits with the signal's own code —
  * 130 for {@code SIGINT}, 143 for {@code SIGTERM}. The JDK behaviour behind this is pinned by
  * {@code SignalExitCodeEndToEndTest}, which exercises those semantics directly rather than through
- * this class.
+ * this class, and the whole path through this class and {@code run}, codes and log lines, by {@code
+ * RunShutdownEndToEndTest}.
  *
  * <p>That is the right outcome and the one {@code mock-client/README.md} documents, so this accepts
  * it rather than working around it. The alternative — capturing the computed code and calling
