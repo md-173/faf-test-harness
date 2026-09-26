@@ -493,7 +493,8 @@ before paying for a full session test, and to tell "the adapter never came up"
 apart from "the session logic is wrong".
 
 The adapter itself is less abstemious: on every launch `faf-ice-adapter` 3.3.14
-opens a telemetry WebSocket to `ice-telemetry.faforever.com`, which it has no
+opens a telemetry WebSocket, which the harness points at FAF's test service
+`ice-telemetry.faforever.xyz` rather than production, and which it has no
 flag to disable (`json-rpc-spec.md` §8). The verdict does not depend on it — a
 refused connection makes the adapter unregister its telemetry debugger and carry
 on — but on a network that blackholes rather than refuses, expect the adapter's
@@ -517,7 +518,7 @@ A pass looks like this (`[MockClient]` = the harness, `[ICEAdapter]` = the real
 jar's own output, trimmed here):
 
 ```text
-[MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
+[MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238 --telemetry-server wss://ice-telemetry.faforever.xyz
 [MockClient] ice-smoke: connecting to ICE adapter JSON-RPC at 127.0.0.1:7236 (within PT10.97S)
 [ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started
 [ICEAdapter] c.n.jjsonrpc.TcpServer - TCP Server started.

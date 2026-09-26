@@ -32,8 +32,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Unit tests for {@link IceAdapterLauncher}. The real {@code faf-ice-adapter} JAR is not available
- * in CI, so a stub shell script stands in for the binary (WBS-3.1.2.2 deliverables). Argument-list
- * construction is verified directly; spawn / capture / terminate are exercised against the stub.
+ * to {@code build}, which runs these unit tests, so a stub shell script stands in for the binary
+ * (WBS-3.1.2.2 deliverables). Argument-list construction is verified directly; spawn / capture /
+ * terminate are exercised against the stub.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class IceAdapterLauncherTest {
@@ -121,6 +122,8 @@ final class IceAdapterLauncherTest {
         assertEquals("7236", valueAfter(argv, "--rpc-port"));
         assertEquals("7237", valueAfter(argv, "--gpgnet-port"));
         assertEquals("7238", valueAfter(argv, "--lobby-port"));
+        // Pinned as a literal, so pointing it back at production fails here rather than in review.
+        assertEquals("wss://ice-telemetry.faforever.xyz", valueAfter(argv, "--telemetry-server"));
     }
 
     @Test

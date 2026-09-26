@@ -13,6 +13,12 @@ on:
   pull_request:
     branches: [ "main" ]
 
+# One run per pull request at a time: a newer push cancels the run of the commit it replaces. A push
+# to main is keyed on its own commit and never cancels, so every merge still gets its own full run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
 
@@ -71,6 +77,136 @@ jobs:
     #
     # - name: Build with Gradle 8.9
     #   run: gradle build
+
+  # The live tests that need no lobby and no FAF account, on every pull request (WBS-2.3.3.4, #451).
+  #
+  # build excludes every @Tag("integration") test. live-integration.yml runs only on dispatch,
+  # because its session needs access tokens minted by hand, and is advisory, because the shared
+  # lobby it logs into is outside our control. These four need neither. The adapter jar is pinned
+  # and checksummed, ClientGameLifecycleLiveTest runs its own scripted lobby, and the other three
+  # open no lobby connection at all. The adapter does dial a telemetry server, FAF's test one
+  # (IceAdapterLauncher passes --telemetry-server wss://ice-telemetry.faforever.xyz), but only after
+  # its GPGNet and RPC servers start, and it drops its telemetry debugger if that connect fails
+  # (3.3.14: IceAdapter.start, TelemetryDebugger.startupComplete), so an unreachable telemetry
+  # server cannot fail them. No FAF account, lobby or secret decides the verdict, so the job runs
+  # on every pull request, forks included.
+  #
+  # A required status check on main (CONTRIBUTING.md section 4): a pull request cannot merge until
+  # it passes. It was measured first, on #458 (2026-09-24): 30 of 30 job runs passed (three rounds
+  # of ten legs), each 49 to 75 s beside build's roughly 4 minutes. That still allows a flake rate
+  # of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of
+  # live-integration.yml's live-tests (one-sided 95%), so if this job goes red on two pull requests
+  # within 30 days for reasons unrelated to their change, it becomes advisory and the flake gets a
+  # fix card. Demoting it takes an admin removing it from the ruleset's required checks, which no
+  # pull request can do, plus a job-level continue-on-error and a note in CONTRIBUTING.md section 3.
+  #
+  # The ruleset requires a check named live-tests, and a job without a name: key reports its id as
+  # the check name. Renaming this job, or giving it a name:, would leave that required check
+  # waiting forever on the pull request making the change, which could not merge until an admin
+  # updated the ruleset.
+  #
+  # The one known timing risk is the wait before the first GPGNet frame (gpgnet-format-spec.md
+  # section 8.1): mock-game's own 500 ms, which ClientGameLifecycleLiveTest's game runs with. The
+  # measured runs had at least 477 ms of it to spare. GpgNetConnectionLiveSmokeTest has waited on
+  # the adapter's own log lines instead since #225. Adapter output showing "gameState must not
+  # change to null" is that race; unless the pull request changed that wait, the order the client
+  # and game connect in, or the pinned adapter, treat it as a flake. The same signature with no
+  # "GPGNetClient has connected" line is section 8.1's condition 1 instead: no JSON-RPC peer ever
+  # connected, which is a real ordering bug. Green runs also log telemetry noise that means
+  # nothing on its own: "Error on sending message object" and "Telemetry websocket closed (reason:
+  # Internal Error)". A status or setIceServers timeout can be slow DNS: 3.3.14 resolves three
+  # public STUN hostnames on first use (GameSession), inside the client's 5 s call budget.
+  #
+  # live-integration.yml runs the same four on dispatch too, so that one dispatch still covers
+  # every live test CI runs, on any ref, and release.yml runs them before it builds anything
+  # (#375). Keep their class lists and the ones below in step: a list left stale after a rename
+  # fails that workflow's check.
+  live-tests:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    env:
+      # Turns each live test's self-skip on a missing binary into a failure naming what is missing.
+      FAF_LIVE_REQUIRED: "true"
+      # downloadIceAdapter writes the jar to the repository root. Naming it explicitly means a
+      # broken download fails at the probe with the variable named, rather than resolving some
+      # other jar that happens to be on a relative path.
+      FAF_ICE_ADAPTER_JAR: ${{ github.workspace }}/faf-ice-adapter.jar
+
+    steps:
+    - uses: actions/checkout@v7
+      timeout-minutes: 5
+      with:
+        # This job runs a third-party binary (the adapter jar) and needs no git credentials.
+        persist-credentials: false
+    - name: Set up JDK 21
+      uses: actions/setup-java@v6
+      timeout-minutes: 5
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    # Held at v5 rather than v6 for the licensing reason the build job gives; keep every job on the
+    # same pinned commit.
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      timeout-minutes: 5
+
+    - name: Download the pinned faf-ice-adapter jar
+      run: ./gradlew downloadIceAdapter
+      timeout-minutes: 5
+
+    # --continue, so a failure in mock-client's live tests does not stop mock-game's from running:
+    # without it, a red mock-client test hides whether the GPGNet handshake still works.
+    - name: Run the live tests that need no lobby
+      timeout-minutes: 20
+      run: |
+        ./gradlew --continue \
+          :mock-client:integrationTest \
+            --tests '*.IceSmokeLiveTest' \
+            --tests '*.IceAdapterConnectionLiveSmokeTest' \
+            --tests '*.ClientGameLifecycleLiveTest' \
+          :mock-game:integrationTest \
+            --tests '*.GpgNetConnectionLiveSmokeTest'
+
+    # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
+    # would leave its --tests pattern matching nothing while the others still ran, and the job
+    # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
+    # would have failed in never existed. The script reads the JUnit XML instead; release.yml's and
+    # live-integration.yml's live-tests jobs call it too, each with the classes it ran.
+    - name: Check every expected live test ran
+      if: success()
+      timeout-minutes: 2
+      run: |
+        scripts/ci/check-live-tests-ran.sh \
+          mock-client:com.faforever.testharness.client.cli.IceSmokeLiveTest \
+          mock-client:com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest \
+          mock-client:com.faforever.testharness.client.state.ClientGameLifecycleLiveTest \
+          mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
+
+    # On failure or cancellation: a green run has nothing to explain, but a job that hits its own
+    # timeout-minutes ends cancelled rather than failed, and a hang is where the evidence matters
+    # most. The step timeouts add up to more than the job's, so that cap can fire first. The JSONL
+    # logs are what makes a live failure readable (the adapter's and the game's captured output
+    # next to the client's own lines), and the glob keeps rolled archives (.jsonl.<date>.<n>.gz)
+    # too, since mock-client's integrationTest logs at DEBUG. Not build's test-reports-* name:
+    # artifact names are unique within a run, so if both jobs failed, the second upload would be
+    # refused.
+    - name: Upload test reports and JSONL logs
+      if: failure() || cancelled()
+      uses: actions/upload-artifact@v7
+      timeout-minutes: 5
+      with:
+        name: live-test-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+        path: |
+          **/build/reports/tests
+          **/build/test-results
+          **/logs/*.jsonl*
+        retention-days: 14
+        if-no-files-found: warn
 
   dependency-submission:
 

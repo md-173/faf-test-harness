@@ -1,8 +1,9 @@
 # Live integration checks against the FAF test environment (WBS-2.3.3.1, #364).
 #
-# ci.yml runs ./gradlew build, which excludes every @Tag("integration") test, so nothing there
-# shows the client, adapter and game path working on a GitHub runner. This workflow does, and it is
-# the shape of the job a consumer (first: the java-ice-adapter maintainer) runs in their own CI.
+# ci.yml's build excludes every @Tag("integration") test, and its live-tests job (WBS-2.3.3.4) runs
+# only the four that need no lobby, so nothing there shows a session through the live lobby. This
+# workflow does, and it is the shape of the job a consumer (first: the java-ice-adapter maintainer)
+# runs in their own CI.
 # Two steps differ for them, and #87's runbook section carries that variant: they download the
 # mock-client and mock-game jars from releases/latest instead of building them here, and they point
 # --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
@@ -75,11 +76,15 @@ jobs:
       # authHandshakeYieldsTerminalReply) read .secrets/refresh_token*.txt: a refresh token rotates
       # on every use, so using one here would spend a developer's local copy. connectSucceeds needs
       # no credential and is worth running: it separates "this runner cannot reach the lobby at all"
-      # from a credential failure in the session job.
+      # from a credential failure in the session job. The four also run on every pull request, in
+      # ci.yml's live-tests job; they stay here so that one dispatch covers every live test CI runs,
+      # on any ref. Keep this list and that job's in step. --continue for the reason ci.yml gives,
+      # and more so here: connectSucceeds fails whenever the shared lobby is down, and without it
+      # Gradle would then never start mock-game's GPGNet test.
       - name: Run the live tests that need no account
         timeout-minutes: 20
         run: |
-          ./gradlew \
+          ./gradlew --continue \
             :mock-client:integrationTest \
               --tests '*.IceSmokeLiveTest' \
               --tests '*.IceAdapterConnectionLiveSmokeTest' \
@@ -91,47 +96,27 @@ jobs:
       # Gradle only fails a task when its whole filter matched nothing, so a renamed or moved class
       # would leave its --tests pattern matching nothing while the others still ran, and the job
       # would pass having run less than it says. FAF_LIVE_REQUIRED cannot catch that: the test it
-      # would have failed in never existed. Check the JUnit XML instead.
+      # would have failed in never existed. The script reads the JUnit XML instead; ci.yml's and
+      # release.yml's live-tests jobs call it too, each with the classes it ran.
       - name: Check every expected live test ran
         if: success()
         timeout-minutes: 2
         run: |
-          status=0
-          check() {
-            xml="$1/build/test-results/integrationTest/TEST-$2.xml"
-            if [ ! -f "$xml" ]; then
-              echo "::error::$2 did not run: no $xml (did the class move or get renamed?)"
-              status=1
-              return
-            fi
-            # `|| true` on each: the step runs under `bash -e`, and an assignment whose pipeline
-            # ends in a grep that matches nothing would abort it, losing the message below that
-            # names the offending class. The `${var:-0}` defaults then turn "no match" into a
-            # reported failure instead of a bare non-zero exit.
-            suite=$(grep -o '<testsuite [^>]*>' "$xml" | head -1 || true)
-            tests=$(printf '%s' "$suite" | grep -o 'tests="[0-9]*"' | grep -o '[0-9]*' || true)
-            skipped=$(printf '%s' "$suite" | grep -o 'skipped="[0-9]*"' | grep -o '[0-9]*' || true)
-            if [ "${tests:-0}" -lt 1 ] || [ "${skipped:-0}" -ne 0 ]; then
-              echo "::error::$2 ran ${tests:-0} test(s) with ${skipped:-0} skipped; expected at least one run and none skipped"
-              status=1
-              return
-            fi
-            echo "$2: ${tests} test(s), none skipped"
-          }
-          check mock-client com.faforever.testharness.client.cli.IceSmokeLiveTest
-          check mock-client com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest
-          check mock-client com.faforever.testharness.client.state.ClientGameLifecycleLiveTest
-          check mock-client com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest
-          check mock-game com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
-          exit $status
+          scripts/ci/check-live-tests-ran.sh \
+            mock-client:com.faforever.testharness.client.cli.IceSmokeLiveTest \
+            mock-client:com.faforever.testharness.client.ice.IceAdapterConnectionLiveSmokeTest \
+            mock-client:com.faforever.testharness.client.state.ClientGameLifecycleLiveTest \
+            mock-client:com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest \
+            mock-game:com.faforever.testharness.game.gpgnet.GpgNetConnectionLiveSmokeTest
 
-      # Failure only, as in ci.yml: a green run has nothing to explain. The JSONL logs are what
+      # On failure or cancellation, as in ci.yml: a green run has nothing to explain, and a job that
+      # hits its own timeout-minutes ends cancelled rather than failed. The JSONL logs are what
       # makes a live failure readable (the adapter's and the game's captured output next to the
       # client's own lines), and the runner is destroyed with them otherwise. The glob keeps rolled
       # archives (.jsonl.<date>.<n>.gz) too, since this task logs at DEBUG. Nothing in this job
       # holds a credential: the tests it runs have no account.
       - name: Upload test reports and JSONL logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
@@ -484,9 +469,10 @@ jobs:
 
       # Only the session's own JSONL logs: the client's lines with every adapter's and game's
       # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are
-      # deleted above, so no path here can reach them.
+      # deleted above, so no path here can reach them. Cancellation counts, as in the runbook's
+      # consumer job: a run that hits the job's timeout-minutes ends cancelled, not failed.
       - name: Upload the session logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
