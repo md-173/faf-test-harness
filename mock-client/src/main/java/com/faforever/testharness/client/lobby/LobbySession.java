@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
@@ -8,6 +9,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 
 /**
  * Orchestrates a single lobby session end to end: open the transport, run the authentication
@@ -60,6 +62,13 @@ public final class LobbySession {
     private volatile LobbyConnection.DisconnectEvent disconnectEvent;
 
     /**
+     * Completed with the disconnect event before {@link #disconnected} is released, so a start the
+     * lobby's close fails has failed by then (#473).
+     */
+    private final CompletableFuture<LobbyConnection.DisconnectEvent> disconnect =
+            new CompletableFuture<>();
+
+    /**
      * Bind a session to a not-yet-connected transport. Installs the connection's disconnect
      * listener and constructs the handshake; no I/O happens until {@link #connectAndAuthenticate}.
      *
@@ -99,6 +108,7 @@ public final class LobbySession {
         connection.onDisconnect(
                 event -> {
                     this.disconnectEvent = event;
+                    disconnect.complete(event);
                     disconnected.countDown();
                 });
     }
@@ -124,10 +134,13 @@ public final class LobbySession {
      *
      * @param tokens source of the JWT access token for the {@code auth} step
      * @return future completing with the hydrated session identity, or exceptionally with the
-     *     connect/handshake failure (e.g. {@link AuthenticationException})
+     *     connect/handshake failure (e.g. {@link AuthenticationException}), the lobby closing the
+     *     connection before {@code welcome} included
      */
     public CompletableFuture<SessionState> start(final TokenSource tokens) {
-        return connection.connect().thenCompose(v -> stateSync.hydrate(handshake.perform(tokens)));
+        return connection
+                .connect()
+                .thenCompose(v -> stateSync.hydrate(welcomeOrClose(handshake.perform(tokens))));
     }
 
     /**
@@ -140,8 +153,9 @@ public final class LobbySession {
      * @param handshakeTimeout bound on the {@code ask_session → welcome} exchange
      * @return the hydrated session identity from the {@code welcome} payload
      * @throws TimeoutException if the connect or the handshake exceeds its bound
-     * @throws ExecutionException if the connect, handshake, or welcome decode fails; the cause is
-     *     the underlying failure (e.g. {@link AuthenticationException})
+     * @throws ExecutionException if the connect, handshake, or welcome decode fails, or the lobby
+     *     closes the connection first; the cause is the underlying failure (e.g. {@link
+     *     AuthenticationException})
      * @throws InterruptedException if the calling thread is interrupted while waiting
      */
     public SessionState connectAndAuthenticate(
@@ -151,8 +165,57 @@ public final class LobbySession {
             throws TimeoutException, ExecutionException, InterruptedException {
         connection.connect().get(connectTimeout.toMillis(), TimeUnit.MILLISECONDS);
         return stateSync
-                .hydrate(handshake.perform(tokens))
+                .hydrate(welcomeOrClose(handshake.perform(tokens)))
                 .get(handshakeTimeout.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * The handshake's {@code welcome}, or the failure {@link #closedBeforeWelcome} gives the
+     * disconnect if that comes first (#473). faf-server ends a login it refuses by closing the
+     * connection, after an {@code invalid} or an error {@code notice} or with nothing, and without
+     * this the start waited out its caller's timeout although the session had already ended.
+     *
+     * @param welcome the handshake's result
+     * @return the result, or the disconnect's failure, whichever comes first
+     */
+    private CompletableFuture<JsonNode> welcomeOrClose(final CompletableFuture<JsonNode> welcome) {
+        return welcome.applyToEither(
+                disconnect.thenCompose(LobbySession::closedBeforeWelcome), Function.identity());
+    }
+
+    /**
+     * What a disconnect before {@code welcome} does to the start (#473). The lobby's close or drop
+     * fails it, naming how the connection ended. The session's own close leaves it be, since before
+     * {@code welcome} that close is a signal's, which must not read as a failure, and so does a
+     * failed connect, which fails the start with its own cause (#455).
+     *
+     * @param event the disconnect
+     * @return a failed future for the lobby's close or drop, or one that never completes
+     */
+    static CompletableFuture<JsonNode> closedBeforeWelcome(
+            final LobbyConnection.DisconnectEvent event) {
+        String closeMessage = event.closeMessage();
+        String ending =
+                switch (event.reason()) {
+                    case CLEAN_CLOSE ->
+                            "the lobby closed the connection before welcome (code "
+                                    + event.statusCode()
+                                    + (closeMessage == null || closeMessage.isBlank()
+                                            ? ""
+                                            : ", reason '" + closeMessage + "'")
+                                    + ")";
+                    case ABRUPT_CLOSE ->
+                            event.error() != null
+                                    ? "the lobby connection dropped before welcome"
+                                    : "the lobby connection dropped before welcome (code "
+                                            + event.statusCode()
+                                            + ", no close frame)";
+                    case LOCAL_CLOSE, CONNECT_FAILED -> null;
+                };
+        return ending == null
+                ? new CompletableFuture<>()
+                : CompletableFuture.failedFuture(
+                        new AuthenticationException(ending, event.error()));
     }
 
     /**
