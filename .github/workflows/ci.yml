@@ -91,25 +91,30 @@ jobs:
   # server cannot fail them. No FAF account, lobby or secret decides the verdict, so the job runs
   # on every pull request, forks included.
   #
-  # Treated as a gate: under CONTRIBUTING.md section 4 a pull request is ready to merge only when
-  # every CI check is green, this one included. It was measured first, on #458 (2026-09-24): 30 of
-  # 30 job runs passed (three rounds of ten legs), each 49 to 75 s beside build's roughly 4
-  # minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting
-  # 13 earlier passes of live-integration.yml's live-tests (one-sided 95%), so if this job goes red
-  # on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory
-  # (job-level continue-on-error, and CONTRIBUTING.md section 3 says so) and the flake gets a fix
-  # card.
+  # A required status check on main (CONTRIBUTING.md section 4): a pull request cannot merge until
+  # it passes. It was measured first, on #458 (2026-09-24): 30 of 30 job runs passed (three rounds
+  # of ten legs), each 49 to 75 s beside build's roughly 4 minutes. That still allows a flake rate
+  # of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of
+  # live-integration.yml's live-tests (one-sided 95%), so if this job goes red on two pull requests
+  # within 30 days for reasons unrelated to their change, it becomes advisory and the flake gets a
+  # fix card. Demoting it takes an admin removing it from the ruleset's required checks, which no
+  # pull request can do, plus a job-level continue-on-error and a note in CONTRIBUTING.md section 3.
+  #
+  # The ruleset requires a check named live-tests, and a job without a name: key reports its id as
+  # the check name. Renaming this job, or giving it a name:, would leave that required check
+  # waiting forever and block every pull request until an admin updated the ruleset.
   #
   # The one known timing risk is the wait before the first GPGNet frame (gpgnet-format-spec.md
-  # section 8.1): mock-game's own 500 ms, and GpgNetConnectionLiveSmokeTest's until #225 replaces
-  # it. The measured runs had at least 477 ms of it to spare. Adapter output showing "gameState
-  # must not change to null" is that race; unless the pull request changed that wait, the order
-  # the client and game connect in, or the pinned adapter, treat it as a flake. The same signature
-  # with no "GPGNetClient has connected" line is section 8.1's condition 1 instead: no JSON-RPC
-  # peer ever connected, which is a real ordering bug. Green runs also log telemetry noise that
-  # means nothing on its own: "Error on sending message object" and "Telemetry websocket closed
-  # (reason: Internal Error)". A status or setIceServers timeout can be slow DNS: 3.3.14 resolves
-  # three public STUN hostnames on first use (GameSession), inside the client's 5 s call budget.
+  # section 8.1): mock-game's own 500 ms, which ClientGameLifecycleLiveTest's game runs with. The
+  # measured runs had at least 477 ms of it to spare. GpgNetConnectionLiveSmokeTest has waited on
+  # the adapter's own log lines instead since #225. Adapter output showing "gameState must not
+  # change to null" is that race; unless the pull request changed that wait, the order the client
+  # and game connect in, or the pinned adapter, treat it as a flake. The same signature with no
+  # "GPGNetClient has connected" line is section 8.1's condition 1 instead: no JSON-RPC peer ever
+  # connected, which is a real ordering bug. Green runs also log telemetry noise that means
+  # nothing on its own: "Error on sending message object" and "Telemetry websocket closed (reason:
+  # Internal Error)". A status or setIceServers timeout can be slow DNS: 3.3.14 resolves three
+  # public STUN hostnames on first use (GameSession), inside the client's 5 s call budget.
   #
   # live-integration.yml runs the same four on dispatch too, so that one dispatch still covers
   # every live test CI runs, on any ref, and release.yml runs them before it builds anything
