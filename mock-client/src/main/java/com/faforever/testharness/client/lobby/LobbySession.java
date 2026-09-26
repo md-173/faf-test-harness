@@ -4,12 +4,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Orchestrates a single lobby session end to end: open the transport, run the authentication
@@ -18,10 +21,10 @@ import java.util.function.Function;
  * LobbyHandshake} (auth, WBS-3.1.1.2), and {@link WelcomeStateSync} (welcome, WBS-3.1.1.3) — that
  * the {@code run} command drives (WBS-3.1.1.4).
  *
- * <p>It adds no protocol logic of its own. In particular the idle heartbeat is free: {@link
- * LobbyConnection} already auto-replies {@code pong} to every server {@code ping}, so "stay idle
- * and keep the connection alive" is simply {@link #awaitDisconnect()} blocking on the disconnect
- * latch.
+ * <p>It adds no protocol logic of its own, bar logging the lobby's {@code notice} frames (#473). In
+ * particular the idle heartbeat is free: {@link LobbyConnection} already auto-replies {@code pong}
+ * to every server {@code ping}, so "stay idle and keep the connection alive" is simply {@link
+ * #awaitDisconnect()} blocking on the disconnect latch.
  *
  * <p>The session installs one of the connection's {@link
  * LobbyConnection#onDisconnect(java.util.function.Consumer) disconnect listeners} (they are
@@ -45,6 +48,16 @@ import java.util.function.Function;
  * @see WelcomeStateSync
  */
 public final class LobbySession {
+
+    /** Logs the lobby's notices; see {@link #logNotice}. */
+    private static final Logger LOG = LoggerFactory.getLogger(LobbySession.class);
+
+    /**
+     * The {@code notice} styles logged at WARN: faf-server sends an error before it ends a login it
+     * refuses, a kick before it drops a player, and a kill to close the player's game; the real
+     * client shows an error and a warning as such. Every other style, info included, is INFO.
+     */
+    private static final Set<String> WARNING_STYLES = Set.of("error", "warning", "kick", "kill");
 
     /** Underlying transport, bound to the lobby endpoint and owned by this session. */
     private final LobbyConnection connection;
@@ -111,6 +124,29 @@ public final class LobbySession {
                     disconnect.complete(event);
                     disconnected.countDown();
                 });
+        connection.registerHandler("notice", LobbySession::logNotice);
+    }
+
+    /**
+     * Logs a {@code notice}, the lobby's message for the player, on one line (#473). It is where
+     * faf-server says why it ends a login, such as a ban or a database outage, and it greets every
+     * login whose user agent is not the official client's with an info notice. The text used to be
+     * dropped, with the frame logged only as an unhandled command.
+     *
+     * @param msg the {@code notice} frame
+     */
+    private static void logNotice(final JsonNode msg) {
+        String style = msg.path("style").asText("info");
+        String text = msg.path("text").asText("").strip().replaceAll("\\s+", " ");
+        String line =
+                text.isEmpty()
+                        ? "lobby notice (" + style + ")"
+                        : "lobby notice (" + style + "): " + text;
+        if (WARNING_STYLES.contains(style)) {
+            LOG.warn(line);
+        } else {
+            LOG.info(line);
+        }
     }
 
     /**

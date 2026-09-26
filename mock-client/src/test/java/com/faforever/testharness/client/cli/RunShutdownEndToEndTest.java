@@ -239,7 +239,8 @@ final class RunShutdownEndToEndTest {
     /**
      * A lobby that closes the connection before {@code welcome} ends the run with {@code 70} at
      * once, with one ERROR naming the close (#473), as faf-server ends a banned player's login: an
-     * error {@code notice}, then a Close frame 1000 with no reason.
+     * error {@code notice}, then a Close frame 1000 with no reason. The notice's text, which says
+     * why, is logged as a WARN on one line before the close is handled.
      */
     @Test
     void aBannedLoginExits70NamingTheClose() throws Exception {
@@ -251,9 +252,7 @@ final class RunShutdownEndToEndTest {
         assertExitCode(ExitCodes.RUNTIME);
         assertLoginEndedAtOnce(
                 "the lobby closed the connection before welcome (code 1000)",
-                List.of(
-                        "unhandled lobby command 'notice'"
-                                + " (will be silent for subsequent occurrences)"));
+                List.of("lobby notice (error): You are banned from FAF forever. Reason: rig"));
     }
 
     /**

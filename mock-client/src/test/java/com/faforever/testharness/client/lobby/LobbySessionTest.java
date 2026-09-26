@@ -7,12 +7,17 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.lobby.LobbyConnection.DisconnectEvent;
 import com.faforever.testharness.client.lobby.LobbyConnection.DisconnectReason;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
@@ -23,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.slf4j.LoggerFactory;
 
 /**
  * Unit tests for {@link LobbySession} — the connect → authenticate → welcome → idle orchestration —
@@ -266,6 +272,53 @@ final class LobbySessionTest {
 
         assertEquals(DisconnectReason.LOCAL_CLOSE, session.awaitDisconnect().reason());
         assertFalse(start.isDone(), "our own close must not settle the start");
+    }
+
+    /**
+     * Each {@code notice} is logged with its text on one line (#473): at WARN for an error, which
+     * faf-server sends before ending a login it refuses, and a kick, and at INFO otherwise, the
+     * greeting faf-server gives an unofficial client included. The frames go ahead of a close,
+     * which flushes them, and the close is handled after every frame before it, so the log is
+     * complete once the disconnect is seen.
+     */
+    @Test
+    void aNoticeIsLoggedWithItsTextOnOneLine() throws Exception {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger logger = context.getLogger(LobbySession.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.setContext(context);
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            lobby = new LobbyConnection(server.uri());
+            session = new LobbySession(lobby, "uid-fixture", "1.2.3", "mock-agent");
+            session.start(fixedToken("jwt-abc"));
+            server.pollReceived(5, TimeUnit.SECONDS); // ask_session
+
+            server.broadcastText(
+                    "{\"command\":\"notice\",\"style\":\"info\","
+                            + "\"text\":\"You are using an unofficial client version!\"}");
+            server.broadcastText(
+                    "{\"command\":\"notice\",\"style\":\"error\","
+                            + "\"text\":\"You are banned.\\n\\nReason: rig\"}");
+            server.broadcastText("{\"command\":\"notice\",\"style\":\"kick\"}");
+            server.broadcastText("{\"command\":\"notice\",\"text\":\"no style\"}");
+            server.closeAllClean(1000, "");
+            session.awaitDisconnect();
+
+            assertEquals(
+                    List.of(
+                            "INFO lobby notice (info): You are using an unofficial client version!",
+                            "WARN lobby notice (error): You are banned. Reason: rig",
+                            "WARN lobby notice (kick)",
+                            "INFO lobby notice (info): no style"),
+                    appender.list.stream()
+                            .map(event -> event.getLevel() + " " + event.getFormattedMessage())
+                            .toList());
+        } finally {
+            appender.stop();
+            logger.detachAppender(appender);
+        }
     }
 
     private static Throwable failure(final DisconnectEvent event) {
