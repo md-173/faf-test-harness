@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 import picocli.CommandLine.Model.CommandSpec;
@@ -147,6 +148,61 @@ final class SessionFaultOptionsTest {
     }
 
     @Test
+    void crashPeerNamesAJoinerByLabel() {
+        Parsed parsed = parse(Map.of(), "--crash-peer=C");
+
+        assertEquals(OptionalInt.of(2), parsed.options().crashPeer(parsed.session(), PEERS));
+    }
+
+    @Test
+    void crashPeerOnTheHostIsRefused() {
+        ParameterException e =
+                assertThrows(ParameterException.class, () -> resolve(Map.of(), "--crash-peer=A"));
+
+        assertTrue(e.getMessage().contains("must name a joiner, B to C"), e.getMessage());
+    }
+
+    @Test
+    void crashPeerOutsideTheSessionIsRefused() {
+        ParameterException e =
+                assertThrows(ParameterException.class, () -> resolve(Map.of(), "--crash-peer=D"));
+
+        assertTrue(e.getMessage().contains("the labels are A to C"), e.getMessage());
+    }
+
+    @Test
+    void crashPeerWithAnyOtherCrashIsRefused() {
+        ParameterException root =
+                assertThrows(
+                        ParameterException.class,
+                        () ->
+                                resolve(
+                                        Map.of(),
+                                        "--crash-peer=B",
+                                        "--mock-game-crash-after-seconds=0"));
+        ParameterException list =
+                assertThrows(
+                        ParameterException.class,
+                        () ->
+                                resolve(
+                                        Map.of(),
+                                        "--crash-peer=B",
+                                        "--peer-mock-game-crash-after-seconds=-1,-1,5"));
+
+        assertTrue(root.getMessage().contains("cannot share a run"), root.getMessage());
+        assertTrue(list.getMessage().contains("cannot share a run"), list.getMessage());
+    }
+
+    @Test
+    void crashPeerLeavesTheOtherFaultsAlone() {
+        List<MockClientConfig> peers =
+                resolve(Map.of(), "--crash-peer=B", "--peer-mock-game-udp-drop-percent=0,0,50");
+
+        assertEquals(List.of(0, 0, 50), drops(peers));
+        assertEquals(List.of(-1, -1, -1), crashes(peers));
+    }
+
+    @Test
     void describeNamesOnlyThePeersWithAFault() {
         List<MockClientConfig> peers =
                 resolve(Map.of(), "--peer-mock-game-udp-drop-percent=0,0,50");
@@ -164,17 +220,38 @@ final class SessionFaultOptionsTest {
      */
     private static List<MockClientConfig> resolve(
             final Map<String, String> env, final String... args) {
+        Parsed parsed = parse(env, args);
+        return parsed.options().apply(parsed.session(), Collections.nCopies(PEERS, parsed.base()));
+    }
+
+    /**
+     * A parsed {@code session} invocation.
+     *
+     * @param session the {@code session} command's spec
+     * @param options its fault options
+     * @param base the root options as one validated config
+     */
+    private record Parsed(
+            CommandSpec session, SessionFaultOptions options, MockClientConfig base) {}
+
+    /**
+     * Parses {@code session} with the minimal root flags plus {@code args}.
+     *
+     * @param env the environment layer
+     * @param args root fault flags and {@code session} fault options
+     * @return the parsed invocation
+     */
+    private static Parsed parse(final Map<String, String> env, final String... args) {
         List<String> argv = new ArrayList<>(List.of(CliTestFixtures.withSubcommand("session")));
         argv.addAll(List.of(args));
         String[] array = argv.toArray(new String[0]);
         CommandLine root = ConfigLoader.newCommandLine(array, env);
         ParseResult parsed = root.parseArgs(array);
         CommandSpec session = parsed.subcommand().commandSpec();
-        SessionFaultOptions options =
-                (SessionFaultOptions) session.mixins().get("faults").userObject();
-        MockClientConfig base =
-                ((MockClientCli) root.getCommand()).toValidatedConfig(root.getCommandSpec());
-        return options.apply(session, Collections.nCopies(PEERS, base));
+        return new Parsed(
+                session,
+                (SessionFaultOptions) session.mixins().get("faults").userObject(),
+                ((MockClientCli) root.getCommand()).toValidatedConfig(root.getCommandSpec()));
     }
 
     private static List<Integer> drops(final List<MockClientConfig> peers) {

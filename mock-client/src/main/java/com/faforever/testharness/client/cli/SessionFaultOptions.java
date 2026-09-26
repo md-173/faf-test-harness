@@ -5,6 +5,7 @@ import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.session.MultiPeerSession;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.ToIntFunction;
@@ -30,12 +31,17 @@ import picocli.CommandLine.ParameterException;
  *   <li>A per-peer list gives each peer its own value, host first, one value per peer.
  * </ul>
  *
- * <p>A crash set here is not expected: a peer whose game dies fails the session, as it always has.
+ * <p>A crash set there is not expected: a peer whose game dies fails the session, as it always has.
+ * {@value #CRASH_PEER_FLAG} is the one expected crash (WBS-5.2.1): it names a joiner, and the
+ * session times that crash itself and plays on through it.
  */
 final class SessionFaultOptions {
 
     /** Limits the root fault flags to the named peers. */
     static final String FAULT_PEER_FLAG = "--fault-peer";
+
+    /** Names the joiner whose deliberate crash the session plays on through. */
+    static final String CRASH_PEER_FLAG = "--crash-peer";
 
     /** One ICE relay delay per peer. */
     static final String PEER_RELAY_DELAY_FLAG = "--peer-ice-relay-delay-ms";
@@ -60,6 +66,17 @@ final class SessionFaultOptions {
                             + "host, B the first joiner, and so on. Repeat the flag or separate "
                             + "labels with commas. Unset, those flags reach every peer.")
     private List<String> faultPeers = new ArrayList<>();
+
+    /** The joiner whose game crashes deliberately after launch, by label; {@code null} for none. */
+    @Option(
+            names = CRASH_PEER_FLAG,
+            paramLabel = "<label>",
+            description =
+                    "Crash this joiner's game after the match has launched, and pass only if the "
+                            + "survivors play on (B is the first joiner). The session launches the "
+                            + "host and times the crash itself, so the run takes a few minutes. "
+                            + "Cannot be combined with any other crash.")
+    private String crashPeer;
 
     /** One ICE relay delay per peer, host first. */
     @Option(
@@ -188,6 +205,20 @@ final class SessionFaultOptions {
             }
             anyRootFault |= rootOn;
         }
+        if (crashPeer(spec, peers).isPresent()) {
+            boolean anyCrash =
+                    root.mockGameCrashAfterSeconds() >= 0
+                            || peerCrashSeconds.stream().anyMatch(seconds -> seconds >= 0);
+            if (anyCrash) {
+                throw new ParameterException(
+                        spec.commandLine(),
+                        CRASH_PEER_FLAG
+                                + " times its own crash and cannot share a run with "
+                                + "--mock-game-crash-after-seconds or "
+                                + PEER_CRASH_FLAG
+                                + ", whose crash would fail the session it is meant to pass");
+            }
+        }
         Set<Integer> targets = targets(spec, peers);
         if (!targets.isEmpty() && !anyRootFault) {
             throw new ParameterException(
@@ -209,6 +240,30 @@ final class SessionFaultOptions {
             faulted.add(MultiPeerSession.withFaults(base, values[0], values[1], values[2]));
         }
         return faulted;
+    }
+
+    /**
+     * The joiner {@value #CRASH_PEER_FLAG} names, by index.
+     *
+     * @param spec the command's spec
+     * @param peers the peer count
+     * @return its index, or empty when the flag is not given
+     * @throws ParameterException for a label that is not one of this session's joiners
+     */
+    OptionalInt crashPeer(final CommandSpec spec, final int peers) {
+        if (crashPeer == null) {
+            return OptionalInt.empty();
+        }
+        int index = indexOf(spec, CRASH_PEER_FLAG, crashPeer, peers);
+        if (index == 0) {
+            throw new ParameterException(
+                    spec.commandLine(),
+                    CRASH_PEER_FLAG
+                            + " must name a joiner, B to "
+                            + MultiPeerSession.labelFor(peers - 1)
+                            + "; crashing the host is out of scope");
+        }
+        return OptionalInt.of(index);
     }
 
     /**
