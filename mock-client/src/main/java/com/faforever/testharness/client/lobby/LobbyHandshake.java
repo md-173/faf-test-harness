@@ -267,9 +267,9 @@ public final class LobbyHandshake {
                                 "faf-uid (%s) %s stderr: %s; authentication "
                                         + "cannot proceed without a generated uid",
                                 binary,
-                                output.isEmpty()
-                                        ? "did not have any output"
-                                        : String.format("exited with code %d", process.exitValue()),
+                                process.exitValue() != 0
+                                        ? String.format("exited with code %d", process.exitValue())
+                                        : "did not have any output",
                                 stderr.isEmpty() ? "<no stderr output>" : truncateForLog(stderr)));
             }
             LOG.info("generated unique_id via faf-uid ({} chars)", output.length());
