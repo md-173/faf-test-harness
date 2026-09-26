@@ -22,9 +22,10 @@ import java.util.function.Predicate;
  * {@link #awaitLine} drains it, so this is built for one caller waiting on one readiness marker per
  * process, not several independent waiters sharing a process; a second, unrelated {@code awaitLine}
  * call on the same instance can consume a line the first was waiting for. The queue is capped at
- * {@value #MAX_QUEUED_LINES} lines so a process that keeps logging long after the marker was found
- * cannot grow it without bound; once full, further lines are dropped rather than blocking the
- * reader thread that calls {@link #accept}.
+ * {@value #MAX_QUEUED_LINES} lines so a process that logs a lot cannot grow it without bound: once
+ * {@value #MAX_QUEUED_LINES} unconsumed lines are queued, further lines — including a marker {@link
+ * #awaitLine} has not been called for yet — are dropped rather than blocking the reader thread that
+ * calls {@link #accept}, until a call drains the backlog.
  */
 public final class LineWaiter implements Consumer<String> {
 

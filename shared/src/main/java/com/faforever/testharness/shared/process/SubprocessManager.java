@@ -105,7 +105,9 @@ public final class SubprocessManager {
      * @param terminateGrace per-call default grace between SIGTERM and SIGKILL used by the no-arg
      *     {@link #terminate()}; must be positive
      * @param lineObserver invoked with each raw line of subprocess output; must not be {@code
-     *     null}. Pass a {@link LineWaiter} to wait on a specific line with a timeout.
+     *     null}. Called from one reader thread per stream, so it may be called from two threads at
+     *     once for a process that writes to stdout and stderr concurrently, and must be
+     *     thread-safe. Pass a {@link LineWaiter} to wait on a specific line with a timeout.
      * @return a manager wrapping the started process
      * @throws IOException if {@link ProcessBuilder#start()} fails
      * @throws IllegalStateException if the JVM is already shutting down when this is called

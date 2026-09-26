@@ -69,10 +69,15 @@ public final class ProcessOutputLogger {
      *
      * <p>{@code lineObserver} is invoked once per raw line read from either stream, in addition to
      * — not instead of — the normal SLF4J routing, so it sees every line before continuation lines
-     * (stack traces) are merged into a block for the log event. It runs on a reader thread, so it
-     * must not block: a slow or hung observer stalls that stream's draining exactly as a slow SLF4J
-     * appender would. An observer that throws is logged and otherwise ignored, so it cannot stop
-     * output capture.
+     * (stack traces) are merged into a block for the log event. It runs on a reader thread — one
+     * per stream, so the same observer instance can be called from both threads at once for a
+     * process that writes to stdout and stderr concurrently, and must therefore be thread-safe;
+     * order is only defined within one stream, not across both. It must also not block: a slow or
+     * hung observer stalls that stream's draining exactly as a slow SLF4J appender would. Anything
+     * the observer throws, including an {@link Error} such as a failed assertion, is caught and
+     * logged rather than propagated, so it cannot stop output capture — which also means an
+     * assertion failure inside an observer cannot fail the calling test. Record the line instead
+     * and assert on it from the test thread.
      *
      * <p>Callers that want a bounded wait on a specific line (e.g. a readiness marker) rather than
      * a raw per-line callback can pass a {@link
@@ -170,8 +175,14 @@ public final class ProcessOutputLogger {
     }
 
     /**
-     * Invokes {@code lineObserver} for {@code line}, containing any exception it throws so a broken
+     * Invokes {@code lineObserver} for {@code line}, containing anything it throws so a broken
      * observer cannot stop the reader thread from continuing to drain and log output.
+     *
+     * <p>Catches {@link Throwable}, not just {@link RuntimeException}: an {@link Error} such as
+     * {@code AssertionError} is exactly the kind of thing a test's observer throws, and letting it
+     * escape would close this method's caller's {@code try}-with-resources reader, closing the
+     * child's pipe with it — silently losing every later line on this stream and, for a native
+     * child still writing to it, risking SIGPIPE.
      *
      * @param lineObserver the observer to invoke
      * @param line the raw line just read
@@ -181,11 +192,11 @@ public final class ProcessOutputLogger {
             final Consumer<String> lineObserver, final String line, final String componentTag) {
         try {
             lineObserver.accept(line);
-        } catch (RuntimeException e) {
+        } catch (Throwable t) {
             LOG.warn(
                     "Subprocess line observer for {} threw; output capture continues",
                     componentTag,
-                    e);
+                    t);
         }
     }
 
