@@ -546,9 +546,6 @@ final class MultiPeerSessionLiveTest {
         args.addAll(credential.args());
         args.addAll(
                 List.of(
-                        // Fallback only: the handshake derives the real unique_id from faf-uid,
-                        // which the lobby's policy server requires.
-                        "--unique-id=00000000-0000-0000-0000-000000000000",
                         "--uid-binary-path=" + requireUidBinary().toAbsolutePath(),
                         "--ice-adapter-binary-path=" + requireAdapterBinary().toAbsolutePath(),
                         "--mock-game-binary-path=" + requireGameBinary().toAbsolutePath()));

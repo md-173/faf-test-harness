@@ -259,10 +259,10 @@ fields. None of the lobby or OAuth rows applies to any of them.
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes² | OAuth2 public client identifier. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
 | `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. What the lobby requires of the token, and how to tell one rejection from another, is in the access-token section of runbook §3. |
-| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes | Stable hardware identifier sent in the lobby `auth` message (fallback when `uidBinaryPath` is unset). |
+| `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes³ | Stable hardware identifier sent in the lobby `auth` message. |
 | `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
 | `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
-| `uidBinaryPath` | `FAF_MOCK_CLIENT_UID_BINARY_PATH` | `--uid-binary-path` | — | no | Path to the FAF `faf-uid` binary. When set, the auth handshake runs `<path> <session>` and sends its output as `unique_id` (the lobby's policy server requires a real RSA-encrypted UID, not a placeholder). When unset, the static `uniqueId` is sent. |
+| `uidBinaryPath` | `FAF_MOCK_CLIENT_UID_BINARY_PATH` | `--uid-binary-path` | — | yes³ | Path to the FAF `faf-uid` binary. When set, the auth handshake runs `<path> <session>` and sends its output as `unique_id` (the lobby's policy server requires a real RSA-encrypted UID, not a placeholder). When unset, the static `uniqueId` is sent. |
 | `iceAdapterBinaryPath` | `FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH` | `--ice-adapter-binary-path` | `faf-ice-adapter.jar` | no | Path to the `faf-ice-adapter` binary; a `.jar` runs via `java -jar`, any other file is executed directly. Relative paths resolve against the working directory. |
 | `mockGameBinaryPath` | `FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH` | `--mock-game-binary-path` | `mock-game/build/install/mock-game/bin/mock-game` | no | Path to the `mock-game` binary; a `.jar` runs via `java -jar`, any other file is executed directly. The default is the Gradle `application` plugin install layout (resolved against the working directory), so the harness "just works" from the repo root after `./gradlew :mock-game:installDist`. |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` | `7236` | no | Local JSON-RPC port exposed by `faf-ice-adapter`. |
@@ -292,6 +292,14 @@ read and need not be supplied. The three bootstrap settings above
 (`oauthAuthEndpoint`, `oauthRedirectUri`, `oauthScopes`) are required by
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
+
+³ Exactly one of the two UID sources is required. Configuring both at different
+layers is resolved by precedence such that CLI flags beat environment variable
+which beat a config file. When both are set at the same layer, `--unique-id` is
+ignored and only `--faf-uid-binary` is taken. A live lobby connection requires
+a generated uid that can only be created by the `faf-uid` program so in that case
+only `--uid-binary-path` should be set. `--unique-id` is used when not
+communicating with the live lobby server (e.g. a scripted server taking its place)
 
 Neither channel accepts a literal token value on the command line. For the
 refresh token that is a correctness requirement — Hydra rotates it on every use
@@ -583,7 +591,7 @@ export FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI=http://127.0.0.1
 export FAF_MOCK_CLIENT_OAUTH_SCOPES="openid offline lobby"
 export FAF_MOCK_CLIENT_OAUTH_CLIENT_ID=95ecec08-29c1-4c48-ae0a-b000ff349cb8
 export FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE=./.secrets/refresh_token.txt
-export FAF_MOCK_CLIENT_UNIQUE_ID=00000000-0000-0000-0000-000000000000
+export FAF_MOCK_CLIENT_UID_BINARY_PATH=./faf-uid
 export FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
 export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game/bin/mock-game
 
@@ -602,7 +610,7 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
   --oauth-scopes 'openid offline lobby' \
   --oauth-client-id 95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
   --oauth-refresh-token-file ./.secrets/refresh_token.txt \
-  --unique-id 00000000-0000-0000-0000-000000000000 \
+  --uid-binary-path ./faf-uid \
   --ice-adapter-binary-path /usr/local/bin/faf-ice-adapter \
   --mock-game-binary-path ./mock-game/build/install/mock-game/bin/mock-game"
 ```
