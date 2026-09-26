@@ -77,9 +77,11 @@ final class CrashInjectionTest {
     private static final Duration WARNING_LAUNCH = Duration.ofSeconds(5);
 
     /**
-     * The host case's launch delay. It must outlast that case's wait for the warning: at {@link
-     * #WARNING_LAUNCH}, LIVE would arm the crash inside the wait and log the same warning, so the
-     * case would pass for a host that never armed on its peer.
+     * The host case's launch delay. Its timer starts in {@code beginHosting}, so it must outlast
+     * the rest of that case up to the end of its wait for the warning: at {@link #WARNING_LAUNCH},
+     * LIVE would arm the crash inside the wait and log the same warning, and the case would pass
+     * for a host that never armed on its peer. The match is then due to end about 40 seconds after
+     * the peer arms the crash, hence the case's 60-second crash.
      */
     private static final Duration HOST_WARNING_LAUNCH = Duration.ofSeconds(30);
 
@@ -342,10 +344,10 @@ final class CrashInjectionTest {
      * Waits until the host has configured the peer with {@code playerId}, by reading the {@code
      * PlayerOption} frames it emits for that peer.
      *
-     * <p>Needed so each {@code ConnectToPeer} is known to have been handled before the next frame
-     * is sent. Without it the test would race its own setup and could reach fewer arming points
-     * than it means to, which is precisely the defect that made an earlier version of this test
-     * pass with the guard under test deleted.
+     * <p>Needed so each {@code ConnectToPeer} is known to have been taken up by the FSM before the
+     * next frame is sent. Without it the test would race its own setup and could reach fewer arming
+     * points than it means to, which is precisely the defect that made an earlier version of this
+     * test pass with the guard under test deleted.
      *
      * <p>It shows the frames went out, not that the action has finished: {@code armCrash} runs
      * after them (#357 review), so a log read straight after this can miss its lines (#479).
@@ -541,8 +543,7 @@ final class CrashInjectionTest {
 
     /**
      * Waits up to {@link #STATE_TIMEOUT_SECONDS} for {@code armCrash}'s warning. It does not fail
-     * on its own: {@link #assertCrashArmed} then reports the missing warning with what was
-     * captured.
+     * on its own: {@link #assertCrashArmed} then fails with what was captured.
      */
     private void awaitCancelledCrashWarning() throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(STATE_TIMEOUT_SECONDS);
