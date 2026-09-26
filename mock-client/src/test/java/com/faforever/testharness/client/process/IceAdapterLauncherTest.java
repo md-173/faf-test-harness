@@ -182,14 +182,13 @@ final class IceAdapterLauncherTest {
 
     @Test
     void startCapturesTaggedOutputThenTerminatesCleanly() throws Exception {
-        // ProcessOutputLogger flushes a line only when the next line arrives (it coalesces
-        // stack-trace continuations), so the stub emits a heartbeat to flush the marker.
+        // The stub goes quiet after its marker, so the marker reaches the log through
+        // ProcessOutputLogger's idle flush, with no later line or exit to push it out. exec, so
+        // terminating the stub ends its output too.
         Path binary =
                 createStub(
                         "adapter",
-                        "#!/bin/sh\n"
-                                + "echo ICE-ADAPTER-STUB-MARKER\n"
-                                + "while true; do echo heartbeat; sleep 1; done\n");
+                        "#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-MARKER\n" + "exec sleep 60\n");
 
         SubprocessManager adapter = new IceAdapterLauncher(configWithBinary(binary)).start();
         try {

@@ -16,9 +16,13 @@ public final class TestChild {
             case "print" -> System.out.println(args[1]);
             case "env" -> System.out.println(System.getenv(args[1]));
             case "lines" -> {
+                // Each arg is a line to print, to stderr if it starts "err:", or a pause of
+                // "sleep:<ms>" between lines.
                 for (int i = 1; i < args.length; i++) {
                     String arg = args[i];
-                    if (arg.startsWith("err:")) {
+                    if (arg.startsWith("sleep:")) {
+                        Thread.sleep(Long.parseLong(arg.substring("sleep:".length())));
+                    } else if (arg.startsWith("err:")) {
                         System.err.println(arg.substring("err:".length()));
                     } else {
                         System.out.println(arg);
