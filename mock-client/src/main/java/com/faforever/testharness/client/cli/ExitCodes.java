@@ -48,8 +48,9 @@ public final class ExitCodes {
      *
      * <p>For {@code run} it also includes a login the lobby ended before {@code welcome}
      * (WBS-3.1.1.2-fix, #473), with {@code invalid} or a close, which ends the run at once rather
-     * than after its 45 s setup timeout, and a lobby connection that dropped under a live session,
-     * a drop without a Close frame (code 1006) included.
+     * than after its 45 s setup timeout, a lobby connection that dropped under a live session, a
+     * drop without a Close frame (code 1006) included, and a command of its own the lobby answered
+     * with {@code invalid} after {@code welcome} (WBS-3.1.3.3-fix, #486).
      *
      * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
      * name a subprocess that died under a session that was running, and a launch that never came up

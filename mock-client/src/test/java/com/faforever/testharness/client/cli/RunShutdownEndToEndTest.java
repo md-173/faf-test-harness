@@ -69,6 +69,11 @@ final class RunShutdownEndToEndTest {
     /** The lobby drop's verdict line, the one that does not end that way. */
     private static final String LOBBY_DROP_VERDICT = "lobby connection dropped unexpectedly";
 
+    /** The verdict for a command the lobby answered with {@code invalid} after welcome (#486). */
+    private static final String REFUSED_VERDICT =
+            "the lobby answered one of this run's commands with invalid; reporting it in this run's"
+                    + " exit code";
+
     /** The lifecycle's WARN when a failed login ends the session (#455). */
     private static final String HANDSHAKE_WARN = "Handshake could not be completed";
 
@@ -253,6 +258,34 @@ final class RunShutdownEndToEndTest {
         assertLoginEndedAtOnce(
                 "the lobby closed the connection before welcome (code 1000)",
                 List.of("lobby notice (error): You are banned from FAF forever. Reason: rig"));
+    }
+
+    /**
+     * An {@code invalid} after welcome, faf-server's answer to one of the run's own commands that
+     * it failed on, ends the run with {@code 70} and a verdict naming it (#486). faf-server closes
+     * the connection cleanly right after, which used to read as the lobby ending the session, so
+     * the run exited {@code 0}. Both WARNs are logged before the run ends: the frame's as it
+     * arrives, the verdict's once TERMINATED commits.
+     */
+    @Test
+    void anInvalidAfterWelcomeExits70() throws Exception {
+        startRunAndReachIdle();
+
+        lobby.broadcastText("{\"command\":\"invalid\"}");
+        lobby.closeAllClean(1000, "");
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(List.of(REFUSED_VERDICT), verdicts(records), "the refusal is the verdict");
+        assertEquals(
+                List.of(
+                        "the lobby answered a command with invalid, a server-side error;"
+                                + " faf-server closes the connection next",
+                        REFUSED_VERDICT),
+                messagesAt(records, "WARN"),
+                "the frame's WARN, then the verdict's");
+        assertNoErrors(records);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
     }
 
     /**

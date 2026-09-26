@@ -71,6 +71,11 @@ public final class LobbyHandshake {
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
+     * Raised when an {@code invalid} arrives once the handshake is over; see {@link #onInvalid}.
+     */
+    private final AtomicBoolean invalidAfterLogin = new AtomicBoolean(false);
+
+    /**
      * Construct a handshake bound to {@code connection}. Its handlers for {@code session}, {@code
      * welcome}, {@code authentication_failed} and {@code invalid} are added to the connection when
      * {@link #perform} is called.
@@ -286,13 +291,14 @@ public final class LobbyHandshake {
      * connection (#473). Before {@code welcome} that command is the login, so the handshake fails
      * at once, and the caller's one ERROR names it; a refused {@code unique_id} and an error
      * checking the token, such as signing keys the lobby could not fetch, both end this way. Once
-     * the handshake is over, the frame answers some other command and is only logged, as it was
-     * before it had a handler.
+     * the handshake is over, the frame answers one of the session's own commands, so it is logged
+     * and recorded for {@code run} to report (#486).
      *
      * @param msg the {@code invalid} frame, which carries nothing else
      */
     private void onInvalid(final JsonNode msg) {
         if (result.isDone()) {
+            invalidAfterLogin.set(true);
             LOG.warn(
                     "the lobby answered a command with invalid, a server-side error;"
                             + " faf-server closes the connection next");
@@ -302,5 +308,15 @@ public final class LobbyHandshake {
                 new AuthenticationException(
                         "the lobby answered the login with invalid, a server-side error such as"
                                 + " a refused unique_id or an error checking the token"));
+    }
+
+    /**
+     * Whether an {@code invalid} arrived once the handshake was over (#486): the lobby failed on
+     * one of the session's own commands.
+     *
+     * @return {@code true} once such a frame has arrived
+     */
+    boolean invalidAfterLogin() {
+        return invalidAfterLogin.get();
     }
 }
