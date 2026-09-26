@@ -38,6 +38,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
 
     private final CountDownLatch started = new CountDownLatch(1);
     private final CountDownLatch firstClientConnected = new CountDownLatch(1);
+    private final CountDownLatch firstClientGone = new CountDownLatch(1);
     private final BlockingQueue<String> received = new LinkedBlockingQueue<>();
     private final List<WebSocket> connections = new CopyOnWriteArrayList<>();
 
@@ -58,6 +59,17 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     public void awaitFirstClient() throws InterruptedException {
         if (!firstClientConnected.await(5, TimeUnit.SECONDS)) {
             throw new AssertionError("no client connected within 5s");
+        }
+    }
+
+    /**
+     * Block until the first client's connection has closed on this side. After a {@link
+     * #closeAllClean} that means the client has answered with its own Close frame, so its output is
+     * closed too.
+     */
+    public void awaitFirstClientGone() throws InterruptedException {
+        if (!firstClientGone.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("no client connection closed within 5s");
         }
     }
 
@@ -137,6 +149,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
                 code,
                 reason,
                 remote);
+        firstClientGone.countDown();
     }
 
     @Override

@@ -41,10 +41,12 @@ import org.junit.jupiter.api.condition.EnabledIf;
  *   <li>{@link #connectSucceeds()} — connect and verify the WS upgrade. Self-skips when {@code
  *       ws.faforever.xyz:443} is unreachable (TCP timeout).
  *   <li>{@link #authHandshakeYieldsTerminalReply()} — the full production path: refresh-token →
- *       Hydra → JWT → {@code ask_session} → {@code session} → {@code auth} → {@code welcome} or
- *       {@code authentication_failed}. Additionally gated on a local {@code
- *       .secrets/refresh_token.txt}. Either terminal reply is a pass — both prove the transport
- *       works bidirectionally; only silence/timeout once connected is a failure.
+ *       Hydra → JWT → {@code ask_session} → {@code session} → {@code auth} → {@code welcome},
+ *       {@code authentication_failed} or {@code invalid}. Additionally gated on a local {@code
+ *       .secrets/refresh_token.txt}. Any of the three is a pass — each proves the transport works
+ *       bidirectionally; only silence/timeout once connected is a failure. {@code invalid} is what
+ *       the live lobby actually sends: this test authenticates with a placeholder {@code
+ *       unique_id}, which the lobby's policy server rejects before closing the socket (#390).
  * </ul>
  *
  * <p>This test mutates {@code .secrets/refresh_token.txt} — Hydra rotates the refresh token on
@@ -179,6 +181,13 @@ final class LobbyConnectionLiveSmokeTest {
                     failureMsg.set(node);
                     terminalLatch.countDown();
                 });
+        // The reply the live lobby gives the placeholder unique_id below, followed by a close.
+        lobby.registerHandler(
+                "invalid",
+                node -> {
+                    failureMsg.set(node);
+                    terminalLatch.countDown();
+                });
 
         try {
             lobby.connect().get(15, TimeUnit.SECONDS);
@@ -203,14 +212,15 @@ final class LobbyConnectionLiveSmokeTest {
 
             assertTrue(
                     terminalLatch.await(15, TimeUnit.SECONDS),
-                    "no `welcome` or `authentication_failed` within 15s of auth. session="
+                    "no `welcome`, `authentication_failed` or `invalid` within 15s of auth."
+                            + " session="
                             + sessionMsg.get()
                             + ", disconnects="
                             + disconnects);
 
             JsonNode terminal = welcomeMsg.get() != null ? welcomeMsg.get() : failureMsg.get();
             assertNotNull(terminal);
-            // Either terminal is a pass — both prove the transport works end-to-end.
+            // Any terminal is a pass — each proves the transport works end-to-end.
             // Log the outcome so the test runner shows which path was exercised.
             System.out.println("[live smoke] auth handshake terminal: " + terminal);
         } finally {

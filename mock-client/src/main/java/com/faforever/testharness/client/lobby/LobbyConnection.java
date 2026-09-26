@@ -349,11 +349,21 @@ public final class LobbyConnection {
     /**
      * Initiate a clean WebSocket close from this side. The disconnect listener fires with {@link
      * DisconnectReason#LOCAL_CLOSE} once the close handshake completes (or immediately if the
-     * connection is already gone).
+     * connection has not opened).
+     *
+     * <p>Idempotent. If this side's output is already closed, there is nothing left to send and the
+     * returned future completes normally rather than failing (#390). That happens after an earlier
+     * {@code close}, and also when the server closed first: the JDK answers a server's Close frame
+     * with its own, without waiting for this class, so a caller closing after the lobby has
+     * rejected it would otherwise get {@code IOException: Output closed}. This method does not fire
+     * the disconnect listener on that path; the listener's own {@code onClose} or {@code onError}
+     * reports the disconnect, as for any other server-side close. A status code the WebSocket API
+     * rejects still fails the future, because that is checked before the output is touched.
      *
      * @param statusCode WebSocket close status code (1000 = normal)
      * @param reason human-readable close reason (empty string allowed)
-     * @return future that completes when the close frame has been sent
+     * @return future that completes when the close frame has been sent, or when this side's output
+     *     turns out to be closed already
      */
     public CompletableFuture<Void> close(final int statusCode, final String reason) {
         closeRequested.set(true);
@@ -363,7 +373,27 @@ public final class LobbyConnection {
                     new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, statusCode, reason, null));
             return CompletableFuture.completedFuture(null);
         }
-        return socket.sendClose(statusCode, reason).thenAccept(ignored -> {});
+        // Judged on the socket's state after the attempt rather than a check before it: the
+        // server's Close frame can land between such a check and sendClose.
+        return socket.sendClose(statusCode, reason)
+                .handle(
+                        (ignored, error) -> {
+                            if (error == null) {
+                                return null;
+                            }
+                            if (socket.isOutputClosed()) {
+                                try (InstanceLabel.Scope scope = label.apply()) {
+                                    LOG.debug(
+                                            "lobby close: output already closed, nothing to send"
+                                                    + " ({})",
+                                            error.toString());
+                                }
+                                return null;
+                            }
+                            throw error instanceof CompletionException completion
+                                    ? completion
+                                    : new CompletionException(error);
+                        });
     }
 
     /**
