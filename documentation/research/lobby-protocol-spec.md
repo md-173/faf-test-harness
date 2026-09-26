@@ -301,7 +301,9 @@ After a successful welcome, the client should be prepared to receive additional 
 ```
 
 faf-server's generic handler sends it when handling the `auth` raised, for example when its
-policy server refuses the `unique_id` or it cannot read the token, then closes the connection.
+policy server refuses the `unique_id` or checking the token raises, as when it cannot fetch its
+signing keys, then closes the connection. A token that fails the check is answered with
+`authentication_failed` instead.
 Since faf-server v1.18.0 (FAForever/server#1093) that close is a Close frame, code 1000, with no
 reason. A banned account and a database outage end the login with an error `notice` and the same
 close instead, `{"command":"notice","style":"error","text":"…"}`, whose text says why. The Mock

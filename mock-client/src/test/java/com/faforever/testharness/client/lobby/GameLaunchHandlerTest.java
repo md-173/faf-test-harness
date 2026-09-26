@@ -128,6 +128,27 @@ public class GameLaunchHandlerTest {
                 "game_launch.args contains disallowed leading '-': --danger", rejected(json));
     }
 
+    /**
+     * A number in {@code args} must be an integer, as faf-server's {@code /numgames} count is
+     * (#474): a float would reach the game as its text, and {@code 1e3} would read as {@code
+     * 1000.0}.
+     */
+    @Test
+    void aFractionalArgIsRejected() throws Exception {
+        String json =
+                "{"
+                        + "\"uid\": 2,"
+                        + "\"mod\": \"faf\","
+                        + "\"name\": \"Fractional\","
+                        + "\"game_type\": \"custom\","
+                        + "\"rating_type\": \"global\","
+                        + "\"args\": [\"/numgames\", 1.5]"
+                        + "}";
+
+        Assertions.assertEquals(
+                "game_launch.args contains unsupported element: 1.5", rejected(json));
+    }
+
     @Test
     public void validInitModeIsAccepted() throws Exception {
         String json =

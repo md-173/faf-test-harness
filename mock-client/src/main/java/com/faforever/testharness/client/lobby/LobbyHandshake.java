@@ -62,7 +62,8 @@ public final class LobbyHandshake {
     private final ObjectMapper mapper = new ObjectMapper();
 
     /**
-     * Result of the handshake; completed by the session / welcome / authentication_failed paths.
+     * Result of the handshake; completed by the session / welcome / authentication_failed / invalid
+     * paths.
      */
     private final CompletableFuture<JsonNode> result = new CompletableFuture<>();
 
@@ -283,9 +284,10 @@ public final class LobbyHandshake {
     /**
      * faf-server's answer to a command whose handling raised, sent just before it closes the
      * connection (#473). Before {@code welcome} that command is the login, so the handshake fails
-     * at once, and the caller's one ERROR names it; a refused {@code unique_id} and a token the
-     * lobby could not read both end this way. Once the handshake is over, the frame answers some
-     * other command and is only logged, as it was before it had a handler.
+     * at once, and the caller's one ERROR names it; a refused {@code unique_id} and an error
+     * checking the token, such as signing keys the lobby could not fetch, both end this way. Once
+     * the handshake is over, the frame answers some other command and is only logged, as it was
+     * before it had a handler.
      *
      * @param msg the {@code invalid} frame, which carries nothing else
      */
@@ -299,6 +301,6 @@ public final class LobbyHandshake {
         result.completeExceptionally(
                 new AuthenticationException(
                         "the lobby answered the login with invalid, a server-side error such as"
-                                + " a refused unique_id or a token it could not read"));
+                                + " a refused unique_id or an error checking the token"));
     }
 }

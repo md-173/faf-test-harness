@@ -143,7 +143,7 @@ final class LobbyHandshakeTest {
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         assertEquals(
                 "the lobby answered the login with invalid, a server-side error such as a refused"
-                        + " unique_id or a token it could not read",
+                        + " unique_id or an error checking the token",
                 e.getCause().getMessage());
     }
 
