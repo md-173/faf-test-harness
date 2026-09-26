@@ -451,7 +451,7 @@ jobs:
               if [ "$uids" -gt 0 ]; then
                 grep -o 'generated unique_id via faf-uid ([0-9]* chars)' "$log" | sort | uniq -c
               else
-                echo '(no faf-uid line: every peer fell back to the placeholder unique_id)'
+                echo '(no faf-uid line: every peer failed to produce a uid)'
               fi
               if [ "$logins" -gt 0 ]; then
                 grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u
@@ -473,9 +473,11 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           # The policy answer (#365 Q1) is only recorded if every peer really produced a faf-uid
-          # blob and reached `welcome`. LobbyHandshake throws when faf-uid fails for a session, and since the lobby ignores the policy
-          # verdict, such a run could still pass while proving nothing about faf-uid. Warn rather
-          # than fail: the session's own verdict decides the job.
+          # blob and reached `welcome`. LobbyHandshake throws when faf-uid fails which
+          # will fail the session. However, a misconfigured faf-uid (e.g. a binary that
+          # returns a static uid) might cause the run to still pass while proving
+          # nothing about faf-uid, due to the lobby ignoring the policy verdict.
+          #  Warn rather than fail: the session's own verdict decides the job.
           if [ "${uids:-0}" -lt "$peers" ] || [ "${logins:-0}" -lt "$peers" ]; then
             echo "::warning::expected $peers faf-uid lines and $peers distinct logins, saw ${uids:-0} and ${logins:-0}; this run does not answer the policy question"
           fi
