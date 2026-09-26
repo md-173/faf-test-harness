@@ -154,8 +154,8 @@ public final class MockClientLifecycle {
 
     /**
      * The constructing thread's instance label (WBS-4.3.3). The process-exit and connectToPeer
-     * continuations and the safety net run on the JVM-wide common pool, so several clients in one
-     * JVM would otherwise log those lines unattributed.
+     * continuations and the safety net normally run on the JVM-wide common pool, so several clients
+     * in one JVM would otherwise log those lines unattributed.
      */
     private final InstanceLabel label = InstanceLabel.capture();
 

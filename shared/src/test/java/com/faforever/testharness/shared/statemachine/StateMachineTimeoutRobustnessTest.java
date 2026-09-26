@@ -263,18 +263,29 @@ final class StateMachineTimeoutRobustnessTest {
     /**
      * Timeouts run on a daemon thread, as they did on {@code new Timer(true)}, so a machine nobody
      * cancels never holds a JVM open (WBS-2.3.7-fix, #465). A new thread takes its creator's daemon
-     * flag, and the first {@code setTimeout} creates this one, so a missing {@code setDaemon} only
-     * shows when that call comes from a thread that is not a daemon: hence the precondition.
+     * flag, and the first {@code setTimeout} creates this one, so it is armed from a thread that is
+     * not a daemon: a missing {@code setDaemon} then shows whatever thread runs this test.
      */
     @Test
     void timeoutsRunOnADaemonThread() throws Exception {
-        assertFalse(
-                Thread.currentThread().isDaemon(),
-                "precondition: the arming thread must not be a daemon itself");
         State a = new State("A");
         StateMachine machine = new StateMachine(a);
         try {
-            assertTrue(timerThreadOf(machine, a).isDaemon(), "the timeout thread must be a daemon");
+            CompletableFuture<Thread> timer = new CompletableFuture<>();
+            Thread armer =
+                    new Thread(
+                            () ->
+                                    machine.setTimeout(
+                                            0,
+                                            a,
+                                            ignored -> timer.complete(Thread.currentThread())),
+                            "non-daemon-armer");
+            armer.setDaemon(false);
+            armer.start();
+
+            assertTrue(
+                    timer.get(AWAIT_SECONDS, TimeUnit.SECONDS).isDaemon(),
+                    "the timeout thread must be a daemon");
         } finally {
             machine.cancel();
         }
