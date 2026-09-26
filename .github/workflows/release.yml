@@ -25,8 +25,14 @@ jobs:
   # at an arbitrary commit, so nothing else guarantees they passed on it. A job of its own rather
   # than steps in `release`, so the third-party adapter jar never runs beside that job's contents:
   # write token. The steps are ci.yml's, whose comments explain them; keep the two in step.
+  #
+  # The name: below keeps this job's check apart from ci.yml's live-tests, which main's ruleset
+  # requires by name. GitHub warns that a job name shared by two workflows can make a required
+  # check ambiguous and block pull requests, and a release dispatched at a pull request's head
+  # commit would put both checks on that commit. needs: in release still refers to the job id.
   live-tests:
 
+    name: Live tests before release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

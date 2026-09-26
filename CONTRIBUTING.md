@@ -358,8 +358,9 @@ assets.
    copy predates a change simply runs the older workflow, gate and all.
 3. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
    -Pversion=<version> check`, the verification `ci.yml`'s `build` job applies to every pull
-   request (`check` is the verification half of `build`), and, in a read-only `live-tests` job the
-   release job waits on, the four lobby-free live tests that `ci.yml`'s `live-tests` job runs. A
+   request (`check` is the verification half of `build`), and, in a read-only job,
+   `Live tests before release`, that the release job waits on, the four lobby-free live tests
+   that `ci.yml`'s `live-tests` job runs. A
    release is dispatched at an arbitrary commit and nothing else guarantees CI ran green on it. If
    either fails, no draft and no assets are created, so re-running is safe: nothing was tagged or
    published. A red gate is not to be worked around. If it is a known flake rather than a real
