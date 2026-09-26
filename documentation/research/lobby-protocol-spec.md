@@ -226,7 +226,7 @@ Once a WebSocket connection is established and the client holds a valid OAuth JW
 | 1 | Client → Server | `ask_session` | Request a session ID |
 | 2 | Server → Client | `session` | Assign session ID |
 | 3 | Client → Server | `auth` | Authenticate with JWT |
-| 4 | Server → Client | `welcome` or `authentication_failed` | Success or failure |
+| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close | Success or failure |
 
 After a successful welcome, the client should be prepared to receive additional state-sync messages such as player_info, game_info, and social. The server also supports matchmaker_info, which is sent in response to requests and periodic updates.
 
@@ -292,6 +292,20 @@ After a successful welcome, the client should be prepared to receive additional 
   "text": "Login not found or password incorrect. They are case sensitive."
 }
 ```
+
+**4c. Failure: server sends `invalid`, then closes the connection**
+```json
+{
+  "command": "invalid"
+}
+```
+
+faf-server's generic handler sends it when handling the `auth` raised, for example when its
+policy server refuses the `unique_id` or it cannot read the token, then closes the connection.
+Since faf-server v1.18.0 (FAForever/server#1093) that close is a Close frame, code 1000, with no
+reason. A banned account and a database outage end the login with an error `notice` and the same
+close instead, `{"command":"notice","style":"error","text":"…"}`, whose text says why. The Mock
+Client ends the login at once on either, naming it, and logs every `notice` with its text (#473).
 
 ### `unique_id` Handling
 
@@ -541,6 +555,9 @@ triggers the local orchestration sequence defined in **4.4 Orchestration Note**
    Each field must therefore be constrained to its expected type and character set
    (for example: `uid` is a non-negative integer; `mapname` and `mod` match a strict
    identifier pattern; enumerated fields are checked against their allowed values).
+   The Mock Client decodes `game_launch` without Jackson's coercion (#474): a float or a
+   string where an integer belongs, or a number or a boolean where a string does, is refused
+   rather than converted, although the real client converts them.
 4. **Subprocess boot** — launch `faf-ice-adapter` and `mock-game` per §4.4, mapping the
    validated fields into the CLI arguments each executable expects.
 5. **IPC handshake** — hold orchestration state until both local TCP channels
@@ -888,7 +905,9 @@ sequenceDiagram
         LS-->>MC: welcome
         LS-->>MC: player_info / game_info / social
     else failure
-        LS-->>MC: authentication_failed + close
+        LS-->>MC: authentication_failed
+    else refused (server error, ban, outage)
+        LS-->>MC: invalid or an error notice, then a close
     end
 
     Note over MC,LS: Phase 3 — Game setup (§4)

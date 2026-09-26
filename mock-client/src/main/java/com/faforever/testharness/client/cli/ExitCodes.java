@@ -46,6 +46,11 @@ public final class ExitCodes {
      * game_launch} frame it could not read or use is one too (WBS-3.1.1.6-fix, #457): nothing came
      * up for it, and before that the run waited, until killed, for a launch it had dropped.
      *
+     * <p>For {@code run} it also includes a login the lobby ended before {@code welcome}
+     * (WBS-3.1.1.2-fix, #473), with {@code invalid} or a close, which ends the run at once rather
+     * than after its 45 s setup timeout, and a lobby connection that dropped under a live session,
+     * a drop without a Close frame (code 1006) included.
+     *
      * <p>Deliberately not a code of its own. {@link #GAME_CRASHED} and {@link #ADAPTER_LOST} each
      * name a subprocess that died under a session that was running, and a launch that never came up
      * had no running session: like a failed token exchange or a handshake timeout, it never got one
