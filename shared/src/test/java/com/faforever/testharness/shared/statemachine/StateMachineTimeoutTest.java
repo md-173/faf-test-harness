@@ -52,8 +52,8 @@ final class StateMachineTimeoutTest {
 
     /**
      * Stops each machine's scheduling. Without this every test leaves a live daemon timer thread
-     * behind, and one of them leaves an armed task that logs into a later test's captured output —
-     * the same leak {@code StateMachineStateWaitTest} cancels its own {@link java.util.Timer} for.
+     * behind, and one of them leaves an armed task that logs into a later test's captured output:
+     * the same leak {@code StateMachineStateWaitTest} shuts its own scheduler down for.
      */
     @AfterEach
     void stopTimers() {

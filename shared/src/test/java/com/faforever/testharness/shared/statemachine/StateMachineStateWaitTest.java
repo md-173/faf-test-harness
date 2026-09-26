@@ -4,9 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
@@ -45,22 +45,20 @@ final class StateMachineStateWaitTest {
         // entry, if one ever comes.
         CompletableFuture<Void> reachedGreen = machine.stateReached(green);
 
-        Timer timer = new Timer();
+        // Timed on the monotonic clock, as the machine's own timeouts are (WBS-2.3.7-fix, #465).
+        ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor();
         try {
             timer.schedule(
-                    new TimerTask() {
-                        @Override
-                        public void run() {
-                            machine.receiveEvent(new IncomingCarDetected());
-                        }
-                    },
-                    TRANSITION_DELAY_MS);
+                    () -> machine.receiveEvent(new IncomingCarDetected()),
+                    TRANSITION_DELAY_MS,
+                    TimeUnit.MILLISECONDS);
 
             reachedGreen.get(AWAIT_SECONDS, TimeUnit.SECONDS);
         } finally {
             // The timer thread outlives this method otherwise, and a leaked thread logging into
-            // another test's captured output is its own class of flake.
-            timer.cancel();
+            // another test's captured output is its own class of flake. shutdownNow() also drops
+            // the event if the wait gave up before it was sent, which shutdown() would still send.
+            timer.shutdownNow();
         }
 
         assertSame(green, machine.getState());

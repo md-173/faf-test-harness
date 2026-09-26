@@ -534,8 +534,8 @@ final class MockGameLauncherTest {
     }
 
     private void awaitLog(final Predicate<ILoggingEvent> matcher) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
-        while (System.currentTimeMillis() < deadline) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(POLL_BUDGET_MS);
+        while (System.nanoTime() < deadline) {
             for (ILoggingEvent e : appender.list) {
                 if (matcher.test(e)) {
                     return;
