@@ -518,7 +518,7 @@ process. It is sent by the server at the end of both custom and matchmaker setup
 | `args` | array | no | Additional launch arguments passed to the game executable |
 | `mapname` | string | matchmaker only | Map folder name |
 | `team` | integer | matchmaker only | Team assignment |
-| `faction` | integer | matchmaker only | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim |
+| `faction` | integer | matchmaker only | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad |
 | `map_position` | integer | matchmaker only | Start spot on the map |
 | `expected_players` | integer | matchmaker only | Expected player count |
 | `game_options` | object | matchmaker only | Additional game options |
@@ -1170,7 +1170,7 @@ Trigger for the Mock Client to start subprocesses. See §§4–5.
 | `args` | array | no | Extra CLI args passed to the game executable. |
 | `mapname` | string | matchmaker | Map folder name. |
 | `team` | integer | matchmaker | Team assignment. |
-| `faction` | integer | matchmaker | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim. |
+| `faction` | integer | matchmaker | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad. |
 | `map_position` | integer | matchmaker | Start spot. |
 | `expected_players` | integer | matchmaker | Expected player count. |
 | `map_pool_map_version_id` | integer | matchmaker | Map pool version reference. |

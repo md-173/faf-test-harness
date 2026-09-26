@@ -211,8 +211,9 @@ final class RunShutdownEndToEndTest {
     /**
      * A {@code game_launch} the client cannot use ends the run with {@code 70} (WBS-3.1.1.6-fix,
      * #457), where the frame used to be dropped with a WARN and the run left idle until killed. One
-     * line names what is wrong with the frame, the launch's verdict follows, nothing is logged at
-     * ERROR, and teardown closes the lobby cleanly.
+     * line names what is wrong with the frame, and it is the only WARN besides the launch's verdict
+     * that follows, so neither the handler nor the validator may add a cause line of its own.
+     * Nothing is logged at ERROR, and teardown closes the lobby cleanly.
      */
     @Test
     void aGameLaunchTheClientCannotUseExits70() throws Exception {
@@ -234,10 +235,14 @@ final class RunShutdownEndToEndTest {
                                 + " code"),
                 verdicts(records),
                 "exactly one verdict, the launch's: " + messages(records));
-        assertTrue(
-                messagesAt(records, "WARN").stream()
-                        .noneMatch(m -> m.startsWith("No matching transitions")),
-                "no stray WARN: " + messages(records));
+        assertEquals(
+                List.of(
+                        "Could not read the game_launch frame (game_launch.args contains unknown"
+                                + " slash-flag: /newflag)",
+                        "the ICE adapter or game never came up; reporting it in this run's exit"
+                                + " code"),
+                messagesAt(records, "WARN"),
+                "the cause line and the verdict, nothing else: " + messages(records));
         assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
         assertNoErrors(records);
         assertEquals(
