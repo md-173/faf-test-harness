@@ -1069,9 +1069,9 @@ public final class MockClientLifecycle {
      * session, whoever started teardown, and its write completes before the lobby close that
      * follows. The game-exit handler used to send it, racing that close, which {@code
      * LobbyConnection} writes directly rather than through its send chain: when the close won, the
-     * frame was lost with a WARN. The real client sends it after every outcome of a {@code
-     * game_launch}, a failed launch included ({@code GameRunner.startOnlineGame}'s {@code
-     * whenComplete}), so this follows every one the lifecycle acted on (#462).
+     * frame was lost with a WARN. The real client sends it after every launch it starts, a failed
+     * one included ({@code GameRunner.startOnlineGame}'s {@code whenComplete}), so this follows
+     * every launch the lifecycle started (#462).
      *
      * <p>Gated on {@link #cleanEndSeen} rather than sent unconditionally, because since R72 was
      * wired into {@code launchGame} (#218) a clean end produces the frame twice: mock-game emits

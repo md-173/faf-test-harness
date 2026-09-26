@@ -213,7 +213,8 @@ final class RunShutdownEndToEndTest {
      * #457), where the frame used to be dropped with a WARN and the run left idle until killed. One
      * line names what is wrong with the frame, and it is the only WARN besides the launch's verdict
      * that follows, so neither the handler nor the validator may add a cause line of its own.
-     * Nothing is logged at ERROR, and teardown closes the lobby cleanly.
+     * Nothing is logged at ERROR, and teardown closes the lobby cleanly without a {@code GameState
+     * Ended}: a refused frame starts no launch, and #462 reports only a launch that started.
      */
     @Test
     void aGameLaunchTheClientCannotUseExits70() throws Exception {
@@ -249,6 +250,7 @@ final class RunShutdownEndToEndTest {
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
                 "teardown must close the lobby cleanly");
+        assertEquals(0, gameStateEndedSent(), "a refused game_launch started no launch to report");
     }
 
     /**
