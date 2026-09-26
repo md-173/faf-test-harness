@@ -291,7 +291,7 @@ final class GameEndReportingTest {
                         super.append(event);
                     }
                 };
-        // The net logs from a pool thread while this one polls.
+        // The net logs from another thread while this one polls.
         appender.list = new CopyOnWriteArrayList<>();
         appender.start();
         lifecycleLogger.addAppender(appender);
