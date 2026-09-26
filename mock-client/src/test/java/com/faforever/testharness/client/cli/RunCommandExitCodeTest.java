@@ -121,6 +121,7 @@ final class RunCommandExitCodeTest {
                 RunCommand.sessionExitCode(
                         false,
                         lobbyDropped,
+                        false,
                         SessionVerdictsFixture.of(launchFailed, adapterLost, gameCrashed, false),
                         log));
     }
@@ -137,14 +138,18 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 ExitCodes.ADAPTER_LOST,
                 RunCommand.sessionExitCode(
-                        false, false, SessionVerdictsFixture.of(false, true, true, false), log));
+                        false,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(false, true, true, false),
+                        log));
     }
 
     /** A clean session says nothing: the log surface is a documented interface. */
     @Test
     void aCleanSessionLogsNothing() {
         RunCommand.sessionExitCode(
-                false, false, SessionVerdictsFixture.of(false, false, false, false), log);
+                false, false, false, SessionVerdictsFixture.of(false, false, false, false), log);
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -153,7 +158,7 @@ final class RunCommandExitCodeTest {
     @Test
     void aLostAdapterIsReportedAtWarn() {
         RunCommand.sessionExitCode(
-                false, false, SessionVerdictsFixture.of(false, true, false, false), log);
+                false, false, false, SessionVerdictsFixture.of(false, true, false, false), log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -169,7 +174,11 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 ExitCodes.RUNTIME,
                 RunCommand.sessionExitCode(
-                        false, false, SessionVerdictsFixture.of(true, false, false, false), log));
+                        false,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(true, false, false, false),
+                        log));
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         ILoggingEvent event = appender.list.get(0);
@@ -186,12 +195,62 @@ final class RunCommandExitCodeTest {
     @Test
     void aLobbyDropOutranksAFailedLaunch() {
         RunCommand.sessionExitCode(
-                false, true, SessionVerdictsFixture.of(true, false, false, false), log);
+                false, true, false, SessionVerdictsFixture.of(true, false, false, false), log);
 
         assertEquals(1, appender.list.size(), "captured: " + appender.list);
         assertTrue(
                 appender.list.get(0).getFormattedMessage().contains("lobby connection dropped"),
                 "the lobby drop must be the line reported: " + appender.list);
+    }
+
+    /**
+     * A command the lobby answered with {@code invalid} is a {@code 70} of its own, named once at
+     * WARN (#486). faf-server closes the connection cleanly after it, which used to read as the
+     * lobby ending the session, so the run exited {@code 0}.
+     */
+    @Test
+    void aRefusedCommandIsReportedAt70() {
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(
+                        false,
+                        false,
+                        true,
+                        SessionVerdictsFixture.of(false, false, false, false),
+                        log));
+
+        assertEquals(1, appender.list.size(), "captured: " + appender.list);
+        assertEquals(Level.WARN, appender.list.get(0).getLevel());
+        assertEquals(
+                "the lobby answered one of this run's commands with invalid; reporting it in this"
+                        + " run's exit code",
+                appender.list.get(0).getFormattedMessage());
+    }
+
+    /**
+     * The two lobby findings come first, the drop ahead of the refusal, and the refusal ahead of
+     * everything the lifecycle found (#486). The line logged shows the order where the code cannot.
+     */
+    @Test
+    void aRefusedCommandRanksAfterTheDropAndAheadOfTheRest() {
+        RunCommand.sessionExitCode(
+                false, true, true, SessionVerdictsFixture.of(false, false, false, false), log);
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(
+                        false,
+                        false,
+                        true,
+                        SessionVerdictsFixture.of(true, true, true, true),
+                        log));
+
+        assertEquals(2, appender.list.size(), "captured: " + appender.list);
+        assertTrue(
+                appender.list.get(0).getFormattedMessage().contains("lobby connection dropped"),
+                "the drop must outrank the refusal: " + appender.list);
+        assertTrue(
+                appender.list.get(1).getFormattedMessage().contains("commands with invalid"),
+                "the refusal must outrank the lifecycle's verdicts: " + appender.list);
     }
 
     /**
@@ -205,23 +264,51 @@ final class RunCommandExitCodeTest {
         assertEquals(
                 ExitCodes.RUNTIME,
                 RunCommand.sessionExitCode(
-                        true, false, SessionVerdictsFixture.of(true, false, false, false), log));
+                        true,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(true, false, false, false),
+                        log));
         assertEquals(
                 ExitCodes.ADAPTER_LOST,
                 RunCommand.sessionExitCode(
-                        true, false, SessionVerdictsFixture.of(false, true, false, false), log));
+                        true,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(false, true, false, false),
+                        log));
         assertEquals(
                 ExitCodes.RUNTIME,
                 RunCommand.sessionExitCode(
-                        true, true, SessionVerdictsFixture.of(false, false, false, false), log));
+                        true,
+                        true,
+                        false,
+                        SessionVerdictsFixture.of(false, false, false, false),
+                        log));
         assertEquals(
                 ExitCodes.GAME_CRASHED,
                 RunCommand.sessionExitCode(
-                        true, false, SessionVerdictsFixture.of(false, false, true, false), log));
+                        true,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(false, false, true, false),
+                        log));
         assertEquals(
                 ExitCodes.RUNTIME,
                 RunCommand.sessionExitCode(
-                        true, false, SessionVerdictsFixture.of(false, false, false, true), log));
+                        true,
+                        false,
+                        false,
+                        SessionVerdictsFixture.of(false, false, false, true),
+                        log));
+        assertEquals(
+                ExitCodes.RUNTIME,
+                RunCommand.sessionExitCode(
+                        true,
+                        false,
+                        true,
+                        SessionVerdictsFixture.of(false, false, false, false),
+                        log));
 
         assertTrue(appender.list.isEmpty(), "captured: " + appender.list);
     }
@@ -258,6 +345,7 @@ final class RunCommandExitCodeTest {
                 RunCommand.sessionExitCode(
                         false,
                         lobbyDropped,
+                        false,
                         SessionVerdictsFixture.of(launchFailed, adapterLost, gameCrashed, true),
                         log));
 

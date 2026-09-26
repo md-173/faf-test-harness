@@ -278,6 +278,17 @@ public final class LobbySession {
     }
 
     /**
+     * Whether the lobby answered one of the session's commands with {@code invalid} after {@code
+     * welcome} (#486). faf-server sends it when handling a command raised, then closes the
+     * connection cleanly, so the close alone would read as the lobby ending the session.
+     *
+     * @return {@code true} once such a frame has arrived
+     */
+    public boolean lobbyRefusedACommand() {
+        return handshake.invalidAfterLogin();
+    }
+
+    /**
      * Initiate a clean close of the underlying connection (status 1000). Idempotent: a no-op once
      * the connection has already gone. The disconnect listener fires with {@link
      * LobbyConnection.DisconnectReason#LOCAL_CLOSE}, releasing {@link #awaitDisconnect()}.

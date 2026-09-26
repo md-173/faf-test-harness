@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -145,10 +146,14 @@ final class LobbyHandshakeTest {
                 "the lobby answered the login with invalid, a server-side error such as a refused"
                         + " unique_id or an error checking the token",
                 e.getCause().getMessage());
+        assertFalse(
+                handshake.invalidAfterLogin(),
+                "an invalid that fails the login is not a refused command");
     }
 
     /**
-     * An {@code invalid} after {@code welcome} answers some other command, so it only warns (#473).
+     * An {@code invalid} after {@code welcome} answers one of the session's own commands, so it
+     * warns rather than failing the login (#473), and is recorded for {@code run} to report (#486).
      * Its handler took the place of the unhandled-command WARN that frame used to draw, and must
      * not lose it. Frames and the close are handled in order on one thread, so once the close is
      * seen, the frame has been.
@@ -180,6 +185,7 @@ final class LobbyHandshakeTest {
             server.closeAllClean(1000, "");
 
             assertTrue(closed.await(5, TimeUnit.SECONDS), "the lobby's close never arrived");
+            assertTrue(handshake.invalidAfterLogin(), "a late invalid must be recorded (#486)");
             assertEquals(
                     List.of(
                             "the lobby answered a command with invalid, a server-side error;"
