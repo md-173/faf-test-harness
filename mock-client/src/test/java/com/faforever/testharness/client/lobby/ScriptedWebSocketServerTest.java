@@ -20,7 +20,8 @@ import org.junit.jupiter.api.Test;
 /**
  * Unit tests for {@link ScriptedWebSocketServer} itself: a frame left queued with no write
  * interest, the state Java-WebSocket's lost-write race leaves behind (#415), still reaches the
- * client, and {@link ScriptedWebSocketServer#broadcastText} returns only once its frame is written.
+ * client, and {@link ScriptedWebSocketServer#broadcastText} and {@link
+ * ScriptedWebSocketServer#closeAllClean} return only once their frame is written.
  */
 final class ScriptedWebSocketServerTest {
 
@@ -87,6 +88,18 @@ final class ScriptedWebSocketServerTest {
         // Without the wait, the selector has rarely written the frame by the time send() returns.
         assertTrue(onlyConnection().outQueue.isEmpty(), "broadcastText returned before the write");
         assertNotNull(probes.poll(5, TimeUnit.SECONDS), "the broadcast probe never arrived");
+    }
+
+    @Test
+    void closeAllCleanReturnsWithItsCloseFrameWritten() throws Exception {
+        connectProbeClient();
+        WebSocketImpl conn = onlyConnection();
+
+        server.closeAllClean(1000, "bye");
+
+        // Without the wait, the selector has rarely written the close frame by the time close()
+        // returns.
+        assertTrue(conn.outQueue.isEmpty(), "closeAllClean returned before the write");
     }
 
     private BlockingQueue<JsonNode> connectProbeClient() throws Exception {
