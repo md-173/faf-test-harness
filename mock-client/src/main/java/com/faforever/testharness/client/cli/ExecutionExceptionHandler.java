@@ -102,12 +102,13 @@ public final class ExecutionExceptionHandler implements IExecutionExceptionHandl
      * text and may span lines — a parser splitting stderr on newlines must not see one failure as
      * several, and a message containing {@code "\nUsage:"} must not be able to forge picocli's
      * usage-block boundary. Mirrors {@code LayeredDefaultProvider.oneLine}, which does the same for
-     * the construction-time diagnostics in the sibling package.
+     * the construction-time diagnostics in the sibling package. {@link ParameterExceptionHandler}
+     * shares this one for parse errors.
      *
      * @param text the raw text to interpolate
      * @return the same text with every line terminator replaced by a literal {@code \n}
      */
-    private static String oneLine(final String text) {
+    static String oneLine(final String text) {
         return text.replaceAll("\\R", "\\\\n");
     }
 }

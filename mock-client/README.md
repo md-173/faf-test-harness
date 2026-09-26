@@ -159,6 +159,11 @@ before the subcommand itself starts: `--log-level` and `--log-file` are applied
 once after parsing and before any subcommand runs, so the records go to the file
 you asked for rather than to the default one.
 
+A parse error is also one line. Picocli quotes the offending argument back in its
+message, and `ParameterExceptionHandler` escapes any line break in it as a literal
+`\n`, so whatever the argv held, stderr carries exactly one error line ahead of
+the first `Usage:` line. The exit code is still `2`.
+
 Note that this is the `--log-level` flag and its `FAF_MOCK_CLIENT_LOG_LEVEL`
 counterpart. A bare `LOG_LEVEL` variable in the environment is Logback's own
 channel and is overridden by the resolved value, on this path and on every
