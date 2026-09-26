@@ -3,6 +3,7 @@ package com.faforever.testharness.client.ice;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -15,6 +16,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -25,6 +27,7 @@ import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -535,11 +538,10 @@ final class IceAdapterConnectionTest {
      *
      * <p>The lifecycle's cause check relies on exactly this: an {@code IOException} means the
      * adapter's socket is gone, and a {@code TimeoutException} means it stayed connected but did
-     * not answer. Nothing in this class enforces it explicitly. Jackson closes the socket when the
-     * reader reaches the end of its input, even mid-frame, and a peer reset breaks the pipe, so a
-     * later write fails at once. If the reader ever stopped doing that, a dead adapter's call would
-     * wait out its timeout and read as a live one, and this is the test that would say so. The 30 s
-     * call timeout keeps a timer-driven failure far outside the wait below.
+     * not answer. Since #452 the connection enforces it itself: once it has ended, a call fails at
+     * once with the recorded disconnect, whatever state the socket is in. A dead adapter's call
+     * must never wait out its timeout and read as a live one, and this is the test that would say
+     * so. The 30 s call timeout keeps a timer-driven failure far outside the wait below.
      *
      * @param lastBytes what the adapter writes before it goes: nothing, or the start of a frame
      */
@@ -571,7 +573,7 @@ final class IceAdapterConnectionTest {
     /**
      * The reset half of the guarantee above: an adapter whose socket goes away with a TCP reset, as
      * a killed process's can, also fails a later call fast with an {@link IOException}. The reader
-     * ends on the reset without closing the socket, and the write then hits a broken pipe.
+     * ends on the reset and records the disconnect, so the later call fails on it before any write.
      */
     @Test
     void aCallAfterTheAdapterResetTheConnectionFailsFast() throws Exception {
@@ -591,6 +593,82 @@ final class IceAdapterConnectionTest {
         ExecutionException thrown =
                 assertThrows(ExecutionException.class, () -> late.get(5, TimeUnit.SECONDS));
         assertInstanceOf(IOException.class, thrown.getCause());
+    }
+
+    /**
+     * The disconnect is recorded for teardown to read (WBS-3.1.2.8-fix, #452): nothing while the
+     * connection is up, and the adapter's own close as {@code REMOTE_CLOSE} once it has gone.
+     */
+    @Test
+    void theDisconnectIsRecordedOnceTheAdapterCloses() throws Exception {
+        conn = connect();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        conn.onDisconnect(e -> disconnected.countDown());
+        assertEquals(Optional.empty(), conn.disconnectEvent(), "a live connection has not ended");
+
+        server.dropClient();
+
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire");
+        assertEquals(DisconnectReason.REMOTE_CLOSE, conn.disconnectEvent().orElseThrow().reason());
+    }
+
+    /**
+     * A stream that stops parsing ends the connection as {@code REMOTE_CLOSE}, with the parse error
+     * as its cause, and the event is readable by the time a call in flight fails (#452). The
+     * lifecycle's teardown check reads it after such a call has ended the session, so it must never
+     * find the call failed and the event not yet recorded.
+     */
+    @Test
+    void aStreamThatStopsParsingIsRecordedBeforeTheCallsItFails() throws Exception {
+        conn =
+                new IceAdapterConnection(
+                        server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(30));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+        CompletableFuture<JsonNode> inflight = conn.call("hostGame", "scmp_007");
+        server.pollReceived(2, TimeUnit.SECONDS);
+        CompletableFuture<Optional<DisconnectEvent>> seenByTheCall =
+                inflight.handle((result, error) -> conn.disconnectEvent());
+
+        server.send("{\"jsonrpc\":\"2.0\",\"result\":}\n");
+
+        DisconnectEvent event = seenByTheCall.get(5, TimeUnit.SECONDS).orElseThrow();
+        assertEquals(DisconnectReason.REMOTE_CLOSE, event.reason());
+        assertInstanceOf(JsonProcessingException.class, event.error());
+        ExecutionException thrown =
+                assertThrows(ExecutionException.class, () -> inflight.get(2, TimeUnit.SECONDS));
+        assertInstanceOf(IOException.class, thrown.getCause());
+        assertSame(event.error(), thrown.getCause().getCause(), "the call names the parse error");
+    }
+
+    /**
+     * A call made after the stream stopped parsing fails at once (#452). The socket is still open
+     * then, since a parse error is not the end of the input, so before this the write succeeded and
+     * the call waited out its whole timeout, reading as a live adapter that did not answer. The
+     * future is failed before {@code call} returns, which is why nothing here waits.
+     */
+    @Test
+    void aCallAfterTheStreamStoppedParsingFailsAtOnce() throws Exception {
+        conn =
+                new IceAdapterConnection(
+                        server.port(), 5, Duration.ofMillis(20), Duration.ofSeconds(30));
+        conn.connect().get(5, TimeUnit.SECONDS);
+        server.awaitClient();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        conn.onDisconnect(e -> disconnected.countDown());
+        // A value missing inside a frame fails at once. A stray token between frames would not:
+        // Jackson reads on before rejecting it, so it would wait for the adapter's next frame.
+        server.send("{\"jsonrpc\":\"2.0\",\"result\":}\n");
+        assertTrue(disconnected.await(2, TimeUnit.SECONDS), "disconnect should fire");
+
+        CompletableFuture<JsonNode> late = conn.call("connectToPeer", "Peer", 2, true);
+
+        assertTrue(late.isCompletedExceptionally(), "the call must fail before call() returns");
+        ExecutionException thrown = assertThrows(ExecutionException.class, late::get);
+        assertInstanceOf(IOException.class, thrown.getCause());
+        assertEquals(
+                "ICE adapter connection closed (REMOTE_CLOSE)", thrown.getCause().getMessage());
+        assertInstanceOf(JsonProcessingException.class, thrown.getCause().getCause());
     }
 
     @Test

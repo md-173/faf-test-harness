@@ -55,13 +55,14 @@ public final class ExitCodes {
      * (WBS-3.1.3.3-fix, #445, and WBS-3.1.1.9-fix, #344): a {@code HostGame}, {@code JoinGame} or
      * {@code ConnectToPeer} frame it could not read, a {@code DisconnectFromPeer} one before the
      * game started, an adapter that answered a host, join or peer-connect call with an error or not
-     * within its timeout, or a match the server cancelled after {@code game_launch} and before the
-     * game started. Read from {@code SessionVerdicts.sessionFailed()}. That session did run, but no
-     * subprocess died under it, which is what the two codes below are for. A call that failed
-     * because the adapter's connection closed is not this: the adapter is gone, which is {@link
-     * #ADAPTER_LOST}'s finding, although a run that such a failure ends still exits {@code 0} until
-     * that code can see it (#438). A live adapter whose RPC stream stopped parsing fails its calls
-     * the same way, and until #452 that run exits {@code 0} too.
+     * within its timeout, a match the server cancelled after {@code game_launch} and before the
+     * game started, or an adapter still running once the session ended although its JSON-RPC link
+     * had closed from its side, such as one whose stream stopped parsing (WBS-3.1.2.8-fix, #452).
+     * Read from {@code SessionVerdicts.sessionFailed()}. That session did run, but no subprocess
+     * died under it, which is what the two codes below are for. A call that failed because the
+     * adapter's connection closed is not this by itself: teardown decides it, as {@link
+     * #ADAPTER_LOST} when the adapter died (#438) and as this when it is still running without its
+     * link.
      *
      * <p>An unexpected exception in the bring-up is a defect rather than a finding, and ends the
      * run here too instead of leaving it waiting (WBS-3.1.3.3-fix, #439): as a launch that never
@@ -116,9 +117,10 @@ public final class ExitCodes {
      * observed while the session was live, outside any harness-initiated teardown (WBS-3.1.2.8-fix,
      * #406).
      *
-     * <p>Set where {@code MockClientLifecycle.onAdapterExited} has already decided an exit was
-     * abnormal, in the same branch that logs {@code ICE adapter exited abnormally}, so the log line
-     * and the exit code cannot disagree. Same arrangement {@link #GAME_CRASHED} has with {@code
+     * <p>Set where an exit has been judged abnormal, in the same step that logs {@code ICE adapter
+     * exited abnormally}, so the log line and the exit code cannot disagree: {@code
+     * MockClientLifecycle.onAdapterExited}, or teardown's own check of the adapter ({@code
+     * SessionFailures.adapterAtTeardown}). Same arrangement {@link #GAME_CRASHED} has with {@code
      * mock-game exited abnormally}.
      *
      * <p><b>Keyed on the adapter's own exit, which is what makes it deterministic.</b> #357 tried
@@ -126,19 +128,18 @@ public final class ExitCodes {
      * removed it: that classification runs on a {@code CompletableFuture} continuation, so {@code
      * RunCommand} could read the verdict before it was written and one scenario exited {@code 69}
      * or {@code 0} run to run. This flag is written inside the {@code AdapterExited} transition
-     * action, which runs before TERMINATED's entry hook and before the {@code
+     * action, or inside TERMINATED's entry hook by teardown's check, and both run before the {@code
      * stateReached(TERMINATED)} future that releases {@code RunCommand} is completed, so the read
      * is ordered with no future to await.
      *
-     * <p>The guarantee is exactly that, and no wider: ordered whenever {@code AdapterExited} is the
-     * event that drives TERMINATED, which is what a killed adapter produces. Verified live under
-     * both SIGKILL and SIGTERM against the pinned adapter, whose own code registers no shutdown
-     * hook, so its GPGNet socket closes only as its process exits and the game has not yet reported
-     * the lost link when the adapter's exit arrives. That is timing, not a guarantee, and a session
-     * ended by some other event while the adapter is dying reports what that event found instead,
-     * exiting {@code 0}: a {@code connectToPeer}, {@code hostGame} or {@code joinGame} call in
-     * flight at that instant fails first and ends the session itself, or the game's own exit is
-     * processed first. Each window is milliseconds wide.
+     * <p>The two cover every way the session can end around a dying adapter (WBS-3.1.2.8-fix,
+     * #438). When {@code AdapterExited} is the event that drives TERMINATED, which is what a killed
+     * adapter usually produces, its action records this. When something the same death caused gets
+     * there first, a {@code connectToPeer}, {@code hostGame} or {@code joinGame} call in flight
+     * failing as the socket closes, or the game's own exit processed first, teardown finds the
+     * adapter dead before it stops it, waiting up to two seconds for one whose link has just
+     * closed, and records this instead. Never on a signalled run, whose signal kills the adapter
+     * itself.
      *
      * <p><b>An adapter that was up and then died</b>, not one that never came up. A failed launch,
      * or an adapter that exits before its JSON-RPC port accepts a connection, fails the {@code

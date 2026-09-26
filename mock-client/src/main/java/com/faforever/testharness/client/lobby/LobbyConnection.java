@@ -349,11 +349,18 @@ public final class LobbyConnection {
     /**
      * Initiate a clean WebSocket close from this side. The disconnect listener fires with {@link
      * DisconnectReason#LOCAL_CLOSE} once the close handshake completes (or immediately if the
-     * connection is already gone).
+     * connection never opened).
+     *
+     * <p>A no-op once the connection has disconnected, whichever side ended it (WBS-3.1.2.6-fix,
+     * #454): the returned future is already complete and nothing fires again. The JDK answers a
+     * server's close itself and shuts its output, so a second close frame could only fail with
+     * {@code Output closed}, which teardown logged as a WARN on every session whose lobby had
+     * already gone. {@link LobbySession#close()} has always documented the no-op.
      *
      * @param statusCode WebSocket close status code (1000 = normal)
      * @param reason human-readable close reason (empty string allowed)
-     * @return future that completes when the close frame has been sent
+     * @return future that completes when the close frame has been sent, or at once if there is
+     *     nothing left to close
      */
     public CompletableFuture<Void> close(final int statusCode, final String reason) {
         closeRequested.set(true);
@@ -361,6 +368,9 @@ public final class LobbyConnection {
         if (socket == null) {
             fireDisconnect(
                     new DisconnectEvent(DisconnectReason.LOCAL_CLOSE, statusCode, reason, null));
+            return CompletableFuture.completedFuture(null);
+        }
+        if (disconnectFired.get()) {
             return CompletableFuture.completedFuture(null);
         }
         return socket.sendClose(statusCode, reason).thenAccept(ignored -> {});

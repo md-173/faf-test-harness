@@ -7,9 +7,11 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import java.net.http.WebSocket;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,12 +20,16 @@ import org.slf4j.LoggerFactory;
  * adapter subprocesses and closes the lobby + adapter connections, so integration tests leave no
  * orphaned processes.
  *
- * <p><b>Order (deterministic):</b> mock-game → ICE adapter → adapter RPC close → lobby close.
- * Subprocesses go first so the adapter is never left relaying for a dead game; connections close
- * last and tolerate the peer already being gone. This mirrors the official FAF client's teardown
- * (game exit → {@code iceAdapter.stop()} → notify server; {@code GameRunner} in
- * downlords-faf-client). Each step is exception-isolated — a failing step is logged and the
- * sequence continues.
+ * <p><b>Order (deterministic):</b> mock-game → the owner's step → ICE adapter → adapter RPC close →
+ * lobby close. Subprocesses go first so the adapter is never left relaying for a dead game;
+ * connections close last and tolerate the peer already being gone. The owner's step is the
+ * session's own work between the two, registered by its lifecycle through {@link
+ * #registerAfterGameStep}: it runs once the game is down, while the lobby is still open, which is
+ * where the session reports the game's end to the server (WBS-3.1.2.6-fix, #454). The official FAF
+ * client does the same things in a slightly different order ({@code GameRunner} in
+ * downlords-faf-client stops the adapter once the game exits, then notifies the server); here the
+ * report comes before the adapter step, and either way it reaches the lobby before the close. Each
+ * step is exception-isolated: a failing step is logged and the sequence continues.
  *
  * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
  * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
@@ -34,7 +40,9 @@ import org.slf4j.LoggerFactory;
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
  * IceAdapterConnection#close()} is a synchronous socket close; the lobby close is awaited for at
- * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely.
+ * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely. The
+ * owner's step runs under this instance's lock and has to bound itself: the lifecycle's waits at
+ * most five seconds for its lobby send and two for a dying adapter.
  *
  * <p><b>Idempotent and convergent:</b> the first {@link #run()} wins; later calls (and concurrent
  * ones, which block until the first finishes) are no-ops. The signal hook and the FSM's TERMINATED
@@ -66,6 +74,9 @@ public final class SessionTeardown {
     /** Lobby connection; present from session startup. */
     private final LobbyConnection lobby;
 
+    /** Raised once a signal has started the JVM's shutdown; see {@link #signalled()}. */
+    private final BooleanSupplier signalled;
+
     /** Adapter JSON-RPC connection; {@code null} until registered. */
     private volatile IceAdapterConnection adapterRpc;
 
@@ -75,6 +86,9 @@ public final class SessionTeardown {
     /** Mock game subprocess handle; {@code null} until registered. */
     private volatile SubprocessManager gameProcess;
 
+    /** The owner's step between the game and the adapter; a no-op until one is registered. */
+    private volatile Runnable afterGameStep = () -> {};
+
     /**
      * True once {@link #run()} has executed. Volatile so the lock-free read in {@link
      * #warnIfDone(String)} is guaranteed to see a completed teardown.
@@ -83,12 +97,26 @@ public final class SessionTeardown {
 
     /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
-     * are registered later, as they come into existence.
+     * are registered later, as they come into existence. Its {@link #signalled()} never reports a
+     * signal, which suits an owner no signal can reach, such as a test.
      *
      * @param lobby the session's lobby connection; must not be {@code null}
      */
     public SessionTeardown(final LobbyConnection lobby) {
+        this(lobby, () -> false);
+    }
+
+    /**
+     * Creates a teardown that knows when a signal is tearing the JVM down (WBS-3.1.2.8-fix, #438).
+     *
+     * @param lobby the session's lobby connection; must not be {@code null}
+     * @param signalled raised once a signal has started the JVM's shutdown, before any teardown:
+     *     {@code run}'s {@code shuttingDown} flag (#442), or the one {@code session}'s hook raises
+     *     through {@code MultiPeerSession.closeOnSignal()}
+     */
+    public SessionTeardown(final LobbyConnection lobby, final BooleanSupplier signalled) {
         this.lobby = Objects.requireNonNull(lobby, "lobby");
+        this.signalled = Objects.requireNonNull(signalled, "signalled");
     }
 
     /**
@@ -122,6 +150,25 @@ public final class SessionTeardown {
     }
 
     /**
+     * Registers the owner's step, which {@link #run()} takes once the game is down and before it
+     * touches the adapter (WBS-3.1.2.6-fix, #454).
+     *
+     * <p>It runs on every path into teardown, whoever starts it: the lifecycle's TERMINATED entry
+     * hook, the CLI's signal hook, a direct {@link #run()}. That is the point of taking it here
+     * rather than in the lifecycle's own hook, since the signal hook reaches teardown without the
+     * lifecycle's state machine. It runs at most once, under this instance's lock, and a throw from
+     * it is logged and the rest of teardown still runs.
+     *
+     * @param step what to do between the game and the adapter; must not be {@code null}
+     */
+    public void registerAfterGameStep(final Runnable step) {
+        this.afterGameStep = Objects.requireNonNull(step, "step");
+        if (done) {
+            LOG.warn("step after the game registered after teardown already ran; it will not run");
+        }
+    }
+
+    /**
      * Best-effort warning for a handle registered after teardown already ran — it will not be torn
      * down by this instance (the JVM-exit registry hook still covers processes). Lock-free so a
      * registration never blocks; a registration racing {@link #run()} may still miss the warning,
@@ -148,9 +195,36 @@ public final class SessionTeardown {
     }
 
     /**
-     * Runs the teardown sequence once: terminate game, terminate adapter, close the adapter RPC
-     * connection, close the lobby connection. Unregistered handles are skipped; a failing step is
-     * logged and does not stop the rest. Subsequent (or concurrent) calls are no-ops.
+     * Whether a signal started the JVM's shutdown (WBS-3.1.2.8-fix, #438). Read by the verdict
+     * check teardown runs through the owner's step, and by the lifecycle's handling of the
+     * adapter's and the game's own exits: a signal kills both processes itself (a terminal's SIGINT
+     * reaches them directly, and {@code SubprocessRegistry}'s hook terminates them), possibly
+     * before any teardown starts, so a process found dead then is the signal's doing, not a
+     * finding.
+     *
+     * @return {@code true} once a signal has started the shutdown
+     */
+    public boolean signalled() {
+        return signalled.getAsBoolean();
+    }
+
+    /**
+     * The ICE adapter process registered for teardown, if one was (WBS-3.1.2.8-fix, #438). The
+     * verdict check reads its exit from here, as the process reaper records it ({@link
+     * SubprocessManager#exitCode()}, {@link SubprocessManager#waitFor}), rather than from a future
+     * the common pool completes.
+     *
+     * @return the adapter's manager, or empty if no adapter was launched
+     */
+    public Optional<SubprocessManager> adapterProcess() {
+        return Optional.ofNullable(adapterProcess);
+    }
+
+    /**
+     * Runs the teardown sequence once: terminate game, run the owner's step, terminate adapter,
+     * close the adapter RPC connection, close the lobby connection. Unregistered handles are
+     * skipped; a failing step is logged and does not stop the rest. Subsequent (or concurrent)
+     * calls are no-ops.
      */
     public synchronized void run() {
         if (done) {
@@ -159,10 +233,24 @@ public final class SessionTeardown {
         done = true;
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
+        runAfterGameStep();
         terminateAdapter();
         closeAdapterRpc();
         closeLobby();
         LOG.info("session teardown complete");
+    }
+
+    /**
+     * Runs the step registered through {@link #registerAfterGameStep}. A throw is a defect in the
+     * owner rather than a teardown failure, so it is logged at ERROR with its trace, and the
+     * adapter and connections are still torn down.
+     */
+    private void runAfterGameStep() {
+        try {
+            afterGameStep.run();
+        } catch (RuntimeException e) {
+            LOG.error("teardown step after the game threw; continuing", e);
+        }
     }
 
     /**
@@ -215,14 +303,13 @@ public final class SessionTeardown {
             LOG.debug("quit RPC to ICE adapter did not complete cleanly: {}", e.getMessage());
         }
         try {
-            process.onExit().get(ADAPTER_QUIT_EXIT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            // waitFor, not onExit(): see SubprocessManager.waitFor for why a busy common pool must
+            // not decide how long this takes.
+            if (!process.waitFor(ADAPTER_QUIT_EXIT_TIMEOUT)) {
+                LOG.debug("ICE adapter did not exit within {} of quit", ADAPTER_QUIT_EXIT_TIMEOUT);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
-            LOG.debug(
-                    "ICE adapter did not exit within {} of quit: {}",
-                    ADAPTER_QUIT_EXIT_TIMEOUT,
-                    e.getMessage());
         }
     }
 

@@ -434,9 +434,10 @@ final class LifecycleSetupTest {
     }
 
     /**
-     * A call that failed because the adapter's connection closed records nothing (#445): the
-     * adapter is gone, and its own exit is the finding. The session still ends, and no WARN comes
-     * without a verdict.
+     * A call that failed because the adapter's connection closed records nothing itself (#445):
+     * teardown's check decides the adapter (#438, #452), and this stand-in reports no disconnect,
+     * so the check records nothing either. What this pins is the call's own rule: the session still
+     * ends, and no WARN comes without a verdict.
      *
      * @param method the call whose connection closes under it
      */
@@ -460,9 +461,8 @@ final class LifecycleSetupTest {
                 failedAtCommit.get(5, TimeUnit.SECONDS),
                 "a closed connection is the adapter's finding, not the call's");
         assertEquals(ClientState.TERMINATED, lifecycle.getState(), "the session still ends");
-        // Only the call's own line. Teardown then kills the game, whose exit handler can race the
-        // lobby close and warn that GameState Ended could not be sent; that one is not this
-        // route's.
+        // Only the call's own line, at INFO. The closed connection is teardown's adapter check to
+        // judge (#438, #452), and this stand-in's adapter is alive with its link intact.
         assertTrue(
                 warnings().stream().noneMatch(w -> w.startsWith("Could not")),
                 "the failed call must not warn without a verdict: " + warnings());

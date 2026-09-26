@@ -44,6 +44,8 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +74,12 @@ public final class MockClientLifecycle {
      * rather than guessing at it.
      */
     private static final int GAME_ADAPTER_LOST_EXIT = 69;
+
+    /**
+     * Bound on writing {@code GameState Ended} at teardown (#454), the same bound {@code
+     * SessionTeardown} gives the lobby close that follows it.
+     */
+    private static final Duration GAME_STATE_ENDED_SEND_TIMEOUT = Duration.ofSeconds(5);
 
     /** State machine used to produce behaviors from changes in state. */
     private final StateMachine machine;
@@ -340,6 +348,21 @@ public final class MockClientLifecycle {
         // otherwise a harness reading the log would never see the state the client starts in
         // (WBS-3.1.6.2).
         logStateEntry(ClientState.CONNECTING);
+
+        // Teardown's step once the game is down, on every path into teardown (#454, #438, #452).
+        // Registered last, so a teardown that starts early finds no step rather than a half-built
+        // lifecycle.
+        teardown.registerAfterGameStep(this::afterGameStopped);
+    }
+
+    /**
+     * Teardown's step once the game is down: reports the game's end to the lobby (#454), then has
+     * {@link SessionFailures#adapterAtTeardown} judge the adapter (#438, #452). The send swallows
+     * its own failures, so it can never cost the session its verdict.
+     */
+    private void afterGameStopped() {
+        sendGameStateEnded();
+        failures.adapterAtTeardown(iceConnection.disconnectEvent());
     }
 
     private void setupStateMachine() {
@@ -461,9 +484,9 @@ public final class MockClientLifecycle {
         // has installed STARTING_GAME as the current state — receiveEvent is synchronized and
         // publishes the new state before releasing its lock, so hopping to the common pool here
         // guarantees this continuation cannot run until that transition has actually completed.
-        // It also keeps GameExited's TERMINATED entry hook (which synchronously terminates the
-        // adapter and awaits its exit) off the JDK's process-reaper machinery, which the adapter's
-        // own exit wiring below needs free to observe that death.
+        // It does not spare the common pool (labelledAsync is that pool): GameExited's TERMINATED
+        // entry hook holds this continuation's thread for the whole teardown, which is why
+        // teardown waits on the reaper's exit record (SubprocessManager.waitFor), not a future.
         gameExit.thenAcceptAsync(this::onGameProcessExit, labelledAsync);
     }
 
@@ -910,13 +933,12 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * {@link #gameExit} completion handler (#211): classifies the exit locally, then — unless the
-     * game already sent one itself — gives the lobby the generic {@code GameState Ended} frame the
-     * real client sends on every termination (clean or crashed; see faf-client's {@code
-     * GameRunner.notifyGameEnded}), before posting {@link GameExited} so the frame leaves before
-     * teardown closes the connection. Crash detail itself never reaches the server — only this
-     * local log line carries it, per the card's source verification (no crash-report command exists
-     * in the protocol).
+     * {@link #gameExit} completion handler (#211): classifies the exit locally, then posts {@link
+     * GameExited}. Crash detail never reaches the server; only this local log line carries it, per
+     * the card's source verification (no crash-report command exists in the protocol). The generic
+     * {@code GameState Ended} frame the real client sends on every termination is teardown's to
+     * send, once the game is down and before the lobby closes ({@link #sendGameStateEnded},
+     * WBS-3.1.2.6-fix, #454). Sent from here, it raced that close.
      *
      * <p>Classification is {@link #classifyGameExit}, which reads the exit code against the
      * observed clean-end signal; see there for the full table and its reasoning.
@@ -924,11 +946,7 @@ public final class MockClientLifecycle {
      * @param exitCode the game process's exit code.
      */
     private void onGameProcessExit(int exitCode) {
-        boolean cleanEnd = cleanEndSeen.get();
-        classifyGameExit(exitCode, cleanEnd, matchStarted.get());
-        if (!cleanEnd) {
-            sendGameStateEnded();
-        }
+        classifyGameExit(exitCode, cleanEndSeen.get(), matchStarted.get());
         machine.receiveEvent(new GameExited(exitCode));
     }
 
@@ -956,13 +974,13 @@ public final class MockClientLifecycle {
      * caught it.
      *
      * <p>Harness-initiated teardown suppresses the <em>crash</em> reading only: a non-zero code
-     * after {@link SessionTeardown#hasRun()} is the harness's own SIGTERM (143 on POSIX, 1 on
-     * Windows), not a finding, which is what R41 relies on — the real client's {@code gameKilled}
-     * flag suppresses the same false crash. It deliberately does not suppress the no-delivery
-     * warning below: the adapter's death drives TERMINATED and so teardown, and this handler runs
-     * asynchronously, so in #295's own scenario teardown has usually already run by the time a game
-     * that exited {@code 0} on its own is classified. Checking teardown first would mask precisely
-     * the case this card exists for.
+     * after {@link SessionTeardown#hasRun()}, or once a signal is stopping the run ({@link
+     * SessionTeardown#signalled()}, #438), is that stop's own SIGTERM or signal, not a finding. R41
+     * relies on this; the real client's {@code gameKilled} flag suppresses the same false crash. It
+     * deliberately does not suppress the no-delivery warning below: the adapter's death drives
+     * TERMINATED and so teardown, and this handler runs asynchronously, so in #295's scenario
+     * teardown has usually run by the time a game that exited {@code 0} on its own is classified.
+     * Checking teardown first would mask precisely the case this card exists for.
      *
      * <p>Takes the two observation signals as parameters rather than reading the fields, so a test
      * can drive every combination directly; teardown state is still read from {@link #teardown}.
@@ -990,7 +1008,7 @@ public final class MockClientLifecycle {
                     "mock-game exited with code {} after losing its GPGNet link to the adapter;"
                             + " the adapter's own exit is reported separately",
                     exitCode);
-        } else if (exitCode != 0 && teardown.hasRun()) {
+        } else if (exitCode != 0 && (teardown.hasRun() || teardown.signalled())) {
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);
@@ -1022,41 +1040,58 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby — the
-     * exact envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send
-     * for a {@code GameState Ended} GPGNet frame. This is the fallback for the case the forwarder
-     * cannot cover: a crashed or killed game process never emits the frame to the adapter at all.
+     * Sends {@code {command: "GameState", target: "game", args: ["Ended"]}} to the lobby, the exact
+     * envelope R72's {@link com.faforever.testharness.client.ice.GpgNetForwarder} would send for a
+     * {@code GameState Ended} GPGNet frame. This is the fallback for the cases the forwarder cannot
+     * cover: a crashed or killed game never emits the frame, and a failed launch has no game.
      *
-     * <p>The caller gates it on {@link #cleanEndSeen} rather than sending unconditionally, because
-     * since R72 was wired into {@code launchGame} (#218) a clean end produces the frame twice —
-     * mock-game emits {@code GameEnded} then {@code GameState Ended}, the adapter relays both
-     * (every frame reaches {@code onGpgNetMessageReceived}; verified in the 3.3.14 jar), and the
-     * forwarder sends them on. faf-server routes {@code GameState "Ended"} to {@code
-     * on_connection_closed()} and drops the repeat silently ({@code lobbyconnection.py}: {@code if
-     * not self.game_connection: return}), so the duplicate is harmless — but the real client never
-     * sends it, and this harness exists to be wire-faithful. The gate is exact because {@code
-     * GameEnded} precedes {@code GameState Ended} on the wire, and it degrades safely: a process
-     * that dies before the adapter relays {@code GameEnded} leaves the flag false and still gets
-     * the frame from here.
+     * <p>Teardown's step once the game is down (WBS-3.1.2.6-fix, #454), so it runs once per
+     * session, whoever started teardown, and its write completes before the lobby close that
+     * follows. The game-exit handler used to send it, racing that close, which {@code
+     * LobbyConnection} writes directly rather than through its send chain: when the close won, the
+     * frame was lost with a WARN. The real client sends it after every outcome of a {@code
+     * game_launch}, a failed launch included ({@code GameRunner.startOnlineGame}'s {@code
+     * whenComplete}), so this follows every one the lifecycle acted on (#462).
      *
-     * <p>Fire-and-forget, matching the forwarder's own send: a failure is logged and otherwise
-     * ignored, since a dead lobby connection surfaces through the connection's own disconnect
-     * listener.
+     * <p>Gated on {@link #cleanEndSeen} rather than sent unconditionally, because since R72 was
+     * wired into {@code launchGame} (#218) a clean end produces the frame twice: mock-game emits
+     * {@code GameEnded} then {@code GameState Ended}, the adapter relays both (every frame reaches
+     * {@code onGpgNetMessageReceived}; verified in the 3.3.14 jar), and the forwarder sends them
+     * on. faf-server routes {@code GameState "Ended"} to {@code on_connection_closed()} and drops
+     * the repeat silently ({@code lobbyconnection.py}: {@code if not self.game_connection:
+     * return}), so the duplicate is harmless, but the real client never sends it, and this harness
+     * exists to be wire-faithful. The gate is exact because {@code GameEnded} precedes {@code
+     * GameState Ended} on the wire, and it degrades safely: a process that dies before the adapter
+     * relays {@code GameEnded} leaves the flag false and still gets the frame from here.
+     *
+     * <p>A lobby that is already gone is skipped at DEBUG, and a failed send is a WARN only while
+     * the lobby is still up. Nothing escapes: teardown carries on either way.
      */
     private void sendGameStateEnded() {
+        if (!verdicts.launchStarted() || cleanEndSeen.get()) {
+            return;
+        }
+        if (session.disconnectEvent().isPresent()) {
+            LOG.debug("lobby connection already closed; GameState Ended not sent");
+            return;
+        }
         ObjectNode envelope = mapper.createObjectNode();
         envelope.put("command", "GameState");
         envelope.put("target", "game");
         envelope.putArray("args").add("Ended");
-        lobby.send(envelope)
-                .whenComplete(
-                        (ok, error) -> {
-                            if (error != null) {
-                                LOG.warn(
-                                        "failed to send GameState Ended to lobby: {}",
-                                        error.getMessage());
-                            }
-                        });
+        try {
+            lobby.send(envelope)
+                    .get(GAME_STATE_ENDED_SEND_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException | RuntimeException e) {
+            String reason = SessionFailures.describe(SessionFailures.unwrap(e));
+            if (session.disconnectEvent().isPresent()) {
+                LOG.debug("GameState Ended not sent, the lobby connection closed: {}", reason);
+            } else {
+                LOG.warn("failed to send GameState Ended to lobby: {}", reason);
+            }
+        }
     }
 
     /**
@@ -1066,11 +1101,11 @@ public final class MockClientLifecycle {
      * check comes first (WBS-3.1.2.5): {@link SessionTeardown}'s adapter step now quits the adapter
      * before ever signalling it, so a clean teardown produces the adapter's own exit(0) here, and
      * that must still read as the real client's "terminated normally" INFO line, not be downgraded
-     * to DEBUG just because teardown happened to be running. Only a non-zero code observed once
-     * {@link SessionTeardown#hasRun()} falls back to DEBUG — that is the SIGTERM/ SIGKILL fallback
-     * firing because quit didn't land, an expected shutdown code, not a crash. The TERMINATED entry
-     * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
-     * logs.
+     * to DEBUG just because teardown happened to be running. Only a non-zero code seen once {@link
+     * SessionTeardown#hasRun()} or {@link SessionTeardown#signalled()} holds falls back to DEBUG:
+     * teardown's SIGTERM/SIGKILL fallback, or the signal's own kill, not a crash. The TERMINATED
+     * entry hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method
+     * only logs.
      *
      * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, recording {@link
      * SessionVerdicts#adapterLost()} in the same branch that warns, so the two cannot disagree.
@@ -1079,13 +1114,13 @@ public final class MockClientLifecycle {
      * arrive here with teardown already run. One is the TERMINATED self-loop through {@link
      * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
      * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
-     * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
-     * while the session is mid-state. Deleting that branch, which is what #371 item 1 asked for
-     * (written before #341 routed the self-loop through this method), logs a crash on any clean
-     * shutdown whose teardown has to end the adapter with a signal, and lets that teardown-owned
-     * code set the flag after {@code RunCommand} may already have read it. Measured, with the
-     * branch removed: a plain {@link #shutdown()} in {@code AdapterCrashRecoveryTest}'s fixture
-     * logs {@code ICE adapter exited abnormally (code=143)}. That class pins both halves.
+     * where the CLI's hook runs teardown outside the FSM and this event can arrive mid-state. There
+     * {@code SubprocessRegistry}'s hook, or the terminal's SIGINT, can kill the adapter before that
+     * teardown starts, so the signal flag counts too (#438). Deleting the branch, as #371 item 1
+     * asked before #341 routed the self-loop here, logs a crash on any clean shutdown whose
+     * teardown has to signal the adapter, and lets that code set the flag after {@code RunCommand}
+     * may have read it. Measured, with the branch removed: a plain {@link #shutdown()} in {@code
+     * AdapterCrashRecoveryTest}'s fixture logs {@code ICE adapter exited abnormally (code=143)}.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
@@ -1093,17 +1128,15 @@ public final class MockClientLifecycle {
         int exitCode = ((AdapterExited) event).exitCode();
         if (exitCode == 0) {
             LOG.info("ICE adapter terminated normally");
-        } else if (teardown.hasRun()) {
+        } else if (teardown.hasRun() || teardown.signalled()) {
             // Load bearing for the exit status, not only for the log level; see the javadoc.
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {
-            LOG.warn("ICE adapter exited abnormally (code={})", exitCode);
-            // The process exit code this run should produce (WBS-3.1.2.8-fix, #406). Set inside
-            // the branch that already decided this exit was unaccounted for, rather than
-            // re-derived by the reader, so the warning above and the exit code cannot disagree
-            // about whether the adapter was lost. Same arrangement classifyGameExit has with
-            // gameCrashed.
-            verdicts.recordAdapterLost();
+            // The warning and the process exit code this run should produce (WBS-3.1.2.8-fix,
+            // #406), decided in the branch that already found this exit unaccounted for, so the
+            // two cannot disagree about whether the adapter was lost. SessionFailures holds the
+            // line so teardown's check logs it the same way (#438).
+            failures.adapterLost(exitCode);
         }
     }
 
@@ -1175,6 +1208,7 @@ public final class MockClientLifecycle {
             throw new AssertionError(
                     "launchGame method called without a LaunchGame event, should be impossible");
         }
+        verdicts.recordLaunchStarted();
         try {
             GameConfig gameConfig = ((LaunchGame) message).config();
             // WBS-3.1.2.9: launch under the identity the lobby assigned, not the config defaults.
@@ -1194,13 +1228,13 @@ public final class MockClientLifecycle {
             // #214: the FSM's adapter-death subscriber reads the shared signal instead of the
             // process directly, the way 3.1.2.6 reads R26's game signal (gameExit()).
             //
-            // Async is load-bearing, not a style choice: Process.onExit()'s dependents run
-            // synchronously on the JDK's internal process-reaper machinery by default, and this
-            // event's handling can itself block on that same machinery (TERMINATED's entry hook
-            // synchronously terminates subprocesses via SessionTeardown, which awaits their exit
-            // futures). A synchronous thenAccept here ties up the reaper thread that a concurrent
-            // game-exit teardown is waiting on to observe *this* adapter's death, stalling it for
-            // a full termination grace. thenAcceptAsync moves the event post off that thread.
+            // Async is load-bearing, for ordering: an adapter that exits at once can have completed
+            // adapterExit by this line, and a synchronous thenAccept would then post AdapterExited
+            // on this thread, inside the LaunchGame transition and before STARTING_GAME is
+            // installed (the hazard setupStateMachine documents for gameExit). It does not spare
+            // the common pool: labelledAsync is that pool, and TERMINATED's entry hook holds
+            // whichever pool thread runs it for the whole teardown, which is why teardown waits on
+            // the reaper's exit record (SubprocessManager.waitFor) instead.
             adapterExit()
                     .thenAcceptAsync(
                             exitCode -> machine.receiveEvent(new AdapterExited(exitCode)),
@@ -1516,8 +1550,8 @@ public final class MockClientLifecycle {
         // posts AdapterExited (#214), which is the reliable channel for that. One consequence of
         // both firing (#406): the kernel closes the RPC socket as the adapter dies, so a call in
         // flight can fail first, and then this ShutdownRequested takes the session to TERMINATED
-        // and the adapter's exit is classified after teardown. The run then exits 0 instead of
-        // ExitCodes.ADAPTER_LOST. The window is the call's round trip; see that constant.
+        // and the adapter's exit is classified after teardown has begun. Teardown's own adapter
+        // check finds the death instead, so the run still exits ExitCodes.ADAPTER_LOST (#438).
         //
         // whenCompleteAsync, not whenComplete: a send that fails outright (dead socket) completes
         // the future before call() even returns, and a synchronous continuation would then re-enter

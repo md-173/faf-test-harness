@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.LobbyConnection;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -105,6 +107,7 @@ final class SessionTeardownTest {
     void concurrentRunsExecuteTeardownOnce() throws Exception {
         SessionTeardown teardown = new SessionTeardown(recordingLobby());
         teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(() -> events.add("step"));
 
         CountDownLatch go = new CountDownLatch(1);
         Runnable call =
@@ -126,9 +129,54 @@ final class SessionTeardownTest {
         second.join();
 
         assertEquals(
-                List.of("rpc-closed", "lobby-closed"),
+                List.of("step", "rpc-closed", "lobby-closed"),
                 events,
-                "each teardown step must fire exactly once across concurrent callers");
+                "each teardown step, the owner's included, must fire exactly once across concurrent"
+                        + " callers");
+    }
+
+    /**
+     * The owner's step runs once the game is down and before the adapter is touched (#454): where
+     * the lifecycle reports the game's end, with the lobby still open.
+     */
+    @Test
+    void theAfterGameStepRunsBetweenTheGameAndTheAdapter() throws Exception {
+        SubprocessManager game = startSleeper();
+        SubprocessManager adapter = startSleeper();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerGameProcess(game);
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(
+                () ->
+                        events.add(
+                                "step: game "
+                                        + (game.isAlive() ? "alive" : "down")
+                                        + ", adapter "
+                                        + (adapter.isAlive() ? "alive" : "down")));
+
+        teardown.run();
+
+        assertEquals(
+                List.of("step: game down, adapter alive", "rpc-closed", "lobby-closed"), events);
+    }
+
+    /** A step that throws is the owner's defect, logged, and the rest of teardown still runs. */
+    @Test
+    void aThrowingAfterGameStepStillTearsDownTheRest() throws Exception {
+        SubprocessManager adapter = startSleeper();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby());
+        teardown.registerAdapterProcess(adapter);
+        teardown.registerAdapterRpc(new RecordingAdapterConnection(() -> events.add("rpc-closed")));
+        teardown.registerAfterGameStep(
+                () -> {
+                    throw new IllegalStateException("defect in the owner's step");
+                });
+
+        teardown.run();
+
+        assertFalse(adapter.isAlive(), "the adapter must still be terminated");
+        assertEquals(List.of("rpc-closed", "lobby-closed"), events);
     }
 
     /** An idle, lobby-only session tears down cleanly — unregistered handles are skipped. */
@@ -174,6 +222,21 @@ final class SessionTeardownTest {
 
         assertFalse(rpc.quitCalled, "quit must not be sent over an RPC connection that isn't open");
         assertFalse(adapter.isAlive(), "adapter must still be terminated via SIGTERM/SIGKILL");
+    }
+
+    /**
+     * {@link SessionTeardown#signalled()} reads the supplier it was built with (#438), and a
+     * teardown built without one never reports a signal.
+     */
+    @Test
+    void signalledFollowsItsSupplier() {
+        AtomicBoolean flag = new AtomicBoolean();
+        SessionTeardown teardown = new SessionTeardown(recordingLobby(), flag::get);
+
+        assertFalse(teardown.signalled());
+        flag.set(true);
+        assertTrue(teardown.signalled());
+        assertFalse(new SessionTeardown(recordingLobby()).signalled(), "no supplier, no signal");
     }
 
     /** Adapter-connection stub: never connects, runs the given action when closed. */

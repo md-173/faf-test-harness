@@ -36,6 +36,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -122,6 +123,7 @@ final class CrashRecoveryTest {
     private DummyIceLauncher iceLauncher;
     private ListAppender<ILoggingEvent> appender;
     private Logger root;
+    private Level originalLevel;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -142,6 +144,11 @@ final class CrashRecoveryTest {
         appender.setContext(ctx);
         appender.start();
         root.addAppender(appender);
+        // The GameState Ended tests read LobbyConnection's DEBUG "lobby sending frame" record to
+        // tell who sent the frame. Set here rather than inherited from the Gradle task's LOG_LEVEL
+        // so they work from an IDE too, as AdapterCrashRecoveryTest does.
+        originalLevel = root.getLevel();
+        root.setLevel(Level.DEBUG);
     }
 
     @AfterEach
@@ -153,6 +160,7 @@ final class CrashRecoveryTest {
         try {
             releaseGameChild();
         } finally {
+            root.setLevel(originalLevel);
             appender.stop();
             root.detachAppender(appender);
         }
@@ -300,6 +308,79 @@ final class CrashRecoveryTest {
         assertEquals("GameState", envelope.get("command").asText());
         assertEquals("game", envelope.get("target").asText());
         assertEquals("Ended", envelope.get("args").get(0).asText());
+        // One owner (#454): teardown sends it, and the game-exit handler no longer does.
+        assertEquals(1, gameStateEndedSends(), "exactly one GameState Ended per run");
+    }
+
+    /**
+     * Teardown reports the game it kills to the lobby itself, before it closes the lobby
+     * (WBS-3.1.2.6-fix, #454). The game-exit handler used to send that frame from a common-pool
+     * thread, racing teardown's lobby close, and a run whose close won lost it with a WARN. Receipt
+     * alone would usually pass on that code too, since the adapter step gave the handler time, so
+     * the thread and the order are what pin the owner.
+     */
+    @Test
+    void teardownReportsTheGameItKillsBeforeClosingTheLobby() throws Exception {
+        gameLauncher = new ChildGameLauncher(HANGING_PROCESS);
+        MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+
+        lifecycle.shutdown();
+        lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
+
+        ILoggingEvent start = onlyEvent(e -> "tearing down session".equals(e.getMessage()));
+        ILoggingEvent sent = onlyEvent(CrashRecoveryTest::isGameStateEndedSend);
+        ILoggingEvent end = onlyEvent(e -> "session teardown complete".equals(e.getMessage()));
+        assertEquals(
+                start.getThreadName(),
+                sent.getThreadName(),
+                "teardown must send the frame itself, not the game-exit handler");
+        List<ILoggingEvent> log = appender.list;
+        assertTrue(
+                log.indexOf(start) < log.indexOf(sent) && log.indexOf(sent) < log.indexOf(end),
+                "the frame must go out inside teardown, before its lobby close");
+        assertTrue(isGameStateEnded(server.pollReceived(5, TimeUnit.SECONDS)));
+        assertNoWarning("GameState Ended");
+    }
+
+    /**
+     * A teardown started outside the state machine reports the game too (#454). The CLI's signal
+     * hook calls {@code SessionTeardown.run()} directly, and the frame is teardown's own step, so
+     * it goes out on that path as well, once, however the state machine then reaches TERMINATED.
+     */
+    @Test
+    void aTeardownStartedOutsideTheStateMachineStillReportsTheGame() throws Exception {
+        gameLauncher = new ChildGameLauncher(HANGING_PROCESS);
+        SessionTeardown teardown = new SessionTeardown(lobby);
+        MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, teardown);
+
+        teardown.run();
+        lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
+
+        assertEquals(
+                Thread.currentThread().getName(),
+                onlyEvent(CrashRecoveryTest::isGameStateEndedSend).getThreadName(),
+                "the teardown this thread ran must send it");
+        assertTrue(isGameStateEnded(server.pollReceived(5, TimeUnit.SECONDS)));
+        assertNoWarning("GameState Ended");
+    }
+
+    /**
+     * A lobby that is already gone ends teardown quietly (#454): no GameState Ended is attempted,
+     * and the close finds nothing left to do. The game-exit handler used to try the send anyway,
+     * and fail it with a WARN whenever the lobby's output was already shut.
+     */
+    @Test
+    void aLobbyAlreadyGoneEndsTeardownQuietly() throws Exception {
+        gameLauncher = new ChildGameLauncher(HANGING_PROCESS);
+        MockClientLifecycle lifecycle = hostingLifecycle(gameLauncher, new SessionTeardown(lobby));
+
+        server.closeAllClean(1000, "bye");
+        lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
+
+        assertFalse(gameLauncher.manager.isAlive(), "teardown must still kill the game");
+        assertEquals(0, gameStateEndedSends(), "nothing may be sent to a lobby that has gone");
+        assertNoWarning("GameState Ended");
+        assertNoWarning("lobby close did not complete cleanly");
     }
 
     @Test
@@ -383,6 +464,53 @@ final class CrashRecoveryTest {
                                                         .contains("No matching transitions")),
                 "a post-teardown subprocess exit must be a deliberate no-op, not an "
                         + "unregistered-event warning. captured: "
+                        + significantEvents());
+    }
+
+    /**
+     * The one captured record matching {@code matcher}.
+     *
+     * @param matcher which record
+     * @return that record, failing the test unless exactly one matched
+     */
+    private ILoggingEvent onlyEvent(final Predicate<ILoggingEvent> matcher) {
+        List<ILoggingEvent> matches = appender.list.stream().filter(matcher).toList();
+        assertEquals(1, matches.size(), "expected exactly one matching record: " + matches);
+        return matches.get(0);
+    }
+
+    /** How many times the client handed a {@code GameState Ended} frame to the lobby. */
+    private long gameStateEndedSends() {
+        return appender.list.stream().filter(CrashRecoveryTest::isGameStateEndedSend).count();
+    }
+
+    /**
+     * Whether {@code event} is {@code LobbyConnection} handing a {@code GameState Ended} frame to
+     * its socket. That DEBUG record is logged on the sending thread, which is what tells the owner
+     * of a send apart.
+     */
+    private static boolean isGameStateEndedSend(final ILoggingEvent event) {
+        String message = event.getFormattedMessage();
+        return message.startsWith("lobby sending frame:")
+                && message.contains("\"command\":\"GameState\"")
+                && message.contains("\"Ended\"");
+    }
+
+    /** Whether a frame the lobby received is {@code {command: "GameState", args: ["Ended"]}}. */
+    private static boolean isGameStateEnded(final String frame) throws IOException {
+        JsonNode envelope = MAPPER.readTree(frame);
+        return "GameState".equals(envelope.path("command").asText())
+                && "Ended".equals(envelope.path("args").path(0).asText());
+    }
+
+    /** Fails if a WARN or ERROR record mentions {@code fragment}. */
+    private void assertNoWarning(final String fragment) {
+        assertFalse(
+                significantEvents().stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains(fragment)),
+                "no WARN or ERROR may mention '"
+                        + fragment
+                        + "'. captured: "
                         + significantEvents());
     }
 
