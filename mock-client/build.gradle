@@ -33,9 +33,11 @@ test {
     // DEBUG and logback.xml defaults to INFO — so today the suite throws away exactly the
     // evidence that would say whether a frame was late or never sent. Turning the level up here
     // puts both ends of every exchange in the Gradle test report, which CI uploads on failure
-    // (see CONTRIBUTING.md § 3). LOG_LEVEL is read by logback.xml at config-parse time; the
-    // child JVMs in LogLevelFlagEndToEndTest scrub it from their environment, so the tests that
-    // assert on the default level are unaffected.
+    // (see CONTRIBUTING.md § 3). Those lines traced the timeout in #415 to the scripted server
+    // stranding a frame, since fixed, and the fixture's re-arm line, the sign the race fired
+    // again, is DEBUG as well. LOG_LEVEL is read by logback.xml at config-parse time; the child
+    // JVMs in LogLevelFlagEndToEndTest scrub it from their environment, so the tests that assert
+    // on the default level are unaffected.
     environment 'LOG_LEVEL', 'DEBUG'
     // VersionFlagJarTest runs the shadow jar that ships, because no test from class directories can
     // see a manifest (WBS-3.1.5.2, #383). inputs.files on the task provider builds the jar first and
