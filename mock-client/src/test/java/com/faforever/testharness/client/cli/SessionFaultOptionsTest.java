@@ -254,14 +254,32 @@ final class SessionFaultOptionsTest {
                 ((MockClientCli) root.getCommand()).toValidatedConfig(root.getCommandSpec()));
     }
 
+    /**
+     * Each peer's drop percentage, host first.
+     *
+     * @param peers the resolved bases
+     * @return the values
+     */
     private static List<Integer> drops(final List<MockClientConfig> peers) {
         return peers.stream().map(MockClientConfig::mockGameUdpDropPercent).toList();
     }
 
+    /**
+     * Each peer's ICE relay delay, host first.
+     *
+     * @param peers the resolved bases
+     * @return the values
+     */
     private static List<Integer> delays(final List<MockClientConfig> peers) {
         return peers.stream().map(MockClientConfig::iceRelayDelayMs).toList();
     }
 
+    /**
+     * Each peer's crash delay, host first.
+     *
+     * @param peers the resolved bases
+     * @return the values
+     */
     private static List<Integer> crashes(final List<MockClientConfig> peers) {
         return peers.stream().map(MockClientConfig::mockGameCrashAfterSeconds).toList();
     }

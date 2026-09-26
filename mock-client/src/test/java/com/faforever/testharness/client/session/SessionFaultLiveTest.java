@@ -93,6 +93,7 @@ final class SessionFaultLiveTest {
     /** The relay delay: half the one-client ceiling in runbook §10 (keep under about 1000 ms). */
     private static final int RELAY_DELAY_MS = 500;
 
+    /** Logger for the per-run marker. */
     private static final Logger LOG = LoggerFactory.getLogger(SessionFaultLiveTest.class);
 
     /** The session under test, kept for the teardown that runs even on a failed checkpoint. */
@@ -275,6 +276,14 @@ final class SessionFaultLiveTest {
         assumeTrue(missing.isEmpty(), () -> "missing live prerequisites: " + missing);
     }
 
+    /**
+     * Adds one line to {@code missing} when {@code found} is absent.
+     *
+     * @param missing the list being built
+     * @param what the prerequisite's name
+     * @param found the resolved path, or {@code null}
+     * @param env the environment variable that overrides its location
+     */
     private static void expect(
             final List<String> missing, final String what, final Path found, final String env) {
         if (found == null) {
@@ -282,11 +291,21 @@ final class SessionFaultLiveTest {
         }
     }
 
+    /**
+     * The lobby endpoint this run targets.
+     *
+     * @return the environment override, or {@link #DEFAULT_LOBBY_URL}
+     */
     private static URI lobbyUrl() {
         String override = System.getenv(LOBBY_URL_ENV);
         return URI.create(override == null || override.isBlank() ? DEFAULT_LOBBY_URL : override);
     }
 
+    /**
+     * Whether the lobby host accepts a TCP connection within a short timeout.
+     *
+     * @return {@code true} if the lobby is reachable from this network
+     */
     private static boolean lobbyReachable() {
         URI url = lobbyUrl();
         int port = url.getPort() == -1 ? 443 : url.getPort();
@@ -300,6 +319,13 @@ final class SessionFaultLiveTest {
         }
     }
 
+    /**
+     * Non-null variant for the test body; guaranteed present once the prerequisite gate passes.
+     *
+     * @param resolved the resolved path, or {@code null}
+     * @param what the prerequisite's name, for the failure message
+     * @return {@code resolved}
+     */
     private static Path required(final Path resolved, final String what) {
         if (resolved == null) {
             throw new IllegalStateException(what + " vanished after the prerequisite gate");
@@ -307,6 +333,12 @@ final class SessionFaultLiveTest {
         return resolved;
     }
 
+    /**
+     * One peer's refresh-token file.
+     *
+     * @param peer the peer's position, 0 for the host
+     * @return the file, or {@code null} if it is not there
+     */
     private static Path token(final int peer) {
         String[] token = TOKENS.get(peer);
         return resolve(token[0], token[1], "../" + token[1]);
