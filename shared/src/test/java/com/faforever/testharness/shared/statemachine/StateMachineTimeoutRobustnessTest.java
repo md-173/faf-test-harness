@@ -21,7 +21,8 @@ import org.slf4j.LoggerFactory;
 /**
  * Tests the two ways a scheduled timeout can misbehave once it has already been handed to the timer
  * thread: firing after it was cancelled, whether by a commit or by {@link StateMachine#cancel()},
- * and throwing something other than {@link FailedTransitionException}.
+ * and throwing something other than {@link FailedTransitionException}. Also pins what that thread
+ * must be (WBS-2.3.7-fix, #465): a daemon, ended by {@code cancel()} without waiting out a timeout.
  */
 final class StateMachineTimeoutRobustnessTest {
     private static final long TIMEOUT_MS = 100;
@@ -81,6 +82,25 @@ final class StateMachineTimeoutRobustnessTest {
     }
 
     /**
+     * Waits, within {@link #AWAIT_SECONDS}, for {@link StateMachine} to log an ERROR carrying a
+     * throwable whose message is {@code thrown}.
+     */
+    private void awaitErrorLogged(String thrown) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT_SECONDS);
+        while (appender.list.stream()
+                .noneMatch(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getThrowableProxy() != null
+                                        && thrown.equals(e.getThrowableProxy().getMessage()))) {
+            assertTrue(
+                    System.nanoTime() < deadline,
+                    () -> "no ERROR carrying \"" + thrown + "\"; log was " + appender.list);
+            Thread.sleep(POLL_MS);
+        }
+    }
+
+    /**
      * The machine's timer thread, captured by a timeout due at once into the state the machine is
      * already in. Such a timeout runs its action and changes nothing else.
      */
@@ -91,10 +111,10 @@ final class StateMachineTimeoutRobustnessTest {
     }
 
     /**
-     * Waits, within {@link #AWAIT_SECONDS}, until {@code timer} has dequeued a timeout and is
-     * parked on the machine's monitor inside its {@code run()}. The frame check matters: {@link
-     * Thread.State#BLOCKED} also covers re-entering a monitor after {@link Object#wait()}, which is
-     * how the timer thread waits for its next task.
+     * Waits, within {@link #AWAIT_SECONDS}, until {@code timer} has started a timeout and is parked
+     * on the machine's monitor inside it. The frame check matters: {@link Thread.State#BLOCKED}
+     * says only that the thread is waiting for some monitor, and the frame says it is this one,
+     * inside the timeout.
      */
     private static void awaitParkedOnMonitor(Thread timer) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(AWAIT_SECONDS);
@@ -116,9 +136,9 @@ final class StateMachineTimeoutRobustnessTest {
     }
 
     /**
-     * {@link java.util.TimerTask#cancel()} cannot stop a task the timer thread has already
-     * dequeued. Such a task blocks on the machine's monitor and, once released, used to commit a
-     * transition out of a state the machine had already left.
+     * Cancelling a timeout's future cannot stop a task the timer thread has already started. Such a
+     * task blocks on the machine's monitor and, once released, used to commit a transition out of a
+     * state the machine had already left.
      */
     @Test
     void timeoutCancelledAfterBeingDequeuedDoesNotCommit() throws Exception {
@@ -131,8 +151,8 @@ final class StateMachineTimeoutRobustnessTest {
         Thread timer = timerThreadOf(machine, a);
 
         // The monitor is held from before the timeout is armed, so it cannot commit ahead of the
-        // event however late this thread runs (#380). Due at once, the timeout is dequeued by the
-        // timer thread, which then parks inside run() waiting for us: the window TimerTask.cancel()
+        // event however late this thread runs (#380). Due at once, the timeout is started by the
+        // timer thread, which then parks inside it waiting for us: the window cancelling its future
         // cannot close. Waiting for that park, rather than sleeping a fixed settle, is what proves
         // the window was entered at all.
         synchronized (machine) {
@@ -168,7 +188,7 @@ final class StateMachineTimeoutRobustnessTest {
             machine.cancel();
         }
 
-        // cancel() stopped the timer, so its thread ends once the released task has returned.
+        // cancel() shut the executor down, so its thread ends once the released task has returned.
         timer.join(TimeUnit.SECONDS.toMillis(AWAIT_SECONDS));
         assertFalse(timer.isAlive(), "the timer thread should end after its last task");
         assertSame(a, machine.getState(), "a timeout dequeued before cancel() must not commit");
@@ -206,5 +226,76 @@ final class StateMachineTimeoutRobustnessTest {
                 "the timer must survive a throwing action");
         reachedC.get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertSame(c, machine.getState());
+    }
+
+    /**
+     * An Error thrown by a timeout action is logged, and a later timeout still fires
+     * (WBS-2.3.7-fix, #465). An executor keeps whatever escapes a task in a future that nothing
+     * reads; the {@code java.util.Timer} before it died of it instead, leaving the trace on stderr
+     * only and every later {@link StateMachine#setTimeout(long, State)} throwing.
+     */
+    @Test
+    void errorInTimeoutActionIsLoggedAndLeavesTheTimerUsable() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        State c = new State("C");
+        StateMachine machine = new StateMachine(a);
+        try {
+            machine.setTimeout(
+                    0,
+                    b,
+                    ignored -> {
+                        throw new Error("action blew up");
+                    });
+
+            awaitErrorLogged("action blew up");
+            assertSame(a, machine.getState(), "a throwing action must not move the machine");
+
+            var reachedC = machine.stateReached(c);
+            machine.setTimeout(0, c);
+            reachedC.get(AWAIT_SECONDS, TimeUnit.SECONDS);
+            assertSame(c, machine.getState());
+        } finally {
+            machine.cancel();
+        }
+    }
+
+    /**
+     * Timeouts run on a daemon thread, as they did on {@code new Timer(true)}, so a machine nobody
+     * cancels never holds a JVM open (WBS-2.3.7-fix, #465). A new thread takes its creator's daemon
+     * flag, and the first {@code setTimeout} creates this one, so a missing {@code setDaemon} only
+     * shows when that call comes from a thread that is not a daemon: hence the precondition.
+     */
+    @Test
+    void timeoutsRunOnADaemonThread() throws Exception {
+        assertFalse(
+                Thread.currentThread().isDaemon(),
+                "precondition: the arming thread must not be a daemon itself");
+        State a = new State("A");
+        StateMachine machine = new StateMachine(a);
+        try {
+            assertTrue(timerThreadOf(machine, a).isDaemon(), "the timeout thread must be a daemon");
+        } finally {
+            machine.cancel();
+        }
+    }
+
+    /**
+     * {@link StateMachine#cancel()} discards a timeout still waiting, as {@code Timer.cancel()}
+     * did, so the timer thread ends at once instead of living on until that timeout's deadline to
+     * run it as a no-op (WBS-2.3.7-fix, #465). The cancelled flag stops such a timeout committing
+     * either way, which is why only the thread shows the difference.
+     */
+    @Test
+    void cancelDoesNotWaitOutAPendingTimeout() throws Exception {
+        State a = new State("A");
+        StateMachine machine = new StateMachine(a);
+        Thread timer = timerThreadOf(machine, a);
+
+        machine.setTimeout(TimeUnit.MINUTES.toMillis(1), new State("DOOM"));
+        machine.cancel();
+
+        timer.join(TimeUnit.SECONDS.toMillis(AWAIT_SECONDS));
+        assertFalse(timer.isAlive(), "cancel() must discard a pending timeout, not wait it out");
     }
 }

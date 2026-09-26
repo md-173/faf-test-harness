@@ -127,7 +127,8 @@ final class StateMachineTimeoutTest {
 
         // Long enough that it cannot fire before the event below cancels it: if it did, the
         // machine would be in C, which has no transition for AToB, and the IGNORE policy would
-        // drop the event. The machine's Timer is a daemon, so nothing ever waits this out.
+        // drop the event. Cancelling it drops it from the machine's queue, so nothing ever waits
+        // this out.
         machine.setTimeout(CANCELLED_TIMEOUT_MS, c);
 
         // Timeout gets cancelled here, as shown by the previous test.
