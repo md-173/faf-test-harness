@@ -36,5 +36,8 @@
 # The WARN lines are expected: 'notice', 'irc_password', 'player_info', 'social', and
 # 'game_info' are lobby broadcasts with no registered handler yet — they belong to later
 # stories (matchmaking 3.1.1.x, game_info consumption). Each is logged once then muted.
+# Since #473 a 'notice' is logged with its text instead, here at INFO as
+# `lobby notice (info): You are using an unofficial client version! ...`; this capture
+# predates that.
 #
 # This capture used `timeout --signal=TERM 20` as a stand-in for an interactive Ctrl-C.
