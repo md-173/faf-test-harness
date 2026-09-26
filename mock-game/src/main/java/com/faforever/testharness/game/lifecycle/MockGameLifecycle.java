@@ -410,6 +410,17 @@ public final class MockGameLifecycle {
     }
 
     /**
+     * The lifecycle's state machine, so a test can hold its monitor and prove a path never takes it
+     * (#329). Not a way to drive the lifecycle: every production caller goes through the methods
+     * above, and a test posting events here would bypass the wiring it is meant to cover.
+     *
+     * @return the state machine this lifecycle drives; never {@code null}.
+     */
+    StateMachine stateMachine() {
+        return machine;
+    }
+
+    /**
      * Cancels any not-yet-started configured schedules (launch delay and match duration) and shuts
      * the scheduler down. Only called by {@link GameShutdown#run()} hence package-private.
      */
@@ -532,10 +543,19 @@ public final class MockGameLifecycle {
         gpgnetDispatcher.registerHandler(
                 "DisconnectFromPeer", frame -> machine.receiveEvent(new PeerDisconnected(frame)));
 
-        // A local close is our own shutdown sequence closing the socket, never news to the FSM: the
-        // transition guard below rejects it in every state, and in ENDED — where the shutdown
-        // sequence runs — there is no ServerDisconnected transition at all, so posting it there
-        // logged "No matching transitions" on every clean exit. Filter it at the source instead.
+        // A local close is our own shutdown sequence closing the socket, never news to the FSM.
+        // This filter is a precondition of the shutdown ordering, not a log-noise fix (#329).
+        // GameShutdown closes the socket before it stops the FSM's scheduling, so that a transition
+        // action stalled mid-write, holding the StateMachine monitor, is released by the close
+        // (#299). On a connection that never opened, close() fires this listener synchronously on
+        // the closing thread, the JVM shutdown hook included. Posting an event from here would take
+        // that monitor inside the close step and block behind the very write the ordering exists to
+        // break. Filtering at the source keeps the close step off the monitor entirely; the
+        // ServerDisconnected guard above also rejects LOCAL_CLOSE, but only once the monitor is
+        // held. Pinned by GameShutdownTest.aLocalCloseNeverTakesTheFsmMonitor.
+        //
+        // It also keeps clean exits quiet: ENDED, where the shutdown sequence runs, has no
+        // ServerDisconnected transition at all, so posting there logged "No matching transitions".
         gpgnet.onDisconnect(
                 event -> {
                     if (event.reason() != DisconnectReason.LOCAL_CLOSE) {
