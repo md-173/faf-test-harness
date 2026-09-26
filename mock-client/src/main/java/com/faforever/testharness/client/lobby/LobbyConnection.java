@@ -71,6 +71,12 @@ public final class LobbyConnection {
     private static final Set<String> SENSITIVE_FIELDS =
             Set.of("token", "jwt", "access_token", "refresh_token", "password", "secret");
 
+    /**
+     * The close code RFC 6455 reserves for a connection that ended without a Close frame. A peer
+     * never sends it; the JDK reports a dropped connection with it, so it marks a drop (#473).
+     */
+    private static final int NO_CLOSE_FRAME = 1006;
+
     /** Reason buckets reported to the disconnect callback. */
     public enum DisconnectReason {
         /** Failed before the WebSocket handshake completed. */
@@ -78,8 +84,9 @@ public final class LobbyConnection {
         /** Peer sent a Close frame (clean close) — see {@link DisconnectEvent#statusCode}. */
         CLEAN_CLOSE,
         /**
-         * Transport error (network drop, TLS failure, peer reset) — see {@link
-         * DisconnectEvent#error}.
+         * The connection ended without a Close frame: a transport error (network drop, TLS failure,
+         * peer reset), see {@link DisconnectEvent#error}, or a close the JDK reports with code 1006
+         * because the connection dropped (#473).
          */
         ABRUPT_CLOSE,
         /** {@link #close()} was called by this side. */
@@ -91,11 +98,13 @@ public final class LobbyConnection {
      * unrelated fields are left null/zero.
      *
      * @param reason coarse cause bucket
-     * @param statusCode WebSocket close status code (only set for {@link
-     *     DisconnectReason#CLEAN_CLOSE} and {@link DisconnectReason#LOCAL_CLOSE})
-     * @param closeMessage WebSocket close reason text (only for the same two reasons)
+     * @param statusCode WebSocket close status code (set for {@link DisconnectReason#CLEAN_CLOSE}
+     *     and {@link DisconnectReason#LOCAL_CLOSE}, and 1006 for an {@link
+     *     DisconnectReason#ABRUPT_CLOSE} the JDK reported as a close)
+     * @param closeMessage WebSocket close reason text (only for the same closes)
      * @param error the throwable surfaced by the WebSocket listener (only for {@link
-     *     DisconnectReason#CONNECT_FAILED} and {@link DisconnectReason#ABRUPT_CLOSE})
+     *     DisconnectReason#CONNECT_FAILED} and an {@link DisconnectReason#ABRUPT_CLOSE} reported as
+     *     an error)
      */
     public record DisconnectEvent(
             DisconnectReason reason, int statusCode, String closeMessage, Throwable error) {}
@@ -503,10 +512,14 @@ public final class LobbyConnection {
         }
 
         private CompletionStage<?> closed(final int statusCode, final String reasonText) {
-            DisconnectReason bucket =
-                    closeRequested.get()
-                            ? DisconnectReason.LOCAL_CLOSE
-                            : DisconnectReason.CLEAN_CLOSE;
+            DisconnectReason bucket;
+            if (closeRequested.get()) {
+                bucket = DisconnectReason.LOCAL_CLOSE;
+            } else if (statusCode == NO_CLOSE_FRAME) {
+                bucket = DisconnectReason.ABRUPT_CLOSE;
+            } else {
+                bucket = DisconnectReason.CLEAN_CLOSE;
+            }
             LOG.info(
                     "lobby WebSocket closed: code={} reason='{}' bucket={}",
                     statusCode,

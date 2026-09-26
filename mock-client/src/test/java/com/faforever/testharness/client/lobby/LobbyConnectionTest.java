@@ -334,12 +334,9 @@ final class LobbyConnectionTest {
         server.abruptlyTerminate();
 
         assertTrue(disconnected.await(3, TimeUnit.SECONDS), "disconnect listener never fired");
-        DisconnectReason reason = captured.get().reason();
-        // Some platforms surface an abrupt server-side terminate as CLEAN_CLOSE with code 1006;
-        // the contract requirement is just "observable", not a specific bucket.
-        assertTrue(
-                reason == DisconnectReason.ABRUPT_CLOSE || reason == DisconnectReason.CLEAN_CLOSE,
-                "expected ABRUPT_CLOSE or CLEAN_CLOSE bucket, got " + reason);
+        // The JDK reports a drop either as an error or as a close with code 1006, which a peer
+        // never sends; both are the drop they are, not a clean close (#473).
+        assertEquals(DisconnectReason.ABRUPT_CLOSE, captured.get().reason(), "" + captured.get());
     }
 
     @Test
