@@ -3,6 +3,7 @@ package com.faforever.testharness.shared.process;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -16,6 +17,7 @@ import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -109,6 +111,56 @@ class SubprocessManagerStartTest {
                         "hello-world-marker".equals(e.getMessage())
                                 && TAG.equals(
                                         e.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY)));
+    }
+
+    /**
+     * Exercises the 4-arg {@link SubprocessManager#start(ProcessBuilder, String, Duration,
+     * java.util.function.Consumer)} overload (WBS 3.1.2.10 / #225): the observer sees a line as it
+     * arrives, and the existing SLF4J routing this class already covers is unaffected by passing
+     * one.
+     */
+    @Test
+    void lineObserverSeesEachLineViaStartOverload() throws Exception {
+        LineWaiter waiter = new LineWaiter();
+        SubprocessManager m =
+                SubprocessManager.start(
+                        TestSupport.testChild("lines", "first-line", "READY: hello-world-marker"),
+                        TAG,
+                        GRACE,
+                        waiter);
+
+        String matched =
+                waiter.awaitLine(
+                        line -> line.contains("hello-world-marker"), Duration.ofSeconds(10));
+        assertEquals("READY: hello-world-marker", matched);
+
+        m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
+        awaitLog(
+                e ->
+                        "READY: hello-world-marker".equals(e.getMessage())
+                                && TAG.equals(
+                                        e.getMDCPropertyMap().get(LoggingSetup.COMPONENT_MDC_KEY)));
+    }
+
+    /** A predicate that never matches must time out rather than block forever (WBS 3.1.2.10). */
+    @Test
+    void awaitLineTimesOutWhenTheMarkerNeverArrives() throws Exception {
+        LineWaiter waiter = new LineWaiter();
+        SubprocessManager m =
+                SubprocessManager.start(TestSupport.testChild("sleep", "5000"), TAG, GRACE, waiter);
+        try {
+            long start = System.nanoTime();
+            assertThrows(
+                    TimeoutException.class,
+                    () ->
+                            waiter.awaitLine(
+                                    line -> line.contains("never appears"),
+                                    Duration.ofMillis(300)));
+            long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+            assertTrue(elapsedMs < 5000, "awaitLine did not honour its own timeout");
+        } finally {
+            m.terminate();
+        }
     }
 
     @Test

@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -90,9 +91,37 @@ public final class SubprocessManager {
     public static SubprocessManager start(
             final ProcessBuilder pb, final String componentTag, final Duration terminateGrace)
             throws IOException {
+        return start(pb, componentTag, terminateGrace, line -> {});
+    }
+
+    /**
+     * Same as {@link #start(ProcessBuilder, String, Duration)}, plus an opt-in per-line observer on
+     * the child's stdout/stderr — see {@link ProcessOutputLogger#captureAsync(Process, String,
+     * Consumer)}. The default SLF4J routing is unaffected either way; {@code lineObserver} is an
+     * addition to it, not a replacement.
+     *
+     * @param pb fully-configured ProcessBuilder for the child
+     * @param componentTag MDC component label applied to every captured log line; must be non-blank
+     * @param terminateGrace per-call default grace between SIGTERM and SIGKILL used by the no-arg
+     *     {@link #terminate()}; must be positive
+     * @param lineObserver invoked with each raw line of subprocess output; must not be {@code
+     *     null}. Called from one reader thread per stream, so it may be called from two threads at
+     *     once for a process that writes to stdout and stderr concurrently, and must be
+     *     thread-safe. Pass a {@link LineWaiter} to wait on a specific line with a timeout.
+     * @return a manager wrapping the started process
+     * @throws IOException if {@link ProcessBuilder#start()} fails
+     * @throws IllegalStateException if the JVM is already shutting down when this is called
+     */
+    public static SubprocessManager start(
+            final ProcessBuilder pb,
+            final String componentTag,
+            final Duration terminateGrace,
+            final Consumer<String> lineObserver)
+            throws IOException {
         Objects.requireNonNull(pb, "pb");
         Objects.requireNonNull(componentTag, "componentTag");
         Objects.requireNonNull(terminateGrace, "terminateGrace");
+        Objects.requireNonNull(lineObserver, "lineObserver");
         if (componentTag.isBlank()) {
             throw new IllegalArgumentException("componentTag must not be blank");
         }
@@ -100,7 +129,8 @@ public final class SubprocessManager {
             throw new IllegalArgumentException("terminateGrace must be positive");
         }
         Process process = pb.start();
-        ExecutorService readers = ProcessOutputLogger.captureAsync(process, componentTag);
+        ExecutorService readers =
+                ProcessOutputLogger.captureAsync(process, componentTag, lineObserver);
         SubprocessManager manager =
                 new SubprocessManager(process, readers, componentTag, terminateGrace);
         try {

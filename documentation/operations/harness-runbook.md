@@ -396,9 +396,15 @@ Lobby` is the full exchange.
 
 Two practical notes:
 
-- The adapter's output reaches the harness pipe block-buffered, so those
-  `[ICEAdapter]` lines may not surface until the run window ends and the adapter
-  is terminated. Do not read their absence mid-run as absence of anything.
+- Those `[ICEAdapter]` lines may not surface until the run window ends and the
+  adapter is terminated, but not because the pipe itself is block-buffered —
+  the adapter's bundled Logback flushes every event immediately. The lag is
+  `ProcessOutputLogger` on this side: it holds each line, waiting to see
+  whether the next one is a stack-trace continuation to coalesce it with,
+  before logging either. A per-line observer (WBS 3.1.2.10 / #225) bypasses
+  that hold and sees a line the moment it arrives, but the default
+  `[ICEAdapter]` routing this note describes is unchanged. Do not read the
+  absence of those lines mid-run as absence of anything.
 - **Give the adapter the longer window.** If `launch-ice` ends first, its
   termination reaches the game as a lost connection and the game exits `69`
   (`SERVER_CONNECTION_LOST`) — a correct report of what happened to it, and easy
@@ -455,8 +461,10 @@ does:
   you need the GPGNet seam **alone**:
   `./gradlew :mock-game:integrationTest --tests '*GpgNetConnectionLiveSmokeTest'`.
   It drives the protocol in-process, holds a plain TCP socket on the RPC port —
-  all `getPeerOrWait()` needs to be released — and pauses before its first
-  frame, which is §8.1's *second* precondition.
+  all `getPeerOrWait()` needs to be released — and, before its first frame,
+  waits on two of the adapter's own log lines that together prove §8.1's
+  *second* precondition has cleared (WBS 3.1.2.10 / #225), rather than pausing
+  for a fixed duration.
 
 Both self-skip (they do not fail) when either required binary is absent — the
 adapter jar, or `mock-game` for the lifecycle test — so a skip is the expected
