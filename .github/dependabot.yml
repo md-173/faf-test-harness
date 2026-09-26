@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    ignore:
+      # Held at v5 over v6's licence change (#346): moving is a team decision, not a routine bump.
+      # The wildcard is required. Dependabot names a SHA-pinned action with a subpath by repo plus
+      # path (gradle/actions/setup-gradle), so a bare "gradle/actions" would match nothing.
+      - dependency-name: "gradle/actions*"
+        update-types: ["version-update:semver-major"]
