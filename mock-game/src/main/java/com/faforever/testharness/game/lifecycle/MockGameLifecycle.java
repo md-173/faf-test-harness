@@ -22,11 +22,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
@@ -106,7 +104,7 @@ public final class MockGameLifecycle {
     private final MockGameConfig config;
 
     /** A scheduler used to make certain transitions occur after a configurable delay. */
-    private final ScheduledExecutorService scheduler;
+    private final ScheduledThreadPoolExecutor scheduler;
 
     /** The delay before initiating a match after all configuration is done. */
     private final Duration launchDelay;
@@ -286,13 +284,15 @@ public final class MockGameLifecycle {
         // Uses a daemon thread, so that it doesn't keep the JVM up after the the main thread(s)
         // finish executing.
         this.scheduler =
-                Executors.newScheduledThreadPool(
+                new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
                             Thread t = new Thread(r, "game-scheduler");
                             t.setDaemon(true);
                             return t;
                         });
+        // stopSchedules() shuts this down, which then discards every task still waiting.
+        scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         this.launchDelay = launchDelay;
         this.matchDuration = matchDuration;
 
@@ -411,26 +411,33 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Cancels any not-yet-started configured schedules (launch delay and match duration) and shuts
-     * the scheduler down. Only called by {@link GameShutdown#run()} hence package-private.
+     * Cancels any not-yet-started configured schedules (launch delay, match duration and injected
+     * crash) and shuts the scheduler down. Only called by {@link GameShutdown#run()} hence
+     * package-private.
+     *
+     * <p><b>Never interrupts</b> (WBS-3.2.4.1-fix, #487). It uses {@code shutdown()}, not {@code
+     * shutdownNow()}, because it often runs on the scheduler's own thread: a match that ends on its
+     * own posts {@code GameEnded} from its match-end task, and ENDED's entry hook runs the whole
+     * teardown there. An interrupt made the traffic step's wait for its receiver return at once, so
+     * the receiver's totals line raced the process exit. A task already due when this runs is still
+     * started, and does nothing; see {@code schedule(Runnable, Duration)}.
      */
     /* package-private */ void stopSchedules() {
-        scheduler.shutdownNow();
+        scheduler.shutdown();
     }
 
     /**
      * How many tasks the lifecycle's scheduler holds that have not started yet: a pending launch,
      * match end or injected crash. Package-private for {@code GameShutdownTest}, which checks that
-     * a launch was pending before teardown and that teardown drained it, rather than sleeping past
-     * the launch delay. The queue is what tells the two ways of stopping apart: {@code
-     * shutdownNow()} drains a task that has not started, so it never runs, while a plain {@code
-     * shutdown()} leaves a delayed one queued to run when its delay expires.
+     * a launch was pending before teardown and that teardown discarded it, rather than sleeping
+     * past the launch delay. The queue is what tells the two apart: shutting down discards a task
+     * that has not started, so it never runs, while without the discard policy set in the
+     * constructor a delayed one would stay queued to run when its delay expires.
      *
      * @return the number of tasks still queued on the lifecycle's scheduler.
      */
     /* package-private */ int queuedSchedules() {
-        // Executors.newScheduledThreadPool builds a ScheduledThreadPoolExecutor.
-        return ((ThreadPoolExecutor) scheduler).getQueue().size();
+        return scheduler.getQueue().size();
     }
 
     /**
@@ -1112,7 +1119,17 @@ public final class MockGameLifecycle {
      * and logs them. */
     private ScheduledFuture<?> schedule(Runnable command, Duration delay) {
         try {
-            return scheduler.schedule(command, delay.toMillis(), TimeUnit.MILLISECONDS);
+            return scheduler.schedule(
+                    () -> {
+                        // stopSchedules() discards every task still waiting, but one already due is
+                        // still started, and returns here (WBS-3.2.4.1-fix, #487). At equal delays
+                        // this is what cancels a crash with the match end that tore the game down.
+                        if (!scheduler.isShutdown()) {
+                            command.run();
+                        }
+                    },
+                    delay.toMillis(),
+                    TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException e) {
             // The scheduler has likely been shut down, so we log and return null.
             LOG.debug(

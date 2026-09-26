@@ -48,8 +48,8 @@ class SubprocessManagerShutdownTest {
             boolean parentExited = parent.waitFor(PARENT_EXIT_TIMEOUT_S, TimeUnit.SECONDS);
             assertTrue(parentExited, "parent JVM did not exit on SIGTERM within budget");
 
-            long deadline = System.currentTimeMillis() + REAP_BUDGET_MS;
-            while (System.currentTimeMillis() < deadline) {
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REAP_BUDGET_MS);
+            while (System.nanoTime() < deadline) {
                 if (!isAlive(grandchildPid)) {
                     return;
                 }
