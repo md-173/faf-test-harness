@@ -181,12 +181,27 @@ class SubprocessManagerStartTest {
     }
 
     /**
-     * Regression for the race where a fast-exiting child's deregister callback fires before {@link
-     * SubprocessManager#start} adds the manager to {@link SubprocessRegistry}, leaving the manager
-     * pinned in the active set for the JVM lifetime. The {@code true} utility is the
-     * most-aggressive trigger available; {@link TestSupport#fastExitingNativeChild()} resolves it
-     * from {@code PATH} rather than assuming a path, because Linux and a bare-metal macOS dev box
-     * disagree about where it lives (#227).
+     * Documents — rather than reliably detects — the race where a fast-exiting child's deregister
+     * callback fires before {@link SubprocessManager#start} adds the manager to {@link
+     * SubprocessRegistry}, leaving the manager pinned in the active set for the JVM's lifetime. The
+     * synchronous {@code !process.isAlive()} fallback at the end of {@code start} is what closes
+     * that window.
+     *
+     * <p>Measured during review of #352: with that fallback deleted — the defect reintroduced — the
+     * leak reproduced in 1 run out of 200. The {@code true} utility is the most-aggressive trigger
+     * available, but it does not exit faster than the test thread gets from the constructor to
+     * {@code register()}, so the window this test aims at is almost never open.
+     *
+     * <p>Read a green run accordingly: it is not evidence that the fallback is still doing its job,
+     * because the fallback could be deleted and this suite would pass on essentially every run.
+     * What the test carries is the intent, next to the production comment that states the
+     * reasoning. Forcing the race reliably would need an injectable pre-register seam in {@code
+     * SubprocessManager.start} — a production design change, deliberately not made (#397).
+     *
+     * <p>{@link TestSupport#fastExitingNativeChild()} resolves {@code true} from {@code PATH}
+     * rather than assuming a path, because Linux and a bare-metal macOS dev box disagree about
+     * where it lives (#227). Asserting that the manager left the registry only says something
+     * because {@link #isAliveAndExitCodeFlipAtExit()} shows a manager can be in it at all.
      */
     @Test
     void fastExitingChildDoesNotLeakIntoRegistry() throws Exception {
