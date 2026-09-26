@@ -306,7 +306,7 @@ A successful adapter-only run looks like this in the log (`[MockClient]` = the
 harness, `[ICEAdapter]` = the real jar's own output):
 
 ```text
-[MockClient] Launching ICE adapter: <java> -Dlogback.configurationFile=... -jar .../faf-ice-adapter.jar --id 1 --login mock-client --game-id 0 --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
+[MockClient] Launching ICE adapter: <java> -Dlogback.configurationFile=... -jar .../faf-ice-adapter.jar --id 1 --login mock-client --game-id 0 --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238 --telemetry-server wss://ice-telemetry.faforever.xyz
 [MockClient] ICE adapter started, pid=<pid>
 [ICEAdapter] c.f.i.IceAdapter - Version: SNAPSHOT
 [ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started

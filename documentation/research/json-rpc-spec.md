@@ -318,6 +318,7 @@ arguments relevant to the Mock Client are bold.
 | **`--rpc-port <int>`** | `7236` | TCP port for the JSON-RPC server. The Mock Client passes it explicitly: the configured value, `7236` unless moved, or a free port per peer under `session` (subprocess-orchestration-spec §3). |
 | **`--gpgnet-port <int>`** | `0` (auto) | TCP port for the internal GPGNet server that mock-game connects to. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
 | **`--lobby-port <int>`** | `0` (auto) | UDP port the game lobby will use for game-traffic packets to/from the PeerRelay. **Pass an explicit port.** Mock-game receives the same port via its CLI. |
+| **`--telemetry-server <url>`** | FAF telemetry | By default the adapter opens a websocket to `ice-telemetry.faforever.com` on launch. **No clean disable in 3.3.14:** an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. The Mock Client passes FAF's test service, `wss://ice-telemetry.faforever.xyz`, so no harness launch reports to production. |
 | `--log-directory <path>` | unset | Not present at the pinned 3.3.14; the upstream README still lists it as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var. |
 | `--force-relay` | off | Forces TURN-only candidates; useful for fault-injection later (WBS 3.x). |
 | `--debug-window` | off | JavaFX UI flag, effective only if JavaFX is available. Never set: the harness runs headless. |
@@ -325,7 +326,6 @@ arguments relevant to the Mock Client are bold.
 | `--delay-ui <ms>` | 0 | Same. |
 | `--ping-count <int>` | `1` | Pings sent to each ICE server to measure its round-trip time; `0` skips the measurement. |
 | `--acceptable-latency <double>` | `250.0` | Round-trip-time threshold: ICE servers measured below it, or not measured, are tried first. Upstream's `--help` text for this flag repeats `--ping-count`'s. |
-| `--telemetry-server <url>` | FAF telemetry | On launch the adapter opens a websocket to `ice-telemetry.faforever.com`. **No clean disable in 3.3.14** — an empty value just errors (`unknown scheme: null`); telemetry failure is non-blocking. |
 | `--help` | — | Print usage and exit. |
 
 > **Headless runtime caveat (verified 3.3.14).** Even the `-nojfx` jar's bundled `logback.xml`

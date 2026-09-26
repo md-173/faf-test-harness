@@ -108,10 +108,10 @@ The `mock-game` `test` task clamps the level instead (set in `mock-game/build.gr
 Three GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
 - **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
-- **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. To reproduce it locally, run `./gradlew downloadIceAdapter` once, then the Gradle command from the job's `Run the live tests that need no lobby` step with `FAF_LIVE_REQUIRED=true` in the environment. Without that variable a missing jar skips all four and the run still looks green. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days. The Release workflow runs the same job before it builds anything ([Section 8](#8-releases)). Under [Section 4](#4-pull-requests) a PR is ready to merge only when every CI check is green, `live-tests` included. It was measured before it gated: 30 of 30 job runs passed on #458 (2026-09-24), in three rounds of ten legs, each taking 49 to 75 s beside `build`'s roughly 4 minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of the live integration workflow's `live-tests` (one-sided 95%), so if it goes red on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory, with a job-level `continue-on-error` and a note here exempting it from Section 4's all-green rule, and the flake gets a fix card.
+- **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. To reproduce it locally, run `./gradlew downloadIceAdapter` once, then the Gradle command from the job's `Run the live tests that need no lobby` step with `FAF_LIVE_REQUIRED=true` in the environment. Without that variable a missing jar skips all four and the run still looks green. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days. The Release workflow runs the same job before it builds anything ([Section 8](#8-releases)). It was measured before it gated: 30 of 30 job runs passed on #458 (2026-09-24), in three rounds of ten legs, each taking 49 to 75 s beside `build`'s roughly 4 minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of the live integration workflow's `live-tests` (one-sided 95%), so if it goes red on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory and the flake gets a fix card. Demoting it takes three changes: an admin removes it from the ruleset's required checks (no pull request can), it gains a job-level `continue-on-error`, and a note here exempts it from Section 4's all-green rule.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
-`build` and `dependency-submission` are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
+`build`, `live-tests` and `dependency-submission` are required status checks on `main` ([Section 4](#4-pull-requests)): GitHub merges a PR only once each has passed on its latest commit. One that failed, was cancelled or has not reported yet blocks it, and one skipped by a job-level `if:` counts as passed.
 
 ### The live integration workflow (manual, advisory)
 
@@ -157,15 +157,19 @@ Examples:
 
 After squash-merge this lands on `main` as e.g. `feat(shared): add message codec [2.3.1] (#123)`.
 
-Rationale: one WBS item → one PR → one commit on `main`. The `[<WBS-id>]` suffix survives the squash (branch names are deleted on merge), keeping `git log main` readable as a WBS-indexed changelog and making `git bisect` trivial.
+Rationale: one WBS item → one PR → one commit on `main`. The `[<WBS-id>]` suffix survives the squash (the branch name never reaches `main`), keeping `git log main` readable as a WBS-indexed changelog and making `git bisect` trivial.
 
 ### Branch protection on `main`
 
-- Require pull request before merging.
-- Require status checks (`build`, `dependency-submission`) to pass.
-- Require branches to be up to date before merging.
-- Disallow force pushes and direct pushes.
-- Delete head branch after merge.
+A repository ruleset ("Force Pull Requests") is what GitHub enforces on `main`:
+
+- Changes arrive only through a pull request, with one approving review and every review thread resolved.
+- Squash merges only.
+- The required status checks `build`, `live-tests` and `dependency-submission`, from GitHub Actions.
+- No force pushes, and `main` cannot be deleted.
+- Nobody can bypass these rules, admins included.
+
+The rest of the merge rules above (item 6) are the reviewers' to uphold. GitHub does not require a branch to be up to date with `main` before it merges, so rebase first ([Section 5](#5-keeping-your-branch-current)), and it does not delete a merged branch.
 
 ## 5. Keeping your branch current
 

@@ -518,7 +518,7 @@ A pass looks like this (`[MockClient]` = the harness, `[ICEAdapter]` = the real
 jar's own output, trimmed here):
 
 ```text
-[MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238
+[MockClient] Launching ICE adapter: <java> ... --rpc-port 7236 --gpgnet-port 7237 --lobby-port 7238 --telemetry-server wss://ice-telemetry.faforever.xyz
 [MockClient] ice-smoke: connecting to ICE adapter JSON-RPC at 127.0.0.1:7236 (within PT10.97S)
 [ICEAdapter] c.f.i.g.GPGNetServer - GPGNetServer started
 [ICEAdapter] c.n.jjsonrpc.TcpServer - TCP Server started.
