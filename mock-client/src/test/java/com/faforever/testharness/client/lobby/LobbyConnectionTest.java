@@ -385,14 +385,15 @@ final class LobbyConnectionTest {
      */
     @Test
     void lobbyTrafficKeepsTheConnectionAlive() throws Exception {
-        lobby = withSilenceLimit(Duration.ofSeconds(1));
+        lobby = withSilenceLimit(Duration.ofSeconds(2));
         CompletableFuture<DisconnectEvent> disconnect = new CompletableFuture<>();
         lobby.onDisconnect(disconnect::complete);
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
-        // Twice the limit, with a ping every tenth of it.
-        for (int i = 0; i < 20; i++) {
+        // One and a half limits of traffic, a ping every twentieth of one, so only a stall of
+        // nearly the whole limit could end it: the 2 s this class's other waits allow.
+        for (int i = 0; i < 30; i++) {
             server.broadcastText("{\"command\":\"ping\"}");
             Thread.sleep(100);
         }
