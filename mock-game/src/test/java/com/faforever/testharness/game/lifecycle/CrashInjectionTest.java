@@ -76,6 +76,15 @@ final class CrashInjectionTest {
     /** A launch delay for the same cases, long enough that no test sees the match start. */
     private static final Duration WARNING_LAUNCH = Duration.ofSeconds(5);
 
+    /**
+     * The host case's launch delay. Its timer starts in {@code beginHosting}, so it must outlast
+     * the rest of that case up to the end of its wait for the warning: at {@link #WARNING_LAUNCH},
+     * LIVE would arm the crash inside the wait and log the same warning, and the case would pass
+     * for a host that never armed on its peer. The match is then due to end about 40 seconds after
+     * the peer arms the crash, hence the case's 60-second crash.
+     */
+    private static final Duration HOST_WARNING_LAUNCH = Duration.ofSeconds(30);
+
     /** Captures {@code MockGameLifecycle}'s own records; attached per test, detached after it. */
     private final ListAppender<ILoggingEvent> lifecycleLog = new ListAppender<>();
 
@@ -335,10 +344,13 @@ final class CrashInjectionTest {
      * Waits until the host has configured the peer with {@code playerId}, by reading the {@code
      * PlayerOption} frames it emits for that peer.
      *
-     * <p>Needed so each {@code ConnectToPeer} is known to have been handled before the next frame
-     * is sent. Without it the test would race its own setup and could reach fewer arming points
-     * than it means to, which is precisely the defect that made an earlier version of this test
-     * pass with the guard under test deleted.
+     * <p>Needed so each {@code ConnectToPeer} is known to have been taken up by the FSM before the
+     * next frame is sent. Without it the test would race its own setup and could reach fewer arming
+     * points than it means to, which is precisely the defect that made an earlier version of this
+     * test pass with the guard under test deleted.
+     *
+     * <p>It shows the frames went out, not that the action has finished: {@code armCrash} runs
+     * after them (#357 review), so a log read straight after this can miss its lines (#479).
      */
     private void awaitPeerConfigured(final MockGameLifecycle lifecycle, final int playerId)
             throws Exception {
@@ -471,15 +483,20 @@ final class CrashInjectionTest {
     /**
      * A host arms on its first peer, reading the launch timer {@code beginHosting} started rather
      * than one {@code joinGame} did, so it is covered separately.
+     *
+     * <p>It stays in HOSTING, so no state change marks the end of the action that arms the crash,
+     * and the peer's frames {@link #awaitPeerConfigured} reads go out before {@code armCrash} runs
+     * (#357 review). So it waits for the warning before asserting (#479).
      */
     @Test
     void aHostCrashDueAfterLaunchPlusMatchIsWarnedAbout() throws Exception {
-        MockGameLifecycle lifecycle = lifecycleWith(20, WARNING_LAUNCH, WARNING_MATCH);
+        MockGameLifecycle lifecycle = lifecycleWith(60, HOST_WARNING_LAUNCH, WARNING_MATCH);
         driveToLobby(lifecycle);
 
         hostGame(lifecycle);
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
         awaitPeerConfigured(lifecycle, 2);
+        awaitCancelledCrashWarning();
 
         assertCrashArmed(true);
     }
@@ -507,8 +524,9 @@ final class CrashInjectionTest {
     /**
      * Asserts that the crash was armed, and whether it was warned about as due after the match.
      *
-     * <p>Both records are written inside the transition action, which completes before the state
-     * the caller waited for is published, so they are already captured. The armed line is asserted
+     * <p>Both records are written inside the transition action. A caller that waited for JOINING or
+     * LIVE has them already, because that action completes before the state is published. The host
+     * case stays in HOSTING, so it waits for the warning first (#479). The armed line is asserted
      * too so that a silent case cannot pass merely because {@code armCrash} never ran.
      */
     private void assertCrashArmed(final boolean warned) {
@@ -519,12 +537,25 @@ final class CrashInjectionTest {
                 "the crash must have been armed. captured: " + events);
         assertEquals(
                 warned,
-                events.stream()
-                        .anyMatch(
-                                e ->
-                                        e.getLevel() == Level.WARN
-                                                && e.getFormattedMessage()
-                                                        .contains("likely inject no fault")),
+                events.stream().anyMatch(CrashInjectionTest::isCancelledCrashWarning),
                 "cancelled-crash warning. captured: " + events);
+    }
+
+    /**
+     * Waits up to {@link #STATE_TIMEOUT_SECONDS} for {@code armCrash}'s warning. It does not fail
+     * on its own: {@link #assertCrashArmed} then fails with what was captured.
+     */
+    private void awaitCancelledCrashWarning() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(STATE_TIMEOUT_SECONDS);
+        while (lifecycleLog.list.stream().noneMatch(CrashInjectionTest::isCancelledCrashWarning)
+                && System.nanoTime() - deadline < 0) {
+            Thread.sleep(10);
+        }
+    }
+
+    /** Whether {@code event} is {@code armCrash}'s warning that the match will cancel the crash. */
+    private static boolean isCancelledCrashWarning(final ILoggingEvent event) {
+        return event.getLevel() == Level.WARN
+                && event.getFormattedMessage().contains("likely inject no fault");
     }
 }

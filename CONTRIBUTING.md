@@ -107,7 +107,7 @@ The `mock-game` `test` task clamps the level instead (set in `mock-game/build.gr
 
 Two GitHub Actions jobs defined in `.github/workflows/ci.yml` run automatically on every pull request targeting `main`:
 
-- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: the lobby tests time out waiting for a frame often enough to matter, and at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send and receive lines are emitted, so the report cannot say whether a frame was late or never sent. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
+- **`build`** — runs `./gradlew build`, which compiles the code, executes unit tests, and enforces Checkstyle and `spotlessCheck`. This is the primary verification gate. It does **not** run `spotlessApply` — formatting drift causes CI to fail, not silently reformat. When it fails, the Gradle test reports are attached to the run's summary page as a `test-reports-<run-id>-<attempt>` artifact and kept for 14 days, so a failure can be diagnosed from the JUnit XML and HTML rather than the single assertion line in the log. The `mock-client` test task runs at `LOG_LEVEL=DEBUG` for the same reason: at the default `INFO` neither `LobbyConnection`'s inbound-frame log nor the scripted server's send, receive and re-arm lines are emitted, so a report on a lobby test that timed out waiting for a frame cannot say whether the frame was late or never sent. Those lines traced the timeout in #415 to the scripted server stranding a frame, since fixed. Note that `build` stops at the first failing module, so the artifact holds that module plus any that finished before it — a green run uploads nothing at all.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
 Both jobs are listed as required status checks on `main` (see [Section 4](#4-pull-requests)). If either fails or is skipped, the PR cannot be merged.
@@ -355,9 +355,9 @@ assets.
    the verification half of ci's `build`), because a release is dispatched at an arbitrary commit and
    nothing else guarantees CI ran green on it. If it fails, no draft and no assets are created, so
    re-running the failed job is safe: nothing was tagged or published.
-   A red gate is not to be worked around. If it is a known flake rather than a real failure (the
-   lobby tests occasionally time out waiting for a frame, see § 3), re-run the job and let it pass on
-   its own. The gate also uploads the Gradle test reports on failure, as `ci.yml` does.
+   A red gate is not to be worked around. If it is a known flake rather than a real failure, re-run
+   the job and let it pass on its own. The gate also uploads the Gradle test reports on failure, as
+   `ci.yml` does.
 4. **Check the draft before publishing.** It must carry exactly four assets:
    `mock-client-<version>-all.jar`, `mock-game-<version>-all.jar`, and a `.sha256` for each. Download
    them and confirm the checksums:
