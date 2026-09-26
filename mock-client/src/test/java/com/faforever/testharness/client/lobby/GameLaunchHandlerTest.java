@@ -173,6 +173,31 @@ public class GameLaunchHandlerTest {
         Assertions.assertEquals("game_launch.faction invalid for matchmaker: 9", rejected(json));
     }
 
+    /**
+     * Nomad (5) is accepted: faf-server's {@code Faction} enum ends at {@code nomad = 5}, {@code
+     * --queue-faction} accepts it ({@code GameQueueConfig}), and faf-server sends the searched
+     * faction back as {@code game_launch.faction}. Refusing it made {@code run} exit 70 on its own
+     * search.
+     */
+    @Test
+    void nomadFactionIsAccepted() throws Exception {
+        String json =
+                "{"
+                        + "\"uid\": 3,"
+                        + "\"mod\": \"faf\","
+                        + "\"name\": \"Nomad\","
+                        + "\"game_type\": \"matchmaker\","
+                        + "\"rating_type\": \"ladder_1v1\","
+                        + "\"mapname\": \"map\","
+                        + "\"team\": 2,"
+                        + "\"faction\": 5,"
+                        + "\"map_position\": 1,"
+                        + "\"expected_players\": 2"
+                        + "}";
+
+        Assertions.assertEquals(Integer.valueOf(5), accepted(json).faction());
+    }
+
     @Test
     public void missingMatchmakerFieldIsRejected() throws Exception {
         String json =

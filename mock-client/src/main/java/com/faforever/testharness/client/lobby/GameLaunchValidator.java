@@ -27,8 +27,11 @@ public final class GameLaunchValidator {
     /** Allowed game type values. */
     private static final Set<String> VALID_GAME_TYPES = Set.of("coop", "custom", "matchmaker");
 
-    /** Allowed faction numeric values. */
-    private static final Set<Integer> VALID_FACTIONS = Set.of(1, 2, 3, 4);
+    /**
+     * Allowed faction numeric values. Tracks faf-server's {@code Faction} enum, {@code uef = 1} to
+     * {@code nomad = 5}, the same bound {@code GameQueueConfig} uses for {@code --queue-faction}.
+     */
+    private static final Set<Integer> VALID_FACTIONS = Set.of(1, 2, 3, 4, 5);
 
     /**
      * Allow-list of recognized slash-prefixed CLI flags.

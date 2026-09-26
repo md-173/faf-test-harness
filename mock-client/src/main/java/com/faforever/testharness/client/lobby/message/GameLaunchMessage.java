@@ -39,7 +39,7 @@ import java.util.List;
  *     server omits it
  * @param mapname matchmaker only — map folder name
  * @param team matchmaker only — team assignment
- * @param faction matchmaker only — 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim
+ * @param faction matchmaker only — 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad
  * @param mapPosition matchmaker only — start spot on the map
  * @param expectedPlayers matchmaker only — expected player count
  * @param mapPoolMapVersionId matchmaker only — map pool version reference
