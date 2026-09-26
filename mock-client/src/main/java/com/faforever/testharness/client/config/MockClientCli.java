@@ -173,15 +173,14 @@ public final class MockClientCli implements Callable<Integer> {
 
     /**
      * Optional stable hardware identifier sent in the lobby auth message. If {@code
-     * --uid-binary-path} is set, used by tests that do not connect to the live lobby server. . Must
-     * set exactly one of this or {@code --uid-binary-path} for a valid configuration.
+     * --uid-binary-path} is set, at an equal or higher layer this option is ignored.
      */
     @Option(
             names = "--unique-id",
             scope = ScopeType.INHERIT,
             description =
-                    "Stable hardware identifier sent in the lobby auth message. "
-                            + "Mutually exclusive with --uid-binary-path.")
+                    "Optional stable hardware identifier sent in the lobby auth message. "
+                            + "Ignored if --uid-binary-path is set.")
     private String uniqueId;
 
     /** Client version string sent in the lobby {@code ask_session} message. */
@@ -206,17 +205,17 @@ public final class MockClientCli implements Callable<Integer> {
 
     /**
      * Optional path to the {@code faf-uid} binary used to generate a real lobby {@code unique_id}.
-     * Required for a live lobby connection (since the lobby rejects a static id). Must set exactly
-     * one of this or {@code --unique-id} for a valid configuration.
+     * Required for a live lobby connection (since the lobby rejects a static id). Used instead of
+     * {@code --unique-id} when both are set at the same layer.
      */
     @Option(
             names = "--uid-binary-path",
             scope = ScopeType.INHERIT,
             description =
-                    "Optional path to the FAF faf-uid binary. When set, the auth handshake runs "
+                    "Path to the FAF faf-uid binary. When set, the auth handshake runs "
                             + "'<path> <session>' and sends its output as unique_id (the lobby's "
                             + "policy server requires a real RSA-encrypted UID). When unset, the "
-                            + "static --unique-id is sent. Mutually exclusive with --unique-id.")
+                            + "static --unique-id is sent.")
     private Path uidBinaryPath;
 
     /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
@@ -652,6 +651,7 @@ public final class MockClientCli implements Callable<Integer> {
     public MockClientConfig toValidatedConfig(final CommandSpec callerSpec) {
         try {
             dropShadowedCredentialChannel(callerSpec);
+            dropShadowedUniqueIdSource(callerSpec);
             // Read after the precedence step, which may clear a shadowed refresh-token file.
             return toConfig();
         } catch (IllegalArgumentException e) {
@@ -673,6 +673,7 @@ public final class MockClientCli implements Callable<Integer> {
     public MockClientConfig toValidatedConfig(
             final CommandSpec callerSpec, final Path refreshTokenFile) {
         try {
+            dropShadowedUniqueIdSource(callerSpec);
             return toConfig(refreshTokenFile, Optional.empty());
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
@@ -692,6 +693,7 @@ public final class MockClientCli implements Callable<Integer> {
     public MockClientConfig toValidatedConfigWithAccessToken(
             final CommandSpec callerSpec, final Path accessTokenFile) {
         try {
+            dropShadowedUniqueIdSource(callerSpec);
             return toConfig(null, Optional.of(accessTokenFile));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
@@ -785,6 +787,34 @@ public final class MockClientCli implements Callable<Integer> {
             oauthRefreshTokenFile = null;
         } else {
             oauthAccessTokenFile = null;
+        }
+    }
+
+    /**
+     * Applies the documented precedence to the two sources for a unique ID: a static one and a
+     * faf-uid binary path, so that a higher layer <em>overrides</em> a lower one instead of
+     * colliding with it.
+     *
+     * <p>A genuine tie is resolved by dropping the static unique ID and keeping the faf-uid binary
+     * path. Otherwise, whichever option is in a lower layer is dropped and the other one is kept.
+     *
+     * @param callerSpec the spec whose command line carries the layered provider
+     */
+    private void dropShadowedUniqueIdSource(final CommandSpec callerSpec) {
+        if (uidBinaryPath == null || uniqueId == null) {
+            return;
+        }
+        Optional<String> winner = higherLayer(callerSpec, "--uid-binary-path", "--unique-id");
+
+        if (winner.isEmpty()) {
+            // Same layer, so uidBinaryPath wins.
+            uniqueId = null;
+        } else {
+            if (winner.get().equals("--uid-binary-path")) {
+                uniqueId = null;
+            } else {
+                uidBinaryPath = null;
+            }
         }
     }
 
