@@ -78,9 +78,9 @@ final class LobbyTimeoutTest {
     }
 
     /**
-     * A game driven into a role never trips it. The cancellation is the state machine's — {@code
-     * commitTransition} disarms every pending timeout on any state change — so this is what pins
-     * that the timer is armed in a way that participates in it.
+     * A game driven into a role never trips it. The cancellation is the state machine's: {@code
+     * commitTransition} disarms, on every state change, each timeout already pending when that
+     * change began, so this is what pins that the timer is armed in a way that participates in it.
      */
     @Test
     void aHostedGameNeverTripsTheTimer() throws Exception {

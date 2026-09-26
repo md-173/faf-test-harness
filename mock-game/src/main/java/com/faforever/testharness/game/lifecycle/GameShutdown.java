@@ -74,12 +74,12 @@ import org.slf4j.LoggerFactory;
  * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} calls {@code
  * shutdownNow()} on the launch-delay and match-duration scheduler, which drains the tasks that have
  * not started yet. Neither can recall work already running: a scheduler task past its cancellation
- * check can still post an event after teardown, and a timeout already holding the StateMachine
- * monitor when {@code cancel()} runs still commits. That residue is inert: the invalid-transition
- * policy is IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that
- * does fire converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears
- * down twice. Both FSM timeouts, the GPGNet connect timeout and the optional lobby give-up timer,
- * target ENDED.
+ * check can still post an event after teardown, and a timeout whose transition is already under way
+ * when {@code cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the
+ * optional lobby give-up timer, target ENDED. That residue is inert: the invalid-transition policy
+ * is IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that does
+ * fire converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears down
+ * twice.
  *
  * <p>Step one is what makes that true. Before WBS-3.2.4.1-fix (#265) added it, nothing stopped that
  * scheduler: a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in
@@ -120,9 +120,12 @@ import org.slf4j.LoggerFactory;
  * crossing went with #328, and the compare-and-set guard keeps a second lock out of teardown so it
  * cannot come back. The cost is that a losing caller returns while the winner is still mid-teardown
  * rather than waiting for it. On the path where that actually happens, a {@code SIGTERM} landing
- * during the ENDED transition, the loser is the JVM hook, which then stops logging and lets the JVM
- * halt while the winner may still be inside this method. Both consequences are benign: the kernel
- * closes the socket the winner was closing, and what is lost is two teardown INFO lines.
+ * during the ENDED transition, either caller can lose. The JVM hook usually wins while the
+ * transition's action is still sending, and the FSM thread's entry hook then returns at once and
+ * commits ENDED while the hook is still tearing down. If the entry hook wins instead, the JVM hook
+ * returns at once, stops logging and lets the JVM halt while the winner may still be inside this
+ * method. Both are benign: the kernel closes the socket the winner was closing, and what is lost is
+ * at most a few teardown INFO lines.
  *
  * <p><b>Exit code.</b> This sequence does not call {@link System#exit(int)}; the exit code is the
  * bootstrap's, mapped from {@link MockGameLifecycle#getExitStatus()} once the FSM reaches ENDED. A
