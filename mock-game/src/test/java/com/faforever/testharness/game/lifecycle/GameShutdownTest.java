@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.abort;
 
+import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
@@ -214,6 +215,60 @@ final class GameShutdownTest {
             assertEquals(GameState.HOSTING, lifecycle.getState());
         } finally {
             // Make sure gpgnet server is always stopped.
+            gpgnet.stop();
+        }
+    }
+
+    /**
+     * A match that ends on its own tears the game down from the scheduler's match-end task, and
+     * stopping that scheduler must not interrupt the thread it runs on (WBS-3.2.4.1-fix). {@code
+     * shutdownNow()} did, and the traffic step's wait for its receiver then returned at once. The
+     * wait for ENDED is completed by the thread that committed it, right after ENDED's entry hook
+     * ran this sequence there, so that is where the flag is read.
+     */
+    @Test
+    void aMatchThatEndsOnItsOwnIsNotInterruptedByItsOwnTeardown() throws Exception {
+        int lobbyPort = TestPorts.freeUdpPort();
+        MockGameConfig config =
+                new MockGameConfig(50000, lobbyPort, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+        ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
+        try {
+            MockGameLifecycle lifecycle =
+                    new MockGameLifecycle(
+                            config,
+                            new GpgNetConnection(gpgnet.port()),
+                            Duration.ZERO,
+                            Duration.ofMillis(100));
+            gpgnet.start();
+            lifecycle.start();
+            gpgnet.awaitClient();
+            lifecycle.stateReached(GameState.IDLE).get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            CompletableFuture<Void> lobby = lifecycle.stateReached(GameState.LOBBY);
+            gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 1, 1)));
+            lobby.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            // Attached before HostGame, so it runs on whichever thread commits ENDED.
+            AtomicReference<Thread> tornDownOn = new AtomicReference<>();
+            AtomicBoolean interrupted = new AtomicBoolean();
+            CompletableFuture<Void> ended =
+                    lifecycle
+                            .stateReached(GameState.ENDED)
+                            .thenRun(
+                                    () -> {
+                                        tornDownOn.set(Thread.currentThread());
+                                        interrupted.set(Thread.currentThread().isInterrupted());
+                                    });
+            // Launches at once, then ends 100 ms into the match from the scheduler's own thread.
+            gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+
+            ended.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(
+                    "game-scheduler",
+                    tornDownOn.get().getName(),
+                    "precondition: the match end must tear the game down on the scheduler");
+            assertFalse(
+                    interrupted.get(),
+                    "stopping the scheduler must not interrupt the teardown running on it");
+        } finally {
             gpgnet.stop();
         }
     }

@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -395,8 +396,8 @@ final class CrashInjectionTest {
 
     /**
      * Teardown cancels a crash that has not fired. This is {@code GameShutdown}'s {@code
-     * stopSchedules()} calling {@code shutdownNow()}, pinned: a harness that tore the game down
-     * deliberately must not then be told the game crashed.
+     * stopSchedules()} discarding it, pinned: a harness that tore the game down deliberately must
+     * not then be told the game crashed.
      */
     @Test
     void teardownCancelsAPendingCrash() throws Exception {
@@ -410,6 +411,28 @@ final class CrashInjectionTest {
         assertFalse(
                 halted.await(CANCELLABLE_CRASH_SECONDS + QUIET_WINDOW_SECONDS, TimeUnit.SECONDS),
                 "teardown must cancel a crash that had not fired yet");
+        assertEquals(0, haltCalls.get());
+    }
+
+    /**
+     * A crash due as the match ends is cancelled with it, as {@code matchBegins} promises for equal
+     * delays (WBS-3.2.4.1-fix). The match end tears the game down on the scheduler's own thread, by
+     * when the crash is due, so shutting the scheduler down does not discard it: it is still
+     * started, and only its shut-down check keeps it from halting a game that ended cleanly.
+     */
+    @Test
+    void aCrashDueAsTheMatchEndsIsCancelledWithIt() throws Exception {
+        // The crash and the match end share one delay, armed back to back on entry to LIVE.
+        MockGameLifecycle lifecycle = lifecycleWith(1, Duration.ZERO, Duration.ofSeconds(1));
+        driveToLobby(lifecycle);
+        CompletableFuture<Void> ended = lifecycle.stateReached(GameState.ENDED);
+
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
+        ended.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertFalse(
+                halted.await(QUIET_WINDOW_SECONDS, TimeUnit.SECONDS),
+                "a crash due as the match ends must be cancelled with the rest of the schedule");
         assertEquals(0, haltCalls.get());
     }
 
