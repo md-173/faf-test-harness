@@ -859,6 +859,14 @@ The mock client **must**:
   (backoff, re-authentication, session re-establishment per [§3](#section-3-auth))
   is implementation-defined and is not mandated by the protocol.
 
+The mock client applies the last point with a 100 s limit, two missed pings and a
+margin: a lobby that sends nothing for that long ends the session as a dropped
+connection, with no reconnect (#485). Only the time it spends waiting for a frame
+counts, since a handler such as `game_launch` can hold its listener for longer. It
+sends no `ping` of its own. The real client's `FafLobbyClient` (faf-java-commons)
+has no such limit, and sends its own `ping` after 60 s without traffic in either
+direction.
+
 ### Related Timing Constants
 
 | Constant | Value | Purpose |

@@ -183,7 +183,8 @@ final class LobbySessionTest {
      * until its caller's timeout. The Close frame follows a frame, as faf-server's {@code notice}
      * or {@code invalid} does, so it is never the lone reply the fixture can strand. The drop
      * follows none: it queues no write to strand, and the JDK can miss a drop that lands right
-     * behind a frame, with the client's socket left in CLOSE-WAIT, which is not what this tests.
+     * behind a frame, with the client's socket left in CLOSE-WAIT (#485), which is not what this
+     * tests.
      *
      * @param ending how the lobby ends the connection, for the report
      * @param dropped whether it drops the connection rather than closing it

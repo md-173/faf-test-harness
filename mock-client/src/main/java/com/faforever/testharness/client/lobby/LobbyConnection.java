@@ -19,6 +19,10 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -38,7 +42,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>Disconnects — server-initiated close, abrupt transport error, or a failed initial connect —
  * are surfaced exactly once via the {@link #onDisconnect(Consumer)} callback so a higher-level
- * reconnect FSM can react. The reconnect FSM itself is out of scope for this class.
+ * reconnect FSM can react. The reconnect FSM itself is out of scope for this class. A lobby that
+ * sends nothing for {@link #SILENCE_LIMIT} while this side waits is surfaced as a drop too (#485).
  *
  * <p>Thread-safety:
  *
@@ -77,6 +82,21 @@ public final class LobbyConnection {
      */
     private static final int NO_CLOSE_FRAME = 1006;
 
+    /**
+     * How long the lobby may send nothing before this side treats the connection as dropped (#485).
+     * faf-server sends every connection a {@code ping} each {@code PING_INTERVAL}, 45 s ({@code
+     * broadcast_service.py}, {@code config.py}), so this is two missed pings and a margin, the
+     * heuristic in lobby-protocol-spec.md §8. See {@link #checkSilence} for why it is needed.
+     */
+    private static final Duration SILENCE_LIMIT = Duration.ofSeconds(100);
+
+    /**
+     * Runs every connection's silence check on one daemon thread, however many clients share the
+     * JVM. A cancelled check leaves the queue at once, so a closed connection is not held until its
+     * next check was due.
+     */
+    private static final ScheduledThreadPoolExecutor SILENCE_CHECKS = silenceChecks();
+
     /** Reason buckets reported to the disconnect callback. */
     public enum DisconnectReason {
         /** Failed before the WebSocket handshake completed. */
@@ -86,7 +106,8 @@ public final class LobbyConnection {
         /**
          * The connection ended without a Close frame: a transport error (network drop, TLS failure,
          * peer reset), see {@link DisconnectEvent#error}, or a close the JDK reports with code 1006
-         * because the connection dropped (#473).
+         * because the connection dropped (#473). A lobby that sent nothing for 100 s ends this way
+         * too, with a {@link TimeoutException} as its error (#485).
          */
         ABRUPT_CLOSE,
         /** {@link #close()} was called by this side. */
@@ -104,7 +125,7 @@ public final class LobbyConnection {
      * @param closeMessage WebSocket close reason text (only for the same closes)
      * @param error the throwable surfaced by the WebSocket listener (only for {@link
      *     DisconnectReason#CONNECT_FAILED} and an {@link DisconnectReason#ABRUPT_CLOSE} reported as
-     *     an error)
+     *     an error), or the {@link TimeoutException} of a silent lobby
      */
     public record DisconnectEvent(
             DisconnectReason reason, int statusCode, String closeMessage, Throwable error) {}
@@ -124,6 +145,9 @@ public final class LobbyConnection {
 
     /** Initial handshake timeout. */
     private final Duration connectTimeout;
+
+    /** How long the lobby may send nothing; {@link #SILENCE_LIMIT} outside tests. */
+    private final Duration silenceLimit;
 
     /**
      * The constructing thread's instance label (WBS-4.3.3), re-applied on the JDK threads that run
@@ -157,6 +181,23 @@ public final class LobbyConnection {
     private CompletableFuture<?> sendChain = CompletableFuture.completedFuture(null);
 
     /**
+     * When the listener last became ready for a frame, by {@link System#nanoTime()}: when the
+     * socket opened, or when it finished with the previous frame. The lobby's silence counts from
+     * here.
+     */
+    private volatile long waitingSince;
+
+    /**
+     * True while the listener holds a frame. A handler can keep it for a long time, a {@code
+     * game_launch} for the whole launch, and frames the lobby sends meanwhile wait unread, so that
+     * time is not the lobby's silence.
+     */
+    private volatile boolean handling;
+
+    /** The next silence check, cancelled once the connection has disconnected. */
+    private volatile ScheduledFuture<?> silenceCheck;
+
+    /**
      * Construct a connection bound to {@code endpoint}. The connection is not opened until {@link
      * #connect()} is called.
      *
@@ -179,10 +220,31 @@ public final class LobbyConnection {
             final HttpClient httpClient,
             final ObjectMapper mapper,
             final Duration connectTimeout) {
+        this(endpoint, httpClient, mapper, connectTimeout, SILENCE_LIMIT);
+    }
+
+    /**
+     * Full-control constructor with a silence limit of its own, for a test that cannot wait 100 s
+     * (#485).
+     *
+     * @param endpoint WebSocket URI
+     * @param httpClient HTTP client to use for the upgrade
+     * @param mapper Jackson mapper for encode/decode
+     * @param connectTimeout timeout for the initial WebSocket handshake
+     * @param silenceLimit how long the lobby may send nothing before the connection counts as
+     *     dropped
+     */
+    LobbyConnection(
+            final URI endpoint,
+            final HttpClient httpClient,
+            final ObjectMapper mapper,
+            final Duration connectTimeout,
+            final Duration silenceLimit) {
         this.endpoint = endpoint;
         this.httpClient = httpClient;
         this.mapper = mapper;
         this.connectTimeout = connectTimeout;
+        this.silenceLimit = silenceLimit;
         this.label = InstanceLabel.capture();
     }
 
@@ -406,6 +468,10 @@ public final class LobbyConnection {
 
     private void fireDisconnect(final DisconnectEvent event) {
         if (disconnectFired.compareAndSet(false, true)) {
+            ScheduledFuture<?> check = silenceCheck;
+            if (check != null) {
+                check.cancel(false);
+            }
             for (Consumer<DisconnectEvent> listener : disconnectListeners) {
                 try {
                     listener.accept(event);
@@ -417,6 +483,57 @@ public final class LobbyConnection {
                 }
             }
         }
+    }
+
+    /**
+     * Treats a lobby that has sent nothing for {@link #silenceLimit}, while the listener waited for
+     * a frame, as a dropped connection (#485). The JDK reports a dropped connection as {@code
+     * onClose} with code 1006, but not one that drops while the listener holds a frame: end of
+     * stream then calls {@code acknowledgeReception()} with no demand, which throws an {@code
+     * InternalError} the JDK swallows, so neither {@code onClose} nor {@code onError} runs and the
+     * socket sits in CLOSE-WAIT. Without this check the session would wait on it forever.
+     *
+     * <p>Re-arms for the time left, or for a whole limit while a frame is held. When the limit runs
+     * out it aborts the socket and fires an {@link DisconnectReason#ABRUPT_CLOSE}.
+     *
+     * @param socket the open socket
+     */
+    private void checkSilence(final WebSocket socket) {
+        if (disconnectFired.get()) {
+            return;
+        }
+        boolean busy = handling;
+        long silent = System.nanoTime() - waitingSince;
+        long limit = silenceLimit.toNanos();
+        if (busy || silent < limit) {
+            scheduleSilenceCheck(socket, busy ? limit : limit - silent);
+            return;
+        }
+        String silence = "lobby sent nothing for " + silenceLimit.toSeconds() + " s";
+        LOG.warn("{}; treating the connection as dropped", silence);
+        socket.abort();
+        fireDisconnect(
+                new DisconnectEvent(
+                        DisconnectReason.ABRUPT_CLOSE, 0, null, new TimeoutException(silence)));
+    }
+
+    private void scheduleSilenceCheck(final WebSocket socket, final long delayNanos) {
+        silenceCheck =
+                SILENCE_CHECKS.schedule(
+                        label.wrap(() -> checkSilence(socket)), delayNanos, TimeUnit.NANOSECONDS);
+    }
+
+    private static ScheduledThreadPoolExecutor silenceChecks() {
+        ScheduledThreadPoolExecutor checks =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        runnable -> {
+                            Thread thread = new Thread(runnable, "lobby-silence-check");
+                            thread.setDaemon(true);
+                            return thread;
+                        });
+        checks.setRemoveOnCancelPolicy(true);
+        return checks;
     }
 
     private void dispatch(final String text) {
@@ -481,12 +598,15 @@ public final class LobbyConnection {
 
         @Override
         public void onOpen(final WebSocket socket) {
+            waitingSince = System.nanoTime();
+            scheduleSilenceCheck(socket, silenceLimit.toNanos());
             socket.request(1);
         }
 
         @Override
         public CompletionStage<?> onText(
                 final WebSocket socket, final CharSequence data, final boolean last) {
+            handling = true;
             partial.append(data);
             if (last) {
                 String full = partial.toString();
@@ -499,6 +619,10 @@ public final class LobbyConnection {
                     }
                 }
             }
+            // Written before handling is cleared, so a silence check that finds the frame done
+            // also finds the time the listener became ready for the next one (#485).
+            waitingSince = System.nanoTime();
+            handling = false;
             socket.request(1);
             return null;
         }
