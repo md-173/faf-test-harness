@@ -71,7 +71,7 @@ class SubprocessManagerTerminateTest {
                 SubprocessManager.start(TestSupport.testChild("sleep", "60000"), TAG, LONG_GRACE);
         CountDownLatch release = new CountDownLatch(1);
         try {
-            occupyCommonPool(release);
+            CommonPoolOccupier.occupy(release);
             long start = System.nanoTime();
             m.terminate();
             long elapsedMs = (System.nanoTime() - start) / 1_000_000L;
@@ -91,36 +91,5 @@ class SubprocessManagerTerminateTest {
         assertFalse(m.waitFor(Duration.ofMillis(100)), "a live child has not exited");
         m.terminate();
         assertTrue(m.waitFor(Duration.ZERO), "an exited child says so without waiting");
-    }
-
-    /**
-     * Blocks as many common-pool threads as the pool runs tasks on at once, its parallelism, until
-     * {@code release} opens. Spare threads an earlier test's blocking {@code get()} left behind
-     * stay idle while that many run, and the pool does not wake them for queued work, the work this
-     * holds back included. One blocker per spare is queued too, for a spare still busy with earlier
-     * work to take once it is free.
-     *
-     * @param release opened by the caller to let the pool go
-     * @throws InterruptedException if interrupted while the pool fills
-     */
-    private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
-        ForkJoinPool pool = ForkJoinPool.commonPool();
-        int parallelism = ForkJoinPool.getCommonPoolParallelism();
-        int threads = Math.max(parallelism, pool.getPoolSize());
-        CountDownLatch occupied = new CountDownLatch(parallelism);
-        for (int i = 0; i < threads; i++) {
-            pool.execute(
-                    () -> {
-                        occupied.countDown();
-                        try {
-                            release.await();
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    });
-        }
-        assertTrue(
-                occupied.await(AWAIT_SECONDS, TimeUnit.SECONDS),
-                "could not occupy the common pool's " + parallelism + " threads");
     }
 }

@@ -2,6 +2,7 @@ package com.faforever.testharness.client.session;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -294,6 +296,34 @@ final class MultiPeerSessionTest {
                 assertThrows(
                         IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
         assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
+    }
+
+    /**
+     * A signal closes the session with its flag raised before any peer tears down, and each peer's
+     * teardown reads it (#438 review). {@code SubprocessRegistry}'s hook and a terminal's SIGINT
+     * kill every peer's processes at that moment, which no peer may report as a finding.
+     */
+    @Test
+    void closeOnSignalRaisesTheFlagBeforeAnyPeerTearsDown() throws IOException {
+        Path adapter = Files.createFile(dir.resolve("faf-ice-adapter"));
+        Path game = Files.createFile(dir.resolve("mock-game"));
+        String[] binaries = {
+            "--ice-adapter-binary-path=" + adapter, "--mock-game-binary-path=" + game
+        };
+        MultiPeerSession session =
+                new MultiPeerSession(
+                        List.of(base(token("a"), binaries), base(token("b"), binaries)), "t");
+        SessionPeer peer =
+                session.addPeer(
+                        "A", "host", MultiPeerSession.hostConfig(base(token("a")), PORTS, "t"));
+        AtomicReference<Boolean> seenByTeardown = new AtomicReference<>();
+        peer.teardown()
+                .registerAfterGameStep(() -> seenByTeardown.set(peer.teardown().signalled()));
+        assertFalse(peer.teardown().signalled(), "no signal yet");
+
+        session.closeOnSignal();
+
+        assertEquals(Boolean.TRUE, seenByTeardown.get(), "the peer's teardown ran with it raised");
     }
 
     @Test

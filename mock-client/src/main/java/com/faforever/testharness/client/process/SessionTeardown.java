@@ -98,8 +98,7 @@ public final class SessionTeardown {
     /**
      * Creates a teardown for a session whose lobby connection already exists. The remaining handles
      * are registered later, as they come into existence. Its {@link #signalled()} never reports a
-     * signal, which suits an owner that does not tell teardown about one, such as {@code session},
-     * whose own hook stops its peers through their state machines.
+     * signal, which suits an owner no signal can reach, such as a test.
      *
      * @param lobby the session's lobby connection; must not be {@code null}
      */
@@ -111,8 +110,9 @@ public final class SessionTeardown {
      * Creates a teardown that knows when a signal is tearing the JVM down (WBS-3.1.2.8-fix, #438).
      *
      * @param lobby the session's lobby connection; must not be {@code null}
-     * @param signalled raised once a signal has started the JVM's shutdown: {@code run}'s {@code
-     *     shuttingDown} flag (#442), which its hook raises before it tears down
+     * @param signalled raised once a signal has started the JVM's shutdown, before any teardown:
+     *     {@code run}'s {@code shuttingDown} flag (#442), or the one {@code session}'s hook raises
+     *     through {@code MultiPeerSession.closeOnSignal()}
      */
     public SessionTeardown(final LobbyConnection lobby, final BooleanSupplier signalled) {
         this.lobby = Objects.requireNonNull(lobby, "lobby");
@@ -196,9 +196,11 @@ public final class SessionTeardown {
 
     /**
      * Whether a signal started the JVM's shutdown (WBS-3.1.2.8-fix, #438). Read by the verdict
-     * check teardown runs through the owner's step: a signal kills the adapter itself (a terminal's
-     * SIGINT reaches it directly, and {@code SubprocessRegistry}'s hook terminates it), so an
-     * adapter found dead then is the signal's doing, not a finding.
+     * check teardown runs through the owner's step, and by the lifecycle's handling of the
+     * adapter's and the game's own exits: a signal kills both processes itself (a terminal's SIGINT
+     * reaches them directly, and {@code SubprocessRegistry}'s hook terminates them), possibly
+     * before any teardown starts, so a process found dead then is the signal's doing, not a
+     * finding.
      *
      * @return {@code true} once a signal has started the shutdown
      */

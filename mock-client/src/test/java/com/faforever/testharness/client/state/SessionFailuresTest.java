@@ -17,6 +17,7 @@ import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReaso
 import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.process.CommonPoolOccupier;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
@@ -506,7 +507,7 @@ final class SessionFailuresTest {
         CountDownLatch release = new CountDownLatch(1);
         long elapsedMs;
         try {
-            occupyCommonPool(release);
+            CommonPoolOccupier.occupy(release);
             long start = System.nanoTime();
 
             waitingFailures(wait).adapterAtTeardown(linkDropped(null));
@@ -582,37 +583,6 @@ final class SessionFailuresTest {
         assertFalse(verdicts.adapterLost());
         assertFalse(verdicts.sessionFailed());
         assertEquals(List.of(), lines());
-    }
-
-    /**
-     * Blocks as many common-pool threads as the pool runs tasks on at once, its parallelism, until
-     * {@code release} opens. Spare threads an earlier test's blocking {@code get()} left behind
-     * stay idle while that many run, and the pool does not wake them for queued work, the work this
-     * holds back included. One blocker per spare is queued too, for a spare still busy with earlier
-     * work to take once it is free.
-     *
-     * @param release opened by the caller to let the pool go
-     * @throws InterruptedException if interrupted while the pool fills
-     */
-    private static void occupyCommonPool(final CountDownLatch release) throws InterruptedException {
-        ForkJoinPool pool = ForkJoinPool.commonPool();
-        int parallelism = ForkJoinPool.getCommonPoolParallelism();
-        int threads = Math.max(parallelism, pool.getPoolSize());
-        CountDownLatch occupied = new CountDownLatch(parallelism);
-        for (int i = 0; i < threads; i++) {
-            pool.execute(
-                    () -> {
-                        occupied.countDown();
-                        try {
-                            release.await();
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                    });
-        }
-        assertTrue(
-                occupied.await(10, TimeUnit.SECONDS),
-                "could not occupy the common pool's " + parallelism + " threads");
     }
 
     /**

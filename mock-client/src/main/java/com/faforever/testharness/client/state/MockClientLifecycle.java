@@ -974,13 +974,13 @@ public final class MockClientLifecycle {
      * caught it.
      *
      * <p>Harness-initiated teardown suppresses the <em>crash</em> reading only: a non-zero code
-     * after {@link SessionTeardown#hasRun()} is the harness's own SIGTERM (143 on POSIX, 1 on
-     * Windows), not a finding, which is what R41 relies on — the real client's {@code gameKilled}
-     * flag suppresses the same false crash. It deliberately does not suppress the no-delivery
-     * warning below: the adapter's death drives TERMINATED and so teardown, and this handler runs
-     * asynchronously, so in #295's own scenario teardown has usually already run by the time a game
-     * that exited {@code 0} on its own is classified. Checking teardown first would mask precisely
-     * the case this card exists for.
+     * after {@link SessionTeardown#hasRun()}, or once a signal is stopping the run ({@link
+     * SessionTeardown#signalled()}, #438), is that stop's own SIGTERM or signal, not a finding. R41
+     * relies on this; the real client's {@code gameKilled} flag suppresses the same false crash. It
+     * deliberately does not suppress the no-delivery warning below: the adapter's death drives
+     * TERMINATED and so teardown, and this handler runs asynchronously, so in #295's scenario
+     * teardown has usually run by the time a game that exited {@code 0} on its own is classified.
+     * Checking teardown first would mask precisely the case this card exists for.
      *
      * <p>Takes the two observation signals as parameters rather than reading the fields, so a test
      * can drive every combination directly; teardown state is still read from {@link #teardown}.
@@ -1008,7 +1008,7 @@ public final class MockClientLifecycle {
                     "mock-game exited with code {} after losing its GPGNet link to the adapter;"
                             + " the adapter's own exit is reported separately",
                     exitCode);
-        } else if (exitCode != 0 && teardown.hasRun()) {
+        } else if (exitCode != 0 && (teardown.hasRun() || teardown.signalled())) {
             LOG.info("mock-game exited with code {} after harness-initiated teardown", exitCode);
         } else if (exitCode == 0 && cleanEnd) {
             LOG.info("mock-game exited cleanly with exit code {}", exitCode);
@@ -1101,11 +1101,11 @@ public final class MockClientLifecycle {
      * check comes first (WBS-3.1.2.5): {@link SessionTeardown}'s adapter step now quits the adapter
      * before ever signalling it, so a clean teardown produces the adapter's own exit(0) here, and
      * that must still read as the real client's "terminated normally" INFO line, not be downgraded
-     * to DEBUG just because teardown happened to be running. Only a non-zero code observed once
-     * {@link SessionTeardown#hasRun()} falls back to DEBUG — that is the SIGTERM/ SIGKILL fallback
-     * firing because quit didn't land, an expected shutdown code, not a crash. The TERMINATED entry
-     * hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method only
-     * logs.
+     * to DEBUG just because teardown happened to be running. Only a non-zero code seen once {@link
+     * SessionTeardown#hasRun()} or {@link SessionTeardown#signalled()} holds falls back to DEBUG:
+     * teardown's SIGTERM/SIGKILL fallback, or the signal's own kill, not a crash. The TERMINATED
+     * entry hook (registered in {@link #setupStateMachine()}) runs the actual teardown; this method
+     * only logs.
      *
      * <p>Since WBS-3.1.2.8-fix (#406) it also decides this run's exit status, recording {@link
      * SessionVerdicts#adapterLost()} in the same branch that warns, so the two cannot disagree.
@@ -1114,13 +1114,13 @@ public final class MockClientLifecycle {
      * arrive here with teardown already run. One is the TERMINATED self-loop through {@link
      * #logAdapterExitAfterTeardown(Event)}, where {@code hasRun()} is always true because
      * TERMINATED's entry hook runs teardown before the state commits. The other is the signal path,
-     * where the CLI's shutdown hook runs teardown outside the FSM and this event can still arrive
-     * while the session is mid-state. Deleting that branch, which is what #371 item 1 asked for
-     * (written before #341 routed the self-loop through this method), logs a crash on any clean
-     * shutdown whose teardown has to end the adapter with a signal, and lets that teardown-owned
-     * code set the flag after {@code RunCommand} may already have read it. Measured, with the
-     * branch removed: a plain {@link #shutdown()} in {@code AdapterCrashRecoveryTest}'s fixture
-     * logs {@code ICE adapter exited abnormally (code=143)}. That class pins both halves.
+     * where the CLI's hook runs teardown outside the FSM and this event can arrive mid-state. There
+     * {@code SubprocessRegistry}'s hook, or the terminal's SIGINT, can kill the adapter before that
+     * teardown starts, so the signal flag counts too (#438). Deleting the branch, as #371 item 1
+     * asked before #341 routed the self-loop here, logs a crash on any clean shutdown whose
+     * teardown has to signal the adapter, and lets that code set the flag after {@code RunCommand}
+     * may have read it. Measured, with the branch removed: a plain {@link #shutdown()} in {@code
+     * AdapterCrashRecoveryTest}'s fixture logs {@code ICE adapter exited abnormally (code=143)}.
      *
      * @param event the {@link AdapterExited} event that triggered this transition.
      */
@@ -1128,7 +1128,7 @@ public final class MockClientLifecycle {
         int exitCode = ((AdapterExited) event).exitCode();
         if (exitCode == 0) {
             LOG.info("ICE adapter terminated normally");
-        } else if (teardown.hasRun()) {
+        } else if (teardown.hasRun() || teardown.signalled()) {
             // Load bearing for the exit status, not only for the log level; see the javadoc.
             LOG.debug("ICE adapter exited (code={}) during session teardown", exitCode);
         } else {

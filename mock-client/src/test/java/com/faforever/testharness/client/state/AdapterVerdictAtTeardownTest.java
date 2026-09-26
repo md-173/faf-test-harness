@@ -408,6 +408,23 @@ final class AdapterVerdictAtTeardownTest {
     }
 
     /**
+     * An adapter a signal killed before any teardown started records nothing either (#438 review):
+     * its own exit ends the session here, and {@code onAdapterExited} reads the same signal flag as
+     * teardown's check. {@code SubprocessRegistry}'s hook can kill the adapter that early.
+     */
+    @Test
+    void anAdapterASignalKilledBeforeTeardownRecordsNothing() throws Exception {
+        MockClientLifecycle lifecycle =
+                hosted(new ScriptedAdapterConnection(), new SessionTeardown(lobby, () -> true));
+        CompletableFuture<Found> atCommit = foundAtCommit(lifecycle);
+
+        killAdapter();
+
+        assertEquals(new Found(false, false, false), atCommit.get(15, TimeUnit.SECONDS));
+        assertEquals(0, warnings(ADAPTER_LOST_LINE), warnings());
+    }
+
+    /**
      * The verdicts a run can report for its adapter, as sampled at a moment.
      *
      * @param launchFailed the launch never came up (#437)
