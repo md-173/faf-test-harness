@@ -282,7 +282,7 @@ final class LobbyHandshakeTest {
                 !System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win"),
                 "POSIX-only: uses a shell script as a stand-in faf-uid binary");
         // A stand-in 'faf-uid' that writes an error to stderr and exits non-zero, proving the
-        // handshake falls back to the static unique_id when the tool fails after starting.
+        // handshake fails with an exception and the correct information.
         Path fakeUid = dir.resolve("failing-uid.sh");
         Files.writeString(fakeUid, "#!/bin/sh\necho 'boom: no hardware id' >&2\nexit 3\n");
         assertTrueExecutable(fakeUid);
@@ -301,6 +301,16 @@ final class LobbyHandshakeTest {
         ExecutionException e =
                 assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
+        String message = e.getCause().getMessage();
+        String[] containsAll = {"faf-uid", fakeUid.toString(), "code 3", "boom: no hardware id"};
+        for (var contained : containsAll) {
+            assertTrue(
+                    message.contains(contained),
+                    String.format("AuthenticationException message did not contain %s", contained));
+        }
+
+        // Make sure no other messages arrive
+        assertThrows(AssertionError.class, () -> server.pollReceived(300, TimeUnit.MILLISECONDS));
     }
 
     @Test
@@ -320,6 +330,16 @@ final class LobbyHandshakeTest {
         ExecutionException e =
                 assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
+        String message = e.getCause().getMessage();
+        String[] containsAll = {"faf-uid", absent.toString()};
+        for (var contained : containsAll) {
+            assertTrue(
+                    message.contains(contained),
+                    String.format("AuthenticationException message did not contain %s", contained));
+        }
+
+        // Make sure no other messages arrive
+        assertThrows(AssertionError.class, () -> server.pollReceived(300, TimeUnit.MILLISECONDS));
     }
 
     private static void assertTrueExecutable(final Path file) {
