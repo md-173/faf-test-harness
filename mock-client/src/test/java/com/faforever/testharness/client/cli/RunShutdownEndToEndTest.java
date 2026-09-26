@@ -297,6 +297,9 @@ final class RunShutdownEndToEndTest {
     @Test
     void aLobbyDroppedAfterWelcomeExits70() throws Exception {
         startRunAndReachIdle();
+        // run's main thread logs the idle line while the lobby's thread may still be finishing
+        // welcome, and the JDK loses a drop that lands before it has (#485), so the drop waits.
+        Thread.sleep(200);
 
         lobby.abruptlyTerminate();
 
