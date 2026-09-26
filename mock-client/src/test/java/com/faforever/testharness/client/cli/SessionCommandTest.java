@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.ConfigLoader;
+import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.session.MultiPeerSession;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
@@ -15,8 +17,11 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import picocli.CommandLine;
 
 /**
@@ -264,6 +269,115 @@ final class SessionCommandTest {
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
         assertTrue(outcome.err().contains("the same account as peer A"), outcome.err());
+    }
+
+    @Test
+    void aPerPeerFaultListOfTheRightLengthPassesToTheSession() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--peer-mock-game-udp-drop-percent=0,100");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
+    @Test
+    void aPerPeerFaultListFromTheEnvironmentIsSplitAndChecked() throws IOException {
+        // Three values at two peers: refused for its length, which shows the environment layer
+        // reached the mixin's option and split it on commas.
+        Outcome outcome =
+                execute(
+                        Map.of("FAF_MOCK_CLIENT_PEER_MOCK_GAME_UDP_DROP_PERCENT", "0,0,100"),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"));
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("--peers is 2 but 3 given"), outcome.err());
+    }
+
+    @Test
+    void crashPeerOnTheHostIsUsage() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--crash-peer=A");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("--crash-peer must name a joiner"), outcome.err());
+    }
+
+    @Test
+    void crashPeerOnAJoinerPassesToTheSessionAtTwoPeers() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--crash-peer=B");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
+    /**
+     * Each fault option read from its config-file key, the option's name in camel case. Every value
+     * is one this two-peer run refuses, and the refusal names the option, so a key that was
+     * silently ignored would reach the binary check instead.
+     */
+    @ParameterizedTest
+    @CsvSource(
+            delimiter = '|',
+            value = {
+                "faultPeer|C|'C' is not a peer of this session",
+                "crashPeer|A|--crash-peer must name a joiner",
+                "peerIceRelayDelayMs|0,0,0|--peer-ice-relay-delay-ms needs exactly one value",
+                "peerMockGameUdpDropPercent|0,0,0|--peer-mock-game-udp-drop-percent needs exactly",
+                "peerMockGameCrashAfterSeconds|-1,-1,-1|--peer-mock-game-crash-after-seconds needs"
+            })
+    void eachFaultOptionIsReadFromItsConfigFileKey(
+            final String key, final String value, final String refusal) throws IOException {
+        Path config =
+                Files.writeString(
+                        dir.resolve("faults.json"),
+                        "{\"" + key + "\": \"" + value + "\", \"iceRelayDelayMs\": \"100\"}");
+
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--config=" + config,
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"));
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(refusal), outcome.err());
+    }
+
+    @Test
+    void crashPeerReachesTheSession() throws IOException {
+        Path adapter = Files.writeString(dir.resolve("adapter.jar"), "");
+        Path game = Files.writeString(dir.resolve("mock-game"), "");
+        List<MockClientConfig> bases = new ArrayList<>();
+        for (String name : List.of("a", "b", "c")) {
+            bases.add(
+                    ConfigLoader.load(
+                                    new String[] {
+                                        "--lobby-websocket-url=wss://ws.faforever.xyz",
+                                        "--oauth-token-url=https://hydra.faforever.xyz/token",
+                                        "--oauth-client-id=client",
+                                        "--oauth-refresh-token-file=" + token(name),
+                                        "--unique-id=00000000-0000-0000-0000-000000000000",
+                                        "--ice-adapter-binary-path=" + adapter,
+                                        "--mock-game-binary-path=" + game
+                                    },
+                                    Map.of())
+                            .orElseThrow());
+        }
+
+        MultiPeerSession crashing = SessionCommand.newSession(bases, "t", OptionalInt.of(2));
+        MultiPeerSession plain = SessionCommand.newSession(bases, "t", OptionalInt.empty());
+
+        assertEquals(OptionalInt.of(2), crashing.deliberateCrash());
+        assertEquals(OptionalInt.empty(), plain.deliberateCrash());
     }
 
     @Test

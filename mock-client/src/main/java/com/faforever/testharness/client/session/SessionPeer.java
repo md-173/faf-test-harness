@@ -320,16 +320,17 @@ public final class SessionPeer {
     /**
      * Moves every queued verdict into this peer's record, checking each is about this adapter.
      *
+     * @param stage the checkpoint draining them, named in the failure
      * @throws CheckpointFailure if the adapter reports another player as itself
      */
-    void drainVerdicts() {
+    void drainVerdicts(final String stage) {
         PeerVerdict verdict;
         while ((verdict = verdicts.poll()) != null) {
             observed.add(verdict);
             if (verdict.localId() != identity.id()) {
                 throw new CheckpointFailure(
                         name,
-                        "full mesh",
+                        stage,
                         "adapter reported "
                                 + verdict
                                 + " but its lobby-assigned id is "
@@ -359,6 +360,26 @@ public final class SessionPeer {
     }
 
     /**
+     * Whether this peer's adapter reported {@code other} unreachable after the first {@code mark}
+     * drained verdicts (WBS-5.2.1). Only a verdict after the mark counts, because the adapter also
+     * reports {@code false} while ICE is still negotiating, and a bring-up verdict must not pass
+     * for a loss.
+     *
+     * @param mark how many verdicts had been drained when the loss became possible
+     * @param other the peer that was lost
+     * @return {@code true} if a later verdict about {@code other} says it is not connected
+     */
+    boolean reportedLostSince(final int mark, final SessionPeer other) {
+        for (int i = mark; i < observed.size(); i++) {
+            PeerVerdict verdict = observed.get(i);
+            if (verdict.remoteId() == other.identity.id() && !verdict.connected()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Appended to a failed checkpoint's message when the server refused this peer's join.
      *
      * @return the refusal frame in parentheses, or an empty string
@@ -374,11 +395,11 @@ public final class SessionPeer {
      * verdict from player 0 and fail the mesh checkpoint by blaming this peer's id rather than the
      * malformed frame. Malformed ones are dropped rather than failing here: this runs on the
      * adapter's reader thread, where an exception would be swallowed, so a missing verdict surfaces
-     * as the checkpoint that timed out instead.
+     * as the checkpoint that timed out instead. Package-private so a test can feed it.
      *
      * @param notification the raw JSON-RPC notification
      */
-    private void recordVerdict(final JsonNode notification) {
+    void recordVerdict(final JsonNode notification) {
         JsonNode params = notification.path("params");
         if (!params.isArray()
                 || params.size() < VERDICT_PARAMS
@@ -395,11 +416,12 @@ public final class SessionPeer {
     /**
      * Records one {@code ConnectToPeer} frame, {@code args: [login, id, offer]} (faf-server {@code
      * GpgNetServerProtocol.send_ConnectToPeer}). A malformed frame is recorded with id -1, so it
-     * fails an offer check by name instead of vanishing on the listener thread.
+     * fails an offer check by name instead of vanishing on the listener thread. Package-private so
+     * a test can feed it.
      *
      * @param frame the lobby frame
      */
-    private void recordOffer(final JsonNode frame) {
+    void recordOffer(final JsonNode frame) {
         JsonNode args = frame.path("args");
         boolean wellFormed = args.path(1).canConvertToLong() && args.path(2).isBoolean();
         offers.add(

@@ -93,6 +93,25 @@ refresh tokens for one account are caught at the joiner's `welcome` stage. The r
 logs which list it used and where it came from, as `session: credentials from
 <flag> (<layer>)`.
 
+`session` faults (WBS-5.1.2, WBS-5.2.1). The root `--ice-relay-delay-ms`,
+`--mock-game-udp-drop-percent` and `--mock-game-crash-after-seconds` reach every
+peer unless `--fault-peer=<labels>` names some (A is the host, B the first
+joiner, and so on). `--peer-ice-relay-delay-ms`,
+`--peer-mock-game-udp-drop-percent` and `--peer-mock-game-crash-after-seconds`
+instead give each peer its own value, host first, exactly `--peers` values. In
+a `--config` file the keys are the options in camel case (`faultPeer`,
+`crashPeer`, `peerIceRelayDelayMs`, `peerMockGameUdpDropPercent`,
+`peerMockGameCrashAfterSeconds`), and each list is one comma-separated string.
+A crash set either way is not expected: it fails the run only if it lands before
+the session has proven its traffic, a few seconds after the last join, so use
+`0`; a later one never fires, because the session tears down once traffic is
+proven. `--crash-peer=<joiner>` is the one crash a run expects: `session`
+launches the match, has that joiner's game crash after launch, and exits `0`
+only if the survivors play on, which takes a few minutes. See
+[`harness-runbook.md` §10](../documentation/operations/harness-runbook.md#faults-on-one-peer-of-a-session-wbs-512-521)
+for the rules and the verdict. The run logs each faulted peer's values as
+`session: faults on <label>: ...`.
+
 Invocation shape:
 
 ```text
@@ -103,8 +122,9 @@ Global flags (`--config`, `--help`, `--version`, plus the 38 config options)
 are declared on the root and apply to every subcommand. Each
 subcommand also accepts its own `--help`. `launch-ice` and `launch-game`
 additionally take a subcommand-local `--duration-seconds` flag, `ice-smoke`
-a `--timeout-seconds` flag, and `session` `--peers`, `--peer-refresh-token-file` and
-`--peer-access-token-file`.
+a `--timeout-seconds` flag, and `session` `--peers`, `--peer-refresh-token-file`,
+`--peer-access-token-file`, `--fault-peer`, `--crash-peer` and the three
+`--peer-*` fault lists.
 
 `--version` prints `mock-client <version>`, where the version is read from the
 jar manifest, so a release jar reports the version it was released as. Every
@@ -115,8 +135,8 @@ is no manifest, and it prints `mock-client (development build)` instead.
 
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
-| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running. |
-| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file or (on access tokens) one account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, or `INSTANCE_NAME` set, all refused before any process starts. |
+| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running, and with `--crash-peer` also that joiner's game crashing after launch while the survivors played on. |
+| `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file or (on access tokens) one account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, `INSTANCE_NAME` set, or a fault option that does not say one thing clearly (a `--peer-*` fault list of the wrong length or out of range, a list given with its root flag, a `--fault-peer` naming no peer or no set fault, a `--crash-peer` on the host or beside another crash), all refused before any process starts. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file, the lobby session failed, its ICE adapter or game never came up (a binary that could not be started, an adapter that exited or never accepted its JSON-RPC connection, one that refused a setup call, or an unexpected exception on the way up; logged as `the ICE adapter or game never came up`, after a line naming the cause), or its session failed after they came up (a `HostGame`, `JoinGame` or `ConnectToPeer` frame it could not read, a `DisconnectFromPeer` one before the game started, an adapter that answered a host, join or peer-connect call with an error or not within 5 s, a match the server cancelled after `game_launch` and before the game started, or an unexpected exception in the host, join or peer-connect step; logged as `the session failed after its ICE adapter and game came up`, after a line naming the cause), `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed (including no two-way game traffic) or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 | `71` | `GAME_CRASHED`    | `run` only: the session ran, but the game process died unaccounted for: a non-zero exit with no `GameEnded` frame observed and no harness-initiated teardown, the same condition that logs `mock-game exited abnormally`. Covers a game process that exited before its match as well as one that died mid-match (a game binary that could not be started at all is `70`), but not mock-game's own `69` (`ADAPTER_LOST`), which is logged as a lost adapter link and leaves this code alone; the adapter's own death is `72` below. Before this existed, such a run exited `0`. |
 | `72` | `ADAPTER_LOST`    | `run` only: the session ran, but the ICE adapter process exited non-zero while it was live, outside harness teardown, the same condition that logs `ICE adapter exited abnormally`. Keyed on the adapter's own exit rather than on the game reporting a lost link, so it is decided before the run's terminal state is observable whenever the adapter's death is what ends the session, which is what a killed adapter does. Not guaranteed in the rare case where something else ends it first in the same few milliseconds (an adapter RPC call failing in flight, or the game's own exit being processed first): the run then exits `0`. An adapter that was up and then died, not one that never came up: a failed launch ends the session through a failed transition instead, and an adapter rejecting an argument exits `0` while doing so, so that case is `70`. A clean adapter quit (exit `0`) and a teardown-initiated exit are not this. Before this existed, such a run exited `0`. |

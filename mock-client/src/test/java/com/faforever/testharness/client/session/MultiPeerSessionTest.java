@@ -2,12 +2,19 @@ package com.faforever.testharness.client.session;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.lobby.SessionState;
+import com.faforever.testharness.client.state.ClientState;
+import com.faforever.testharness.game.config.ExitCodes;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
@@ -45,6 +52,8 @@ final class MultiPeerSessionTest {
                     "hostConfig",
                     "joinConfig",
                     "queueConfig");
+
+    private static final ObjectMapper JSON = new ObjectMapper();
 
     private static final MultiPeerSession.AdapterPorts PORTS =
             new MultiPeerSession.AdapterPorts(40001, 40002, 40003);
@@ -175,6 +184,175 @@ final class MultiPeerSessionTest {
         assertTrue(host.joinConfig().isEmpty());
         assertEquals(12345, joiner.joinConfig().orElseThrow().targetGameId());
         assertTrue(joiner.hostConfig().isEmpty());
+    }
+
+    @Test
+    void withFaultsReplacesOnlyTheThreeFaultValues() throws Exception {
+        MockClientConfig base = distinctBase("--oauth-refresh-token-file=" + token("distinct"));
+        Set<String> faults =
+                Set.of("iceRelayDelayMs", "mockGameUdpDropPercent", "mockGameCrashAfterSeconds");
+
+        MockClientConfig faulted = MultiPeerSession.withFaults(base, 501, 51, 41);
+
+        for (RecordComponent component : MockClientConfig.class.getRecordComponents()) {
+            if (!faults.contains(component.getName())) {
+                assertEquals(
+                        component.getAccessor().invoke(base),
+                        component.getAccessor().invoke(faulted),
+                        component.getName());
+            }
+        }
+        assertEquals(501, faulted.iceRelayDelayMs());
+        assertEquals(51, faulted.mockGameUdpDropPercent());
+        assertEquals(41, faulted.mockGameCrashAfterSeconds());
+    }
+
+    @Test
+    void aDeliberateCrashIsSetOnTheNamedJoinerOnly() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b")), base(token("c")));
+
+        List<MockClientConfig> crashing = MultiPeerSession.crashBases(bases, 1);
+
+        assertEquals(
+                List.of(-1, MultiPeerSession.crashAfterSeconds(3), -1),
+                crashing.stream().map(MockClientConfig::mockGameCrashAfterSeconds).toList());
+    }
+
+    @Test
+    void refusesADeliberateCrashOnTheHostOrOutsideTheSession() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b")), base(token("c")));
+
+        IllegalArgumentException host =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 0));
+        IllegalArgumentException outside =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 3));
+
+        assertTrue(host.getMessage().contains("on a joiner, B to C; got A"), host.getMessage());
+        assertTrue(outside.getMessage().contains("got D"), outside.getMessage());
+    }
+
+    @Test
+    void refusesADeliberateCrashBesideAnotherCrash() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b"), "--mock-game-crash-after-seconds=5"));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 1));
+
+        assertTrue(e.getMessage().startsWith("peer B already sets a crash"), e.getMessage());
+    }
+
+    @Test
+    void aDeliberateCrashLandsAfterLaunchAndLeavesTheSurvivorsTimeBeforeTheMatchEnds() {
+        for (int peers = MultiPeerSession.MIN_PEERS; peers <= MultiPeerSession.MAX_PEERS; peers++) {
+            long launch = MultiPeerSession.minHostLaunchDelaySeconds(peers);
+            long crash = MultiPeerSession.crashAfterSeconds(peers);
+            // The crash timer starts at the joiner's join, no earlier than the host started
+            // hosting, which is when the host's launch timer started.
+            assertTrue(crash >= launch + MultiPeerSession.CRASH_AFTER_LAUNCH.toSeconds());
+            // Every joiner is in before launch, so the crash lands at most a launch delay later
+            // than that, and the survivor wait must end before the host's match does: mock-game
+            // runs it for twice the launch delay after launch.
+            long latestCrash = launch + crash;
+            long matchEnds = launch + 2 * launch;
+            assertTrue(
+                    latestCrash + MultiPeerSession.SURVIVOR_TIMEOUT.toSeconds() < matchEnds,
+                    "at " + peers + " peers");
+        }
+    }
+
+    @Test
+    void theInjectedCrashExitCodeIsMockGames() {
+        assertEquals(ExitCodes.INJECTED_CRASH, MultiPeerSession.INJECTED_CRASH_EXIT);
+    }
+
+    @Test
+    void aDeliberateCrashSessionIsCheckedLikeAnyOther() throws IOException {
+        List<MockClientConfig> bases = List.of(base(token("a")), base(token("b")));
+
+        // Everything passes up to the default adapter path, which does not exist.
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.withDeliberateCrash(bases, "t", 1));
+
+        assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
+    }
+
+    @Test
+    void aLossCountsOnlyWhenReportedAfterTheMarkAndStillStanding() throws IOException {
+        SessionPeer host = peer("A", "host", 7982, token("a"));
+        SessionPeer crashed = peer("B", "joiner", 330072, token("b"));
+        // Bring-up: the adapter reports B down while ICE negotiates, then up.
+        host.recordVerdict(verdict(7982, 330072, false));
+        host.recordVerdict(verdict(7982, 330072, true));
+        host.drainVerdicts("crash");
+        int mark = host.observed().size();
+
+        assertFalse(host.reportedLostSince(mark, crashed), "a bring-up false must not count");
+
+        host.recordVerdict(verdict(7982, 330072, false));
+        host.drainVerdicts("loss");
+        assertTrue(host.reportedLostSince(mark, crashed));
+        assertFalse(host.reportsConnected(crashed));
+
+        host.recordVerdict(verdict(7982, 330072, true));
+        host.drainVerdicts("loss");
+        assertTrue(host.reportsConnected(crashed), "a flap back up is what the latest check sees");
+    }
+
+    @Test
+    void onlySurvivorsThatOfferedToTheCrashedJoinerMustReportIt() throws IOException {
+        SessionPeer host = peer("A", "host", 1, token("a"));
+        SessionPeer crashed = peer("B", "joiner", 2, token("b"));
+        SessionPeer later = peer("C", "joiner", 3, token("c"));
+        SessionPeer earlier = peer("D", "joiner", 4, token("d"));
+        host.recordOffer(offer(2, true));
+        later.recordOffer(offer(2, true));
+        earlier.recordOffer(offer(2, false));
+
+        assertEquals(
+                List.of(host, later),
+                MultiPeerSession.requiredReporters(List.of(host, later, earlier), crashed));
+    }
+
+    @Test
+    void aHostThatRecordedNoOfferFailsRatherThanAskingNobody() throws IOException {
+        SessionPeer host = peer("A", "host", 1, token("a"));
+        SessionPeer crashed = peer("B", "joiner", 2, token("b"));
+        SessionPeer later = peer("C", "joiner", 3, token("c"));
+        later.recordOffer(offer(2, true));
+
+        CheckpointFailure e =
+                assertThrows(
+                        CheckpointFailure.class,
+                        () -> MultiPeerSession.requiredReporters(List.of(host, later), crashed));
+
+        assertTrue(e.getMessage().startsWith("A(host): loss: recorded no"), e.getMessage());
+    }
+
+    @Test
+    void theMatchIsLiveOnlyWhenTheHostPlaysAndTheServerSaysSo() {
+        assertTrue(MultiPeerSession.matchLive(ClientState.PLAYING, Optional.of("playing")));
+        assertFalse(MultiPeerSession.matchLive(ClientState.PLAYING, Optional.of("open")));
+        assertFalse(MultiPeerSession.matchLive(ClientState.PLAYING, Optional.empty()));
+        assertFalse(MultiPeerSession.matchLive(ClientState.HOSTING, Optional.of("playing")));
+    }
+
+    @Test
+    void onlyExit134ClassifiedAsACrashIsTheInjectedCrash() {
+        assertTrue(MultiPeerSession.injectedCrash(134, true));
+        assertFalse(MultiPeerSession.injectedCrash(134, false), "the harness's own doing");
+        assertFalse(MultiPeerSession.injectedCrash(70, true), "a crash, but not the injected one");
+        assertFalse(MultiPeerSession.injectedCrash(null, true), "not exited");
     }
 
     @Test
@@ -421,6 +599,57 @@ final class MultiPeerSessionTest {
             "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar")
         };
         return ConfigLoader.load(args, Map.of()).orElseThrow();
+    }
+
+    /**
+     * A peer with a lobby identity and no connection, enough to feed its recorders directly.
+     *
+     * @param label the instance label
+     * @param role {@code host} or {@code joiner}
+     * @param id its player id
+     * @param tokenFile its refresh-token file
+     * @return the peer
+     */
+    private static SessionPeer peer(
+            final String label, final String role, final int id, final Path tokenFile) {
+        SessionPeer peer =
+                new SessionPeer(
+                        label,
+                        role,
+                        MultiPeerSession.joinConfig(
+                                base(tokenFile),
+                                new MultiPeerSession.AdapterPorts(
+                                        40000 + id, 41000 + id, 42000 + id),
+                                1));
+        peer.identity(new SessionState(id, label, "", "", Map.of(), "2026-09-26T00:00:00Z"));
+        return peer;
+    }
+
+    /**
+     * An {@code onConnected} notification as the adapter sends it.
+     *
+     * @param local the reporting adapter's player id
+     * @param remote the peer the verdict is about
+     * @param connected the verdict
+     * @return the notification
+     */
+    private static JsonNode verdict(final long local, final long remote, final boolean connected) {
+        ObjectNode notification = JSON.createObjectNode().put("method", "onConnected");
+        notification.putArray("params").add(local).add(remote).add(connected);
+        return notification;
+    }
+
+    /**
+     * A {@code ConnectToPeer} frame as faf-server sends it: login, id, offer.
+     *
+     * @param remote the peer to connect to
+     * @param offer whether this side makes the ICE offer
+     * @return the frame
+     */
+    private static JsonNode offer(final long remote, final boolean offer) {
+        ObjectNode frame = JSON.createObjectNode().put("command", "ConnectToPeer");
+        frame.putArray("args").add("login-" + remote).add(remote).add(offer);
+        return frame;
     }
 
     private static MockClientConfig base(final Path tokenFile, final String... extra) {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.game.net.GameTrafficSession;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -130,6 +131,90 @@ final class TrafficEvidenceTest {
 
         assertTrue(
                 failure.getMessage().startsWith("B(joiner): traffic: session ended"),
+                failure.getMessage());
+        assertTrue(Duration.ofNanos(System.nanoTime() - started).toSeconds() < 5);
+    }
+
+    @Test
+    void aDirectionAdvancesSinceASnapshotOnlyWithTwoNewLinesAndAHigherSequence() {
+        TrafficEvidence evidence = new TrafficEvidence();
+        evidence.accept(line(JOINER_ID, HOST_ID, 3, 6));
+        evidence.accept(line(JOINER_ID, HOST_ID, 13, 16));
+        Map<TrafficEvidence.Direction, TrafficEvidence.Progress> before = evidence.snapshot();
+
+        evidence.accept(line(JOINER_ID, HOST_ID, 23, 26));
+        assertFalse(evidence.advancedSince(before, JOINER_ID, HOST_ID), "one new line");
+
+        evidence.accept(line(JOINER_ID, HOST_ID, 33, 36));
+        assertTrue(evidence.advancedSince(before, JOINER_ID, HOST_ID));
+        assertFalse(evidence.advancedSince(before, HOST_ID, JOINER_ID), "a silent direction never");
+    }
+
+    @Test
+    void aSequenceThatStalledSinceTheSnapshotHasNotAdvanced() {
+        TrafficEvidence evidence = new TrafficEvidence();
+        evidence.accept(line(JOINER_ID, HOST_ID, 3, 16));
+        Map<TrafficEvidence.Direction, TrafficEvidence.Progress> before = evidence.snapshot();
+
+        evidence.accept(line(JOINER_ID, HOST_ID, 4, 16));
+        evidence.accept(line(JOINER_ID, HOST_ID, 5, 16));
+
+        assertFalse(evidence.advancedSince(before, JOINER_ID, HOST_ID));
+    }
+
+    @Test
+    void awaitAllPassesOnceNothingIsMissing() {
+        List<Map<String, String>> answers =
+                new ArrayList<>(List.of(Map.of("A(host)", "no loss yet"), Map.of()));
+
+        assertDoesNotThrow(
+                () ->
+                        MultiPeerSession.awaitAll(
+                                "loss",
+                                () -> answers.size() > 1 ? answers.remove(0) : answers.get(0),
+                                List::of,
+                                // Generous: it passes on the second poll, which a stalled runner
+                                // could otherwise push past a short deadline.
+                                System.nanoTime() + Duration.ofMinutes(1).toNanos(),
+                                "PT1M"));
+    }
+
+    @Test
+    void awaitAllFailsNamingWhatIsStillMissing() {
+        CheckpointFailure failure =
+                assertThrows(
+                        CheckpointFailure.class,
+                        () ->
+                                MultiPeerSession.awaitAll(
+                                        "loss",
+                                        () -> Map.of("C(joiner)", "no onConnected false"),
+                                        List::of,
+                                        System.nanoTime() + SHORT_WAIT.toNanos(),
+                                        SHORT_WAIT.toString()));
+
+        assertTrue(
+                failure.getMessage().startsWith("C(joiner): loss: not met within"),
+                failure.getMessage());
+        assertTrue(failure.getMessage().contains("no onConnected false"), failure.getMessage());
+    }
+
+    @Test
+    void awaitAllFailsAsSoonAsASurvivorEnds() {
+        long started = System.nanoTime();
+
+        CheckpointFailure failure =
+                assertThrows(
+                        CheckpointFailure.class,
+                        () ->
+                                MultiPeerSession.awaitAll(
+                                        "play on",
+                                        () -> Map.of("A(host)", "from C(joiner): nothing"),
+                                        () -> List.of("C(joiner)"),
+                                        System.nanoTime() + Duration.ofMinutes(1).toNanos(),
+                                        "PT1M"));
+
+        assertTrue(
+                failure.getMessage().startsWith("C(joiner): play on: session ended"),
                 failure.getMessage());
         assertTrue(Duration.ofNanos(System.nanoTime() - started).toSeconds() < 5);
     }
