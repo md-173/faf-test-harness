@@ -382,7 +382,11 @@ public final class MockClientLifecycle {
                         this::onWelcomeReceived,
                         null);
         states.get(ClientState.CONNECTING)
-                .registerTransition(AuthFailed.class, states.get(ClientState.TERMINATED));
+                .registerTransition(
+                        AuthFailed.class,
+                        states.get(ClientState.TERMINATED),
+                        failures::handshakeFailed,
+                        null);
 
         states.get(ClientState.IDLE)
                 .registerTransition(
@@ -392,6 +396,14 @@ public final class MockClientLifecycle {
                         null);
         states.get(ClientState.IDLE).onEntry(this::sendConfiguredIntentOnFirstIdle);
         registerMatchmakingQueueTransitions();
+        for (var s : List.of(ClientState.IDLE, ClientState.SEARCHING)) {
+            states.get(s)
+                    .registerTransition(
+                            LaunchRejected.class,
+                            states.get(ClientState.TERMINATED),
+                            failures::launchRejected,
+                            null);
+        }
 
         states.get(ClientState.STARTING_GAME)
                 .registerTransition(
@@ -461,22 +473,7 @@ public final class MockClientLifecycle {
         // Teardown subprocesses and connections.
         states.get(ClientState.TERMINATED).onEntry(() -> teardown.run());
 
-        // Adapt lobby events to state events.
-        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
-        GameLaunchHandler launchHandler =
-                new GameLaunchHandler(
-                        mapper, message -> machine.receiveEvent(new LaunchGame(message)));
-        lobby.registerHandler("game_launch", launchHandler::onMessage);
-        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
-        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
-        lobby.registerHandler(
-                "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
-        lobby.registerHandler("search_info", this::onSearchInfo);
-        lobby.registerHandler("match_found", this::onMatchFound);
-        lobby.registerHandler(
-                "match_cancelled", message -> machine.receiveEvent(new MatchCancelled(message)));
-        lobby.registerHandler("search_timeout", this::onSearchTimeout);
-        lobby.registerHandler("matchmaker_info", this::onMatchmakerInfo);
+        registerLobbyHandlers();
 
         // Wire the game exiting to the appropriate event. Async (#211, and also load-bearing for
         // #214): a game that exits near-instantly can complete gameExit on the same thread that
@@ -739,7 +736,8 @@ public final class MockClientLifecycle {
      * genuinely matters in the other four states, so the events are real and only the timing makes
      * them uninteresting. Same treatment {@link Disconnected} already gets, and for the same reason
      * — a deliberate debug-level no-op beats the framework's generic WARN. Self-loops skip entry
-     * hooks, so neither can re-run teardown.
+     * hooks, so neither can re-run teardown. {@link AuthFailed} and {@link MatchCancelled} are
+     * no-ops too, without an action (#455, #457; see {@link SessionFailures}).
      */
     private void registerPostTeardownExitTransitions() {
         states.get(ClientState.TERMINATED)
@@ -754,6 +752,29 @@ public final class MockClientLifecycle {
                         states.get(ClientState.TERMINATED),
                         this::logGameExitAfterTeardown,
                         null);
+        State terminated = states.get(ClientState.TERMINATED);
+        terminated.registerTransition(AuthFailed.class, terminated);
+        terminated.registerTransition(MatchCancelled.class, terminated);
+    }
+
+    private void registerLobbyHandlers() {
+        lobby.onDisconnect(e -> machine.receiveEvent(new Disconnected(e)));
+        GameLaunchHandler launchHandler =
+                new GameLaunchHandler(
+                        mapper,
+                        message -> machine.receiveEvent(new LaunchGame(message)),
+                        reason -> machine.receiveEvent(new LaunchRejected(reason)));
+        lobby.registerHandler("game_launch", launchHandler::onMessage);
+        lobby.registerHandler("HostGame", message -> machine.receiveEvent(new HostGame(message)));
+        lobby.registerHandler("JoinGame", message -> machine.receiveEvent(new JoinGame(message)));
+        lobby.registerHandler(
+                "ConnectToPeer", message -> machine.receiveEvent(new ConnectToPeer(message)));
+        lobby.registerHandler("search_info", this::onSearchInfo);
+        lobby.registerHandler("match_found", this::onMatchFound);
+        lobby.registerHandler(
+                "match_cancelled", message -> machine.receiveEvent(new MatchCancelled(message)));
+        lobby.registerHandler("search_timeout", this::onSearchTimeout);
+        lobby.registerHandler("matchmaker_info", this::onMatchmakerInfo);
     }
 
     /**
@@ -773,7 +794,6 @@ public final class MockClientLifecycle {
                     if (err == null) {
                         machine.receiveEvent(new WelcomeReceived(state));
                     } else {
-                        LOG.warn("Handshake could not be completed");
                         machine.receiveEvent(
                                 new AuthFailed(err.getCause() != null ? err.getCause() : err));
                     }
@@ -1049,9 +1069,9 @@ public final class MockClientLifecycle {
      * session, whoever started teardown, and its write completes before the lobby close that
      * follows. The game-exit handler used to send it, racing that close, which {@code
      * LobbyConnection} writes directly rather than through its send chain: when the close won, the
-     * frame was lost with a WARN. The real client sends it after every outcome of a {@code
-     * game_launch}, a failed launch included ({@code GameRunner.startOnlineGame}'s {@code
-     * whenComplete}), so this follows every one the lifecycle acted on (#462).
+     * frame was lost with a WARN. The real client sends it after every launch it starts, a failed
+     * one included ({@code GameRunner.startOnlineGame}'s {@code whenComplete}), so this follows
+     * every launch the lifecycle started (#462).
      *
      * <p>Gated on {@link #cleanEndSeen} rather than sent unconditionally, because since R72 was
      * wired into {@code launchGame} (#218) a clean end produces the frame twice: mock-game emits

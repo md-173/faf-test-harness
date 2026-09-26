@@ -14,6 +14,9 @@ import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -29,7 +32,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 /**
  * How the real {@code run} ends, when a signal stops it and when it stops on its own
- * (WBS-3.1.5.2-fix, #297, and WBS-3.1.3.2-fix, #446).
+ * (WBS-3.1.5.2-fix, #297, and WBS-3.1.3.2-fix, #446), a lobby it cannot reach (#455) and a {@code
+ * game_launch} it cannot use (#457) among them.
  *
  * <p>{@code mock-client/README.md} documents that {@code Ctrl-C} or {@code SIGTERM} closes the
  * WebSocket cleanly and exits 130 or 143. {@code SignalExitCodeEndToEndTest} pins the JDK behaviour
@@ -65,6 +69,19 @@ final class RunShutdownEndToEndTest {
     /** The lobby drop's verdict line, the one that does not end that way. */
     private static final String LOBBY_DROP_VERDICT = "lobby connection dropped unexpectedly";
 
+    /** The verdict for a command the lobby answered with {@code invalid} after welcome (#486). */
+    private static final String REFUSED_VERDICT =
+            "the lobby answered one of this run's commands with invalid; reporting it in this run's"
+                    + " exit code";
+
+    /** The lifecycle's WARN when a failed login ends the session (#455). */
+    private static final String HANDSHAKE_WARN = "Handshake could not be completed";
+
+    /** An error notice, as faf-server sends a banned player before it closes the login (#473). */
+    private static final String BAN_NOTICE =
+            "{\"command\":\"notice\",\"style\":\"error\","
+                    + "\"text\":\"You are banned from FAF forever.\\nReason: rig\"}";
+
     /** Logged just before the main thread parks: the session is idle. */
     private static final String IDLE_LINE = "mock client idle as player";
 
@@ -74,6 +91,12 @@ final class RunShutdownEndToEndTest {
     private static final String WELCOME =
             "{\"command\":\"welcome\",\"me\":{\"id\":7,\"login\":\"MockPlayer\"},"
                     + "\"current_time\":\"2026-09-23T00:00:00Z\"}";
+
+    /** A custom game's launch whose args carry a slash flag the client does not allow (#457). */
+    private static final String UNUSABLE_GAME_LAUNCH =
+            "{\"command\":\"game_launch\",\"uid\":4243,\"mod\":\"faf\",\"name\":\"unusable\","
+                    + "\"game_type\":\"custom\",\"rating_type\":\"global\",\"init_mode\":0,"
+                    + "\"args\":[\"/numgames\",0,\"/newflag\"]}";
 
     /** A custom game's launch, carrying every field the handler requires. */
     private static final String GAME_LAUNCH =
@@ -145,6 +168,191 @@ final class RunShutdownEndToEndTest {
 
         assertExitCode(130);
         assertEndedCleanlyBySignal();
+    }
+
+    /**
+     * A lobby that refuses the connection ends the run with {@code 70} and one ERROR naming the
+     * failure's type, its root cause and the lobby, where it used to read {@code lobby session
+     * failed: null} (WBS-3.1.1.4-fix, #455). The lobby's disconnect ends the session before the
+     * handshake's failure is posted, and neither that failure nor the framework may then warn about
+     * it. The port is bound and never listened on, so the connect is refused and nothing can take
+     * it meanwhile. A refused connect has a root cause because {@code java.net.http} retries it on
+     * the channel the refusal closed; which class that is, the JDK chooses, so it is not asserted.
+     */
+    @Test
+    void aRefusedConnectExits70NamingTheLobbyOnce() throws Exception {
+        String lobbyUrl;
+        try (Socket reserved = new Socket()) {
+            reserved.bind(new InetSocketAddress("127.0.0.1", 0));
+            lobbyUrl = "ws://127.0.0.1:" + reserved.getLocalPort();
+            startRun(URI.create(lobbyUrl), List.of());
+
+            assertExitCode(ExitCodes.RUNTIME);
+        }
+
+        List<JsonNode> records = records();
+        List<String> errors = messagesAt(records, "ERROR");
+        List<String> warnings = messagesAt(records, "WARN");
+        String error = "lobby session with " + lobbyUrl + " failed: ";
+        assertEquals(1, errors.size(), "exactly one ERROR: " + messages(records));
+        assertTrue(
+                errors.get(0).startsWith(error + "ConnectException"),
+                "the ERROR must name the failure and the lobby: " + errors);
+        String failure = errors.get(0).substring(error.length());
+        assertTrue(
+                failure.contains(", caused by "),
+                "the ERROR must name the failure's root cause: " + errors);
+        assertTrue(
+                warnings.contains("lobby WebSocket connect to " + lobbyUrl + " failed: " + failure),
+                "the connect WARN must name the same failure and the lobby: " + warnings);
+        assertTrue(
+                errors.stream().noneMatch(m -> m.endsWith("null"))
+                        && warnings.stream().noneMatch(m -> m.endsWith("null")),
+                "no line may name the failure as null: " + messages(records));
+        assertTrue(
+                warnings.stream()
+                        .noneMatch(
+                                m ->
+                                        m.startsWith("No matching transitions")
+                                                || m.startsWith(
+                                                        "Handshake could not be completed")),
+                "nothing may warn about the handshake once the session has ended: " + warnings);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+        assertEquals(List.of(), verdicts(records), "a session that never opened names no verdict");
+    }
+
+    /**
+     * An {@code invalid} in answer to {@code auth} ends the run with {@code 70} at once, with one
+     * ERROR naming it (#473), where the run used to wait out its 45 s setup timeout and then blame
+     * the timeout. faf-server sends it when handling the login raised, a refused {@code unique_id}
+     * included, and closes the connection straight after.
+     */
+    @Test
+    void anInvalidAnswerToAuthExits70NamingIt() throws Exception {
+        startRunAndReachAuth(List.of());
+
+        lobby.broadcastText("{\"command\":\"invalid\"}");
+        lobby.closeAllClean(1000, "");
+
+        assertExitCode(ExitCodes.RUNTIME);
+        assertLoginEndedAtOnce(
+                "the lobby answered the login with invalid, a server-side error such as a refused"
+                        + " unique_id or an error checking the token",
+                List.of());
+    }
+
+    /**
+     * A lobby that closes the connection before {@code welcome} ends the run with {@code 70} at
+     * once, with one ERROR naming the close (#473), as faf-server ends a banned player's login: an
+     * error {@code notice}, then a Close frame 1000 with no reason. The notice's text, which says
+     * why, is logged as a WARN on one line before the close is handled.
+     */
+    @Test
+    void aBannedLoginExits70NamingTheClose() throws Exception {
+        startRunAndReachAuth(List.of());
+
+        lobby.broadcastText(BAN_NOTICE);
+        lobby.closeAllClean(1000, "");
+
+        assertExitCode(ExitCodes.RUNTIME);
+        assertLoginEndedAtOnce(
+                "the lobby closed the connection before welcome (code 1000)",
+                List.of("lobby notice (error): You are banned from FAF forever. Reason: rig"));
+    }
+
+    /**
+     * An {@code invalid} after welcome, faf-server's answer to one of the run's own commands that
+     * it failed on, ends the run with {@code 70} and a verdict naming it (#486). faf-server closes
+     * the connection cleanly right after, which used to read as the lobby ending the session, so
+     * the run exited {@code 0}. Both WARNs are logged before the run ends: the frame's as it
+     * arrives, the verdict's once TERMINATED commits.
+     */
+    @Test
+    void anInvalidAfterWelcomeExits70() throws Exception {
+        startRunAndReachIdle();
+
+        lobby.broadcastText("{\"command\":\"invalid\"}");
+        lobby.closeAllClean(1000, "");
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(List.of(REFUSED_VERDICT), verdicts(records), "the refusal is the verdict");
+        assertEquals(
+                List.of(
+                        "the lobby answered a command with invalid, a server-side error;"
+                                + " faf-server closes the connection next",
+                        REFUSED_VERDICT),
+                messagesAt(records, "WARN"),
+                "the frame's WARN, then the verdict's");
+        assertNoErrors(records);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+    }
+
+    /**
+     * A lobby lost without a Close frame after welcome ends the run with {@code 70} and the lobby
+     * drop as its verdict (#473). The JDK reports such a drop as a close with code 1006, which used
+     * to be read as a clean close, so the run exited {@code 0} as if the lobby had ended the
+     * session.
+     */
+    @Test
+    void aLobbyDroppedAfterWelcomeExits70() throws Exception {
+        startRunAndReachIdle();
+        // run's main thread logs the idle line while the lobby's thread may still be finishing
+        // welcome, and the JDK loses a drop that lands before it has (#485), so the drop waits.
+        Thread.sleep(200);
+
+        lobby.abruptlyTerminate();
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(List.of(LOBBY_DROP_VERDICT), verdicts(records), "the drop is the verdict");
+        assertNoErrors(records);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+    }
+
+    /**
+     * A {@code game_launch} the client cannot use ends the run with {@code 70} (WBS-3.1.1.6-fix,
+     * #457), where the frame used to be dropped with a WARN and the run left idle until killed. One
+     * line names what is wrong with the frame, and it is the only WARN besides the launch's verdict
+     * that follows, so neither the handler nor the validator may add a cause line of its own.
+     * Nothing is logged at ERROR, and teardown closes the lobby cleanly without a {@code GameState
+     * Ended}: a refused frame starts no launch, and #462 reports only a launch that started.
+     */
+    @Test
+    void aGameLaunchTheClientCannotUseExits70() throws Exception {
+        startRunAndReachIdle();
+
+        lobby.broadcastText(UNUSABLE_GAME_LAUNCH);
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(
+                List.of(
+                        "Could not read the game_launch frame (game_launch.args contains unknown"
+                                + " slash-flag: /newflag)"),
+                messages(records).stream().filter(m -> m.startsWith("Could not")).toList(),
+                "one line must name what is wrong with the frame: " + messages(records));
+        assertEquals(
+                List.of(
+                        "the ICE adapter or game never came up; reporting it in this run's exit"
+                                + " code"),
+                verdicts(records),
+                "exactly one verdict, the launch's: " + messages(records));
+        assertEquals(
+                List.of(
+                        "Could not read the game_launch frame (game_launch.args contains unknown"
+                                + " slash-flag: /newflag)",
+                        "the ICE adapter or game never came up; reporting it in this run's exit"
+                                + " code"),
+                messagesAt(records, "WARN"),
+                "the cause line and the verdict, nothing else: " + messages(records));
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+        assertNoErrors(records);
+        assertEquals(
+                1000,
+                lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
+                "teardown must close the lobby cleanly");
+        assertEquals(0, gameStateEndedSent(), "a refused game_launch started no launch to report");
     }
 
     /**
@@ -312,6 +520,62 @@ final class RunShutdownEndToEndTest {
      * @param sessionArgs the adapter and game options, binary paths included
      */
     private void startRunAndReachIdle(final List<String> sessionArgs) throws Exception {
+        startRunAndReachAuth(sessionArgs);
+        lobby.broadcastText(WELCOME);
+        awaitLogged(IDLE_LINE);
+    }
+
+    /**
+     * Starts {@code run} in a child JVM and plays the lobby's side of the handshake up to the
+     * child's {@code auth}, which the caller answers.
+     *
+     * @param sessionArgs the adapter and game options, binary paths included
+     */
+    private void startRunAndReachAuth(final List<String> sessionArgs) throws Exception {
+        startRun(lobby.uri(), sessionArgs);
+        assertEquals("ask_session", nextFrame().path("command").asText());
+        lobby.broadcastText("{\"command\":\"session\",\"session\":42}");
+        assertEquals("auth", nextFrame().path("command").asText());
+    }
+
+    /**
+     * Asserts a login the lobby ended before {@code welcome} (#473): one ERROR naming how, where
+     * the setup timeout used to be blamed, no verdict and no signal line. The WARNs are the given
+     * ones, besides the lifecycle's {@link #HANDSHAKE_WARN}: that one is written on the lobby's
+     * thread after the main thread has woken, so the JVM can exit before it reaches the log.
+     *
+     * @param failure how the ERROR names the end of the login
+     * @param warnings the WARNs expected besides the handshake's
+     */
+    private void assertLoginEndedAtOnce(final String failure, final List<String> warnings)
+            throws IOException {
+        List<JsonNode> records = records();
+        assertEquals(
+                List.of(
+                        "lobby session with "
+                                + lobby.uri()
+                                + " failed: AuthenticationException: "
+                                + failure),
+                messagesAt(records, "ERROR"),
+                "one ERROR must name how the login ended");
+        assertEquals(
+                warnings,
+                messagesAt(records, "WARN").stream()
+                        .filter(m -> !m.equals(HANDSHAKE_WARN))
+                        .toList(),
+                "the WARNs besides the handshake's");
+        assertEquals(List.of(), verdicts(records), "a session that never opened names no verdict");
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+    }
+
+    /**
+     * Starts {@code run} in a child JVM against {@code lobbyUrl}, with a placeholder access token
+     * and unique id, logging to {@link #jsonl()}.
+     *
+     * @param lobbyUrl the lobby the child connects to
+     * @param sessionArgs the child's other options, such as its binary paths
+     */
+    private void startRun(final URI lobbyUrl, final List<String> sessionArgs) throws Exception {
         Path token = Files.writeString(dir.resolve("access-token"), "placeholder-token");
         List<String> command =
                 new ArrayList<>(
@@ -321,7 +585,7 @@ final class RunShutdownEndToEndTest {
                                 System.getProperty("java.class.path"),
                                 Main.class.getName(),
                                 "run",
-                                "--lobby-websocket-url=" + lobby.uri(),
+                                "--lobby-websocket-url=" + lobbyUrl,
                                 "--oauth-access-token-file=" + token,
                                 "--unique-id=00000000-0000-0000-0000-000000000000",
                                 "--log-file=" + jsonl()));
@@ -337,12 +601,6 @@ final class RunShutdownEndToEndTest {
         pb.redirectErrorStream(true);
         pb.redirectOutput(console().toFile());
         child = pb.start();
-
-        assertEquals("ask_session", nextFrame().path("command").asText());
-        lobby.broadcastText("{\"command\":\"session\",\"session\":42}");
-        assertEquals("auth", nextFrame().path("command").asText());
-        lobby.broadcastText(WELCOME);
-        awaitLogged(IDLE_LINE);
     }
 
     /**
@@ -445,6 +703,13 @@ final class RunShutdownEndToEndTest {
 
     private static List<String> messages(final List<JsonNode> records) {
         return records.stream().map(r -> r.path("message").asText()).toList();
+    }
+
+    private static List<String> messagesAt(final List<JsonNode> records, final String level) {
+        return records.stream()
+                .filter(r -> level.equals(r.path("level").asText()))
+                .map(r -> r.path("message").asText())
+                .toList();
     }
 
     private static List<String> verdicts(final List<JsonNode> records) {

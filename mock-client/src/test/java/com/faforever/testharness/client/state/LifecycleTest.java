@@ -4,6 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.GameConfig;
@@ -15,6 +20,8 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.io.IOException;
+import java.net.ConnectException;
 import java.net.URI;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -23,10 +30,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
+import org.slf4j.LoggerFactory;
 
 final class LifecycleTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
@@ -268,6 +278,61 @@ final class LifecycleTest {
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
     }
 
+    /** A handshake failure that ends the session is named at WARN, as it always was (#455). */
+    @Test
+    void aHandshakeFailureThatEndsTheSessionIsAWarning() throws Throwable {
+        MockClientLifecycle lifecycle = defaultLifecycle();
+
+        List<String> warnings =
+                warningsWhile(() -> lifecycle.post(new AuthFailed(new IOException("rejected"))));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertEquals(List.of("Handshake could not be completed"), warnings);
+    }
+
+    /**
+     * A {@code match_cancelled} that arrives once a rejected {@code game_launch} has ended the
+     * session is not a warning (#457). faf-server sends a matched guest both frames back to back
+     * when the host did not host in time: {@code launch_match} launches the guests from a {@code
+     * finally}, then cancels the match.
+     */
+    @Test
+    void aMatchCancelledAfterARejectedLaunchIsNotAWarning() throws Throwable {
+        MockClientLifecycle lifecycle = defaultLifecycle();
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        lifecycle.post(new SearchStarted(MAPPER.createObjectNode().put("state", "start")));
+        lifecycle.post(new LaunchRejected("game_launch.mapname invalid for matchmaker: null"));
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+
+        List<String> warnings =
+                warningsWhile(
+                        () ->
+                                lifecycle.post(
+                                        new MatchCancelled(
+                                                MAPPER.createObjectNode().put("game_id", 502))));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertEquals(List.of(), warnings);
+    }
+
+    /**
+     * A handshake failure that arrives once the lobby's disconnect has ended the session is not a
+     * warning (#455). A connection that fails fires its disconnect first, and the failure used to
+     * land after the session had ended as "Handshake could not be completed" and the framework's
+     * "No matching transitions for AuthFailed".
+     */
+    @Test
+    void aHandshakeFailureAfterTheSessionEndedIsNotAWarning() throws Throwable {
+        MockClientLifecycle lifecycle = defaultLifecycle();
+        lifecycle.post(new Disconnected(null));
+
+        List<String> warnings =
+                warningsWhile(() -> lifecycle.post(new AuthFailed(new ConnectException())));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertEquals(List.of(), warnings);
+    }
+
     @Test
     void disconnection() throws Exception {
         MockClientLifecycle lifecycle = defaultLifecycle();
@@ -385,5 +450,36 @@ final class LifecycleTest {
 
     private MockClientLifecycle defaultLifecycle() {
         return lifecycleWithConfig(MINIMAL_CONFIG);
+    }
+
+    /**
+     * Runs {@code action} and returns what any logger logged at WARN or above on this thread
+     * meanwhile. A post is handled on the posting thread, so every line it causes lands here, and
+     * one a lifecycle left behind by another class logs on its own thread does not.
+     *
+     * @param action what to run
+     * @return the messages, in order
+     * @throws Throwable whatever {@code action} throws
+     */
+    private static List<String> warningsWhile(final Executable action) throws Throwable {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger root = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.setContext(context);
+        appender.start();
+        root.addAppender(appender);
+        try {
+            action.execute();
+        } finally {
+            root.detachAppender(appender);
+            appender.stop();
+        }
+        String thread = Thread.currentThread().getName();
+        return appender.list.stream()
+                .filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
+                .filter(event -> thread.equals(event.getThreadName()))
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
     }
 }

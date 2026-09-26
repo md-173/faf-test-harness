@@ -1,22 +1,32 @@
 package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.LoggerContext;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 /** Unit tests for {@link LobbyHandshake} running against {@link ScriptedWebSocketServer}. */
 final class LobbyHandshakeTest {
@@ -105,6 +115,89 @@ final class LobbyHandshakeTest {
                 assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         assertEquals("Login not found", e.getCause().getMessage());
+    }
+
+    /**
+     * An {@code invalid} in answer to {@code auth} fails the handshake at once, naming it (#473).
+     * faf-server sends it when handling the login raised, a refused {@code unique_id} included,
+     * then closes the connection. The close does nothing to the handshake itself, and it flushes
+     * the frame, which the fixture can otherwise strand in its write queue.
+     */
+    @Test
+    void handshakeFailsOnInvalid() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        LobbyHandshake handshake =
+                new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+        CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
+
+        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.broadcastText("{\"command\":\"session\",\"session\":42}");
+        server.pollReceived(2, TimeUnit.SECONDS); // auth
+        server.broadcastText("{\"command\":\"invalid\"}");
+        server.closeAllClean(1000, "");
+
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+        assertEquals(
+                "the lobby answered the login with invalid, a server-side error such as a refused"
+                        + " unique_id or an error checking the token",
+                e.getCause().getMessage());
+        assertFalse(
+                handshake.invalidAfterLogin(),
+                "an invalid that fails the login is not a refused command");
+    }
+
+    /**
+     * An {@code invalid} after {@code welcome} answers one of the session's own commands, so it
+     * warns rather than failing the login (#473), and is recorded for {@code run} to report (#486).
+     * Its handler took the place of the unhandled-command WARN that frame used to draw, and must
+     * not lose it. Frames and the close are handled in order on one thread, so once the close is
+     * seen, the frame has been.
+     */
+    @Test
+    void anInvalidAfterWelcomeIsAWarning() throws Exception {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger logger = context.getLogger(LobbyHandshake.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.setContext(context);
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            lobby = new LobbyConnection(server.uri());
+            lobby.connect().get(5, TimeUnit.SECONDS);
+            server.awaitFirstClient();
+            CountDownLatch closed = new CountDownLatch(1);
+            lobby.onDisconnect(event -> closed.countDown());
+            LobbyHandshake handshake =
+                    new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
+            CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
+            server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+            server.broadcastText("{\"command\":\"session\",\"session\":42}");
+            server.pollReceived(2, TimeUnit.SECONDS); // auth
+            server.broadcastText("{\"command\":\"welcome\",\"id\":3,\"login\":\"Rhiza\"}");
+            welcome.get(2, TimeUnit.SECONDS);
+
+            server.broadcastText("{\"command\":\"invalid\"}");
+            server.closeAllClean(1000, "");
+
+            assertTrue(closed.await(5, TimeUnit.SECONDS), "the lobby's close never arrived");
+            assertTrue(handshake.invalidAfterLogin(), "a late invalid must be recorded (#486)");
+            assertEquals(
+                    List.of(
+                            "the lobby answered a command with invalid, a server-side error;"
+                                    + " faf-server closes the connection next"),
+                    appender.list.stream()
+                            .filter(event -> event.getLevel() == Level.WARN)
+                            .map(ILoggingEvent::getFormattedMessage)
+                            .toList());
+        } finally {
+            appender.stop();
+            logger.detachAppender(appender);
+        }
     }
 
     @Test
