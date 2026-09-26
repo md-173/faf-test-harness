@@ -592,7 +592,8 @@ final class LifecycleSetupTest {
      * IDLE, where a host or a joiner waits for it, and from SEARCHING, where a matched game's
      * arrives. It used to be dropped with a WARN, leaving the run waiting for a launch it had
      * already received. The frame comes from the lobby through the real connection and handler, so
-     * the rejection is handled on the connection's thread, where one WARN must name it.
+     * the rejection is handled on the connection's thread, where one WARN must name it. A value
+     * Jackson would coerce is refused the same way (#474).
      *
      * @param route what the frame gets wrong, for the report
      * @param searching whether a search is on when the frame arrives
@@ -658,7 +659,16 @@ final class LifecycleSetupTest {
                         "{\"command\":\"game_launch\",\"uid\":\"abc\",\"mod\":\"faf\","
                                 + "\"name\":\"x\",\"game_type\":\"custom\","
                                 + "\"rating_type\":\"global\"}",
-                        "game_launch.uid: Cannot deserialize value of type"),
+                        "game_launch.uid: Cannot coerce String value (\"abc\") to"
+                                + " `java.lang.Integer` value)"),
+                Arguments.of(
+                        "IDLE, a value Jackson would coerce",
+                        false,
+                        "{\"command\":\"game_launch\",\"uid\":1.5,\"mod\":\"faf\","
+                                + "\"name\":\"x\",\"game_type\":\"custom\","
+                                + "\"rating_type\":\"global\"}",
+                        "game_launch.uid: Cannot coerce Floating-point value (1.5) to"
+                                + " `java.lang.Integer` value)"),
                 Arguments.of(
                         "SEARCHING, a matched game with no map",
                         true,
@@ -674,7 +684,8 @@ final class LifecycleSetupTest {
                         "{\"command\":\"game_launch\",\"uid\":502,\"mod\":\"ladder1v1\","
                                 + "\"name\":\"ladder1 Vs ladder2\",\"game_type\":\"matchmaker\","
                                 + "\"rating_type\":\"ladder_1v1\",\"team\":\"two\"}",
-                        "game_launch.team: Cannot deserialize value of type"));
+                        "game_launch.team: Cannot coerce String value (\"two\") to"
+                                + " `java.lang.Integer` value)"));
     }
 
     /**

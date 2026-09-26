@@ -1,11 +1,17 @@
 package com.faforever.testharness.client.lobby;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 public class GameLaunchHandlerTest {
     private final ObjectMapper mapper = new ObjectMapper();
@@ -277,25 +283,97 @@ public class GameLaunchHandlerTest {
     }
 
     /**
-     * A value of the wrong type fails to decode too, and its reason names the field on one line
+     * A value of the wrong JSON type fails to decode, and its reason names the field on one line
      * (#457). Jackson's own message puts its source location on a second line, which would split
-     * the one line that reports the rejection.
+     * the one line that reports the rejection. A value Jackson could coerce is refused rather than
+     * coerced (#474), and its reason ends before Jackson's advice on enabling coercion.
+     *
+     * @param field the field given the wrong type
+     * @param value the value, as JSON
+     * @param reason the exact reason
+     */
+    @ParameterizedTest(name = "{0} = {1}")
+    @MethodSource("wrongJsonTypes")
+    void aValueOfTheWrongJsonTypeIsRefusedNamingItsField(
+            final String field, final String value, final String reason) throws Exception {
+        ObjectNode frame =
+                (ObjectNode)
+                        mapper.readTree(
+                                "{\"uid\":42,\"mod\":\"faf\",\"name\":\"x\","
+                                        + "\"game_type\":\"custom\",\"rating_type\":\"global\","
+                                        + "\"args\":[\"/numgames\",5]}");
+        frame.set(field, mapper.readTree(value));
+
+        Assertions.assertEquals(reason, rejected(mapper.writeValueAsString(frame)));
+    }
+
+    static Stream<Arguments> wrongJsonTypes() {
+        return Stream.of(
+                Arguments.of(
+                        "uid",
+                        "\"abc\"",
+                        "game_launch.uid: Cannot coerce String value (\"abc\") to"
+                                + " `java.lang.Integer` value"),
+                Arguments.of(
+                        "uid",
+                        "1.5",
+                        "game_launch.uid: Cannot coerce Floating-point value (1.5) to"
+                                + " `java.lang.Integer` value"),
+                Arguments.of(
+                        "uid",
+                        "\"8\"",
+                        "game_launch.uid: Cannot coerce String value (\"8\") to"
+                                + " `java.lang.Integer` value"),
+                Arguments.of(
+                        "uid",
+                        "\"\"",
+                        "game_launch.uid: Cannot coerce empty String (\"\") to"
+                                + " `java.lang.Integer` value"),
+                Arguments.of(
+                        "team",
+                        "\"2\"",
+                        "game_launch.team: Cannot coerce String value (\"2\") to"
+                                + " `java.lang.Integer` value"),
+                Arguments.of(
+                        "mod",
+                        "5",
+                        "game_launch.mod: Cannot coerce Integer value (5) to"
+                                + " `java.lang.String` value"),
+                Arguments.of(
+                        "mod",
+                        "1.5",
+                        "game_launch.mod: Cannot coerce Float value (1.5) to"
+                                + " `java.lang.String` value"),
+                Arguments.of(
+                        "name",
+                        "true",
+                        "game_launch.name: Cannot coerce Boolean value (true) to"
+                                + " `java.lang.String` value"),
+                Arguments.of(
+                        "mapname",
+                        "15",
+                        "game_launch.mapname: Cannot coerce Integer value (15) to"
+                                + " `java.lang.String` value"));
+    }
+
+    /**
+     * A matchmaker frame as faf-server sends it still launches under the strict decode (#474). Its
+     * {@code args} carry an integer and its {@code game_options} values can be of any type, and
+     * both are read as raw JSON, which the coercion rules do not reach.
      */
     @Test
-    void aValueOfTheWrongTypeIsRejectedNamingItsField() throws Exception {
-        String json =
-                "{"
-                        + "\"uid\":\"abc\","
-                        + "\"mod\":\"faf\","
-                        + "\"name\":\"x\","
-                        + "\"game_type\":\"custom\","
-                        + "\"rating_type\":\"global\""
-                        + "}";
+    void aFafServerMatchmakerFrameStillLaunches() throws Exception {
+        ObjectNode frame =
+                (ObjectNode)
+                        mapper.readTree(loadFixture("lobby/inbound/game_launch_matchmaker.json"));
+        frame.set(
+                "game_options",
+                mapper.readTree(
+                        "{\"Share\":\"ShareUntilDeath\",\"UnitCap\":1000,\"Cheats\":false}"));
 
-        String reason = rejected(json);
+        GameConfig cfg = accepted(mapper.writeValueAsString(frame));
 
-        Assertions.assertTrue(
-                reason.startsWith("game_launch.uid: Cannot deserialize value of type"), reason);
-        Assertions.assertFalse(reason.contains("\n"), reason);
+        Assertions.assertEquals(41956, cfg.uid());
+        Assertions.assertEquals(List.of("/numgames", "0"), cfg.args());
     }
 }
