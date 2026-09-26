@@ -209,6 +209,25 @@ final class RunShutdownEndToEndTest {
     }
 
     /**
+     * A lobby lost without a Close frame after welcome ends the run with {@code 70} and the lobby
+     * drop as its verdict (#473). The JDK reports such a drop as a close with code 1006, which used
+     * to be read as a clean close, so the run exited {@code 0} as if the lobby had ended the
+     * session.
+     */
+    @Test
+    void aLobbyDroppedAfterWelcomeExits70() throws Exception {
+        startRunAndReachIdle();
+
+        lobby.abruptlyTerminate();
+
+        assertExitCode(ExitCodes.RUNTIME);
+        List<JsonNode> records = records();
+        assertEquals(List.of(LOBBY_DROP_VERDICT), verdicts(records), "the drop is the verdict");
+        assertNoErrors(records);
+        assertEquals(0, count(records, SIGNAL_LINE), "no signal was sent: " + messages(records));
+    }
+
+    /**
      * A {@code game_launch} the client cannot use ends the run with {@code 70} (WBS-3.1.1.6-fix,
      * #457), where the frame used to be dropped with a WARN and the run left idle until killed. One
      * line names what is wrong with the frame, and it is the only WARN besides the launch's verdict
