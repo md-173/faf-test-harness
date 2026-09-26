@@ -249,9 +249,11 @@ public final class LobbyHandshake {
             // small UID blob comfortably until the process exits.
             if (!process.waitFor(UID_BINARY_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 process.destroyForcibly();
-                LOG.warn(
-                        "faf-uid timed out; authentication cannot proceed without a generated uid");
-                throw new AuthenticationException("faf-uid timed out");
+                throw new AuthenticationException(
+                        String.format(
+                                "faf-uid (%s) timed out; authentication "
+                                        + "cannot proceed without a generated uid",
+                                binary));
             }
             String output =
                     new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8)
@@ -260,25 +262,33 @@ public final class LobbyHandshake {
                 String stderr =
                         new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8)
                                 .strip();
-                LOG.warn(
-                        "faf-uid exited {}: {}; authentication "
-                                + "cannot proceed without a generated uid",
-                        process.exitValue(),
-                        stderr.isEmpty() ? "<no stderr output>" : truncateForLog(stderr));
-                throw new AuthenticationException("faf-uid exited with a non-zero code");
+                throw new AuthenticationException(
+                        String.format(
+                                "faf-uid (%s) %s stderr: %s; authentication "
+                                        + "cannot proceed without a generated uid",
+                                binary,
+                                output.isEmpty()
+                                        ? "did not have any output"
+                                        : String.format("exited with code %d", process.exitValue()),
+                                stderr.isEmpty() ? "<no stderr output>" : truncateForLog(stderr)));
             }
             LOG.info("generated unique_id via faf-uid ({} chars)", output.length());
             return output;
         } catch (IOException e) {
-            LOG.warn(
-                    "faf-uid invocation failed ({}); authentication "
-                            + "cannot proceed without a generated uid",
+            throw new AuthenticationException(
+                    String.format(
+                            "faf-uid (%s) invocation failed; authentication "
+                                    + "cannot proceed without a generated uid",
+                            binary),
                     e);
-            throw new AuthenticationException("faf-uid invocation failed", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            LOG.warn("faf-uid interrupted; authentication cannot proceed without a generated uid");
-            throw new AuthenticationException("faf-uid process interrupted", e);
+            throw new AuthenticationException(
+                    String.format(
+                            "faf-uid (%s) process interrupted; authentication "
+                                    + "cannot proceed without a generated uid",
+                            binary),
+                    e);
         }
     }
 
