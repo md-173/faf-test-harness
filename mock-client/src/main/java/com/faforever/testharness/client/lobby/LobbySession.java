@@ -37,7 +37,11 @@ import org.slf4j.LoggerFactory;
  * <pre>{@code
  * LobbyConnection connection = new LobbyConnection(config.lobbyWebSocketUrl());
  * LobbySession session =
- *     new LobbySession(connection, config.uniqueId(), config.clientVersion(), config.userAgent());
+ *     new LobbySession(
+ *         connection,
+ *         config.uniqueId().get(),
+ *         config.clientVersion(),
+ *         config.userAgent());
  * SessionState me =
  *     session.connectAndAuthenticate(tokens, Duration.ofSeconds(15), Duration.ofSeconds(30));
  * session.awaitDisconnect(); // blocks idle; transport auto-pongs lobby pings
@@ -119,7 +123,7 @@ public final class LobbySession {
 
     /**
      * Bind a session that either derives its {@code unique_id} from the {@code faf-uid} binary if
-     * {@code uidBinaryPath} exists or or from a static {@code uniqueId} if that is not set.
+     * {@code uidBinaryPath} exists or from a static {@code uniqueId} if that is not set.
      *
      * @param connection a {@link LobbyConnection} that has not yet been {@link
      *     LobbyConnection#connect() connected}

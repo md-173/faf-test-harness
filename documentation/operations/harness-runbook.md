@@ -704,9 +704,9 @@ token file:
   --mock-game-launch-delay-seconds=-1
 ```
 
-Four of those are less obvious than they look. The four `--host-*` options have to be
-set together or not at all; a partial set is rejected by name, and omitting all
-four leaves the session at IDLE rather than HOSTING.
+Two of those are less obvious than they look. The four `--host-*` options have
+to be set together or not at all; a partial set is rejected by name, and
+omitting all four leaves the session at IDLE rather than HOSTING.
 `--mock-game-launch-delay-seconds=-1` is what makes HOSTING an observable state:
 the default of 5 has mock-game start the match on its own, moving the client
 straight on to PLAYING.
@@ -851,7 +851,8 @@ and is not repeated here.**
 
 | Symptom | Log line to look for | Cause / fix |
 |---|---|---|
-| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby answered the login with invalid, …`, the lobby's `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id`: `uidBinaryPath` is unset or wrong. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. Less often, checking the token failed on the lobby's side (§3). |
+| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby answered the login with invalid, …`, the lobby's `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id`: `uidBinaryPath` is unset, so the static `uniqueId` was sent. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. Less often, checking the token failed on the lobby's side (§3). |
+| `run` exits `70` at once, before the `auth` frame is sent | `lobby session with <url> failed: AuthenticationException: faf-uid (<path>) …` | The `faf-uid` binary timed out, exited non-zero, or could not be run at all; the message names the binary, its exit code and its stderr. Check the path, that the file is executable, and that it runs on this machine (§1, §3). |
 | `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1000)`, usually after a `lobby notice (…)` line | The lobby ended the login, and its notice says why: an error notice for a ban or a lobby database outage, an info one for maintenance. With no notice at all, it could not parse the `auth` frame. `the lobby connection dropped before welcome` means the connection was lost rather than closed. |
 | `run` exits `70` after the session was up, and the lobby closed the connection | `the lobby answered one of this run's commands with invalid; reporting it in this run's exit code`, after a WARN `the lobby answered a command with invalid, …` | faf-server failed while handling one of `run`'s own commands (`game_host`, `game_join`, `game_matchmaking`, or a GPGNet frame relayed for the game) and closed the connection (#486). The lobby's logs hold the exception; at DEBUG, `run`'s log shows the frames it sent just before. |
 | `run` exits `70` after the session was up, though the lobby never closed the connection | `lobby connection dropped unexpectedly`, after a WARN `lobby sent nothing for 100 s; treating the connection as dropped` | The connection went quiet (#485). faf-server pings every connection every 45 s, so 100 s without a frame means it is gone: a drop on the network path, a proxy, or a lobby that crashed, which the JDK did not report. A run in a match plays on until its game exits, and exits then. Check the network path to the lobby. |
