@@ -173,8 +173,10 @@ final class TrafficEvidenceTest {
                                 "loss",
                                 () -> answers.size() > 1 ? answers.remove(0) : answers.get(0),
                                 List::of,
-                                System.nanoTime() + SHORT_WAIT.toNanos(),
-                                SHORT_WAIT.toString()));
+                                // Generous: it passes on the second poll, which a stalled runner
+                                // could otherwise push past a short deadline.
+                                System.nanoTime() + Duration.ofMinutes(1).toNanos(),
+                                "PT1M"));
     }
 
     @Test

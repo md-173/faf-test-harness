@@ -1159,7 +1159,9 @@ exit rather than a crash.
 **After launch**, that guard closes and **no targeted notification is sent at
 all**. The server broadcasts a `game_info` with the reduced player list and
 nothing else; the Mock Client does not consume `game_info`, so nothing in the
-harness reacts to it. The survivor learns from its own adapter instead:
+harness reacts to it. The survivor learns from its own adapter instead, if it
+made the ICE offer on that link, which the host always does (§10 has the rule
+at three peers and more):
 
 ```text
 [MockClient] peer connected: local=<own id> remote=<departing id> connected=false
@@ -1502,7 +1504,7 @@ abnormally with exit code 134`, sends the synthesised `GameState Ended` to the
 lobby on the game's behalf, reaches TERMINATED, and exits `71`
 (`GAME_CRASHED`) rather than `0`.
 
-**Two ways to get nothing.**
+**Three ways to get nothing.**
 
 The first applies only when auto-launch is on: a crash due after the match
 ends. The crash and the match-end timer share one scheduler, and the end of the
@@ -1529,6 +1531,11 @@ arriving, nothing starts the clock. The absence of the `injected crash armed`
 line is the way to tell: it is logged the moment the timer starts, so if you
 never see it, the game never had a session to lose.
 
+The third applies to `session`, outside `--crash-peer`: a crash due after the
+session has proven its traffic. The session tears its peers down a few seconds
+after the last join, once the traffic is proven, so the crash never fires and
+the run exits `0`. Use `0` there, as the next section says.
+
 ### Faults on one peer of a session (WBS 5.1.2, 5.2.1)
 
 `session` builds every peer from the same root options, so on their own the
@@ -1542,10 +1549,12 @@ narrow them, and a fault takes its values from one of them only:
 - `--peer-ice-relay-delay-ms`, `--peer-mock-game-udp-drop-percent` and
   `--peer-mock-game-crash-after-seconds` give each peer its own value, host
   first, and need exactly `--peers` values, so a value misplaced by one
-  position is refused rather than landing on the wrong peer. Write a list that
-  starts with a negative value as `--flag=-1,40`, or picocli reads the `-1` as
-  an option. In a `--config` file each list is one comma-separated string, not
-  a JSON array.
+  position is refused rather than landing on the wrong peer.
+
+In a `--config` file the keys are the options in camel case: `faultPeer`,
+`crashPeer`, `peerIceRelayDelayMs`, `peerMockGameUdpDropPercent` and
+`peerMockGameCrashAfterSeconds`, each list one comma-separated string, not a
+JSON array.
 
 A list given together with its root flag is refused, and the message says which
 layer the root flag came from, since a shared config file can set it. So is a
@@ -1567,8 +1576,12 @@ applies; `500` passes at three peers.
 
 **A crash set this way is not expected.** A peer whose game dies can never
 pass the mesh or traffic checkpoints, so the session fails at once and names
-it, as it always has. That is the tool for a run meant to go red. In the lobby
-phase it is also all a crash can do today: faf-server's `abort()` runs
+it, as it always has, but only if the crash lands before the session has proven
+its traffic. That takes a few seconds after the last join, and the session
+tears down once it has, so a later crash never fires and the run exits `0`.
+Use `0`, which halts the game as soon as it first has a peer: that is the tool
+for a run meant to go red, and anything between races the traffic check. In the
+lobby phase that is also all a crash can do today: faf-server's `abort()` runs
 `disconnect_all_peers()` only while the game is in `GameState.LOBBY`, and the
 mock game ends on any single `DisconnectFromPeer`, so every survivor's game
 ends too. Whether a survivor should instead free the slot is #435's question.
@@ -1603,6 +1616,13 @@ lands at most one launch delay plus 30 s after launch, well before the host's
 match ends at twice the launch delay after launch. `MultiPeerSessionTest`
 checks that arithmetic at every peer count.
 
+What the survivors notice. The adapter does not exit when its game dies (it
+closes the game's GPGNet connection and keeps serving), but the crashed peer's
+client tears its adapter down once its game has gone, as the real client does:
+downlords-faf-client's `GameRunner` calls `iceAdapter.stop()` after handling any
+game exit (`develop` at `8be1a118`). The survivors' adapters then stop getting
+echoes from it.
+
 Why only the offering side must report the loss. In adapter 3.3.14 only the
 side that made the ICE offer runs `PeerConnectivityCheckerModule`
 (`PeerIceModule.java:381-382`), which declares a peer lost after 10000 ms
@@ -1619,6 +1639,7 @@ PASS line says so. It is still the cheapest crash run, and needs only two
 accounts:
 
 ```text
+session: deliberate crash of B: the host launches 90 s after it starts hosting, and that joiner's game crashes 120 s after it joins
 session: match live; B(joiner) is due to crash 120 s after it joined
 [B] mock-game exited abnormally with exit code 134
 session: B(joiner) crashed as planned (exit 134); waiting for the survivors
@@ -1638,7 +1659,9 @@ question.
 to C against the live lobby on 2026-09-26, 286 s in total: the crash above,
 `50` and `100` percent drop on C, and a `500` ms relay delay on C. The
 two-peer crash was a `session --peers=2 --crash-peer=B` run from the installed
-jars the same day, exit `0`.*
+jars the same day, exit `0`. Both were repeated after the review changes with
+the same outcome: four of four in 290 s, and exit `0` with the loss report 9.4 s
+after the crash.*
 
 ## 11. A session in a consumer's CI (WBS 4.2.1)
 
@@ -2036,11 +2059,12 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
 ### A fault scenario in the same job
 
 Adding `--crash-peer=B` to the session step turns the job into a check that a
-surviving adapter notices a crashed peer after launch and keeps forwarding the
-rest of the match. It needs no extra account at two peers, where the host is
-the only survivor. It does need time: the host waits out its launch delay and
-the crash lands after it, so allow about five more minutes of step timeout per
-run than a plain session, on top of the 420 s deadline. The rules and the
+surviving adapter notices a crashed peer after launch. At two peers, with no
+extra account, only that is checked: the host is the only survivor, so there is
+no pair left to prove it keeps forwarding. That half needs a third account and
+`--peers 3`. Either way the run needs time: the host waits out its launch delay
+and the crash lands after it, so allow about five more minutes of step timeout
+per run than a plain session, on top of the 420 s deadline. The rules and the
 verdict are in §10.
 
 ### What the run does not cover

@@ -98,14 +98,17 @@ logs which list it used and where it came from, as `session: credentials from
 peer unless `--fault-peer=<labels>` names some (A is the host, B the first
 joiner, and so on). `--peer-ice-relay-delay-ms`,
 `--peer-mock-game-udp-drop-percent` and `--peer-mock-game-crash-after-seconds`
-instead give each peer its own value, host first, exactly `--peers` values;
-write a list that starts with a negative value as `--flag=-1,40`, and in a
-`--config` file give each list as one comma-separated string. A crash set either
-way is not expected, so it fails the run as it always has. `--crash-peer=<joiner>`
-is the one crash a run expects: `session` launches the match, has that joiner's
-game crash after launch, and exits `0` only if the survivors play on, which takes
-a few minutes. See [`harness-runbook.md`
-§10](../documentation/operations/harness-runbook.md#faults-on-one-peer-of-a-session-wbs-512-521)
+instead give each peer its own value, host first, exactly `--peers` values. In
+a `--config` file the keys are the options in camel case (`faultPeer`,
+`crashPeer`, `peerIceRelayDelayMs`, `peerMockGameUdpDropPercent`,
+`peerMockGameCrashAfterSeconds`), and each list is one comma-separated string.
+A crash set either way is not expected: it fails the run only if it lands before
+the session has proven its traffic, a few seconds after the last join, so use
+`0`; a later one never fires, because the session tears down once traffic is
+proven. `--crash-peer=<joiner>` is the one crash a run expects: `session`
+launches the match, has that joiner's game crash after launch, and exits `0`
+only if the survivors play on, which takes a few minutes. See
+[`harness-runbook.md` §10](../documentation/operations/harness-runbook.md#faults-on-one-peer-of-a-session-wbs-512-521)
 for the rules and the verdict. The run logs each faulted peer's values as
 `session: faults on <label>: ...`.
 

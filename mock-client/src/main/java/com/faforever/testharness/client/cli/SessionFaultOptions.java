@@ -31,9 +31,15 @@ import picocli.CommandLine.ParameterException;
  *   <li>A per-peer list gives each peer its own value, host first, one value per peer.
  * </ul>
  *
- * <p>A crash set there is not expected: a peer whose game dies fails the session, as it always has.
- * {@value #CRASH_PEER_FLAG} is the one expected crash (WBS-5.2.1): it names a joiner, and the
- * session times that crash itself and plays on through it.
+ * <p>A crash set there is not expected, and it only turns a session red if it lands before the
+ * session has proven its traffic, a few seconds after the last join, which in practice means {@code
+ * 0}. The session tears down once its traffic is proven, so a later crash never fires. {@value
+ * #CRASH_PEER_FLAG} is the one expected crash (WBS-5.2.1): it names a joiner, and the session
+ * launches the match, times that crash itself and plays on through it.
+ *
+ * <p>Each field is named for its option in camel case, because the config-file key is the field
+ * name: {@code faultPeer}, {@code crashPeer}, {@code peerIceRelayDelayMs}, {@code
+ * peerMockGameUdpDropPercent} and {@code peerMockGameCrashAfterSeconds}.
  */
 final class SessionFaultOptions {
 
@@ -65,7 +71,7 @@ final class SessionFaultOptions {
                             + "--mock-game-crash-after-seconds to these peers, by label: A is the "
                             + "host, B the first joiner, and so on. Repeat the flag or separate "
                             + "labels with commas. Unset, those flags reach every peer.")
-    private List<String> faultPeers = new ArrayList<>();
+    private List<String> faultPeer = new ArrayList<>();
 
     /** The joiner whose game crashes deliberately after launch, by label; {@code null} for none. */
     @Option(
@@ -86,7 +92,7 @@ final class SessionFaultOptions {
             description =
                     "Each peer's --ice-relay-delay-ms, host first, exactly one value per peer, "
                             + "instead of the root flag.")
-    private List<Integer> peerRelayDelayMs = new ArrayList<>();
+    private List<Integer> peerIceRelayDelayMs = new ArrayList<>();
 
     /** One outbound drop percentage per peer, host first. */
     @Option(
@@ -96,7 +102,7 @@ final class SessionFaultOptions {
             description =
                     "Each peer's --mock-game-udp-drop-percent, host first, exactly one value per "
                             + "peer, instead of the root flag.")
-    private List<Integer> peerDropPercent = new ArrayList<>();
+    private List<Integer> peerMockGameUdpDropPercent = new ArrayList<>();
 
     /** One crash delay per peer, host first. */
     @Option(
@@ -105,12 +111,10 @@ final class SessionFaultOptions {
             paramLabel = "<seconds>",
             description =
                     "Each peer's --mock-game-crash-after-seconds, host first, exactly one value "
-                            + "per peer, instead of the root flag; negative never crashes. Give it "
-                            + "as "
-                            + PEER_CRASH_FLAG
-                            + "=-1,-1,40 so a leading negative is not read as an option. A crash "
-                            + "set here fails the session.")
-    private List<Integer> peerCrashSeconds = new ArrayList<>();
+                            + "per peer, instead of the root flag; negative never crashes. Not an "
+                            + "expected crash: at 0 it fails the session, and one due after the "
+                            + "session has proven its traffic never fires.")
+    private List<Integer> peerMockGameCrashAfterSeconds = new ArrayList<>();
 
     /**
      * One fault as the options describe it.
@@ -170,7 +174,7 @@ final class SessionFaultOptions {
                                 0,
                                 Integer.MAX_VALUE,
                                 MockClientConfig::iceRelayDelayMs,
-                                peerRelayDelayMs),
+                                peerIceRelayDelayMs),
                         new Fault(
                                 "--mock-game-udp-drop-percent",
                                 PEER_DROP_FLAG,
@@ -178,7 +182,7 @@ final class SessionFaultOptions {
                                 0,
                                 MAX_DROP_PERCENT,
                                 MockClientConfig::mockGameUdpDropPercent,
-                                peerDropPercent),
+                                peerMockGameUdpDropPercent),
                         new Fault(
                                 "--mock-game-crash-after-seconds",
                                 PEER_CRASH_FLAG,
@@ -186,7 +190,7 @@ final class SessionFaultOptions {
                                 Integer.MIN_VALUE,
                                 Integer.MAX_VALUE,
                                 MockClientConfig::mockGameCrashAfterSeconds,
-                                peerCrashSeconds));
+                                peerMockGameCrashAfterSeconds));
         boolean anyRootFault = false;
         for (Fault fault : faults) {
             checkList(spec, fault, peers);
@@ -208,7 +212,8 @@ final class SessionFaultOptions {
         if (crashPeer(spec, peers).isPresent()) {
             boolean anyCrash =
                     root.mockGameCrashAfterSeconds() >= 0
-                            || peerCrashSeconds.stream().anyMatch(seconds -> seconds >= 0);
+                            || peerMockGameCrashAfterSeconds.stream()
+                                    .anyMatch(seconds -> seconds >= 0);
             if (anyCrash) {
                 throw new ParameterException(
                         spec.commandLine(),
@@ -357,7 +362,7 @@ final class SessionFaultOptions {
      */
     private Set<Integer> targets(final CommandSpec spec, final int peers) {
         Set<Integer> indexes = new TreeSet<>();
-        for (String label : faultPeers) {
+        for (String label : faultPeer) {
             indexes.add(indexOf(spec, FAULT_PEER_FLAG, label, peers));
         }
         return indexes;
@@ -373,7 +378,7 @@ final class SessionFaultOptions {
      * @return the index, 0 for the host
      * @throws ParameterException if the label is not one of this session's
      */
-    static int indexOf(
+    private static int indexOf(
             final CommandSpec spec, final String flag, final String label, final int peers) {
         String trimmed = label.trim();
         if (trimmed.length() == 1) {

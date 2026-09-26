@@ -659,9 +659,10 @@ defaults to waiting indefinitely. A Mock Client killed before it gives the game
 a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
 delay; the adapter still moves it out of `IDLE` by sending `CreateLobby` itself.
 Once hosting or joining, mock-game ends when its launch and match timers finish,
-unless auto-launch is off, as `mock-client session` sets it for every peer and a
-negative `--mock-game-launch-delay-seconds` sets it for `run`; then it also
-waits indefinitely. It ends at once if the adapter closes its connection, and
+unless auto-launch is off, as `mock-client session` sets it for every joiner,
+and for the host unless `--crash-peer` asks for a launch, and a negative
+`--mock-game-launch-delay-seconds` sets it for `run`; then it also waits
+indefinitely. It ends at once if the adapter closes its connection, and
 within 30 s if the connection never comes up.
 
 ### 7.4 Process tracking

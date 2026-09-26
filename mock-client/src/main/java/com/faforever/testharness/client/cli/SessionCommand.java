@@ -33,7 +33,7 @@ import picocli.CommandLine.Spec;
  *
  * <p>The clients run in this JVM, and their adapters and games as subprocesses. Sharing the JVM
  * means sharing its fate: an OOM or a stuck lock ends every peer, and any peer failing fails the
- * session.
+ * session, except the joiner a {@code --crash-peer} run crashes on purpose after launch.
  *
  * <p>Each peer's credential is one file: a refresh-token file ({@code --peer-refresh-token-file},
  * exchanged at Hydra and rewritten on rotation) or a pre-signed access-token file ({@code
@@ -43,12 +43,13 @@ import picocli.CommandLine.Spec;
  *
  * <p>The inherited options supply what every peer shares (lobby, OAuth endpoints, {@code faf-uid},
  * adapter and game binaries, log level). The session sets each peer's credential, adapter ports,
- * auto-launch off, and the host or join intent itself. The root {@code --oauth-refresh-token-file}
- * and {@code --oauth-access-token-file} are therefore ignored entirely, and {@code
- * --ice-adapter-*-port}, {@code --mock-game-launch-delay-seconds}, {@code --host-*}, {@code
- * --target-game-id}, {@code --game-join-password} and {@code --queue-*} are not used, though they
- * are still validated. The run logs which credential list it used and where that came from, so a CI
- * that set both can see which one won.
+ * auto-launch (off, except the host's under {@code --crash-peer}), and the host or join intent
+ * itself. The root {@code --oauth-refresh-token-file} and {@code --oauth-access-token-file} are
+ * therefore ignored entirely, and {@code --ice-adapter-*-port}, {@code
+ * --mock-game-launch-delay-seconds}, {@code --host-*}, {@code --target-game-id}, {@code
+ * --game-join-password} and {@code --queue-*} are not used, though they are still validated. The
+ * run logs which credential list it used and where that came from, so a CI that set both can see
+ * which one won.
  *
  * <p>The root fault flags reach every peer unless {@code --fault-peer} names some, and a per-peer
  * list such as {@code --peer-mock-game-udp-drop-percent} gives each peer its own value instead
@@ -65,9 +66,10 @@ import picocli.CommandLine.Spec;
  * unreadable or empty file, a missing binary, a {@code --log-level} above INFO (the traffic check
  * reads INFO lines), or a fault option that does not say one thing clearly (a per-peer list of the
  * wrong length or out of range, a list given with its root flag, a {@code --fault-peer} naming no
- * peer or no set fault), all refused before any process starts; {@link ExitCodes#RUNTIME} when a
- * checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a subprocess
- * survives teardown, which is then killed.
+ * peer or no set fault, a {@code --crash-peer} on the host or beside another crash), all refused
+ * before any process starts; {@link ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code
+ * session: FAIL <peer>: <stage>: <detail>}) or a subprocess survives teardown, which is then
+ * killed.
  */
 @Command(
         name = "session",
@@ -205,26 +207,22 @@ public final class SessionCommand implements Callable<Integer> {
         String title = "faf-test-harness session " + UUID.randomUUID();
         MultiPeerSession session;
         try {
-            session =
-                    crashPeer.isPresent()
-                            ? MultiPeerSession.withDeliberateCrash(
-                                    bases, title, crashPeer.getAsInt())
-                            : new MultiPeerSession(bases, title);
+            session = newSession(bases, title, crashPeer);
         } catch (IllegalArgumentException e) {
             throw new ParameterException(spec.commandLine(), e.getMessage(), e);
         }
 
         Logger log = LoggerFactory.getLogger(SessionCommand.class);
+        List<String> faulted = SessionFaultOptions.describe(bases);
+        if (!faulted.isEmpty()) {
+            log.info("session: faults on {}", String.join("; ", faulted));
+        }
         // Which list won matters to a CI mid-switch: the other may hold the secrets it thinks are
         // in use, and a refresh-token run spends its tokens even when it passes.
         log.info(
                 "session: credentials from {} ({})",
                 flag,
                 MockClientCli.layerDescription(spec, flag));
-        List<String> faulted = SessionFaultOptions.describe(bases);
-        if (!faulted.isEmpty()) {
-            log.info("session: faults on {}", String.join("; ", faulted));
-        }
         // Ctrl-C or SIGTERM: tear every peer down before the JVM exits. close() is idempotent and
         // synchronized, so this and the teardown below never both run a peer's teardown.
         Runtime.getRuntime().addShutdownHook(new Thread(session::close, "mc-session-shutdown"));
@@ -252,8 +250,27 @@ public final class SessionCommand implements Callable<Integer> {
                 "session: PASS - {} peers, full mesh and two-way game traffic, {}nothing left"
                         + " running",
                 peers,
-                crashPeer.isPresent() ? crashSummary(crashPeer.getAsInt()) : "");
+                session.deliberateCrash().isPresent()
+                        ? crashSummary(session.deliberateCrash().getAsInt())
+                        : "");
         return ExitCodes.OK;
+    }
+
+    /**
+     * Builds the session, with a deliberate crash when {@code --crash-peer} named a joiner.
+     * Separate so a test can check the crash reaches the session without running one.
+     *
+     * @param bases one validated base per peer, host first
+     * @param title the title the host advertises
+     * @param crashPeer the crashing joiner's position, or empty
+     * @return the session, not yet started
+     * @throws IllegalArgumentException for any refusal of the session's
+     */
+    static MultiPeerSession newSession(
+            final List<MockClientConfig> bases, final String title, final OptionalInt crashPeer) {
+        return crashPeer.isPresent()
+                ? MultiPeerSession.withDeliberateCrash(bases, title, crashPeer.getAsInt())
+                : new MultiPeerSession(bases, title);
     }
 
     /**

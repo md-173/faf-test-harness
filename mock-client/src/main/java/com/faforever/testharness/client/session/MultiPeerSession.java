@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -81,11 +82,12 @@ import org.slf4j.MDC;
  * so a host on a timer would make itself unjoinable while a joiner is still booting two JVMs. The
  * peer links are established during the lobby phase, so nothing is lost.
  *
- * <p>The host alone can be given a delay, through the three-argument constructor, for a caller that
- * needs the session to leave its lobby phase (WBS-4.3.4): no other lever exists, since only the
- * host reporting {@code Launching} moves the server's game to LIVE. Joiners never auto-launch
- * whatever is asked, and the delay is floored by {@link #minHostLaunchDelaySeconds(int)}, which
- * grows with the peer count, so the reasoning above still holds.
+ * <p>The host alone can be given a delay, through the three-argument constructor or {@link
+ * #withDeliberateCrash}, for a caller that needs the session to leave its lobby phase (WBS-4.3.4):
+ * no other lever exists, since only the host reporting {@code Launching} moves the server's game to
+ * LIVE. Joiners never auto-launch whatever is asked, and the delay is floored by {@link
+ * #minHostLaunchDelaySeconds(int)}, which grows with the peer count, so the reasoning above still
+ * holds.
  *
  * <p><b>A deliberate crash</b> ({@link #withDeliberateCrash}, WBS-5.2.1) has one joiner's game
  * crash after the match has launched, and the session passes only if the survivors play on. After
@@ -110,8 +112,9 @@ import org.slf4j.MDC;
  * order of the configs given.
  *
  * <p><b>Every wait is bounded and named</b>: a missed checkpoint throws {@link CheckpointFailure}
- * with the peer, the stage, the limit that ran out and what had been seen by then. Each wait is
- * bound by its own budget and by {@link #SESSION_DEADLINE}, whichever is sooner.
+ * with the peer, the stage, the limit that ran out and what had been seen by then. Each bring-up
+ * wait is bound by its own budget and by {@link #SESSION_DEADLINE}, whichever is sooner; a
+ * deliberate crash's waits after launch have their own budgets only.
  *
  * <p><b>Labels.</b> Each peer runs under an instance label, A to Z in join order. Its components
  * capture the label from the thread that builds them ({@code InstanceLabel}), so every peer is
@@ -503,7 +506,7 @@ public final class MultiPeerSession implements AutoCloseable {
                     "the deliberate crash must be on a joiner, B to "
                             + labelFor(Math.max(1, peerBases.size() - 1))
                             + "; got "
-                            + labelFor(Math.max(0, joiner)));
+                            + (joiner < 0 ? "position " + joiner : labelFor(joiner)));
         }
         for (int i = 0; i < peerBases.size(); i++) {
             if (peerBases.get(i).mockGameCrashAfterSeconds() >= 0) {
@@ -529,8 +532,10 @@ public final class MultiPeerSession implements AutoCloseable {
     /**
      * Runs the session: the host through welcome, {@code game_launch} and HOSTING, then each joiner
      * in turn through welcome, {@code game_launch} and JOINING, then the full mesh, then game
-     * traffic. Returns normally only when every peer's adapter reports every other peer connected
-     * and every game has received every other game's datagrams.
+     * traffic, and for a deliberate crash the launch, the crash and the survivors playing on.
+     * Returns normally only when every peer's adapter reports every other peer connected and every
+     * game has received every other game's datagrams, and, for a deliberate crash, when its stages
+     * have passed too.
      *
      * @throws CheckpointFailure naming the peer and the stage, if any checkpoint does not pass
      * @throws InterruptedException if any bounded wait is interrupted
@@ -550,6 +555,14 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         deadline = System.nanoTime() + SESSION_DEADLINE.toNanos();
         LOG.info("session: {} peers, host title '{}'", bases.size(), hostTitle);
+        if (crashingPeer != NO_CRASH) {
+            LOG.info(
+                    "session: deliberate crash of {}: the host launches {} s after it starts"
+                            + " hosting, and that joiner's game crashes {} s after it joins",
+                    labelFor(crashingPeer),
+                    hostLaunchDelaySeconds,
+                    crashAfterSeconds(bases.size()));
+        }
 
         // A hosts. Reaching IDLE sends game_host; the server answers game_launch, which is what
         // spawns A's adapter and game and completes gameLaunched with the uid.
@@ -597,6 +610,15 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     public List<SessionPeer> peers() {
         return List.copyOf(peers);
+    }
+
+    /**
+     * The joiner whose crash this session expects (WBS-5.2.1).
+     *
+     * @return its position, 1 for the first joiner, or empty for a session without one
+     */
+    public OptionalInt deliberateCrash() {
+        return crashingPeer == NO_CRASH ? OptionalInt.empty() : OptionalInt.of(crashingPeer);
     }
 
     /**
@@ -835,7 +857,7 @@ public final class MultiPeerSession implements AutoCloseable {
         while (true) {
             boolean complete = true;
             for (SessionPeer peer : peers) {
-                peer.drainVerdicts();
+                peer.drainVerdicts("full mesh");
                 complete &= missingLinks(peer).isEmpty();
             }
             if (complete) {
@@ -972,15 +994,9 @@ public final class MultiPeerSession implements AutoCloseable {
      */
     private List<String> terminatedPeers() {
         List<String> terminated = new ArrayList<>();
-        for (int i = 0; i < peers.size(); i++) {
-            SessionPeer peer = peers.get(i);
+        for (SessionPeer peer : peers) {
             if (peer.lifecycle().getState() == ClientState.TERMINATED) {
-                // A slow bring-up can run into a deliberate crash; say so rather than leave it to
-                // read as a fault.
-                terminated.add(
-                        i == crashingPeer
-                                ? peer.name() + " (its deliberate crash, due before this stage)"
-                                : peer.name());
+                terminated.add(peer.name());
             }
         }
         return terminated;
@@ -1015,7 +1031,7 @@ public final class MultiPeerSession implements AutoCloseable {
         // Marked before the crash, so a bring-up verdict cannot pass for the loss.
         Map<SessionPeer, Integer> marks = new HashMap<>();
         for (SessionPeer survivor : survivors) {
-            survivor.drainVerdicts();
+            survivor.drainVerdicts("crash");
             marks.put(survivor, survivor.observed().size());
         }
         awaitCrash(crashed, survivorsEnded);
@@ -1024,36 +1040,22 @@ public final class MultiPeerSession implements AutoCloseable {
                 crashed.name(),
                 INJECTED_CRASH_EXIT);
 
-        // Only the side that made the ICE offer on a link runs the adapter's connectivity
-        // checker; the answering side never notices a lost peer. The lobby's ConnectToPeer
-        // frames say which side that was, and the host offers on every host link.
-        long crashedId = crashed.identity().id();
-        List<SessionPeer> offerers =
-                survivors.stream()
-                        .filter(s -> s.offers().contains(new SessionPeer.Offer(crashedId, true)))
-                        .toList();
-        if (!offerers.contains(host)) {
-            throw new CheckpointFailure(
-                    host.name(),
-                    "loss",
-                    "recorded no ConnectToPeer offer for "
-                            + crashed.name()
-                            + ", so no survivor can be required to notice the loss; offers seen: "
-                            + host.offers());
-        }
+        List<SessionPeer> offerers = requiredReporters(survivors, crashed);
         long waitUntil = System.nanoTime() + SURVIVOR_TIMEOUT.toNanos();
         awaitAll(
                 "loss",
                 () -> {
                     Map<String, String> missing = new LinkedHashMap<>();
                     for (SessionPeer offerer : offerers) {
-                        offerer.drainVerdicts();
-                        if (!offerer.reportedLostSince(marks.get(offerer), crashed)) {
+                        offerer.drainVerdicts("loss");
+                        // The latest verdict too, so a flap before the crash cannot pass.
+                        if (!offerer.reportedLostSince(marks.get(offerer), crashed)
+                                || offerer.reportsConnected(crashed)) {
                             missing.put(
                                     offerer.name(),
                                     "no onConnected(..., false) about "
                                             + crashed.name()
-                                            + " since the crash, verdicts seen "
+                                            + " standing since the crash, verdicts seen "
                                             + offerer.observed());
                         }
                     }
@@ -1132,9 +1134,8 @@ public final class MultiPeerSession implements AutoCloseable {
                         "session ended (TERMINATED) before the match went live; its log lines say"
                                 + " why");
             }
-            boolean playing = host.lifecycle().getState() == ClientState.PLAYING;
             Optional<String> server = host.serverGameState(uid);
-            if (playing && server.filter("playing"::equals).isPresent()) {
+            if (matchLive(host.lifecycle().getState(), server)) {
                 return;
             }
             if (System.nanoTime() >= waitUntil) {
@@ -1182,10 +1183,9 @@ public final class MultiPeerSession implements AutoCloseable {
             }
             pollPause(waitUntil);
         }
-        Integer exit = crashed.lifecycle().gameExit().getNow(null);
-        if (!crashed.lifecycle().verdicts().gameCrashed()
-                || exit == null
-                || exit != INJECTED_CRASH_EXIT) {
+        if (!injectedCrash(
+                crashed.lifecycle().gameExit().getNow(null),
+                crashed.lifecycle().verdicts().gameCrashed())) {
             throw new CheckpointFailure(
                     crashed.name(),
                     "crash",
@@ -1206,6 +1206,63 @@ public final class MultiPeerSession implements AutoCloseable {
                 + INJECTED_CRASH_EXIT
                 + "), classified as a game crash: "
                 + crashed.lifecycle().verdicts().gameCrashed();
+    }
+
+    /**
+     * The survivors that must report a crashed joiner lost (WBS-5.2.1): those that made the ICE
+     * offer on their link to it. Only the offering side runs the adapter's connectivity checker in
+     * adapter 3.3.14, and the answering side never notices a lost peer. The lobby's {@code
+     * ConnectToPeer} frames say which side offered, and faf-server gives the host the offer on
+     * every host link, so a host without one means the offers were not recorded, and asking nobody
+     * would pass the check vacuously.
+     *
+     * @param survivors the survivors, host first
+     * @param crashed the crashed joiner
+     * @return the survivors that offered to it, host first
+     * @throws CheckpointFailure at stage {@code loss} if the host is not among them
+     */
+    static List<SessionPeer> requiredReporters(
+            final List<SessionPeer> survivors, final SessionPeer crashed) {
+        SessionPeer.Offer offer = new SessionPeer.Offer(crashed.identity().id(), true);
+        List<SessionPeer> offerers =
+                survivors.stream().filter(s -> s.offers().contains(offer)).toList();
+        SessionPeer host = survivors.get(0);
+        if (!offerers.contains(host)) {
+            throw new CheckpointFailure(
+                    host.name(),
+                    "loss",
+                    "recorded no ConnectToPeer offer for "
+                            + crashed.name()
+                            + ", so no survivor can be required to notice the loss; offers seen: "
+                            + host.offers());
+        }
+        return offerers;
+    }
+
+    /**
+     * Whether the match has gone live as both sides see it: the host's client in PLAYING, and the
+     * server reporting the game {@code playing}. The first alone is not enough, since the host's
+     * {@code GameState Launching} reaches the server after its own adapter relays it.
+     *
+     * @param hostState the host client's state
+     * @param serverState the server's state for the host's game, as {@code game_info} last said
+     * @return {@code true} once both agree the match is live
+     */
+    static boolean matchLive(final ClientState hostState, final Optional<String> serverState) {
+        return hostState == ClientState.PLAYING
+                && serverState.filter("playing"::equals).isPresent();
+    }
+
+    /**
+     * Whether a game's end was mock-game's injected crash: its exit code, and the client
+     * classifying it as a crash rather than something the harness did.
+     *
+     * @param exit the game's exit code, or {@code null} if it has not exited
+     * @param gameCrashed the client's classification
+     * @return {@code true} only for exit {@value #INJECTED_CRASH_EXIT} classified as a crash
+     */
+    static boolean injectedCrash(final Integer exit, final boolean gameCrashed) {
+        return gameCrashed && exit != null && exit == INJECTED_CRASH_EXIT;
     }
 
     /**
