@@ -1455,8 +1455,8 @@ injection only has to end the process convincingly.
 
 **It halts rather than exits, and that is the whole design.** `Main` ends a
 normal run with `System.exit`, which runs the JVM shutdown hook, which runs
-`GameShutdown`: the GPGNet socket is closed in an orderly sequence, the traffic
-session is stopped, the FSM is cancelled. A consumer watching the adapter would
+`GameShutdown`: scheduling is stopped, then the GPGNet socket is closed and the
+traffic session is stopped, in that order. A consumer watching the adapter would
 see a tidy disconnect, the opposite of a crash. The injected crash calls
 `Runtime.getRuntime().halt()` instead. No hook runs, no closing frame is
 written, and the socket is torn down by the operating system exactly as it

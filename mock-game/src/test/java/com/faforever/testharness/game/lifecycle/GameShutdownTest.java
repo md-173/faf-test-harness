@@ -171,9 +171,9 @@ final class GameShutdownTest {
     /**
      * Teardown stops the lifecycle's own scheduler, so a launch pending in HOSTING never fires. The
      * launch delay is far longer than the test, so nothing here races it; what is checked is that
-     * the scheduler holding the launch was shut down with nothing left queued, which is what keeps
-     * the launch from ever running. Watching LIVE never arrive instead would need the delay to
-     * elapse, and the test would then have to reach teardown within that delay of HOSTING
+     * the launch was queued before teardown and that nothing is left queued after it, which is what
+     * keeps the launch from ever running. Watching LIVE never arrive instead would need the delay
+     * to elapse, and the test would then have to reach teardown within that delay of HOSTING
      * committing, however late its own thread ran.
      */
     @Test
@@ -202,11 +202,14 @@ final class GameShutdownTest {
             CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
             gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
             hosting.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            // Without a queued launch the drain below would pass having tested nothing.
+            assertEquals(1, lifecycle.queuedSchedules(), "hosting should have queued the launch");
 
             lifecycle.shutdown().run();
 
-            assertTrue(
-                    lifecycle.schedulesDrained(),
+            assertEquals(
+                    0,
+                    lifecycle.queuedSchedules(),
                     "shutdown must drain the scheduler holding the pending launch");
             assertEquals(GameState.HOSTING, lifecycle.getState());
         } finally {

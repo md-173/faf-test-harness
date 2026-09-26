@@ -124,8 +124,10 @@ import org.slf4j.LoggerFactory;
  * transition's action is still sending, and the FSM thread's entry hook then returns at once and
  * commits ENDED while the hook is still tearing down. If the entry hook wins instead, the JVM hook
  * returns at once, stops logging and lets the JVM halt while the winner may still be inside this
- * method. Both are benign: the kernel closes the socket the winner was closing, and what is lost is
- * at most a few teardown INFO lines.
+ * method. Both are benign: the kernel closes the socket the winner was closing, and what the guard
+ * costs is at most a few teardown INFO lines. The signal itself can cost more: any closing frame
+ * the ENDED action has not sent when the JVM hook closes the socket is lost, as for a real game
+ * killed mid-send.
  *
  * <p><b>Exit code.</b> This sequence does not call {@link System#exit(int)}; the exit code is the
  * bootstrap's, mapped from {@link MockGameLifecycle#getExitStatus()} once the FSM reaches ENDED. A

@@ -759,10 +759,10 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * Gives a future that completes when the state is reached.
+     * Gives a future for the next entry to {@code state}; see {@link StateMachine#stateReached}.
      *
      * @param state the state to wait for.
-     * @return a future that only completes when the state is reached.
+     * @return a future that completes on the next entry to {@code state}, or at once if current.
      */
     public CompletableFuture<Void> stateReached(ClientState state) {
         return machine.stateReached(states.get(state));
