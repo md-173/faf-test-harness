@@ -33,7 +33,7 @@ public final class LobbyHandshake {
     /** SLF4J logger — never carries credentials; see class-level note. */
     private static final Logger LOG = LoggerFactory.getLogger(LobbyHandshake.class);
 
-    /** Bound on the {@code faf-uid} subprocess before it is killed and the static UID is used. */
+    /** Bound on the {@code faf-uid} subprocess before it is killed and the handshake throws. */
     private static final int UID_BINARY_TIMEOUT_SECONDS = 15;
 
     /** Cap on the {@code faf-uid} stderr text quoted in the failure-path warning log. */
@@ -225,11 +225,13 @@ public final class LobbyHandshake {
      * present, run {@code <binary> <session>} and use its (trimmed) stdout — the FAF {@code
      * faf-uid} tool's RSA-encrypted blob, which the lobby's policy server requires (a plain
      * placeholder is rejected; lobby-protocol-spec.md §3). On any failure (missing binary, non-zero
-     * exit, timeout, empty output) it logs a warning and falls back to the static {@link
-     * #uniqueId}. On failure the tool's stderr is logged — there is no UID to leak on that path;
-     * the successful blob itself is never logged, only its length.
+     * exit, timeout, empty output) it logs a warning and throws an exception. On failure the tool's
+     * stderr is logged — there is no UID to leak on that path; the successful blob itself is never
+     * logged, only its length.
      *
      * @param session the lobby-issued session number passed to the UID binary
+     * @throws AuthenticationException when the faf-uid binary times out, exits with a non-zero
+     *     code, does not have any output, or its invocation fails.
      * @return the resolved unique_id string
      */
     private String resolveUniqueId(final long session) {

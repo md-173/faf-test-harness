@@ -701,9 +701,9 @@ token file:
   --mock-game-launch-delay-seconds=-1
 ```
 
-Four of those are less obvious than they look. The four `--host-*` options have to be
-set together or not at all; a partial set is rejected by name, and omitting all
-four leaves the session at IDLE rather than HOSTING.
+Two of those are less obvious than they look. The four `--host-*` options have
+to be set together or not at all; a partial set is rejected by name, and
+omitting all four leaves the session at IDLE rather than HOSTING.
 `--mock-game-launch-delay-seconds=-1` is what makes HOSTING an observable state:
 the default of 5 has mock-game start the match on its own, moving the client
 straight on to PLAYING.
@@ -848,7 +848,8 @@ and is not repeated here.**
 
 | Symptom | Log line to look for | Cause / fix |
 |---|---|---|
-| Login ends without a `session ready` line; last relevant frame is a rejected auth | `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id` — `uidBinaryPath` is unset or wrong. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. |
+| Login ends without a `session ready` line; last relevant frame is a rejected auth | `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id` — using `uniqueId` instead of `uidBinaryPath`. Set `uidBinaryPath` to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. |
+| `run` fails before the `auth` command is sent to the lobby server | `lobby session failed: faf-uid ...` | The `faf-uid` binary did not exit successfuly or it timed out. Ensure the correct `faf-uid` binary is being used, execute permissions have been granted, etc. |
 | `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. Full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery — get a fresh `code=` and refresh token. |
 | `run` hangs on connect, then times out with no `lobby WebSocket connected` line | (none — silence is the symptom) | `wss://ws.faforever.xyz` is Cloudflare-fronted and publicly reachable (§3, §8 verified this directly) — no FAF allowlist or VPN is needed for it. Look locally first: DNS resolution, an intercepting proxy, or an outbound firewall rule on this machine/network. Confirm with a raw TCP probe to `ws.faforever.xyz:443` before assuming a code problem. |
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
