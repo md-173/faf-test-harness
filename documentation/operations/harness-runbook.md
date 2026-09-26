@@ -1253,6 +1253,9 @@ and work wherever the mocks themselves run.
 | `--mock-game-udp-drop-percent` | mock-client | `0` | Passes the above through to an orchestrated mock-game as `--udp-drop-percent`. Emitted only when non-zero. |
 | `--crash-after-seconds` | mock-game | `-1` | Halts the game's JVM with no shutdown that many seconds after it enters a session. Negative never crashes. |
 | `--mock-game-crash-after-seconds` | mock-client | `-1` | Passes the above through to an orchestrated mock-game. Emitted only when set. |
+| `--fault-peer` | `session` | every peer | Limits the three mock-client fault flags above to the named peers. |
+| `--peer-ice-relay-delay-ms`, `--peer-mock-game-udp-drop-percent`, `--peer-mock-game-crash-after-seconds` | `session` | unset | One value per peer, host first, instead of the root flag. |
+| `--crash-peer` | `session` | unset | Crashes one joiner's game after the match has launched, and passes only if the survivors play on. |
 
 ### `--ice-relay-delay-ms`
 
@@ -1465,8 +1468,9 @@ would be if the process were killed.
 **When the timer starts.** On the first of two events: a peer connecting, or
 the match going live. Not on entry to LIVE alone, which is what it looks like it
 should be. In this harness a multi-peer session runs with auto-launch disabled
-(`--mock-game-launch-delay-seconds=-1`), nothing else posts
-`LaunchMatch`, and so the game never enters LIVE at all. Anchored there the
+on every joiner, and on the host too unless `--crash-peer` asks for a launch
+(below); nothing else posts `LaunchMatch`, so a joiner's game never enters LIVE
+at all. Anchored there the
 fault would have been silently inert in the one configuration it is most worth
 injecting into. Peers connect and exchange traffic in the lobby phase, so "a
 peer is here" is what actually means the game has a session to lose.
@@ -1524,6 +1528,117 @@ game that never enters a session at all. With auto-launch off and no peer ever
 arriving, nothing starts the clock. The absence of the `injected crash armed`
 line is the way to tell: it is logged the moment the timer starts, so if you
 never see it, the game never had a session to lose.
+
+### Faults on one peer of a session (WBS 5.1.2, 5.2.1)
+
+`session` builds every peer from the same root options, so on their own the
+flags above degrade every peer alike, which no real match looks like. Two ways
+narrow them, and a fault takes its values from one of them only:
+
+- `--fault-peer=<labels>` limits the root `--ice-relay-delay-ms`,
+  `--mock-game-udp-drop-percent` and `--mock-game-crash-after-seconds` to the
+  named peers. Labels are the session's own: `A` is the host, `B` the first
+  joiner, and so on. Unset, the flags reach every peer, as before.
+- `--peer-ice-relay-delay-ms`, `--peer-mock-game-udp-drop-percent` and
+  `--peer-mock-game-crash-after-seconds` give each peer its own value, host
+  first, and need exactly `--peers` values, so a value misplaced by one
+  position is refused rather than landing on the wrong peer. Write a list that
+  starts with a negative value as `--flag=-1,40`, or picocli reads the `-1` as
+  an option. In a `--config` file each list is one comma-separated string, not
+  a JSON array.
+
+A list given together with its root flag is refused, and the message says which
+layer the root flag came from, since a shared config file can set it. So is a
+`--fault-peer` with none of the three root flags set, since it would target
+nothing. The run logs each faulted peer's values, for example
+`session: faults on C: UDP drop 100%`.
+
+What stays on the peer. A drop is outbound: the lossy peer's games send less,
+so only the directions it sends are damaged. At three peers with
+`--peer-mock-game-udp-drop-percent=0,0,100` the session fails at `traffic`
+naming the two receivers and only the sender C:
+`A(host) from C(joiner): nothing; B(joiner) from C(joiner): nothing`, while
+every direction A and B send is proven. At `50` it passes: the traffic check
+wants three datagrams over two progress lines from a stream of ten a second,
+so a failure at that rate is not credible even unseeded (#358). A relay delay
+on one peer delays both directions of every link through that peer's relay,
+which is two passes per link, so the one-client row of the ceiling table above
+applies; `500` passes at three peers.
+
+**A crash set this way is not expected.** A peer whose game dies can never
+pass the mesh or traffic checkpoints, so the session fails at once and names
+it, as it always has. That is the tool for a run meant to go red. In the lobby
+phase it is also all a crash can do today: faf-server's `abort()` runs
+`disconnect_all_peers()` only while the game is in `GameState.LOBBY`, and the
+mock game ends on any single `DisconnectFromPeer`, so every survivor's game
+ends too. Whether a survivor should instead free the slot is #435's question.
+
+**`--crash-peer=<joiner>` is the one crash a session expects**, and it lands
+after launch, where real FAF plays on: faf-server sends no disconnect notice
+once the game is live, and a non-host leaving a live game does not end it.
+`session` then:
+
+1. brings the session up as usual, full mesh and traffic included;
+2. launches the host at the shortest delay its floor allows
+   (`MultiPeerSession.minHostLaunchDelaySeconds`: 90 s at two peers, plus
+   30 s per joiner beyond the first), and waits for the host to reach
+   PLAYING and the server's `game_info` to report the game `playing`
+   (stage `launch`);
+3. waits for the joiner's game to exit `134` and the client to classify it as
+   a crash (stage `crash`);
+4. waits for every survivor that made the ICE offer on its link to the crashed
+   joiner to report it lost (stage `loss`);
+5. and only then snapshots the traffic evidence and waits for every
+   survivor-to-survivor direction to advance again (stage `play on`).
+
+Stages 4 and 5 share one 45 s budget from the crash. A survivor that ends
+anywhere in 2 to 5 fails the run.
+
+Why the session picks the crash time itself. The joiner's crash timer starts
+when it joins, not at launch (see `--crash-after-seconds` above), and a joiner
+never launches. The host's launch timer starts when it begins hosting, which is
+before any joiner joins, so a crash delay of the host's launch delay plus 30 s
+always lands after launch. Every joiner is in before launch, so the crash also
+lands at most one launch delay plus 30 s after launch, well before the host's
+match ends at twice the launch delay after launch. `MultiPeerSessionTest`
+checks that arithmetic at every peer count.
+
+Why only the offering side must report the loss. In adapter 3.3.14 only the
+side that made the ICE offer runs `PeerConnectivityCheckerModule`
+(`PeerIceModule.java:381-382`), which declares a peer lost after 10000 ms
+without an echo; the answering side has no timeout at all. faf-server gives the
+offer to the host on every host and joiner link and to the later joiner on
+every joiner pair, which the session reads from the `ConnectToPeer` frames each
+peer recorded. So crashing `B` requires every survivor's report, and crashing a
+later joiner leaves the earlier joiners silent by design, not by fault. The
+host always offers, so a run in which the host recorded no offer for the
+crashed joiner fails rather than passing with nobody asked.
+
+At two peers there is no survivor pair, so stage 5 has nothing to check and the
+PASS line says so. It is still the cheapest crash run, and needs only two
+accounts:
+
+```text
+session: match live; B(joiner) is due to crash 120 s after it joined
+[B] mock-game exited abnormally with exit code 134
+session: B(joiner) crashed as planned (exit 134); waiting for the survivors
+[A] peer connected: local=7982 remote=330072 connected=false
+session: PASS - 2 peers, full mesh and two-way game traffic, B(joiner) crashed after launch and the host reported the loss (no survivor pair to trade traffic), nothing left running
+```
+
+That run (2026-09-26, live lobby, adapter 3.3.14) took just over two minutes,
+and the loss report came 9.5 s after the crash. At three peers with `B` crashed,
+`SessionFaultLiveTest` took 161 s: the crash landed 32 s after the match went
+live, and both A and C reported it 9.2 s later, within 9 ms of each other. Each
+joiner beyond the first adds about 30 s, the growth of the launch floor.
+Crashing the host is out of scope: it asks who owns the match, a different
+question.
+
+*Provenance: `SessionFaultLiveTest`, all four runs at three peers on accounts A
+to C against the live lobby on 2026-09-26, 286 s in total: the crash above,
+`50` and `100` percent drop on C, and a `500` ms relay delay on C. The
+two-peer crash was a `session --peers=2 --crash-peer=B` run from the installed
+jars the same day, exit `0`.*
 
 ## 11. A session in a consumer's CI (WBS 4.2.1)
 
@@ -1826,9 +1941,9 @@ mistakes as somebody else's.
 
 | Exit | What it means | What the job should do |
 |---|---|---|
-| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running. | Pass. |
+| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running; with `--crash-peer`, also that joiner's crash after launch and the survivors playing on. | Pass. |
 | `70` | A checkpoint failed, logged as `session: FAIL <peer>: <stage>: <detail>`, or a subprocess survived teardown and was killed, or an exception escaped the command. | Read the stage before filing anything. See below. |
-| `2` | A bad invocation: no credential list, fewer credential files than peers, two peers on one file or one account, an unreadable or empty file, a missing binary, `INSTANCE_NAME` set, or `--log-level` above INFO. | Fix the job. Nothing started, so there is nothing to clean up. |
+| `2` | A bad invocation: no credential list, fewer credential files than peers, two peers on one file or one account, an unreadable or empty file, a missing binary, `INSTANCE_NAME` set, `--log-level` above INFO, or a fault option that does not say one thing clearly (§10). | Fix the job. Nothing started, so there is nothing to clean up. |
 
 Every `2` is refused before any process starts, which is what makes the
 distinction worth keeping: a job that folds `2` into `70` reports its own
@@ -1842,6 +1957,12 @@ peer started, and `welcome` is a credential or the lobby. The other five,
 `game_launch`, `HOSTING`, `JOINING`, `full mesh` and `traffic`, are the ones
 that belong to the adapter under test. The peer and the stage are named in the
 log line, not in the exit status, so a job cannot branch on them. Keep the log.
+
+A run with `--crash-peer` (§10) adds four stages after those. `launch` is the
+host and the lobby; `crash` is the harness's own injected fault not landing as
+planned; `loss` and `play on` are the adapter under test: a surviving adapter
+that never declared the crashed peer lost, or stopped forwarding the survivors'
+traffic once it had.
 
 Two codes below the harness are not session verdicts at all: a cancelled or
 killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
@@ -1911,6 +2032,16 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   destroyed afterwards anyway; a self-hosted one is not, and a hard-killed job
   never reaches its cleanup step, so treat each file as a live bearer
   credential until its token expires.
+
+### A fault scenario in the same job
+
+Adding `--crash-peer=B` to the session step turns the job into a check that a
+surviving adapter notices a crashed peer after launch and keeps forwarding the
+rest of the match. It needs no extra account at two peers, where the host is
+the only survivor. It does need time: the host waits out its launch delay and
+the crash lands after it, so allow about five more minutes of step timeout per
+run than a plain session, on top of the 420 s deadline. The rules and the
+verdict are in §10.
 
 ### What the run does not cover
 
