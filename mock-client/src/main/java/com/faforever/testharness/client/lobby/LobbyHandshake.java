@@ -15,13 +15,13 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Drives the four-step lobby authentication handshake over a connected {@link LobbyConnection}:
- * {@code ask_session → session → auth → welcome | authentication_failed} (see {@code
+ * {@code ask_session → session → auth → welcome | authentication_failed | invalid} (see {@code
  * documentation/research/lobby-protocol-spec.md} §3).
  *
  * <p>One handshake per {@link LobbyHandshake} instance. The {@link #perform(TokenSource)} future
  * completes with the {@code welcome} payload on success, or completes exceptionally with {@link
- * AuthenticationException} on either an {@code authentication_failed} frame or any failure
- * obtaining the access token. The caller is responsible for chaining a timeout / disconnect
+ * AuthenticationException} on an {@code authentication_failed} or {@code invalid} frame, or any
+ * failure obtaining the access token. The caller is responsible for chaining a timeout / disconnect
  * listener if it needs to bound the handshake.
  *
  * <p>No log line emitted by this class contains the JWT access token. The success log records the
@@ -70,8 +70,8 @@ public final class LobbyHandshake {
     private final AtomicBoolean started = new AtomicBoolean(false);
 
     /**
-     * Construct a handshake bound to {@code connection}. The connection's existing handlers for
-     * {@code session}, {@code welcome}, and {@code authentication_failed} will be replaced when
+     * Construct a handshake bound to {@code connection}. Its handlers for {@code session}, {@code
+     * welcome}, {@code authentication_failed} and {@code invalid} are added to the connection when
      * {@link #perform} is called.
      *
      * @param connection a connected {@link LobbyConnection}
@@ -126,6 +126,7 @@ public final class LobbyHandshake {
         }
         connection.registerHandler("welcome", this::onWelcome);
         connection.registerHandler("authentication_failed", this::onAuthenticationFailed);
+        connection.registerHandler("invalid", this::onInvalid);
         tokens.obtain()
                 .whenComplete(
                         (token, err) -> {
@@ -277,5 +278,27 @@ public final class LobbyHandshake {
         String text = msg.has("text") ? msg.get("text").asText() : "<no text>";
         LOG.error("lobby authentication_failed: {}", text);
         result.completeExceptionally(new AuthenticationException(text));
+    }
+
+    /**
+     * faf-server's answer to a command whose handling raised, sent just before it closes the
+     * connection (#473). Before {@code welcome} that command is the login, so the handshake fails
+     * at once, and the caller's one ERROR names it; a refused {@code unique_id} and a token the
+     * lobby could not read both end this way. Once the handshake is over, the frame answers some
+     * other command and is only logged, as it was before it had a handler.
+     *
+     * @param msg the {@code invalid} frame, which carries nothing else
+     */
+    private void onInvalid(final JsonNode msg) {
+        if (result.isDone()) {
+            LOG.warn(
+                    "the lobby answered a command with invalid, a server-side error;"
+                            + " faf-server closes the connection next");
+            return;
+        }
+        result.completeExceptionally(
+                new AuthenticationException(
+                        "the lobby answered the login with invalid, a server-side error such as"
+                                + " a refused unique_id or a token it could not read"));
     }
 }
