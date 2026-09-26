@@ -1536,7 +1536,6 @@ clone, no Gradle:
 ```bash
 java -jar mock-client-<version>-all.jar \
   --lobby-websocket-url=wss://ws.faforever.xyz \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./your-adapter-build.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -1789,7 +1788,6 @@ jobs:
           cd "$WORK"
           java -jar "$CLIENT_JAR" \
             --lobby-websocket-url=wss://ws.faforever.xyz \
-            --unique-id=00000000-0000-0000-0000-000000000000 \
             --uid-binary-path="$FAF_UID_BINARY" \
             --ice-adapter-binary-path="$ADAPTER_JAR" \
             --mock-game-binary-path="$GAME_JAR" \
@@ -1884,13 +1882,13 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   the check step does. Without that step, a jar lacking the subcommand answers
   the session invocation with `Unmatched arguments`, naming `session` and
   everything after it, and exits `2` after the adapter build.
-- **A placeholder `--unique-id` and a real `faf-uid`.** Both are needed, for
-  the reason §3 gives. On a runner the failure is easy to misread: without the
+- **A real `faf-uid`** is needed, for the reason §3 gives.
+  On a runner the failure is easy to misread: without the
   binary the lobby's policy request fails and the login ends in
   `{"command":"invalid"}`, which looks like an ordinary auth failure. That is
   what the probe step exists to pre-empt. A stock GitHub-hosted
   `ubuntu-latest` runner is enough: `faf-uid` v4.0.7 produced a real
-  `unique_id` there rather than falling back to the placeholder, and both
+  `unique_id` there rather than failing, and both
   peers' logins were accepted (run 35520318859). So neither a self-hosted
   runner nor a policy exemption is needed. The blob's length varies between
   runs and between the probe and the session, so the figure the probe step
@@ -1921,12 +1919,6 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   that machine's own interfaces. The run proves the client, adapter and game
   path end to end, and that the adapter forwards game packets in both
   directions, not that it gets through anything.
-- **That each peer really used `faf-uid`.** The probe step proves the binary
-  runs on this runner. If it later fails for a peer, the client falls back to
-  the placeholder `unique_id` with only a WARN, and the lobby ignores the
-  policy verdict, so such a run can still pass. This repository's own job greps
-  its log for one `faf-uid` line and one login per peer, and warns when either
-  is short; a consumer who wants that assurance has to add the same check.
 
 *Provenance. Every `run:` step above was executed on **2026-09-19** on WSL2
 Linux, in order, the way a runner hands them to bash and with `GITHUB_ENV`

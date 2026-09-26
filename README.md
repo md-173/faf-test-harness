@@ -162,7 +162,6 @@ the peer and the stage that failed.
 ```bash
 java -jar mock-client-<version>-all.jar \
   --lobby-websocket-url=wss://ws.faforever.xyz \
-  --unique-id=00000000-0000-0000-0000-000000000000 \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./faf-ice-adapter-3.3.14-nojfx.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -170,9 +169,6 @@ java -jar mock-client-<version>-all.jar \
     --peer-access-token-file=./host.txt \
     --peer-access-token-file=./joiner.txt
 ```
-
-`--unique-id` satisfies a required field and `--uid-binary-path` then overrides it at
-handshake time with a real value, which is why both are given.
 
 One FAF test account per peer and one credential file each: a pre-signed access token as
 above, or a refresh token with `--peer-refresh-token-file`, which also needs
