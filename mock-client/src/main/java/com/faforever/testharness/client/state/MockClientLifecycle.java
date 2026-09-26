@@ -38,12 +38,12 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -154,8 +154,8 @@ public final class MockClientLifecycle {
 
     /**
      * The constructing thread's instance label (WBS-4.3.3). The process-exit and connectToPeer
-     * continuations run on the JVM-wide common pool and the safety net on its own timer thread, so
-     * several clients in one JVM would otherwise log those lines unattributed.
+     * continuations and the safety net run on the JVM-wide common pool, so several clients in one
+     * JVM would otherwise log those lines unattributed.
      */
     private final InstanceLabel label = InstanceLabel.capture();
 
@@ -176,11 +176,8 @@ public final class MockClientLifecycle {
     /** How a failure ends this session: its one cause line and its verdict, decided together. */
     private final SessionFailures failures;
 
-    /** Backs the safety-net window; a daemon thread, one per lifecycle. */
-    private final Timer safetyNetTimer = new Timer("game-end-safety-net", true);
-
     /** The pending safety-net task armed on {@code GameEnded}, if any; cancelled on game exit. */
-    private volatile TimerTask safetyNetTask;
+    private volatile FutureTask<Void> safetyNetTask;
 
     /**
      * One-shot latch for the configured session intent — the {@code game_host} / {@code game_join}
@@ -873,25 +870,26 @@ public final class MockClientLifecycle {
             return;
         }
         LOG.info("GameEnded observed; arming {} safety net", safetyNetWindow);
-        TimerTask task =
-                new TimerTask() {
-                    @Override
-                    public void run() {
-                        try (InstanceLabel.Scope ignored = label.apply()) {
-                            LOG.warn(
-                                    "Game did not exit within {} of GameEnded; requesting shutdown",
-                                    safetyNetWindow);
-                            machine.receiveEvent(new ShutdownRequested());
-                        }
-                    }
-                };
+        FutureTask<Void> task = new FutureTask<>(this::safetyNetExpired, null);
+        // Published before it is scheduled, so a game exit racing this notification still cancels
+        // it. The JDK's shared delay thread times the window on the monotonic clock (#465) and only
+        // hands the task to labelledAsync: nothing may block that thread, which orTimeout uses too.
         safetyNetTask = task;
+        CompletableFuture.delayedExecutor(
+                        safetyNetWindow.toMillis(), TimeUnit.MILLISECONDS, labelledAsync)
+                .execute(task);
+    }
+
+    /** Posts {@link ShutdownRequested} once the safety net's window runs out; logs any throw. */
+    private void safetyNetExpired() {
         try {
-            safetyNetTimer.schedule(task, safetyNetWindow.toMillis());
-        } catch (IllegalStateException e) {
-            // The timer was already cancelled by a game exit racing this notification; nothing
-            // left to protect against.
-            LOG.debug("Safety net not armed, lifecycle is already tearing down");
+            LOG.warn(
+                    "Game did not exit within {} of GameEnded; requesting shutdown",
+                    safetyNetWindow);
+            machine.receiveEvent(new ShutdownRequested());
+        } catch (Throwable e) {
+            // Its FutureTask would otherwise keep this where nothing reads it (#465).
+            LOG.error("Game-end safety net's shutdown request threw", e);
         }
     }
 
@@ -903,9 +901,9 @@ public final class MockClientLifecycle {
      * @param event the {@link GameExited} event that triggered this transition.
      */
     private void onGameExited(Event event) {
-        TimerTask task = safetyNetTask;
+        FutureTask<Void> task = safetyNetTask;
         if (task != null) {
-            task.cancel();
+            task.cancel(false);
         }
     }
 

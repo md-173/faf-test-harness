@@ -4,6 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceAdapterConnection;
 import com.faforever.testharness.client.lobby.GameConfig;
@@ -11,6 +15,7 @@ import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -31,6 +36,8 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Client end-of-session reporting (#192): a consumer on the ICE-notification fan-out (R36) that
@@ -256,6 +263,81 @@ final class GameEndReportingTest {
         Thread.sleep(TEST_SAFETY_NET_WINDOW.toMillis() * 3);
 
         assertEquals(ClientState.PLAYING, lifecycle.getState());
+    }
+
+    /**
+     * Whatever the net's shutdown request throws is logged, under this instance's label
+     * (WBS-2.3.7-fix, #465). The net runs as a {@code FutureTask}, which would otherwise keep an
+     * Error where nothing reads it; the {@code java.util.Timer} before it died of one, with the
+     * trace on stderr only. Here teardown reaches the adapter connection's {@code close()}, which
+     * throws, and neither {@code SessionTeardown} nor {@code State} contains an Error.
+     */
+    @Test
+    void safetyNetLogsAnErrorUnderTheInstanceLabel() throws Exception {
+        FakeIceAdapterConnection iceConn =
+                new FakeIceAdapterConnection(MINIMAL_CONFIG) {
+                    @Override
+                    public void close() {
+                        throw new Error("close blew up");
+                    }
+                };
+        Logger lifecycleLogger = (Logger) LoggerFactory.getLogger(MockClientLifecycle.class);
+        ListAppender<ILoggingEvent> appender =
+                new ListAppender<>() {
+                    @Override
+                    protected void append(final ILoggingEvent event) {
+                        // Fixes the event's MDC on the logging thread; Logback reads it lazily.
+                        event.prepareForDeferredProcessing();
+                        super.append(event);
+                    }
+                };
+        // The net logs from a pool thread while this one polls.
+        appender.list = new CopyOnWriteArrayList<>();
+        appender.start();
+        lifecycleLogger.addAppender(appender);
+        try {
+            // Built under a label and armed without one, so only the label the lifecycle captured
+            // can reach the thread the net runs on.
+            MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "peer-a");
+            try {
+                playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
+            } finally {
+                MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+            }
+
+            iceConn.emitGpgNet("GameEnded");
+
+            // Teardown terminates the hanging "game" and "ICE adapter" before it reaches close(),
+            // and that dominates this wait, as in safetyNetFiresOnlyWhenNoExitArrives.
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+            ILoggingEvent logged;
+            while ((logged = errorCarrying(appender, "close blew up")) == null) {
+                assertTrue(
+                        System.nanoTime() < deadline,
+                        () -> "the net's Error was never logged; log was " + appender.list);
+                Thread.sleep(10);
+            }
+            assertEquals(
+                    "peer-a",
+                    logged.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY),
+                    "the net's lines must carry the lifecycle's instance label");
+        } finally {
+            lifecycleLogger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    /** The first ERROR in {@code appender} whose throwable's message is {@code thrown}, or null. */
+    private static ILoggingEvent errorCarrying(
+            ListAppender<ILoggingEvent> appender, String thrown) {
+        return appender.list.stream()
+                .filter(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getThrowableProxy() != null
+                                        && thrown.equals(e.getThrowableProxy().getMessage()))
+                .findFirst()
+                .orElse(null);
     }
 
     private MockClientLifecycle playingLifecycle(
