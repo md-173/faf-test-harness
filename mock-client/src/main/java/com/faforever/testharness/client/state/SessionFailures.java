@@ -280,6 +280,10 @@ final class SessionFailures {
      * to host in time, faf-server still sends each guest its {@code game_launch}, then {@code
      * match_cancelled}, which then reaches TERMINATED's no-op.
      *
+     * <p>A refused frame starts no launch, so it records no {@link SessionVerdicts#launchStarted()}
+     * and teardown owes the lobby no {@code GameState Ended} (#462). Nothing is lost by that: the
+     * lobby close that ends the run frees the player on faf-server the way that frame would.
+     *
      * @param event the {@link LaunchRejected} event
      * @throws FailedTransitionException always, which takes the session to TERMINATED
      */
