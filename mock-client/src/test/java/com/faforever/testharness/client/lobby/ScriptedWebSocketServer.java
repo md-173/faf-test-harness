@@ -125,7 +125,9 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
                     code,
                     reason);
             c.close(code, reason);
-            // The close frame goes through the same queue, so it can be stranded the same way.
+            // The close frame goes through the same queue, so it can be stranded the same way. The
+            // server drops the connection once the frame is out, so the "wrote" line can come
+            // after onClose's "lost" line, or not at all.
             awaitWritten(c, "close frame (code=" + code + ")");
         }
     }
@@ -198,14 +200,15 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
      * | OP_WRITE} from the sending thread. {@code WebSocketServer.doWrite} drains the queue on the
      * selector thread and, once it has seen it empty, sets the interest back to {@code OP_READ}.
      * When the sender's update lands between those two steps it is overwritten. The window is
-     * narrow, but a scripted exchange aims at it: after a write-only selection the key keeps a
-     * stale write-ready bit, so the selector follows the next read with a no-op {@code doWrite},
-     * and that read is what wakes the test to reply. The read also took the key out of the selected
-     * set, so nothing but the next {@code OP_WRITE} on it writes the stranded frame. The code is
-     * the same in Java-WebSocket 1.5.7, 1.6.0 and master.
+     * narrow, but a scripted exchange aims at it: after a write-only selection the key stays in the
+     * selected set with a stale write-ready bit, so every selector pass runs a no-op {@code
+     * doWrite} on it until its next read. That read is what wakes the test to reply, and it also
+     * takes the key out of the selected set, so a frame stranded in that pass stays queued until
+     * the next {@code OP_WRITE} on the key. The code is the same in Java-WebSocket 1.5.7, 1.6.0 and
+     * master.
      *
-     * <p>The "wrote" line is logged once the queue is seen empty, up to a millisecond after the
-     * write itself, so it can follow the client's own receive line.
+     * <p>The "wrote" line is logged once the queue is seen empty, about a millisecond after the
+     * write itself and longer under load, so it can follow the client's own receive line.
      *
      * @param conn a connection of this server
      * @param what the frame, for the log and the failure message
@@ -215,6 +218,15 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
         SelectionKey key = impl.getSelectionKey();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WRITE_TIMEOUT_SECONDS);
         while (!impl.outQueue.isEmpty() && key.isValid()) {
+            // Give up at once, like the fixture's other waits: parkNanos returns straight away
+            // while the flag is set, so waiting on would spin.
+            if (Thread.currentThread().isInterrupted()) {
+                throw new AssertionError(
+                        "scripted server was interrupted waiting to write to "
+                                + conn.getRemoteSocketAddress()
+                                + ": "
+                                + what);
+            }
             try {
                 // Checked twice: a write that finished after the loop test also leaves OP_READ.
                 if ((key.interestOps() & SelectionKey.OP_WRITE) == 0 && !impl.outQueue.isEmpty()) {
