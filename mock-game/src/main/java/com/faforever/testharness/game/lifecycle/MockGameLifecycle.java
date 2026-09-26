@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
@@ -418,14 +419,17 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Whether {@link #stopSchedules()} has run. Package-private for {@code GameShutdownTest}, which
-     * checks that teardown stopped the scheduler holding a pending launch rather than sleeping past
-     * the launch delay: {@code shutdownNow()} drains a task that has not started, so it never runs.
+     * Whether {@link #stopSchedules()} has run and left nothing queued. Package-private for {@code
+     * GameShutdownTest}, which checks that teardown drained the scheduler holding a pending launch
+     * rather than sleeping past the launch delay. The queue is what tells the two ways of stopping
+     * apart: {@code shutdownNow()} drains a task that has not started, so it never runs, while a
+     * plain {@code shutdown()} leaves a delayed one queued to run when its delay expires.
      *
-     * @return {@code true} once the scheduler has been shut down.
+     * @return {@code true} once the scheduler is shut down with no task left queued.
      */
-    /* package-private */ boolean schedulesStopped() {
-        return scheduler.isShutdown();
+    /* package-private */ boolean schedulesDrained() {
+        // Executors.newScheduledThreadPool builds a ScheduledThreadPoolExecutor.
+        return scheduler.isShutdown() && ((ThreadPoolExecutor) scheduler).getQueue().isEmpty();
     }
 
     /**

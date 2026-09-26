@@ -288,13 +288,14 @@ final class MainTest {
      * releases the hook thread into that same window. Whichever wins the once-guard, the other must
      * not block behind it.
      *
-     * <p>Repeated because the window is a genuine race rather than a pinned interleaving. The
-     * repetitions sample both winners of the once-guard and the close landing at different points
-     * among {@code gameEnds}'s sends, so a lock cycle introduced later between a teardown step and
-     * the FSM thread shows up in most builds rather than in about half of them. Before #328, with
-     * the old guard restored, repetitions 1 and 3 still passed while most of the rest timed out.
-     * Both timers are set long enough that the lifecycle's own scheduler is not a third racer: the
-     * only {@code GameEnded} here is the one posted below.
+     * <p>Repeated because the window is a genuine race rather than a pinned interleaving. The hook
+     * usually wins the once-guard, since the {@code endMatch()} thread reaches ENDED's entry hook
+     * only after {@code gameEnds} has sent its closing frames, so the repetitions mainly vary where
+     * the hook's close lands among those sends. That gives a lock cycle introduced later between a
+     * teardown step and the FSM thread more chances to show than a single run would. Before #328,
+     * with the old guard restored, repetitions 1 and 3 still passed while most of the rest timed
+     * out. Both timers are set long enough that the lifecycle's own scheduler is not a third racer:
+     * the only {@code GameEnded} here is the one posted below.
      */
     @RepeatedTest(20)
     void shutdownHookCompletesDuringTheEndedTransition() throws Exception {

@@ -171,9 +171,10 @@ final class GameShutdownTest {
     /**
      * Teardown stops the lifecycle's own scheduler, so a launch pending in HOSTING never fires. The
      * launch delay is far longer than the test, so nothing here races it; what is checked is that
-     * the scheduler holding the launch was stopped. Watching LIVE never arrive instead would need
-     * the delay to elapse, and the test would then have to reach teardown within that delay of
-     * HOSTING committing, however late its own thread ran.
+     * the scheduler holding the launch was shut down with nothing left queued, which is what keeps
+     * the launch from ever running. Watching LIVE never arrive instead would need the delay to
+     * elapse, and the test would then have to reach teardown within that delay of HOSTING
+     * committing, however late its own thread ran.
      */
     @Test
     void stopsLifecycleScheduledDelay() throws Exception {
@@ -205,8 +206,8 @@ final class GameShutdownTest {
             lifecycle.shutdown().run();
 
             assertTrue(
-                    lifecycle.schedulesStopped(),
-                    "shutdown must stop the scheduler holding the pending launch");
+                    lifecycle.schedulesDrained(),
+                    "shutdown must drain the scheduler holding the pending launch");
             assertEquals(GameState.HOSTING, lifecycle.getState());
         } finally {
             // Make sure gpgnet server is always stopped.

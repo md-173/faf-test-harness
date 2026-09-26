@@ -182,9 +182,10 @@ public class StateMachine implements EventListener {
      *
      * <p>A timeout armed during the transition itself, by its action or by an exit or entry hook,
      * is not in {@code armedBefore} and stays armed: it belongs to the state the machine lands in,
-     * a failure state included, and the next commit disarms it (WBS-2.3.7-fix, #259). So does one
-     * armed by a {@link #stateReached(State)} callback during this commit. Clearing the whole list
-     * here used to discard such a timeout silently.
+     * a failure state included, and the next commit disarms it (WBS-2.3.7-fix, #259). Clearing the
+     * whole list here used to discard such a timeout silently. One armed by a {@link
+     * #stateReached(State)} callback during this commit is not in {@code armedBefore} either, and
+     * stays armed as it always has.
      *
      * <p>The caller must already hold this machine's monitor.
      *
@@ -265,13 +266,14 @@ public class StateMachine implements EventListener {
     /**
      * Stops the machine's time-based scheduling: shuts down the timer thread, so once this returns
      * no timeout goes on to take this machine's monitor and start a transition, including one the
-     * timer has already dequeued and that is waiting for the monitor. A timeout that already holds
-     * the monitor when this is called runs to completion and commits, as an event-driven transition
-     * does, and that includes one whose own transition calls this: stopping one after its hooks
-     * have run but before its commit would leave the machine half-transitioned (#258). Intended for
-     * the shutdown path: it is terminal, so a later {@link #setTimeout(long, State)} arms nothing
-     * and returns rather than throwing on the dead timer. Event-driven transitions via {@link
-     * #receiveEvent(Event)} are unaffected. Idempotent: calling it more than once is safe.
+     * timer has already dequeued and that is waiting for the monitor. A timeout whose transition
+     * has already begun when this is called, holding the monitor and past its cancelled check, runs
+     * to completion as an event-driven transition does, and that includes one whose own transition
+     * calls this: stopping one after its hooks have run but before its commit would leave the
+     * machine half-transitioned (#258). Intended for the shutdown path: it is terminal, so a later
+     * {@link #setTimeout(long, State)} arms nothing and returns rather than throwing on the dead
+     * timer. Event-driven transitions via {@link #receiveEvent(Event)} are unaffected. Idempotent:
+     * calling it more than once is safe.
      *
      * <p><b>Never waits for a transition</b> (WBS-2.3.7-fix, #328). It takes only {@link
      * #schedulingLock}, never this machine's monitor, so it returns at once even while a transition
