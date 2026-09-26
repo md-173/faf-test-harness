@@ -221,10 +221,10 @@ final class GameShutdownTest {
 
     /**
      * A match that ends on its own tears the game down from the scheduler's match-end task, and
-     * stopping that scheduler must not interrupt the thread it runs on (WBS-3.2.4.1-fix). {@code
-     * shutdownNow()} did, and the traffic step's wait for its receiver then returned at once. The
-     * wait for ENDED is completed by the thread that committed it, right after ENDED's entry hook
-     * ran this sequence there, so that is where the flag is read.
+     * stopping that scheduler must not interrupt the thread it runs on (WBS-3.2.4.1-fix, #487).
+     * {@code shutdownNow()} did, and the traffic step's wait for its receiver then returned at
+     * once. The wait for ENDED is completed by the thread that committed it, right after ENDED's
+     * entry hook ran this sequence there, so that is where the flag is read.
      */
     @Test
     void aMatchThatEndsOnItsOwnIsNotInterruptedByItsOwnTeardown() throws Exception {

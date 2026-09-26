@@ -415,7 +415,7 @@ public final class MockGameLifecycle {
      * crash) and shuts the scheduler down. Only called by {@link GameShutdown#run()} hence
      * package-private.
      *
-     * <p><b>Never interrupts</b> (WBS-3.2.4.1-fix). It uses {@code shutdown()}, not {@code
+     * <p><b>Never interrupts</b> (WBS-3.2.4.1-fix, #487). It uses {@code shutdown()}, not {@code
      * shutdownNow()}, because it often runs on the scheduler's own thread: a match that ends on its
      * own posts {@code GameEnded} from its match-end task, and ENDED's entry hook runs the whole
      * teardown there. An interrupt made the traffic step's wait for its receiver return at once, so
@@ -1121,8 +1121,8 @@ public final class MockGameLifecycle {
         try {
             return scheduler.schedule(
                     () -> {
-                        // stopSchedules() discards every task still waiting, but one already due
-                        // is still started, and returns here (WBS-3.2.4.1-fix). At equal delays
+                        // stopSchedules() discards every task still waiting, but one already due is
+                        // still started, and returns here (WBS-3.2.4.1-fix, #487). At equal delays
                         // this is what cancels a crash with the match end that tore the game down.
                         if (!scheduler.isShutdown()) {
                             command.run();

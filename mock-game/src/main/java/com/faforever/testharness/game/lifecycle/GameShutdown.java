@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * for the StateMachine monitor. Nor does either interrupt the thread running this sequence, which
  * is often one of those schedulers' own: a timeout, or a match that ends on its own, drives the
  * game into ENDED, whose entry hook runs this sequence, and an interrupt would cut the traffic
- * step's wait for its receiver short (WBS-2.3.7-fix, #465; WBS-3.2.4.1-fix).
+ * step's wait for its receiver short (WBS-2.3.7-fix, #465; WBS-3.2.4.1-fix, #487).
  *
  * <p><b>Stopping scheduling first is safe because {@link StateMachine#cancel()} never waits for the
  * StateMachine monitor</b> (WBS-2.3.7-fix, #328). Every outbound frame is written from a transition

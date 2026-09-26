@@ -416,9 +416,9 @@ final class CrashInjectionTest {
 
     /**
      * A crash due as the match ends is cancelled with it, as {@code matchBegins} promises for equal
-     * delays (WBS-3.2.4.1-fix). The match end tears the game down on the scheduler's own thread, by
-     * when the crash is due, so shutting the scheduler down does not discard it: it is still
-     * started, and only its shut-down check keeps it from halting a game that ended cleanly.
+     * delays (WBS-3.2.4.1-fix, #487). The match end tears the game down on the scheduler's own
+     * thread, by when the crash is due, so shutting the scheduler down does not discard it: it is
+     * still started, and only its shut-down check keeps it from halting a game that ended cleanly.
      */
     @Test
     void aCrashDueAsTheMatchEndsIsCancelledWithIt() throws Exception {
