@@ -111,7 +111,7 @@ Three GitHub Actions jobs defined in `.github/workflows/ci.yml` run automaticall
 - **`live-tests`** runs the four live tests that need no lobby and no FAF account, against the real `faf-ice-adapter` that `downloadIceAdapter` pins: `IceSmokeLiveTest`, `IceAdapterConnectionLiveSmokeTest`, `ClientGameLifecycleLiveTest` (which stands up its own scripted lobby) and mock-game's `GpgNetConnectionLiveSmokeTest`. It is the only check on a pull request that drives the real adapter, since `build` excludes the `integration` tag, and it reads no secret, so it runs on pull requests from forks too. Like the live integration workflow below, it sets `FAF_LIVE_REQUIRED` and checks the JUnit XML, so a missing jar or a renamed class fails it instead of letting it pass having run less. To reproduce it locally, run `./gradlew downloadIceAdapter` once, then the Gradle command from the job's `Run the live tests that need no lobby` step with `FAF_LIVE_REQUIRED=true` in the environment. Without that variable a missing jar skips all four and the run still looks green. It runs both modules' tests with `--continue`, so a mock-client failure does not hide the GPGNet result. On failure it uploads the reports and JSONL logs as `live-test-evidence-<run-id>-<attempt>`, kept for 14 days. The Release workflow runs the same job before it builds anything ([Section 8](#8-releases)). It was measured before it gated: 30 of 30 job runs passed on #458 (2026-09-24), in three rounds of ten legs, each taking 49 to 75 s beside `build`'s roughly 4 minutes. That still allows a flake rate of up to about 9.5% on those 30 alone, or 6.7% counting 13 earlier passes of the live integration workflow's `live-tests` (one-sided 95%), so if it goes red on two pull requests within 30 days for reasons unrelated to their change, it becomes advisory and the flake gets a fix card. Demoting it takes three changes: an admin removes it from the ruleset's required checks (no pull request can), it gains a job-level `continue-on-error`, and a note here exempts it from Section 4's all-green rule.
 - **`dependency-submission`** — submits the project's dependency graph to GitHub so Dependabot can surface alerts on vulnerable (transitive) dependencies. It does not run tests or style checks.
 
-`build`, `live-tests` and `dependency-submission` are required status checks on `main` ([Section 4](#4-pull-requests)): GitHub merges a PR only once each has passed on its latest commit. One that failed, was cancelled or has not reported yet blocks it, and one skipped by a job-level `if:` counts as passed.
+`build`, `live-tests` and `dependency-submission` are required status checks on `main` ([Section 4](#4-pull-requests)): GitHub lets a PR merge only once each has passed on its latest commit. One that failed, was cancelled or has not reported yet blocks it, and one skipped by a job-level `if:` counts as passed.
 
 ### The live integration workflow (manual, advisory)
 
@@ -359,15 +359,14 @@ assets.
 3. **The workflow verifies before it builds.** Before any jar is built it runs `./gradlew
    -Pversion=<version> check`, the verification `ci.yml`'s `build` job applies to every pull
    request (`check` is the verification half of `build`), and, in a read-only job,
-   `Live tests before release`, that the release job waits on, the four lobby-free live tests
-   that `ci.yml`'s `live-tests` job runs. A
-   release is dispatched at an arbitrary commit and nothing else guarantees CI ran green on it. If
-   either fails, no draft and no assets are created, so re-running is safe: nothing was tagged or
-   published. A red gate is not to be worked around. If it is a known flake rather than a real
-   failure (the lobby tests occasionally time out waiting for a frame, see § 3; the live tests'
-   first-frame race, see the triage note in `ci.yml`), re-run the failed jobs and let them pass on
-   their own; a skipped release job re-runs with them. Both jobs upload their evidence on failure,
-   as `ci.yml` does.
+   `Live tests before release`, that the release job waits on, the four lobby-free live tests that
+   `ci.yml`'s `live-tests` job runs. A release is dispatched at an arbitrary commit and nothing
+   else guarantees CI ran green on it. If either fails, no draft and no assets are created, so
+   re-running is safe: nothing was tagged or published. A red gate is not to be worked around. If
+   it is a known flake rather than a real failure (the lobby tests occasionally time out waiting
+   for a frame, see § 3; the live tests' first-frame race, see the triage note in `ci.yml`), re-run
+   the failed jobs and let them pass on their own; a skipped release job re-runs with them. Both
+   jobs upload their evidence on failure, as `ci.yml` does.
 4. **Check the draft before publishing.** It must carry exactly four assets:
    `mock-client-<version>-all.jar`, `mock-game-<version>-all.jar`, and a `.sha256` for each. Download
    them and confirm the checksums:

@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
  * <pre>{@code
  * <binary> --id <id> --login <login> --game-id <uid>
  *          --rpc-port <rpc> --gpgnet-port <gpgnet> --lobby-port <lobby>
+ *          --telemetry-server <TELEMETRY_SERVER>
  * }</pre>
  *
  * <p>Those three identity values have two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is

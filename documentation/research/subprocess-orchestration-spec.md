@@ -161,7 +161,7 @@ not have. Bold flags are passed by the Mock Client on every launch.
 | **`--rpc-port <int>`** | 7236 | yes (explicit) | TCP port for the JSON-RPC server. The configured value, `7236` unless moved; only `session` allocates a free port per peer (§3), so two other harness commands on one host collide unless one is moved (runbook §2a, **Ports**). |
 | **`--gpgnet-port <int>`** | 0 (auto) | yes (explicit) | TCP port for the adapter's internal GPGNet server. The Mock Client picks the port and passes the same value to `mock-game --gpgnet-port`. |
 | **`--lobby-port <int>`** | 0 (auto) | yes (explicit) | UDP port the game lobby uses for game traffic. Mock Client picks it and forwards to `mock-game --lobby-port`. |
-| **`--telemetry-server <url>`** | `wss://ice-telemetry.faforever.com` | no | Websocket the adapter opens to FAF's ICE telemetry service on launch. No clean disable at 3.3.14 (json-rpc-spec §8). The Mock Client passes FAF's test service, `wss://ice-telemetry.faforever.xyz` (`IceAdapterLauncher.TELEMETRY_SERVER`), so no harness launch reports to production. |
+| **`--telemetry-server <url>`** | `wss://ice-telemetry.faforever.com` | yes (explicit) | Websocket the adapter opens to FAF's ICE telemetry service on launch. No clean disable at 3.3.14 (json-rpc-spec §8). The Mock Client passes FAF's test service, `wss://ice-telemetry.faforever.xyz` (`IceAdapterLauncher.TELEMETRY_SERVER`), so no harness launch reports to production. |
 | `--log-directory <path>` | unset | no | Not present at the pinned 3.3.14; only the upstream README's help text still lists it, as deprecated. The adapter accepts unknown arguments, so passing it is silently ignored. Use the `LOG_DIR` env var (§2.3). |
 | `--force-relay` | off | no | Relay-only ICE candidates. Reserved for fault-injection (WBS 3.x); not set by default. |
 | `--debug-window` / `--info-window` / `--delay-ui <ms>` | off | no | JavaFX UI flags; upstream opens the windows only if JavaFX is available. **Never set: the harness runs headless.** |
@@ -221,7 +221,8 @@ The example below mirrors json-rpc-spec §9 phases A–B.
      "--game-id",     game_launch.uid,   // required by 3.3.x
      "--rpc-port",    rpcPort,
      "--gpgnet-port", gpgnetPort,
-     "--lobby-port",  lobbyUdpPort ]
+     "--lobby-port",  lobbyUdpPort,
+     "--telemetry-server", "wss://ice-telemetry.faforever.xyz" ]  // FAF's test service (§2.6)
    env  += LOG_DIR=logs/ice-adapter/, LOG_LEVEL=<mock-client's resolved level>
    cwd   = <inherited from the harness; see §2.4>
    redirectErrorStream(false)
