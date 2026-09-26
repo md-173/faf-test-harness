@@ -359,6 +359,26 @@ public final class SessionPeer {
     }
 
     /**
+     * Whether this peer's adapter reported {@code other} unreachable after the first {@code mark}
+     * drained verdicts (WBS-5.2.1). Only a verdict after the mark counts, because the adapter also
+     * reports {@code false} while ICE is still negotiating, and a bring-up verdict must not pass
+     * for a loss.
+     *
+     * @param mark how many verdicts had been drained when the loss became possible
+     * @param other the peer that was lost
+     * @return {@code true} if a later verdict about {@code other} says it is not connected
+     */
+    boolean reportedLostSince(final int mark, final SessionPeer other) {
+        for (int i = mark; i < observed.size(); i++) {
+            PeerVerdict verdict = observed.get(i);
+            if (verdict.remoteId() == other.identity.id() && !verdict.connected()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Appended to a failed checkpoint's message when the server refused this peer's join.
      *
      * @return the refusal frame in parentheses, or an empty string

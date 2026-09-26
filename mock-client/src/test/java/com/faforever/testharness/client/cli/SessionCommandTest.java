@@ -292,6 +292,30 @@ final class SessionCommandTest {
     }
 
     @Test
+    void crashPeerOnTheHostIsUsage() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--crash-peer=A");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("--crash-peer must name a joiner"), outcome.err());
+    }
+
+    @Test
+    void crashPeerOnAJoinerPassesToTheSessionAtTwoPeers() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--crash-peer=B");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
+    @Test
     void theAccessTokenCommandLineCiUsesNeedsNoRefreshSettings() throws IOException {
         // The live workflow's session step, as it runs: no --oauth-token-url, no
         // --oauth-client-id, nothing but the lobby, identity and binaries.

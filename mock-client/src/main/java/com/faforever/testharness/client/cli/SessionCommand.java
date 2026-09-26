@@ -9,6 +9,7 @@ import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import org.slf4j.Logger;
@@ -53,6 +54,10 @@ import picocli.CommandLine.Spec;
  * list such as {@code --peer-mock-game-udp-drop-percent} gives each peer its own value instead
  * ({@link SessionFaultOptions}, WBS-5.1.2). The run logs each faulted peer's values.
  *
+ * <p>With {@code --crash-peer} the session also launches the match and plays on through that
+ * joiner's crash (WBS-5.2.1), and passes only if the survivors do; see {@link
+ * MultiPeerSession#withDeliberateCrash}.
+ *
  * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
  * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including no
  * credential list, both lists at one layer, fewer credential files than peers, two peers on one
@@ -81,7 +86,9 @@ import picocli.CommandLine.Spec;
                         + "and the --ice-adapter-*-port, --mock-game-launch-delay-seconds, "
                         + "--host-*, --target-game-id, --game-join-password and --queue-* options "
                         + "are not used, though they are still validated. The fault flags reach "
-                        + "every peer unless --fault-peer or a per-peer fault list says otherwise.")
+                        + "every peer unless --fault-peer or a per-peer fault list says otherwise. "
+                        + "--crash-peer launches the match and passes only if the other peers play "
+                        + "on through that joiner's crash.")
 public final class SessionCommand implements Callable<Integer> {
 
     /** The refresh-token channel's option, shared with the layer lookup so a typo cannot pass. */
@@ -194,10 +201,15 @@ public final class SessionCommand implements Callable<Integer> {
                             : parent.toValidatedConfig(spec, file));
         }
         bases = faults.apply(spec, bases);
+        OptionalInt crashPeer = faults.crashPeer(spec, peers);
         String title = "faf-test-harness session " + UUID.randomUUID();
         MultiPeerSession session;
         try {
-            session = new MultiPeerSession(bases, title);
+            session =
+                    crashPeer.isPresent()
+                            ? MultiPeerSession.withDeliberateCrash(
+                                    bases, title, crashPeer.getAsInt())
+                            : new MultiPeerSession(bases, title);
         } catch (IllegalArgumentException e) {
             throw new ParameterException(spec.commandLine(), e.getMessage(), e);
         }
@@ -237,10 +249,25 @@ public final class SessionCommand implements Callable<Integer> {
         // Only after teardown, so a consumer reading the log never sees PASS for a run that left
         // a subprocess behind.
         log.info(
-                "session: PASS - {} peers, full mesh and two-way game traffic, "
-                        + "nothing left running",
-                peers);
+                "session: PASS - {} peers, full mesh and two-way game traffic, {}nothing left"
+                        + " running",
+                peers,
+                crashPeer.isPresent() ? crashSummary(crashPeer.getAsInt()) : "");
         return ExitCodes.OK;
+    }
+
+    /**
+     * What a passing deliberate-crash run proved, for its PASS line. At two peers there is no
+     * survivor pair, so the play-on traffic check had nothing to check, and the line says so.
+     *
+     * @param joiner the crashed joiner's position
+     * @return the clause, ending in a comma and a space
+     */
+    private String crashSummary(final int joiner) {
+        String crashed = MultiPeerSession.labelFor(joiner) + "(joiner) crashed after launch";
+        return peers > MultiPeerSession.MIN_PEERS
+                ? crashed + " and the survivors played on, "
+                : crashed + " and the host reported the loss (no survivor pair to trade traffic), ";
     }
 
     /**

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.game.config.ExitCodes;
 import java.io.IOException;
 import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
@@ -196,6 +197,86 @@ final class MultiPeerSessionTest {
         assertEquals(501, faulted.iceRelayDelayMs());
         assertEquals(51, faulted.mockGameUdpDropPercent());
         assertEquals(41, faulted.mockGameCrashAfterSeconds());
+    }
+
+    @Test
+    void aDeliberateCrashIsSetOnTheNamedJoinerOnly() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b")), base(token("c")));
+
+        List<MockClientConfig> crashing = MultiPeerSession.crashBases(bases, 1);
+
+        assertEquals(
+                List.of(-1, MultiPeerSession.crashAfterSeconds(3), -1),
+                crashing.stream().map(MockClientConfig::mockGameCrashAfterSeconds).toList());
+    }
+
+    @Test
+    void refusesADeliberateCrashOnTheHostOrOutsideTheSession() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b")), base(token("c")));
+
+        IllegalArgumentException host =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 0));
+        IllegalArgumentException outside =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 3));
+
+        assertTrue(host.getMessage().contains("on a joiner, B to C; got A"), host.getMessage());
+        assertTrue(outside.getMessage().contains("got D"), outside.getMessage());
+    }
+
+    @Test
+    void refusesADeliberateCrashBesideAnotherCrash() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(base(token("a")), base(token("b"), "--mock-game-crash-after-seconds=5"));
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.crashBases(bases, 1));
+
+        assertTrue(e.getMessage().startsWith("peer B already sets a crash"), e.getMessage());
+    }
+
+    @Test
+    void aDeliberateCrashLandsAfterLaunchAndLeavesTheSurvivorsTimeBeforeTheMatchEnds() {
+        for (int peers = MultiPeerSession.MIN_PEERS; peers <= MultiPeerSession.MAX_PEERS; peers++) {
+            long launch = MultiPeerSession.minHostLaunchDelaySeconds(peers);
+            long crash = MultiPeerSession.crashAfterSeconds(peers);
+            // The crash timer starts at the joiner's join, no earlier than the host started
+            // hosting, which is when the host's launch timer started.
+            assertTrue(crash >= launch + MultiPeerSession.CRASH_AFTER_LAUNCH.toSeconds());
+            // Every joiner is in before launch, so the crash lands at most a launch delay later
+            // than that, and the survivor wait must end before the host's match does: mock-game
+            // runs it for twice the launch delay after launch.
+            long latestCrash = launch + crash;
+            long matchEnds = launch + 2 * launch;
+            assertTrue(
+                    latestCrash + MultiPeerSession.SURVIVOR_TIMEOUT.toSeconds() < matchEnds,
+                    "at " + peers + " peers");
+        }
+    }
+
+    @Test
+    void theInjectedCrashExitCodeIsMockGames() {
+        assertEquals(ExitCodes.INJECTED_CRASH, MultiPeerSession.INJECTED_CRASH_EXIT);
+    }
+
+    @Test
+    void aDeliberateCrashSessionIsCheckedLikeAnyOther() throws IOException {
+        List<MockClientConfig> bases = List.of(base(token("a")), base(token("b")));
+
+        // Everything passes up to the default adapter path, which does not exist.
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> MultiPeerSession.withDeliberateCrash(bases, "t", 1));
+
+        assertTrue(e.getMessage().startsWith("faf-ice-adapter binary not found"), e.getMessage());
     }
 
     @Test
