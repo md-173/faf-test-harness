@@ -276,10 +276,10 @@ final class LobbySessionTest {
 
     /**
      * Each {@code notice} is logged with its text on one line (#473): at WARN for an error, which
-     * faf-server sends before ending a login it refuses, and a kick, and at INFO otherwise, the
-     * greeting faf-server gives an unofficial client included. The frames go ahead of a close,
-     * which flushes them, and the close is handled after every frame before it, so the log is
-     * complete once the disconnect is seen.
+     * faf-server sends before ending a login it refuses, a warning, a kick and a kill, and at INFO
+     * otherwise, the greeting faf-server gives an unofficial client included. The frames go ahead
+     * of a close, which flushes them, and the close is handled after every frame before it, so the
+     * log is complete once the disconnect is seen.
      */
     @Test
     void aNoticeIsLoggedWithItsTextOnOneLine() throws Exception {
@@ -302,6 +302,9 @@ final class LobbySessionTest {
                     "{\"command\":\"notice\",\"style\":\"error\","
                             + "\"text\":\"You are banned.\\n\\nReason: rig\"}");
             server.broadcastText("{\"command\":\"notice\",\"style\":\"kick\"}");
+            server.broadcastText(
+                    "{\"command\":\"notice\",\"style\":\"warning\",\"text\":\"mind\"}");
+            server.broadcastText("{\"command\":\"notice\",\"style\":\"kill\"}");
             server.broadcastText("{\"command\":\"notice\",\"text\":\"no style\"}");
             server.closeAllClean(1000, "");
             session.awaitDisconnect();
@@ -311,6 +314,8 @@ final class LobbySessionTest {
                             "INFO lobby notice (info): You are using an unofficial client version!",
                             "WARN lobby notice (error): You are banned. Reason: rig",
                             "WARN lobby notice (kick)",
+                            "WARN lobby notice (warning): mind",
+                            "WARN lobby notice (kill)",
                             "INFO lobby notice (info): no style"),
                     appender.list.stream()
                             .map(event -> event.getLevel() + " " + event.getFormattedMessage())

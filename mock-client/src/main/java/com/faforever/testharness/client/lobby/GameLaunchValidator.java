@@ -70,7 +70,8 @@ public final class GameLaunchValidator {
                 return new Rejected("game_launch.init_mode invalid: " + msg.initMode());
             }
 
-            // Validate args: allow slash flags from a whitelist, plain tokens, and numbers.
+            // Validate args: allow slash flags from a whitelist, plain tokens, and integers, the
+            // type of faf-server's /numgames count (#474), so a float is refused, not passed on.
             List<String> sanitizedArgs = new ArrayList<>();
 
             if (msg.args() != null) {
@@ -97,7 +98,7 @@ public final class GameLaunchValidator {
                             }
                             sanitizedArgs.add(s);
                         }
-                    } else if (node.isNumber()) {
+                    } else if (node.isIntegralNumber()) {
                         sanitizedArgs.add(node.asText());
                     } else {
                         return new Rejected(

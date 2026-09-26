@@ -21,10 +21,11 @@ import org.slf4j.LoggerFactory;
  * LobbyHandshake} (auth, WBS-3.1.1.2), and {@link WelcomeStateSync} (welcome, WBS-3.1.1.3) — that
  * the {@code run} command drives (WBS-3.1.1.4).
  *
- * <p>It adds no protocol logic of its own, bar logging the lobby's {@code notice} frames (#473). In
- * particular the idle heartbeat is free: {@link LobbyConnection} already auto-replies {@code pong}
- * to every server {@code ping}, so "stay idle and keep the connection alive" is simply {@link
- * #awaitDisconnect()} blocking on the disconnect latch.
+ * <p>Its own protocol logic is small (#473): it fails the start when the lobby ends the connection
+ * before {@code welcome}, and it logs the lobby's {@code notice} frames. The idle heartbeat is
+ * free: {@link LobbyConnection} already auto-replies {@code pong} to every server {@code ping}, so
+ * "stay idle and keep the connection alive" is simply {@link #awaitDisconnect()} blocking on the
+ * disconnect latch.
  *
  * <p>The session installs one of the connection's {@link
  * LobbyConnection#onDisconnect(java.util.function.Consumer) disconnect listeners} (they are
