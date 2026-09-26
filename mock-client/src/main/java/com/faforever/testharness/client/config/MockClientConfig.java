@@ -175,6 +175,10 @@ public record MockClientConfig(
         uidBinaryPath = uidBinaryPath == null ? Optional.empty() : uidBinaryPath;
         uniqueId = uniqueId == null ? Optional.empty() : uniqueId;
 
+        if (uidBinaryPath.isEmpty() && uniqueId.filter(id -> !id.isBlank()).isEmpty()) {
+            missing.add("--uid-binary-path or --unique-id");
+        }
+
         // Normalised, not merely tolerated. TokenSources.fromConfig dereferences this
         // unguarded, so leaving a null Optional on the record means the two files disagree about
         // whether null is legal — latent today, because every caller passes Optional.ofNullable,
@@ -247,22 +251,6 @@ public record MockClientConfig(
         if (iceRelayDelayMs < 0) {
             throw new IllegalArgumentException(
                     "iceRelayDelayMs must not be negative: " + iceRelayDelayMs);
-        }
-
-        if (uidBinaryPath.isEmpty() && uniqueId.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "no UID source supplied, set exactly one of "
-                            + "--uid-binary-path or --unique-id. "
-                            + "Note that --uid-binary-path is "
-                            + "required for live lobby communication.");
-        }
-
-        if (uidBinaryPath.isPresent() && uniqueId.isPresent()) {
-            throw new IllegalArgumentException(
-                    "both UID source supplied, set only one of "
-                            + "--uid-binary-path or --unique-id. "
-                            + "Note that --uid-binary-path is "
-                            + "required for live lobby communication.");
         }
 
         // Hosting, joining and queueing are three ways to spend the same session, and the client
