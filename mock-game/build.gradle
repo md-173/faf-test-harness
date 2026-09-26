@@ -22,15 +22,18 @@ test {
     useJUnitPlatform {
         excludeTags 'integration'
     }
-    // Pinned to logback.xml's own default because several tests here read the log.
+    // Clamped, not simply set, because several tests here read the log.
     // PeerResultAgreementTest, TwoGameTrafficLoopbackTest and LifecyclePeerConnectTest depend on
     // INFO lines, and CrashInjectionProcessTest proves its child JVM ran no orderly shutdown by
-    // the absence of one. LOG_LEVEL is read from the environment, so a developer who exported
-    // WARN to quiet a manual run would see the first three fail and the last keep passing even if
-    // the crash regressed; the child inherits this value. Pinning the default changes nothing
-    // when the variable is unset. mock-client pins DEBUG for its own evidence; here DEBUG would
-    // log every datagram the traffic tests receive.
-    environment 'LOG_LEVEL', 'INFO'
+    // the absence of one. LOG_LEVEL is read from the environment, so a developer who exported WARN
+    // to quiet a manual run would see the first three fail and the last keep passing even if the
+    // crash regressed; the child inherits this value. DEBUG and TRACE pass through, since both
+    // include INFO, so raising the level to diagnose a flaky traffic test still works; anything
+    // higher becomes logback.xml's own default of INFO rather than breaking those four silently.
+    // mock-client pins DEBUG outright for its own evidence; here that would log every datagram the
+    // traffic tests receive, so it is not the default.
+    def requestedLogLevel = System.getenv('LOG_LEVEL')
+    environment 'LOG_LEVEL', requestedLogLevel in ['DEBUG', 'TRACE'] ? requestedLogLevel : 'INFO'
     // VersionFlagJarTest runs the shadow jar that ships, because no test from class directories can
     // see a manifest (WBS-3.1.5.2, #383). inputs.files on the task provider builds the jar first and
     // reruns the test when it changes. The path goes through an argument provider because Gradle
