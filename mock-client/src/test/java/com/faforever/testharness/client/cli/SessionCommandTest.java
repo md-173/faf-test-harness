@@ -267,6 +267,31 @@ final class SessionCommandTest {
     }
 
     @Test
+    void aPerPeerFaultListOfTheRightLengthPassesToTheSession() throws IOException {
+        Outcome outcome =
+                execute(
+                        Map.of(),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"),
+                        "--peer-mock-game-udp-drop-percent=0,100");
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
+    @Test
+    void aPerPeerFaultListFromTheEnvironmentIsSplitAndChecked() throws IOException {
+        // Three values at two peers: refused for its length, which shows the environment layer
+        // reached the mixin's option and split it on commas.
+        Outcome outcome =
+                execute(
+                        Map.of("FAF_MOCK_CLIENT_PEER_MOCK_GAME_UDP_DROP_PERCENT", "0,0,100"),
+                        "--peer-refresh-token-file=" + token("a") + "," + token("b"));
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains("--peers is 2 but 3 given"), outcome.err());
+    }
+
+    @Test
     void theAccessTokenCommandLineCiUsesNeedsNoRefreshSettings() throws IOException {
         // The live workflow's session step, as it runs: no --oauth-token-url, no
         // --oauth-client-id, nothing but the lobby, identity and binaries.

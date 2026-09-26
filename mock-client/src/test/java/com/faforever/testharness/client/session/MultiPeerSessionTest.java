@@ -178,6 +178,27 @@ final class MultiPeerSessionTest {
     }
 
     @Test
+    void withFaultsReplacesOnlyTheThreeFaultValues() throws Exception {
+        MockClientConfig base = distinctBase("--oauth-refresh-token-file=" + token("distinct"));
+        Set<String> faults =
+                Set.of("iceRelayDelayMs", "mockGameUdpDropPercent", "mockGameCrashAfterSeconds");
+
+        MockClientConfig faulted = MultiPeerSession.withFaults(base, 501, 51, 41);
+
+        for (RecordComponent component : MockClientConfig.class.getRecordComponents()) {
+            if (!faults.contains(component.getName())) {
+                assertEquals(
+                        component.getAccessor().invoke(base),
+                        component.getAccessor().invoke(faulted),
+                        component.getName());
+            }
+        }
+        assertEquals(501, faulted.iceRelayDelayMs());
+        assertEquals(51, faulted.mockGameUdpDropPercent());
+        assertEquals(41, faulted.mockGameCrashAfterSeconds());
+    }
+
+    @Test
     void theSessionOwnedFieldNamesStillExist() {
         Set<String> components =
                 Arrays.stream(MockClientConfig.class.getRecordComponents())

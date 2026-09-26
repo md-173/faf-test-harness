@@ -14,6 +14,7 @@ import java.util.concurrent.Callable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine.Command;
+import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.ParameterException;
@@ -48,12 +49,18 @@ import picocli.CommandLine.Spec;
  * are still validated. The run logs which credential list it used and where that came from, so a CI
  * that set both can see which one won.
  *
+ * <p>The root fault flags reach every peer unless {@code --fault-peer} names some, and a per-peer
+ * list such as {@code --peer-mock-game-udp-drop-percent} gives each peer its own value instead
+ * ({@link SessionFaultOptions}, WBS-5.1.2). The run logs each faulted peer's values.
+ *
  * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
  * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including no
  * credential list, both lists at one layer, fewer credential files than peers, two peers on one
  * file or (on access tokens) one account, a refresh-token path that is not a regular file, an
- * unreadable or empty file, a missing binary or a {@code --log-level} above INFO (the traffic check
- * reads INFO lines), all refused before any process starts; {@link ExitCodes#RUNTIME} when a
+ * unreadable or empty file, a missing binary, a {@code --log-level} above INFO (the traffic check
+ * reads INFO lines), or a fault option that does not say one thing clearly (a per-peer list of the
+ * wrong length or out of range, a list given with its root flag, a {@code --fault-peer} naming no
+ * peer or no set fault), all refused before any process starts; {@link ExitCodes#RUNTIME} when a
  * checkpoint fails (logged as {@code session: FAIL <peer>: <stage>: <detail>}) or a subprocess
  * survives teardown, which is then killed.
  */
@@ -73,7 +80,8 @@ import picocli.CommandLine.Spec;
                         + "--oauth-refresh-token-file and --oauth-access-token-file are ignored, "
                         + "and the --ice-adapter-*-port, --mock-game-launch-delay-seconds, "
                         + "--host-*, --target-game-id, --game-join-password and --queue-* options "
-                        + "are not used, though they are still validated.")
+                        + "are not used, though they are still validated. The fault flags reach "
+                        + "every peer unless --fault-peer or a per-peer fault list says otherwise.")
 public final class SessionCommand implements Callable<Integer> {
 
     /** The refresh-token channel's option, shared with the layer lookup so a typo cannot pass. */
@@ -129,6 +137,9 @@ public final class SessionCommand implements Callable<Integer> {
                             + "expired. Files beyond --peers are unused.")
     private List<Path> peerAccessTokenFiles = new ArrayList<>();
 
+    /** Which peers get which fault (WBS-5.1.2). */
+    @Mixin private SessionFaultOptions faults = new SessionFaultOptions();
+
     /**
      * Validates the invocation, runs the session, tears it down, and maps the verdict to an exit
      * code.
@@ -182,6 +193,7 @@ public final class SessionCommand implements Callable<Integer> {
                             ? parent.toValidatedConfigWithAccessToken(spec, file)
                             : parent.toValidatedConfig(spec, file));
         }
+        bases = faults.apply(spec, bases);
         String title = "faf-test-harness session " + UUID.randomUUID();
         MultiPeerSession session;
         try {
@@ -197,6 +209,10 @@ public final class SessionCommand implements Callable<Integer> {
                 "session: credentials from {} ({})",
                 flag,
                 MockClientCli.layerDescription(spec, flag));
+        List<String> faulted = SessionFaultOptions.describe(bases);
+        if (!faulted.isEmpty()) {
+            log.info("session: faults on {}", String.join("; ", faulted));
+        }
         // Ctrl-C or SIGTERM: tear every peer down before the JVM exits. close() is idempotent and
         // synchronized, so this and the teardown below never both run a peer's teardown.
         Runtime.getRuntime().addShutdownHook(new Thread(session::close, "mc-session-shutdown"));

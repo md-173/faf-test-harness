@@ -3,6 +3,7 @@ package com.faforever.testharness.client.session;
 import ch.qos.logback.classic.Level;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
+import com.faforever.testharness.client.config.GameQueueConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.AuthenticationException;
 import com.faforever.testharness.client.lobby.GameConfig;
@@ -246,9 +247,9 @@ public final class MultiPeerSession implements AutoCloseable {
      * disconnect.
      *
      * @param peerBases one validated config per peer, host first and joiners in join order. Each
-     *     supplies the peer's account, on either credential channel, and the settings every peer
-     *     shares; its ports, launch delay and host, join and queue intent are replaced by the
-     *     session
+     *     supplies the peer's account, on either credential channel, its fault values ({@link
+     *     #withFaults}), and the settings every peer shares; its ports, launch delay and host, join
+     *     and queue intent are replaced by the session
      * @param hostTitle the title the host advertises
      * @throws IllegalArgumentException if the count is outside {@value #MIN_PEERS} to {@value
      *     #MAX_PEERS}, a credential file cannot be used, two peers share one, a binary is missing,
@@ -1067,7 +1068,7 @@ public final class MultiPeerSession implements AutoCloseable {
      * @param index the peer's position, 0 for the host
      * @return {@code A} for 0, {@code B} for 1, and so on
      */
-    static String labelFor(final int index) {
+    public static String labelFor(final int index) {
         return String.valueOf((char) ('A' + index));
     }
 
@@ -1132,8 +1133,39 @@ public final class MultiPeerSession implements AutoCloseable {
     }
 
     /**
+     * Copies {@code base} with its own fault values (WBS-5.1.2), so one peer of a session can be
+     * degraded while the others run clean. The session copies each peer's base as it is, so this is
+     * how a caller gives peers different faults.
+     *
+     * @param base the peer's base config
+     * @param iceRelayDelayMs its ICE relay delay, {@code 0} for none
+     * @param mockGameUdpDropPercent its game's outbound drop percentage, {@code 0} for none
+     * @param mockGameCrashAfterSeconds its game's crash delay, negative for never
+     * @return the validated copy
+     * @throws IllegalArgumentException if a value is out of range
+     */
+    public static MockClientConfig withFaults(
+            final MockClientConfig base,
+            final int iceRelayDelayMs,
+            final int mockGameUdpDropPercent,
+            final int mockGameCrashAfterSeconds) {
+        return copy(
+                base,
+                new AdapterPorts(
+                        base.iceAdapterRpcPort(),
+                        base.iceAdapterGpgNetPort(),
+                        base.iceAdapterLobbyPort()),
+                base.hostConfig(),
+                base.joinConfig(),
+                base.queueConfig(),
+                base.mockGameLaunchDelaySeconds(),
+                new Faults(iceRelayDelayMs, mockGameUdpDropPercent, mockGameCrashAfterSeconds));
+    }
+
+    /**
      * Copies {@code base}, replacing what the session owns: the three adapter ports, the launch
-     * delay, and the host, join and queue intent. Everything else, the account included, is kept.
+     * delay, and the host, join and queue intent. Everything else, the account and the fault values
+     * included, is kept.
      *
      * @param base the peer's base config
      * @param ports its port set
@@ -1149,6 +1181,50 @@ public final class MultiPeerSession implements AutoCloseable {
             final Optional<GameHostConfig> host,
             final Optional<GameJoinConfig> join,
             final int launchDelaySeconds) {
+        return copy(
+                base,
+                ports,
+                host,
+                join,
+                Optional.empty(),
+                launchDelaySeconds,
+                new Faults(
+                        base.iceRelayDelayMs(),
+                        base.mockGameUdpDropPercent(),
+                        base.mockGameCrashAfterSeconds()));
+    }
+
+    /**
+     * One peer's three fault values, as {@link MockClientConfig} holds them.
+     *
+     * @param iceRelayDelayMs the ICE relay delay
+     * @param dropPercent the game's outbound drop percentage
+     * @param crashAfterSeconds the game's crash delay, negative for never
+     */
+    private record Faults(int iceRelayDelayMs, int dropPercent, int crashAfterSeconds) {}
+
+    /**
+     * The one positional copy of {@link MockClientConfig}, shared by {@link #peerConfig} and {@link
+     * #withFaults}: {@code MultiPeerSessionTest} checks that it moves no value to the wrong
+     * component.
+     *
+     * @param base the config to copy
+     * @param ports the adapter ports
+     * @param host the host intent
+     * @param join the join intent
+     * @param queue the queue intent
+     * @param launchDelaySeconds the game's launch delay
+     * @param faults the fault values
+     * @return the validated copy
+     */
+    private static MockClientConfig copy(
+            final MockClientConfig base,
+            final AdapterPorts ports,
+            final Optional<GameHostConfig> host,
+            final Optional<GameJoinConfig> join,
+            final Optional<GameQueueConfig> queue,
+            final int launchDelaySeconds,
+            final Faults faults) {
         return new MockClientConfig(
                 base.lobbyWebSocketUrl(),
                 base.oauthTokenUrl(),
@@ -1175,10 +1251,10 @@ public final class MultiPeerSession implements AutoCloseable {
                 base.playerLogin(),
                 host,
                 join,
-                Optional.empty(),
-                base.iceRelayDelayMs(),
-                base.mockGameUdpDropPercent(),
-                base.mockGameCrashAfterSeconds());
+                queue,
+                faults.iceRelayDelayMs(),
+                faults.dropPercent(),
+                faults.crashAfterSeconds());
     }
 
     /**
