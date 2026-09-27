@@ -406,9 +406,55 @@ API's own per-asset `digest` does not. Releases from 0.3.0 onward ship them.
 
   A tag can be moved by whoever owns the action, and the release job holds `contents: write`, so a
   moved tag there would run unreviewed code with permission to write releases and tags. The SHA is
-  what is verified; the comment is what makes the line readable. Bumping one is a normal pull
-  request: update both the SHA and the comment, and say why in the body, as #346 did when it held
-  `gradle/actions` at v5.
+  what is verified; the comment is what makes the line readable.
+
+A pinned SHA never moves, which is the point of it and also the cost: nothing reaches a pinned action
+on its own, so left alone a pin holds the repo on one release indefinitely, including after that
+release stops getting security fixes. Both `gradle/actions/dependency-submission` and
+`ncipollo/release-action` are pinned inside jobs holding `contents: write`, which is where a stale
+action matters most. `.github/dependabot.yml` is what prompts the bump: it opens one grouped pull
+request a month covering every action under `.github/workflows/`, committed with a `ci` prefix so the
+subject already starts the way § 2 wants. The grouping is a deliberate trade — one pull request a
+month instead of one per action, at the cost of a single bad bump holding up the rest of the group,
+which is why `groups` is worth keeping only while the action count stays small.
+
+`gradle/actions` majors are ignored in that config on purpose. #346 held it at v5 over v6's licence
+change, and moving off v5 is a team decision rather than a routine bump, so Dependabot keeps offering
+v5 patches and never opens the v6 pull request. The entry names `gradle/actions*` with the trailing
+wildcard because Dependabot identifies a SHA-pinned action living in a subdirectory by repository
+plus path — `gradle/actions/setup-gradle`, `gradle/actions/dependency-submission` — so a bare
+`gradle/actions` would match neither. Dropping the wildcard silently re-enables the v6 pull request
+rather than failing anything, so leave it.
+
+Reviewing a bump is not a rubber stamp, because the SHA and the comment together are the whole
+security property and Dependabot rewrites both. dependabot-core #13466 — closed as fixed in March
+2026, and reproduced specifically in repositories that mix floating tags with SHA pins, which is
+exactly this convention — moved pins to the branch HEAD while leaving the trailing comment naming a
+release tag. So resolve the tag yourself and compare the answer to the diff:
+
+```bash
+gh api repos/<owner>/<repo>/git/ref/tags/<tag> --jq .object.sha
+```
+
+using the action's own repository and the tag from the comment (`ncipollo/release-action`,
+`v1.21.0`). Both current pins use lightweight tags, so what comes back is the commit; if
+`.object.type` ever reads `tag` the action has moved to annotated tags and the value needs
+dereferencing once more before it means anything. Read the release notes as well — a pin stops a
+moved tag, it does not make a new version safe. A bump raised by hand is still a normal pull request:
+update the SHA and the comment together, and say why in the body, as #346 did when it held
+`gradle/actions` at v5.
+
+Two conventions bend for these pull requests. Dependabot names its own branches
+(`dependabot/github_actions/...`), so they are exempt from § 1's `<type>/<wbs-id>-<description>`
+rule; that rule is for branches people cut, and nobody is going to rename Dependabot's. And whoever
+merges appends `[2.3.3]` to the squash title by hand, because with the branch name out of the picture
+§ 4's PR title is the only thing carrying a WBS id onto `main`.
+
+One gap worth knowing about: `release.yml` runs only on `workflow_dispatch`, so a pull request
+bumping `ncipollo/release-action` gets no CI signal at all. Nothing exercises the new version until
+the next release, where the four-asset check above is the first thing that would notice a regression.
+Merging those bumps immediately before a release, rather than in the month they arrive, keeps that
+gap short.
 
 ## 9. When in doubt
 
