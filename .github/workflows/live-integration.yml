@@ -354,7 +354,7 @@ jobs:
           code=$?
           set -e
           if [ "$code" -ne 0 ] || [ -z "$uid" ]; then
-            echo "::error::faf-uid exited $code with ${#uid} chars of output; the client would fall back to the placeholder unique_id, whose policy check answers non-2xx, so every login in this session would fail"
+            echo "::error::faf-uid exited $code with ${#uid} chars of output; the client aborts the handshake before it sends auth when faf-uid fails, so every login in this session would fail"
             head -c 200 "$RUNNER_TEMP/faf-uid.stderr"
             exit 1
           fi

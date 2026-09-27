@@ -292,13 +292,14 @@ read and need not be supplied. The three bootstrap settings above
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
 
-³ Exactly one of the two UID sources is required. Configuring both at different
-layers is resolved by precedence such that CLI flags beat environment variable
-which beat a config file. When both are set at the same layer, `--unique-id` is
-ignored and only `--faf-uid-binary` is taken. A live lobby connection requires
-a generated uid that can only be created by the `faf-uid` program so in that case
-only `--uid-binary-path` should be set. `--unique-id` is used when not
-communicating with the live lobby server (e.g. a scripted server taking its place)
+³ At least one of the two UID sources is required. Configuring both at
+different layers is resolved by precedence such that CLI flags beat environment
+variables, which beat a config file. When both are set at the same layer,
+`--unique-id` is ignored and only `--uid-binary-path` is taken. A live lobby
+connection requires a generated uid that can only be created by the `faf-uid`
+program so in that case only `--uid-binary-path` should be set. `--unique-id` is
+used when not communicating with the live lobby server (e.g. a scripted server
+taking its place).
 
 Neither channel accepts a literal token value on the command line. For the
 refresh token that is a correctness requirement — Hydra rotates it on every use

@@ -232,9 +232,9 @@ public final class LobbyHandshake {
      * present, run {@code <binary> <session>} and use its (trimmed) stdout — the FAF {@code
      * faf-uid} tool's RSA-encrypted blob, which the lobby's policy server requires (a plain
      * placeholder is rejected; lobby-protocol-spec.md §3). On any failure (missing binary, non-zero
-     * exit, timeout, empty output) it logs a warning and throws an exception. On failure the tool's
-     * stderr is logged — there is no UID to leak on that path; the successful blob itself is never
-     * logged, only its length.
+     * exit, timeout, empty output) it throws {@link AuthenticationException} naming the binary, its
+     * exit code and its stderr, which the caller logs; the failure path logs nothing itself. There
+     * is no UID to leak on that path, and the successful blob is never logged, only its length.
      *
      * @param session the lobby-issued session number passed to the UID binary
      * @throws AuthenticationException when the faf-uid binary times out, exits with a non-zero
