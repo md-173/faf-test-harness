@@ -5,7 +5,9 @@ Usage:
   scripts/ci/ice-timing.py <mockclient.jsonl> [--peers P] [--expect-delay-ms N]
 
 Reads the client log of one session (live-integration.yml gives each session its own directory, so
-its logs/mockclient.jsonl holds exactly one) and prints one line per ICE link, offering peer first:
+its logs/mockclient.jsonl holds exactly one; a second session run in the same directory appends to
+it, and the script then reports the first and says so) and prints one line per ICE link, offering
+peer first:
 
   A->B: offer leg 237 ms, gathering 601 ms, answer leg 255 ms, gap 1093 ms, no restart
 
@@ -14,8 +16,9 @@ answerer's `gathering` (the offer has arrived). The answerer then gathers its ow
 the answer leg runs from its `awaitingCandidates` (the answer is sent) to the offerer's `checking`
 (the answer has arrived). The gap, the offerer's `awaitingCandidates` to `checking`, is all three
 together and is what the adapter's 6000 ms offerer timer bounds. A restart is the offerer reporting
-`disconnected` before its first `connected`: the timer fired or ICE failed, and the adapter started
-over. A restarted run is no sample of the baseline, since its gap spans the retry.
+`disconnected` before its first `connected`, and the adapter starting over: before `checking`, the
+timer fired with no answer back; after it, the answer arrived and the connectivity checks failed.
+A restarted run is no sample of the baseline, since its gap spans the retry.
 
 Every peer of a session logs from the one client JVM, so these spans are read off one clock. That
 clock is the wall clock, though, and a WSL2 host steps it back by seconds; a record more than
@@ -35,6 +38,8 @@ from datetime import datetime
 
 PEER_ICE = re.compile(r"^peer ice: local=(\d+) remote=(\d+) state=(\w+)$")
 PEER_CONNECT = re.compile(r"^peer connect: login=.* id=(\d+) offer=(true|false)$")
+# MultiPeerSession's start marker, one per session.
+SESSION_START = re.compile(r"^session: \d+ peers, host title ")
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
 # Records reach the log in appender order, at most a few milliseconds apart; a step back larger
 # than this is the wall clock moving rather than threads interleaving.
@@ -56,7 +61,8 @@ def read(path):
                 continue
             message = record.get("message")
             if isinstance(message, str):
-                records.append((when, record.get("component"), record.get("instance") or "", message))
+                instance = record.get("instance") or ""
+                records.append((when, record.get("component"), instance, message))
     return records
 
 
@@ -84,15 +90,19 @@ def first(events, state):
     return next((when for when, reported in events if reported == state), None)
 
 
-def restarted(events):
-    """Whether the offerer went `disconnected` before its first `connected`, by file order, which
-    a wall-clock step cannot reorder."""
+def restart(events):
+    """How the offerer restarted ICE before its first `connected`, read in file order, which a
+    wall-clock step cannot reorder: None for no restart, "timer" when it went `disconnected` still
+    waiting for the answer, "checks" when the answer had arrived and the checks then failed."""
+    checking = False
     for _, state in events:
         if state == "connected":
-            return False
-        if state == "disconnected":
-            return True
-    return False
+            return None
+        if state == "checking":
+            checking = True
+        elif state == "disconnected":
+            return "checks" if checking else "timer"
+    return None
 
 
 def measure(records):
@@ -110,8 +120,10 @@ def measure(records):
             states.setdefault((instance, int(ice.group(2))), []).append((when, ice.group(3)))
             continue
         connect = PEER_CONNECT.match(message)
-        if connect and connect.group(2) == "true" and (instance, int(connect.group(1))) not in offers:
-            offers.append((instance, int(connect.group(1))))
+        if connect and connect.group(2) == "true":
+            offer = (instance, int(connect.group(1)))
+            if offer not in offers:
+                offers.append(offer)
     by_id = {local: instance for instance, local in ids.items()}
     measured = []
     for offerer, answerer_id in offers:
@@ -127,7 +139,7 @@ def measure(records):
             "gathering": span_ms(arrived, answered),
             "answer": span_ms(answered, checking),
             "gap": span_ms(sent, checking),
-            "restarted": restarted(mine),
+            "restarted": restart(mine),
         }
         measured.append((offerer or "?", answerer or "?", spans))
     return measured
@@ -144,22 +156,32 @@ def describe(offerer, answerer, spans):
     )
 
 
-def restart_cause(spans):
-    """What most likely used up the offerer's timer, from the first attempt's spans."""
+def restart_cause(spans, delay):
+    """What most likely made the offerer restart, from the first attempt's spans. The delay is
+    named as a possible cause only when one was injected."""
+    if spans["restarted"] == "checks":
+        return (
+            "the answer arrived and the connectivity checks then failed, so neither the timer nor "
+            "gathering explains it"
+        )
     offer, gathering = spans["offer"], spans["gathering"]
     if offer is None or gathering is None:
-        return "the offerer's timer fired or ICE failed, and the spans around it were not all logged"
+        return (
+            "the offerer gave up before an answer came back, and the spans that say why were not "
+            "all logged"
+        )
     # The answer passes the same relays and the same lobby as the offer, so its leg is taken to
     # match the offer's; what the timer leaves for gathering is 6000 ms less both legs.
     allowance = OFFERER_TIMER_MS - 2 * offer
     if gathering > allowance:
         return (
             f"gathering took {gathering} ms of the about {allowance} ms the timer left it, so slow "
-            "gathering (STUN) used up the timer, not the delay alone"
+            "gathering (STUN) used up the timer" + (", not the delay alone" if delay else "")
         )
+    blame = "the delay itself or a slow lobby" if delay else "a slow lobby"
     return (
-        f"gathering took {gathering} ms, inside the about {allowance} ms the timer left it, so the "
-        "delay itself or a slow lobby used up the timer"
+        f"gathering took {gathering} ms, inside the about {allowance} ms the timer left it, so "
+        f"{blame} used up the timer"
     )
 
 
@@ -175,7 +197,7 @@ def problems(spans, delay):
                 f"{what} for the delay"
             )
     if spans["restarted"]:
-        found.append("ICE restarted: " + restart_cause(spans))
+        found.append("ICE restarted: " + restart_cause(spans, delay))
     return found
 
 
@@ -208,7 +230,7 @@ def main():
         print(describe(offerer, answerer, spans))
         if delay is None:
             if spans["restarted"]:
-                print(f"  {offerer}->{answerer} restarted: {restart_cause(spans)}")
+                print(f"  {offerer}->{answerer} restarted: {restart_cause(spans, None)}")
             continue
         for problem in problems(spans, delay):
             print(f"  FAIL {offerer}->{answerer}: {problem}")
@@ -216,6 +238,14 @@ def main():
     if args.peers is not None and len(links) != args.peers * (args.peers - 1) // 2:
         print(f"{len(links)} ICE link(s) in the log, where {args.peers} peers make "
               f"{args.peers * (args.peers - 1) // 2}")
+        failed = failed or delay is not None
+    sessions = sum(1 for _, component, _, message in records
+                   if component == "MockClient" and SESSION_START.match(message))
+    if sessions > 1:
+        # The figures above are the first session's, since each span is read from first occurrences.
+        kind = "FAIL" if delay is not None else "note"
+        print(f"{kind}: this log holds {sessions} sessions and the figures above are the first "
+              "one's; run each session in a new, empty directory")
         failed = failed or delay is not None
     step = clock_step_ms(records)
     if step:

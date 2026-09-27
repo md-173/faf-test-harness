@@ -1317,10 +1317,11 @@ What to look for when it is on:
 
   That host is in Perth, so every lobby crossing in its figure spans Perth to
   Europe: `ws.faforever.xyz` is served through Cloudflare, and the server
-  behind it is most likely in Falkenstein, Germany. A GitHub-hosted runner sits
-  in a US Azure region, and its gap is about half as long. The runner figures
+  behind it is most likely in Germany, since the unproxied `lobby.faforever.xyz`
+  resolves to a Hetzner machine in Falkenstein. A GitHub-hosted runner sits in
+  a US Azure region, and its gap is about half as long. The runner figures
   below come from the session job of `live-integration.yml` (adapter 3.3.14,
-  `ubuntu-latest`, zero delay). The offer leg runs from the host's
+  `ubuntu-latest`, zero delay, n=6). The offer leg runs from the host's
   `awaitingCandidates` to the joiner's `gathering`, and the answer leg from the
   joiner's `awaitingCandidates` to the host's `checking`:
 
@@ -1342,11 +1343,15 @@ What to look for when it is on:
   | both clients set the flag | 4 | ~1230 ms | 600 ms, CI's delay |
   | one client sets it | 2 | ~2450 ms | ~1200 ms, arithmetic only |
 
+  So a runner's ceiling is looser than this host's, not tighter: about 1230 ms
+  per pass against about 960 ms, with both clients setting the flag.
+
   CI's delay is half the both-clients ceiling from the worst runner gap,
   rounded down to 100 ms. The session job runs a session at that delay on
-  every dispatch (its `ice-relay-delay-ms` input, default 600) and fails unless
-  the session passes, each leg is at least twice the delay and the host never
-  restarts ICE. Verified on 2026-09-27, image 20260920.314.1:
+  every dispatch whose first session passes (its `ice-relay-delay-ms` input,
+  default 600), and fails unless the session passes, each leg is at least
+  twice the delay and the host never restarts ICE. Verified on 2026-09-27,
+  image 20260920.314.1:
 
   | run | region | offer leg | gathering | answer leg | gap |
   |---|---|---|---|---|---|
@@ -1358,11 +1363,14 @@ What to look for when it is on:
   peer takes the root flag. Every dispatch's summary also reports the passing
   session's legs, gathering and gap, so a slower runner shows up without a
   measuring run. Move CI's delay by the same rule when a new worst gap changes
-  it, and re-measure if the delay run restarts ICE twice within 30 days or
-  once `ubuntu-latest` moves to Ubuntu 26 (announced for 2026-10-19). A restart
-  in both runs points at STUN or gathering; in the delay run alone it points
-  at the delay unless the joiner's gathering outran what the timer left it,
-  about `6000 - 4 x delay - 500` ms, and the step prints which.
+  it, and re-measure if the delay run restarts ICE twice within 30 days, or
+  once `ubuntu-latest` has moved to Ubuntu 26, which
+  [actions/runner-images#14748](https://github.com/actions/runner-images/issues/14748)
+  rolls out from 2026-10-19 to 2026-11-19; until then a dispatch can land on
+  either image. A restart in both runs points at STUN or gathering. In the
+  delay run alone it points at the delay, unless the joiner's gathering outran
+  what the timer left it (about `6000 - 4 x delay - 500` ms) or the answer had
+  already arrived and the connectivity checks failed; the step prints which.
 
   Treat a measured baseline as a lower bound for real play. A real FAF client
   also passes TURN servers via `setIceServers`, which the adapter harvests, and
@@ -1371,15 +1379,18 @@ What to look for when it is on:
   hits the adapter's 5000 ms gathering cap, it sends no answer at all and ICE
   restarts whatever the flag is set to.
 
-  To find your own baseline, run a two-peer `session` with the flag at `0`, then
-  `python3 scripts/ci/ice-timing.py logs/mockclient.jsonl` in its working
-  directory. It prints each link's offer leg, gathering, answer leg and gap,
-  the gap being the host's `awaitingCandidates` to `checking` (the host is the
-  side that logs `peer connect: ... offer=true`), and says when ICE restarted.
-  Apply the formula to the gap. Do this on the machine that will run the
-  delay, or stay at a few hundred milliseconds there. On a WSL2 host the wall
-  clock steps back by a second or so about every half minute, and the script
-  says when a log holds such a step, since a leg spanning it reads short.
+  To find your own baseline, run a two-peer `session` with the flag at `0` in a
+  new, empty directory, then run this there, `<clone>` being your checkout:
+  `python3 <clone>/scripts/ci/ice-timing.py logs/mockclient.jsonl`. A session
+  appends to any log it finds, so after a second session in one directory the
+  script reports the first and says so. It prints each link's offer leg,
+  gathering, answer leg and gap, the gap being the host's `awaitingCandidates`
+  to `checking` (the host is the side that logs `peer connect: ... offer=true`),
+  and says when ICE restarted. Apply the formula to the gap. Do this on the
+  machine that will run the delay, or stay at a few hundred milliseconds there.
+  On a WSL2 host the wall clock steps back by a second or so about every half
+  minute, and the script says when a log holds such a step, since a leg
+  spanning it reads short.
 
   Past the ceiling you get an ICE restart loop rather than slow negotiation: on
   the host, `awaitingCandidates` turns to `disconnected` almost exactly 6000 ms

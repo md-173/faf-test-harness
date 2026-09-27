@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-latest
     # Above every session step's 12-minute backstop together, with room for provisioning. A job cap
     # cancels the run rather than failing a step, so a session caught by it never reports its
-    # verdict at all. A normal run takes about five minutes.
+    # verdict at all. A normal run takes about two and a half minutes.
     timeout-minutes: 60
 
     env:
@@ -531,7 +531,7 @@ jobs:
           elif [[ "$verdict" != "session: PASS"* ]]; then
             reason="it exited 0 without a session: PASS line"
           else
-            reason="the session passed, but its ICE timing did not, as the FAIL lines above say"
+            reason="the session passed, but its ICE timing check failed; the lines above say why"
           fi
           auth=$(grep -oE 'lobby authentication_failed: [^"]*' "$log" 2>/dev/null | head -1)
           echo "::error::delayed-ICE run: $reason${auth:+; the lobby said: $auth}"
@@ -543,7 +543,7 @@ jobs:
       # escaped it, so each step pins the line its failure must log, not just the code, and refuses
       # a `session: FAIL teardown:` line, which a leaked process adds to any failure. Game output
       # only ever explains a red run here, never passes one: the client relays it from the game's
-      # pipes, and a relayed line can go missing (#449).
+      # pipes, and relayed lines have gone missing before (#449).
       #
       # Every datagram dropped. The adapters still connect, because a link's liveness is the
       # offering adapter's own echo rather than game traffic (PeerConnectivityCheckerModule,
@@ -582,7 +582,7 @@ jobs:
           elif grep -q 'session: FAIL teardown:' "$log"; then
             reason="a process outlived its teardown"
           else
-            reason="it failed somewhere other than the traffic checkpoint: ${verdict:-no verdict line}"
+            reason="it failed, but not on the traffic deadline: ${verdict:-no verdict line}"
           fi
           # A token that lapsed after the pre-flight is the likeliest cause of an early failure,
           # and only this session's own log shows the lobby's rejection.
