@@ -432,11 +432,19 @@ Properties:
   `Caused by:`) are coalesced into one log event. This is essential for the
   adapter, which emits multi-line Java stack traces on stderr during ICE
   failures.
+- a line is logged once the next line shows whether it continues a stack
+  trace, or after 200 ms with nothing more (WBS 2.3.6-fix, #450), so a quiet
+  child's latest line is not held back until it writes again. Those idle
+  flushes run on one daemon thread shared by every capture,
+  `process-output-idle-flush`, under the reader's MDC; only the JSONL
+  `thread` field tells them apart.
 - INFO for stdout, WARN for stderr — preserves stream provenance after the
   log records are merged.
 - Daemon threads exit when the streams close (i.e. when the child exits).
   The controller calls `executor.shutdown()` after `process.onExit()` to
-  release the pool deterministically.
+  release the pool deterministically, and `terminate()` waits up to 1 s after
+  the exit for them to finish, so what the child wrote while shutting down is
+  logged before it returns (#361).
 
 Routing:
 
@@ -491,7 +499,7 @@ copy does not affect internal cleanup or other listeners.
 |---|---|
 | §2.5 stream wiring, §4 capture | `start()` calls `ProcessOutputLogger.captureAsync(p, tag)` — no manual wiring needed |
 | §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
-| §7.2 forceful teardown | `terminate([grace])` — SIGTERM → wait → SIGKILL |
+| §7.2 forceful teardown | `terminate([grace])`: SIGTERM, wait, SIGKILL, through the process handle so the pipes stay open, then up to 1 s for the output to reach the log (#361) |
 | §7.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
 
 ### 5.3 Launcher pattern (ICE adapter and mock-game)
@@ -589,12 +597,18 @@ The teardown sequence has three layers, each a fallback for the previous.
 ### 7.2 Forceful (any graceful step fails or times out)
 
 ```text
-6. process.destroy()  — POSIX SIGTERM. Wait up to 3 s.
-7. process.destroyForcibly() — POSIX SIGKILL. Wait up to 2 s.
+6. process.toHandle().destroy(): POSIX SIGTERM. Wait up to 3 s.
+7. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to 2 s.
 8. Log ERROR if still alive after 10 s total; abandon and continue.
 ```
 
-Total bounded teardown ≤ ~15 s per child.
+Both strikes go through the process handle. `Process.destroy()` and
+`destroyForcibly()` also close the child's pipes on Linux and macOS, which
+loses what the child writes while shutting down and fails its reader (#361).
+Once the child has exited, `terminate()` waits up to 1 s more for the readers
+to log the rest of its output.
+
+Total bounded teardown ≤ ~16 s per child.
 
 ### 7.3 Catastrophic (parent dying)
 
@@ -671,7 +685,8 @@ Internally a `ConcurrentHashMap`-backed `Set<SubprocessManager>`; managers are
 added by `SubprocessManager.start()` and removed automatically when their
 `onExit()` future completes. The JVM shutdown hook (§7.3 layer 1) iterates this
 set and calls `terminate()` on each manager **in parallel**, so total shutdown
-wall-clock time is bounded by the longest single grace rather than their sum.
+wall-clock time is bounded by the slowest single `terminate()` (its grace
+twice, plus up to 1 s for the output) rather than their sum.
 
 ## 8. Failure modes
 

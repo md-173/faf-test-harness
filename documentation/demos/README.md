@@ -259,11 +259,14 @@ this order:
 > *end* of the method, while `sendGpgnetMessage` logs at send time. Read it as "CreateLobby was the
 > reply to Idle", not as the adapter speaking first.
 
-> **`[MockGame]` output arrives in a lump.** The child's stdout is block-buffered, so game log lines
-> can surface tens of seconds after they were emitted — a line stamped at `t+2s` may not appear
-> until the game exits. On a run that fails *before* the game exits, the most recent `[MockGame]`
-> lines may be missing from the log entirely; read the `[ICEAdapter]` frame log for what the game
-> actually sent.
+> **`[MockGame]` and `[ICEAdapter]` lines reach this log within about 200 ms of being written.**
+> Both children flush every line. The harness's `ProcessOutputLogger` holds a line only until the
+> next one shows whether it continues a stack trace, or for 200 ms if nothing follows, so a child
+> that goes quiet still has its last line logged. What a child writes while the client terminates
+> it reaches this log too, before teardown moves on. For a second record of the game's side,
+> mock-game also writes its own JSONL, `mock-client/logs/mockgame.jsonl` for this Gradle run; the
+> adapter jar keeps none, since the console-only Logback config the harness injects has no file
+> appender.
 
 The identity values (`9001` / `welcome-login`) are the fabricated session identity, and are
 deliberately unlike the config defaults the launchers would otherwise fall back on — seeing them in

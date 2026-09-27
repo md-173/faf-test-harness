@@ -257,8 +257,9 @@ Run from the repo root, where `downloadIceAdapter` puts the jar on the default
 path, even the binary flag is optional — `mock-client ice-smoke` alone passes.
 It takes about two seconds, and every wait inside it is bounded and named
 (`--timeout-seconds`, default `20`, caps the checking; tearing the adapter down
-adds a separately bounded 2 s SIGTERM→SIGKILL grace outside that cap, and only
-matters for an adapter that ignores SIGTERM). Run it as the precondition before paying
+adds a separately bounded 2 s SIGTERM→SIGKILL grace outside that cap, which only
+matters for an adapter that ignores SIGTERM, and up to 1 s for its output to
+reach the log). Run it as the precondition before paying
 for anything longer — when a full session test fails, this is what separates
 "the adapter never came up" from "the session logic is wrong". The verdict
 vocabulary and a worked pass/fail transcript are in
@@ -397,15 +398,14 @@ Lobby` is the full exchange.
 
 Two practical notes:
 
-- Those `[ICEAdapter]` lines may not surface until the run window ends and the
-  adapter is terminated, but not because the pipe itself is block-buffered —
-  the adapter's bundled Logback flushes every event immediately. The lag is
-  `ProcessOutputLogger` on this side: it holds each line, waiting to see
-  whether the next one is a stack-trace continuation to coalesce it with,
-  before logging either. A per-line observer (WBS 3.1.2.10 / #225) bypasses
-  that hold and sees a line the moment it arrives, but the default
-  `[ICEAdapter]` routing this note describes is unchanged. Do not read the
-  absence of those lines mid-run as absence of anything.
+- Those `[ICEAdapter]` lines reach the harness log within about 200 ms of the
+  adapter writing them. The adapter's bundled Logback flushes every event, and
+  `ProcessOutputLogger` on this side holds a line only until the next one shows
+  whether it continues a stack trace, or for 200 ms if nothing follows. What
+  the adapter writes while `launch-ice` terminates it at the end of the run
+  window is logged too, before the command exits. For a `.jar` adapter, as
+  here, the harness log is its only record: the console-only Logback config
+  the harness injects has no file appender.
 - **Give the adapter the longer window.** If `launch-ice` ends first, its
   termination reaches the game as a lost connection and the game exits `69`
   (`SERVER_CONNECTION_LOST`) — a correct report of what happened to it, and easy
@@ -1353,10 +1353,9 @@ What to look for when it is on:
   `first datagram from sender <id> (seq S)`, and the received count `N` and
   highest sequence `H` from
   `game UDP receiver stopped; sender <id> totals: received N, highest sequence H, discontinuities D`,
-  logged when the game shuts down in an orderly way. In an orchestrated run
-  that line reaches only the game's own `logs/mockgame.jsonl` (§6), not the
-  client's output: the client stops relaying the game's stream during
-  teardown, just before it is written. Mid-run, or after a kill that skipped
+  logged when the game shuts down in an orderly way, including when the client
+  terminates it at teardown: it reaches the client's output as well as the
+  game's own `logs/mockgame.jsonl` (§6). Mid-run, or after a kill that skipped
   shutdown, use the last
   `player <receiver> peer traffic from player <sender>` progress line instead,
   which can read one datagram behind. The loss ratio is
