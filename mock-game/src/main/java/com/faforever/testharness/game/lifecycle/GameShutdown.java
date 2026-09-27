@@ -75,7 +75,7 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Steps one and two are not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels
  * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} shuts down the
- * launch-delay and match-duration scheduler, which discards the tasks that have not started yet.
+ * launch, match-end and crash scheduler, which discards every task whose delay has not run out.
  * Neither can recall work already running: a scheduler task past its cancellation check can still
  * post an event after teardown, and a timeout whose transition is already under way when {@code
  * cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the optional
@@ -87,7 +87,8 @@ import org.slf4j.LoggerFactory;
  * scheduler: a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in
  * that state (the local close is filtered, see {@code MockGameLifecycle.setupStateMachine}), and
  * the orphaned {@code LaunchMatch} then drove the registered transition to LIVE against a socket
- * this sequence had already closed. Draining the queue removes that case.
+ * this sequence had already closed. Shutting the scheduler down removes that case: a launch still
+ * waiting is discarded, and one already due finds the scheduler shut down and returns (#487).
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs

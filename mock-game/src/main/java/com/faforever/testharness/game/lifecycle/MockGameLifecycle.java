@@ -442,8 +442,9 @@ public final class MockGameLifecycle {
      * match end or injected crash. Package-private for {@code GameShutdownTest}, which checks that
      * a launch was pending before teardown and that teardown discarded it, rather than sleeping
      * past the launch delay. The queue is what tells the two apart: shutting down discards a task
-     * that has not started, so it never runs, while without the discard policy set in the
-     * constructor a delayed one would stay queued to run when its delay expires.
+     * still waiting for its delay, so it never runs, while without the discard policy set in the
+     * constructor it would stay queued to run when its delay expires. A task already due stays
+     * queued either way, and does nothing once started; see {@code schedule(Runnable, Duration)}.
      *
      * @return the number of tasks still queued on the lifecycle's scheduler.
      */
@@ -1134,8 +1135,8 @@ public final class MockGameLifecycle {
         halt.accept(ExitCodes.INJECTED_CRASH);
     }
 
-    /* Wrapper around ScheduledExecutorService.schedule that catches RejectedExecutionExceptions
-     * and logs them. */
+    /* Wrapper around ScheduledExecutorService.schedule: a task that starts once stopSchedules()
+     * has shut the scheduler down does nothing, and a RejectedExecutionException is logged. */
     private ScheduledFuture<?> schedule(Runnable command, Duration delay) {
         try {
             return scheduler.schedule(

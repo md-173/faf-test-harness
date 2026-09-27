@@ -441,6 +441,9 @@ final class CrashInjectionTest {
 
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
         ended.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // Armed, and warned about as due no earlier than the match end, so the check below is not
+        // passing merely because no crash was ever scheduled.
+        assertCrashArmed(true);
 
         assertFalse(
                 halted.await(QUIET_WINDOW_SECONDS, TimeUnit.SECONDS),

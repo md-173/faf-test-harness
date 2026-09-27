@@ -205,15 +205,13 @@ final class GameShutdownTest {
             CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
             gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
             hosting.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            // Without a queued launch the drain below would pass having tested nothing.
+            // Without a queued launch the check below would pass having tested nothing.
             assertEquals(1, lifecycle.queuedSchedules(), "hosting should have queued the launch");
 
             lifecycle.shutdown().run();
 
             assertEquals(
-                    0,
-                    lifecycle.queuedSchedules(),
-                    "shutdown must drain the scheduler holding the pending launch");
+                    0, lifecycle.queuedSchedules(), "shutdown must discard the pending launch");
             assertEquals(GameState.HOSTING, lifecycle.getState());
         } finally {
             // Make sure gpgnet server is always stopped.
