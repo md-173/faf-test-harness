@@ -11,11 +11,15 @@ package com.faforever.testharness.client.state;
  * two write them, through the package-private recorders.
  *
  * <p>Read them once {@code stateReached(TERMINATED)} has completed. A verdict written inside the
- * transition action that drives TERMINATED is ordered before that read: the action runs before
- * {@code commitTransition} completes the future {@code RunCommand} waits on, and {@code
- * CompletableFuture.complete} happens-before the {@code get} that returns. {@link #gameCrashed()}
- * is the exception, written on a continuation; see there. Every field is {@code volatile} for the
- * reads that do not follow that future, such as a test calling a getter directly.
+ * transition action that drives TERMINATED, or inside TERMINATED's entry hook where teardown's
+ * check writes, is ordered before that read: both run before {@code commitTransition} completes the
+ * future {@code RunCommand} waits on, and {@code CompletableFuture.complete} happens-before the
+ * {@code get} that returns. {@link #gameCrashed()} is the exception, written on a continuation; see
+ * there. Every field is {@code volatile} for the reads that do not follow that future, such as a
+ * test calling a getter directly.
+ *
+ * <p>It also holds one fact that is not a verdict, {@link #launchStarted()}, kept here rather than
+ * in the lifecycle, whose length is budgeted.
  */
 public final class SessionVerdicts {
 
@@ -30,6 +34,9 @@ public final class SessionVerdicts {
 
     /** Backs {@link #sessionFailed()}. */
     private volatile boolean sessionFailed;
+
+    /** Backs {@link #launchStarted()}. */
+    private volatile boolean launchStarted;
 
     /** Created by the lifecycle, which owns the only reference that can record. */
     SessionVerdicts() {}
@@ -63,6 +70,11 @@ public final class SessionVerdicts {
      * #357 read a verdict written on a continuation thread and exited 69 or 0 run to run. Reading
      * it earlier returns {@code false}, which is the right answer for an adapter that is still
      * running.
+     *
+     * <p>When another event the same death caused ends the session first, a call in flight failing
+     * as the socket closes or the game exiting on its dead link, teardown's check records it
+     * instead (#438; {@link SessionFailures#adapterAtTeardown}). That runs inside TERMINATED's
+     * entry hook, which is ordered before the same read.
      *
      * @return {@code true} if the adapter's exit was classified as abnormal
      */
@@ -102,20 +114,21 @@ public final class SessionVerdicts {
      * answered a host, join or peer-connect call with an error or not within its timeout, or a
      * match the server cancelled after {@code game_launch} and before the game started.
      *
-     * <p>Not recorded when one of those calls failed because the adapter's connection closed. The
-     * adapter is gone then, and its own exit is the finding (#406, #438), not the call. A live
-     * adapter whose RPC stream stopped parsing fails its calls the same way, which is #452's; see
-     * {@link SessionFailures#call}. Never recorded once {@code SessionTeardown} has started, the
-     * same rule as {@link #launchFailed()}.
+     * <p>Not recorded when one of those calls failed because the adapter's connection closed: the
+     * connection is the adapter's finding, not the call's. Teardown's check decides it (#438, #452;
+     * {@link SessionFailures#adapterAtTeardown}), recording this verdict for a live adapter whose
+     * JSON-RPC link closed from its side, such as one whose stream stopped parsing, and {@link
+     * #adapterLost()} for one that died. Otherwise never recorded once {@code SessionTeardown} has
+     * started, the same rule as {@link #launchFailed()}.
      *
-     * <p>Recorded inside the transition action that ends the session, which orders it before {@code
-     * RunCommand}'s read. {@code connectToPeer}'s asynchronous failure is the exception: it records
-     * the verdict and then posts the {@code ShutdownRequested} that ends the session, which orders
-     * it the same way only when that event is what ends it. If another route commits TERMINATED
-     * first, such as the server closing the lobby or the game exiting, the verdict can land after
-     * the read, and a run with no other finding exits {@code 0}. The window is the few instructions
-     * between the teardown check and the record, which is why the record comes before the line that
-     * names it.
+     * <p>Recorded inside the transition action that ends the session, or by teardown's check inside
+     * TERMINATED's entry hook, both of which order it before {@code RunCommand}'s read. {@code
+     * connectToPeer}'s asynchronous failure is the exception: it records the verdict and then posts
+     * the {@code ShutdownRequested} that ends the session, which orders it the same way only when
+     * that event is what ends it. If another route commits TERMINATED first, such as the server
+     * closing the lobby or the game exiting, the verdict can land after the read, and a run with no
+     * other finding exits {@code 0}. The window is the few instructions between the teardown check
+     * and the record, which is why the record comes before the line that names it.
      *
      * @return {@code true} if the session failed after it came up, before session teardown began
      */
@@ -141,5 +154,33 @@ public final class SessionVerdicts {
     /** Records that the session failed after it came up; see {@link #sessionFailed()}. */
     void recordSessionFailed() {
         sessionFailed = true;
+    }
+
+    /**
+     * Whether any verdict has been recorded. Read by teardown's adapter check ({@link
+     * SessionFailures#adapterAtTeardown}), which must not add a second cause line; kept beside the
+     * fields so a verdict added later is counted here too.
+     *
+     * @return {@code true} once any verdict has been recorded
+     */
+    boolean any() {
+        return launchFailed || adapterLost || gameCrashed || sessionFailed;
+    }
+
+    /**
+     * Whether the lifecycle started launching a game for a {@code game_launch} (WBS-3.1.2.6-fix,
+     * #462), whether or not the launch came up. Not a verdict, so {@link #any()} leaves it out: it
+     * decides whether teardown owes the lobby a {@code GameState Ended}, which the real client
+     * sends after every outcome of a {@code game_launch}.
+     *
+     * @return {@code true} once a launch has started
+     */
+    boolean launchStarted() {
+        return launchStarted;
+    }
+
+    /** Records that the lifecycle started a launch; see {@link #launchStarted()}. */
+    void recordLaunchStarted() {
+        launchStarted = true;
     }
 }

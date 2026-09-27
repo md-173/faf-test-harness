@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.faforever.testharness.client.Main;
+import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
+import com.faforever.testharness.client.process.FakeAdapterStub;
+import com.faforever.testharness.client.process.FakeIceAdapter;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,7 +37,8 @@ import org.junit.jupiter.api.io.TempDir;
  * shutdown hook and teardown, and what an operator reads in the log. The child JVM runs {@code run}
  * against a scripted lobby in this one; an access-token file and a fixed unique id stand in for the
  * OAuth exchange and {@code faf-uid}, and reaching IDLE starts no subprocess, so nothing here needs
- * the network or a binary.
+ * the network or a real binary. The one case that hosts runs {@code FakeIceAdapter} and a game
+ * script as its subprocesses (#438, #454).
  *
  * <p>The child's console goes to a file, and its records are read from its JSONL once it has
  * exited: {@code SignalExitCodeEndToEndTest} explains why a pipe loses the last lines. Budgets are
@@ -77,6 +81,10 @@ final class RunShutdownEndToEndTest {
                     + " test\",\"game_type\":\"custom\",\"rating_type\":\"global\","
                     + "\"init_mode\":0}";
 
+    /** The server's instruction to host, which takes a launched session to HOSTING. */
+    private static final String HOST_GAME =
+            "{\"command\":\"HostGame\",\"target\":\"game\",\"args\":[\"scmp_007\"]}";
+
     @TempDir private Path dir;
 
     private ScriptedWebSocketServer lobby;
@@ -92,6 +100,10 @@ final class RunShutdownEndToEndTest {
     @AfterEach
     void tearDown() throws Exception {
         if (child != null) {
+            // A SIGKILL runs no shutdown hook, so a test that failed before its signal would leave
+            // the child's adapter and game running. Kill them first, while they are its
+            // descendants.
+            child.descendants().forEach(ProcessHandle::destroyForcibly);
             child.destroyForcibly();
             child.waitFor(STEP_BUDGET_SECONDS, TimeUnit.SECONDS);
         }
@@ -140,7 +152,9 @@ final class RunShutdownEndToEndTest {
      * came up, because the adapter binary does not exist, exits 70 with its cause and its verdict
      * and without the signal line. Teardown closes the lobby before {@code call()} returns, and the
      * hook that {@code Main}'s {@code System.exit} starts found that close still unechoed, so the
-     * line used to follow the verdict. Also pins #437's 70 against the real process.
+     * line used to follow the verdict. Also pins #437's 70 against the real process, and #462: the
+     * lobby still gets one {@code GameState Ended} before the close, as the real client sends after
+     * every {@code game_launch} it acted on.
      */
     @Test
     void aLaunchThatNeverCameUpExits70AndNamesNoSignal() throws Exception {
@@ -161,16 +175,108 @@ final class RunShutdownEndToEndTest {
                 messages(records).stream()
                         .anyMatch(m -> m.startsWith("Could not launch the ICE adapter")),
                 "the cause must be named: " + messages(records));
+        assertTrue(
+                messages(records).stream()
+                        .noneMatch(m -> m.startsWith("failed to send GameState Ended")),
+                "the frame must go out cleanly: " + messages(records));
         assertNoErrors(records);
         assertEquals(
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
                 "teardown must close the lobby cleanly");
+        assertEquals(1, gameStateEndedSent(), "a failed launch still reports the game's end");
     }
 
     /**
-     * What a run a signal ended must show: the signal named once, no verdict (the code is the
-     * signal's own), nothing at ERROR, and a normal close frame at the lobby.
+     * SIGTERM while HOSTING, with an adapter and a game running (#438, #454): exit 143, the signal
+     * named once, no verdict and no adapter finding, and the game's end reported to the lobby
+     * before its close.
+     *
+     * <p>The only automated check that {@code call()} hands its shutdown flag to the teardown. On a
+     * SIGTERM, {@code SubprocessRegistry}'s hook kills the adapter at once while the run's own hook
+     * tears down, and this game takes over a second to die, so by the time teardown judges the
+     * adapter it is dead with 143. Only that flag keeps it from reading as a lost adapter: a
+     * teardown built without it logs {@code ICE adapter exited abnormally}. The adapter is {@code
+     * FakeIceAdapter} run through the real launcher, answering every call.
+     *
+     * <p>Nothing-at-ERROR is not asserted here: with a game running, teardown can log {@code Error
+     * reading subprocess stream} (#361), which is not this card's.
+     */
+    @Test
+    void aSigtermWhileHostingNamesNoAdapterVerdictAndReportsTheGame() throws Exception {
+        IceAdapterSettings adapter =
+                FakeAdapterStub.create(dir, FakeIceAdapter.Mode.FULL).settings();
+        startRunAndReachIdle(
+                List.of(
+                        "--ice-adapter-binary-path=" + adapter.binaryPath(),
+                        "--ice-adapter-rpc-port=" + adapter.rpcPort(),
+                        "--ice-adapter-gpg-net-port=" + adapter.gpgNetPort(),
+                        "--ice-adapter-lobby-port=" + adapter.lobbyPort(),
+                        "--mock-game-binary-path=" + slowDyingGame()));
+        lobby.broadcastText(GAME_LAUNCH);
+        lobby.broadcastText(HOST_GAME);
+        awaitLogged("state entry: HOSTING");
+
+        child.destroy(); // SIGTERM on Linux and macOS
+
+        assertExitCode(143);
+        List<JsonNode> records = records();
+        assertEquals(1, count(records, SIGNAL_LINE), "signal named once: " + messages(records));
+        assertEquals(List.of(), verdicts(records), "a signalled run names no verdict");
+        assertTrue(
+                messages(records).stream()
+                        .noneMatch(m -> m.startsWith("ICE adapter exited abnormally")),
+                "an adapter the signal killed is not a finding: " + messages(records));
+        assertEquals(
+                1000,
+                lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
+                "the WebSocket must close cleanly");
+        assertEquals(
+                1, gameStateEndedSent(), "the lobby must hear GameState Ended before the close");
+    }
+
+    /**
+     * A game stand-in that runs until SIGTERM and then takes about a second and a half to exit.
+     *
+     * @return the script
+     * @throws IOException if it cannot be written
+     */
+    private Path slowDyingGame() throws IOException {
+        Path script = dir.resolve("slow-dying-game");
+        Files.writeString(
+                script,
+                "#!/bin/sh\ntrap 'sleep 1.5; exit 143' TERM\nwhile :; do sleep 0.1; done\n");
+        assertTrue(script.toFile().setExecutable(true), "could not mark the game executable");
+        return script;
+    }
+
+    /**
+     * How many {@code GameState Ended} frames the child sent. Call once the lobby has seen its
+     * clean close: the server handles a connection's frames in order, so every frame sent before
+     * the close is queued by then, and the first empty poll means there are no more.
+     *
+     * @return how many of its remaining frames were it
+     */
+    private long gameStateEndedSent() throws Exception {
+        long sent = 0;
+        while (true) {
+            JsonNode frame;
+            try {
+                frame = MAPPER.readTree(lobby.pollReceived(250, TimeUnit.MILLISECONDS));
+            } catch (AssertionError none) {
+                return sent;
+            }
+            if ("GameState".equals(frame.path("command").asText())
+                    && "Ended".equals(frame.path("args").path(0).asText())) {
+                sent++;
+            }
+        }
+    }
+
+    /**
+     * What an idle run a signal ended must show: the signal named once, no verdict (the code is the
+     * signal's own), nothing at ERROR, a normal close frame at the lobby, and no {@code GameState
+     * Ended} before it.
      */
     private void assertEndedCleanlyBySignal() throws Exception {
         List<JsonNode> records = records();
@@ -184,6 +290,9 @@ final class RunShutdownEndToEndTest {
                 1000,
                 lobby.awaitClose(STEP_BUDGET_SECONDS, TimeUnit.SECONDS),
                 "the WebSocket must close cleanly");
+        // Teardown's step runs on every teardown, this idle one included, but no game_launch was
+        // acted on, so there is no game end to report (#454, #462).
+        assertEquals(0, gameStateEndedSent(), "an idle run has no game end to report");
     }
 
     /**
@@ -191,20 +300,32 @@ final class RunShutdownEndToEndTest {
      * reports itself idle.
      */
     private void startRunAndReachIdle() throws Exception {
+        startRunAndReachIdle(
+                List.of(
+                        "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter"),
+                        "--mock-game-binary-path=" + dir.resolve("no-such-game")));
+    }
+
+    /**
+     * As {@link #startRunAndReachIdle()}, with the game session's own options.
+     *
+     * @param sessionArgs the adapter and game options, binary paths included
+     */
+    private void startRunAndReachIdle(final List<String> sessionArgs) throws Exception {
         Path token = Files.writeString(dir.resolve("access-token"), "placeholder-token");
         List<String> command =
-                List.of(
-                        Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                        "-cp",
-                        System.getProperty("java.class.path"),
-                        Main.class.getName(),
-                        "run",
-                        "--lobby-websocket-url=" + lobby.uri(),
-                        "--oauth-access-token-file=" + token,
-                        "--unique-id=00000000-0000-0000-0000-000000000000",
-                        "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter"),
-                        "--mock-game-binary-path=" + dir.resolve("no-such-game"),
-                        "--log-file=" + jsonl());
+                new ArrayList<>(
+                        List.of(
+                                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                                "-cp",
+                                System.getProperty("java.class.path"),
+                                Main.class.getName(),
+                                "run",
+                                "--lobby-websocket-url=" + lobby.uri(),
+                                "--oauth-access-token-file=" + token,
+                                "--unique-id=00000000-0000-0000-0000-000000000000",
+                                "--log-file=" + jsonl()));
+        command.addAll(sessionArgs);
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(dir.toFile());
         // The child reads the live environment, so anything exported for this JVM would configure

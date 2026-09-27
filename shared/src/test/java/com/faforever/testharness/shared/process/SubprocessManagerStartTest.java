@@ -255,9 +255,9 @@ class SubprocessManagerStartTest {
      * <p>Deregistration is in fact ordered <em>before</em> {@code onExit()} completes: {@code
      * deregister(this)} runs inside the {@code thenApply} that completes {@code exitFuture}, and
      * {@code onExit()} hands out a copy of it, so {@code get()} returning already implies the
-     * removal ran — via the reaper path or {@code start()}'s synchronous {@code !isAlive()}
-     * fallback. Measured: a 400ms child was out of the registry on the first check, 40/40, with no
-     * polling at all.
+     * removal ran: in that chain, on the common-pool thread that completes {@code
+     * Process.onExit()}, or in {@code start()}'s synchronous {@code !isAlive()} fallback. Measured:
+     * a 400ms child was out of the registry on the first check, 40/40, with no polling at all.
      *
      * <p>The poll stays regardless. It costs nothing, it replaces a fixed 50ms sleep that was a
      * guess at how long to wait rather than a wait for the condition, and it keeps this correct if

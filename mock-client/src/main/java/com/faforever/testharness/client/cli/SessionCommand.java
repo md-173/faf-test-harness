@@ -197,9 +197,13 @@ public final class SessionCommand implements Callable<Integer> {
                 "session: credentials from {} ({})",
                 flag,
                 MockClientCli.layerDescription(spec, flag));
-        // Ctrl-C or SIGTERM: tear every peer down before the JVM exits. close() is idempotent and
-        // synchronized, so this and the teardown below never both run a peer's teardown.
-        Runtime.getRuntime().addShutdownHook(new Thread(session::close, "mc-session-shutdown"));
+        // Ctrl-C or SIGTERM: tear every peer down before the JVM exits, with the signal flag raised
+        // first, so no peer reports the signal's own kill as a finding (#438). close() is
+        // idempotent and synchronized, so this and the teardown below never both run a peer's
+        // teardown. On a normal exit the hook runs after that teardown, and raises the flag to no
+        // effect.
+        Runtime.getRuntime()
+                .addShutdownHook(new Thread(session::closeOnSignal, "mc-session-shutdown"));
 
         boolean passed = false;
         boolean cleanTeardown = false;

@@ -6,10 +6,8 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,9 +25,12 @@ import org.slf4j.LoggerFactory;
  * for 2–4 player simulation (client spec §Advanced Extensions). This is why the class lives in
  * {@code shared/} rather than {@code mock-client/}.
  *
- * <p>Continuations chained onto {@link #onExit()} run on the JDK's exit-completion thread.
- * Listeners that perform non-trivial work should hand it off to their own executor rather than
- * blocking the completion thread.
+ * <p>Continuations chained onto {@link #onExit()} run on the thread that completes it, a
+ * common-pool thread: the JDK completes {@code Process.onExit()} through {@code handleAsync}, and
+ * only the exit record behind {@link #isAlive()}, {@link #exitCode()} and {@link
+ * #waitFor(Duration)} is written by its process reaper. Listeners that perform non-trivial work
+ * should hand it off to their own executor rather than blocking that thread, and a caller that must
+ * see an exit while the common pool may be busy waits with {@link #waitFor(Duration)}.
  */
 public final class SubprocessManager {
 
@@ -140,10 +141,10 @@ public final class SubprocessManager {
             throw e;
         }
         // The constructor's onExit chain calls deregister(this), but for a fast-exiting child
-        // that chain may fire before register() above (synchronously inside the constructor if
-        // the process already exited, or concurrently on the reaper thread). Either way the
-        // deregister becomes a no-op and the just-added entry stays in ACTIVE forever. Drop it
-        // now if the process is already gone; deregister is idempotent so a late lambda is fine.
+        // that chain may fire before register() above, concurrently on the common-pool thread
+        // that completes Process.onExit(). The deregister then becomes a no-op and the just-added
+        // entry stays in ACTIVE forever. Drop it now if the process is already gone; deregister
+        // is idempotent so a late lambda is fine.
         if (!process.isAlive()) {
             SubprocessRegistry.deregister(manager);
         }
@@ -181,6 +182,23 @@ public final class SubprocessManager {
      */
     public CompletableFuture<Integer> onExit() {
         return exitFuture.copy();
+    }
+
+    /**
+     * Waits up to {@code timeout} for the process to exit.
+     *
+     * <p>Reads the exit the JDK's process reaper records, as {@link #isAlive()} and {@link
+     * #exitCode()} do, rather than waiting on {@link #onExit()}. That future is completed by a
+     * common-pool task, so a caller waiting on it while every common-pool worker is busy, or
+     * blocked on a monitor the caller holds, can wait out its whole bound for a process that has
+     * already exited. This wait ends when the reaper sees the exit, whatever the pool is doing.
+     *
+     * @param timeout the longest to wait; zero or negative checks without waiting
+     * @return {@code true} if the process has exited
+     * @throws InterruptedException if interrupted while waiting
+     */
+    public boolean waitFor(final Duration timeout) throws InterruptedException {
+        return process.waitFor(timeout.toNanos(), TimeUnit.NANOSECONDS);
     }
 
     /**
@@ -227,18 +245,19 @@ public final class SubprocessManager {
         awaitExit(graceMs);
     }
 
+    /**
+     * Waits for the exit through {@link #waitFor(Duration)}, not {@link #exitFuture}, so a busy
+     * common pool cannot stretch either strike of {@link #terminate(Duration)} to its full grace.
+     *
+     * @param millis the longest to wait
+     * @return {@code true} if the process has exited
+     */
     private boolean awaitExit(final long millis) {
         try {
-            exitFuture.get(millis, TimeUnit.MILLISECONDS);
-            return true;
-        } catch (TimeoutException e) {
-            return false;
+            return waitFor(Duration.ofMillis(millis));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
-        } catch (ExecutionException e) {
-            // exitFuture cannot fail under our wiring; treat as exited
-            return true;
         }
     }
 }

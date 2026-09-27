@@ -253,9 +253,9 @@ final class PeerDepartureLiveTest {
         // kill -9 on the joiner's game, leaving its client alive to notice. The client sends
         // GameState Ended for a game it never saw end cleanly, faf-server routes that to
         // on_connection_closed() then abort(), and abort() runs disconnect_all_peers() because the
-        // game is still in GameState.LOBBY. There is a second path to the same frame if that send
-        // loses its race with the joiner's teardown closing the lobby: the socket closing reaches
-        // on_connection_lost() and so the same abort().
+        // game is still in GameState.LOBBY. Teardown sends it before it closes the lobby (#454),
+        // and that close is a second path to the same frame should the send fail: the socket
+        // closing reaches on_connection_lost() and so the same abort().
         killGameOf(joiner);
 
         // The frame arrived and was relayed. This is the client half of the card.

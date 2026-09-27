@@ -19,6 +19,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,31 +99,48 @@ final class IceAdapterConnectionCloseRaceTest {
     @Test
     void aCloseInsideTheConnectWindowStillFiresExactlyOneDisconnect() throws Exception {
         List<DisconnectEvent> fired = new CopyOnWriteArrayList<>();
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicInteger firedByClose = new AtomicInteger(-1);
         IceAdapterConnection racing =
                 new IceAdapterConnection(server.port(), ATTEMPTS, RETRY_DELAY, CALL_TIMEOUT) {
                     @Override
                     void socketPublished() {
                         // On the connect thread, between the socket assignment and the flag read.
                         close();
+                        // What close() fired by itself, read on the thread that called it.
+                        firedByClose.set(fired.size());
                     }
                 };
         conn = racing;
-        racing.onDisconnect(fired::add);
+        racing.onDisconnect(
+                event -> {
+                    fired.add(event);
+                    disconnected.countDown();
+                });
 
         CompletableFuture<Void> connected = racing.connect();
 
+        // Waits on the listener, not the connect future. runConnection calls completeExceptionally
+        // before fireDisconnect, so connected.get() can return while fired is still empty, and a
+        // CI flake there would read exactly like the fix regressing (#373). The event is one-shot,
+        // so once the latch opens the count below is final.
+        assertTrue(
+                disconnected.await(5, TimeUnit.SECONDS),
+                "a close in this window must fire a disconnect, not none");
+        // Pins the interleaving, not just the count (#373). close() found the socket already
+        // published, so the event is the connect thread's to fire. Were the seam above the socket
+        // assignment, close() would find no socket and fire LOCAL_CLOSE itself, and every count
+        // below would still read one without the #278 branch ever running.
+        assertEquals(
+                0,
+                firedByClose.get(),
+                "close() found the socket published, so it must leave the disconnect to the"
+                        + " connect thread: "
+                        + fired);
         assertThrows(
                 ExecutionException.class,
                 () -> connected.get(5, TimeUnit.SECONDS),
                 "the connect was abandoned, so its future must not complete successfully");
-        // Awaited, not read straight after the future. runConnection calls completeExceptionally
-        // before fireDisconnect, so connected.get() can return while fired is still empty —
-        // measured at roughly 1 failure in 100 on an idle machine, and every time with a delay
-        // injected between the two production lines. A CI flake there would read "must fire
-        // exactly one disconnect, not none: []", which looks exactly like the fix regressing.
-        assertTrue(
-                waitFor(() -> !fired.isEmpty()),
-                "a close in this window must fire a disconnect, not none");
         assertEquals(
                 1,
                 fired.size(),

@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -230,6 +231,9 @@ public class IceAdapterConnection {
 
     /** Currently-installed disconnect listener; volatile so the reader thread sees updates. */
     private volatile Consumer<DisconnectEvent> disconnectListener = ignored -> {};
+
+    /** The disconnect that ended this connection, once one has; see {@link #disconnectEvent()}. */
+    private volatile DisconnectEvent disconnectEvent;
 
     /** Live socket after a successful connect; {@code null} before. */
     private volatile Socket socket;
@@ -578,6 +582,18 @@ public class IceAdapterConnection {
         long id = nextId.getAndIncrement();
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pending.put(id, future);
+        // Once the connection has ended, fail at once rather than write into it (WBS-3.1.2.8-fix,
+        // #452). A stream that stopped parsing leaves the socket open, so the write would succeed
+        // and the call would fail only when its timeout ran out, reading as a live adapter that
+        // did not answer. Checked after the put, so a disconnect racing this call either finds the
+        // entry in failAllPending or is found here; a call that still slips between the two fails
+        // by its own timeout.
+        DisconnectEvent ended = disconnectEvent;
+        if (ended != null) {
+            pending.remove(id);
+            future.completeExceptionally(closed(ended.reason(), ended.error()));
+            return future;
+        }
 
         ObjectNode request = mapper.createObjectNode();
         request.put("jsonrpc", "2.0");
@@ -626,6 +642,22 @@ public class IceAdapterConnection {
      */
     public void onDisconnect(final Consumer<DisconnectEvent> listener) {
         this.disconnectListener = listener == null ? ignored -> {} : listener;
+    }
+
+    /**
+     * The disconnect that ended this connection, if it has ended (WBS-3.1.2.8-fix, #452), exposed
+     * the way {@code LobbySession.disconnectEvent()} exposes the lobby's. A reader, not a second
+     * listener: the lifecycle leaves the single listener slot unwired on purpose (#214), since the
+     * adapter process's exit is its signal for a dead adapter, and only teardown asks, afterwards,
+     * whether the adapter closed its link while it was still running.
+     *
+     * <p>Recorded before the listener runs and before any call in flight is failed, so whoever saw
+     * a call fail because the connection closed sees the event too.
+     *
+     * @return the disconnect event, or empty while the connection has not ended
+     */
+    public Optional<DisconnectEvent> disconnectEvent() {
+        return Optional.ofNullable(disconnectEvent);
     }
 
     /**
@@ -688,6 +720,7 @@ public class IceAdapterConnection {
 
     private void fireDisconnect(final DisconnectEvent event) {
         if (disconnectFired.compareAndSet(false, true)) {
+            disconnectEvent = event;
             try {
                 disconnectListener.accept(event);
             } catch (RuntimeException e) {
@@ -700,11 +733,22 @@ public class IceAdapterConnection {
     }
 
     private void failAllPending(final DisconnectReason reason, final Throwable error) {
-        IOException cause =
-                new IOException("ICE adapter connection closed (" + reason + ")", error);
+        IOException cause = closed(reason, error);
         for (CompletableFuture<JsonNode> future : pending.values()) {
             future.completeExceptionally(cause);
         }
         pending.clear();
+    }
+
+    /**
+     * What a call fails with once the connection has ended: an {@link IOException}, which is how
+     * the lifecycle tells a closed connection from an adapter that is still connected (#445).
+     *
+     * @param reason why the connection ended
+     * @param error the throwable that ended it, or {@code null}
+     * @return the failure, naming the reason and chaining the error
+     */
+    private static IOException closed(final DisconnectReason reason, final Throwable error) {
+        return new IOException("ICE adapter connection closed (" + reason + ")", error);
     }
 }

@@ -197,8 +197,8 @@ final class GameEndReportingTest {
      *
      * <p>The two emitted frames are what mock-game actually sends at the end of a match, in order
      * ({@code MockGameLifecycle.gameEnds}). The hanging "game" never exits on its own, so #192's
-     * safety net drives teardown — and that is the same {@code onGameProcessExit} path a real exit
-     * takes, which is where the duplicate came from.
+     * safety net drives teardown, whose step once the game is down is where a duplicate would come
+     * from: it sends the fallback only when no {@code GameEnded} was seen (#454).
      */
     @Test
     void cleanEndSendsGameStateEndedExactlyOnce() throws Exception {

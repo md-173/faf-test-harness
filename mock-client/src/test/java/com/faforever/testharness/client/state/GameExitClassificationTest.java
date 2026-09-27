@@ -21,6 +21,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -76,6 +77,9 @@ final class GameExitClassificationTest {
                     0,
                     -1);
 
+    /** The signal flag the teardown reads; raised only by the case that needs it. */
+    private final AtomicBoolean signal = new AtomicBoolean();
+
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
     private SessionTeardown teardown;
@@ -91,7 +95,7 @@ final class GameExitClassificationTest {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
-        teardown = new SessionTeardown(lobby);
+        teardown = new SessionTeardown(lobby, signal::get);
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         lifecycle = new MockClientLifecycle(MINIMAL_CONFIG, session, teardown);
 
@@ -211,6 +215,20 @@ final class GameExitClassificationTest {
                     "deliberate teardown is not a finding (cleanEnd=" + cleanEnd + ")");
             assertTrue(event.getFormattedMessage().contains("harness-initiated teardown"));
         }
+    }
+
+    /**
+     * A signal suppresses the crash reading too, before any teardown has run (#438 review): {@code
+     * SubprocessRegistry}'s hook, or a terminal's SIGINT, can kill the game first.
+     */
+    @Test
+    void aNonZeroExitOnceASignalIsStoppingTheRunIsNotACrash() {
+        signal.set(true);
+
+        ILoggingEvent event = classify(143, false, true);
+
+        assertEquals(Level.INFO, event.getLevel(), "a signal's kill is not a finding");
+        assertFalse(lifecycle.verdicts().gameCrashed(), "a signal's kill is not a crash");
     }
 
     /**

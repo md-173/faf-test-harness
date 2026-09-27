@@ -33,6 +33,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -233,6 +234,11 @@ public final class MultiPeerSession implements AutoCloseable {
 
     /** Whether {@link #close()} has been called. Guarded by {@code this}. */
     private boolean closed;
+
+    /**
+     * Raised by {@link #closeOnSignal()} before it closes; every peer's teardown reads it (#438).
+     */
+    private final AtomicBoolean signalled = new AtomicBoolean();
 
     /** {@link System#nanoTime()} at which {@link #SESSION_DEADLINE} runs out. */
     private long deadline;
@@ -490,6 +496,17 @@ public final class MultiPeerSession implements AutoCloseable {
     }
 
     /**
+     * {@link #close()} for a shutdown hook: raises the signal flag every peer's teardown reads,
+     * then closes (#438). The order matters. {@code SubprocessRegistry}'s hook, and a terminal's
+     * SIGINT, kill every peer's adapter and game at the moment this starts, so a peer that found
+     * its processes dead with the flag still down would report the signal's kill as a finding.
+     */
+    public void closeOnSignal() {
+        signalled.set(true);
+        close();
+    }
+
+    /**
      * The "pgrep-clean" sweep: once the session is closed, no peer's adapter or game may still be
      * running under this JVM. Polls up to {@link #NO_ORPHANS_TIMEOUT} for them to disappear.
      *
@@ -608,8 +625,7 @@ public final class MultiPeerSession implements AutoCloseable {
                 hostUid == null
                         ? hostConfig(bases.get(index), ports, hostTitle, hostLaunchDelaySeconds)
                         : joinConfig(bases.get(index), ports, hostUid);
-        SessionPeer peer = new SessionPeer(label, role, config);
-        peers.add(peer);
+        SessionPeer peer = addPeer(label, role, config);
         checkDistinctPorts(peer);
         // Taken before the events that can reach them. StateMachine.stateReached only
         // short-circuits while the state is still current, so a future asked for after the FSM
@@ -1024,6 +1040,21 @@ public final class MultiPeerSession implements AutoCloseable {
             throw new IllegalArgumentException(
                     what + " binary not found: " + path.toAbsolutePath());
         }
+    }
+
+    /**
+     * Builds a peer whose teardown reads this session's signal flag, and adds it to the peers
+     * {@link #close()} shuts down.
+     *
+     * @param label the instance label, e.g. {@code A}
+     * @param role {@code host} or {@code joiner}
+     * @param config the peer's validated config
+     * @return the peer
+     */
+    SessionPeer addPeer(final String label, final String role, final MockClientConfig config) {
+        SessionPeer peer = new SessionPeer(label, role, config, signalled::get);
+        peers.add(peer);
+        return peer;
     }
 
     /**

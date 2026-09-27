@@ -21,6 +21,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import org.slf4j.MDC;
 
 /**
@@ -94,6 +95,17 @@ public final class SessionPeer {
     private volatile SessionState identity;
 
     /**
+     * Builds a peer no signal can reach, as a test does.
+     *
+     * @param label the instance label, e.g. {@code A}
+     * @param role {@code host} or {@code joiner}
+     * @param config the peer's validated config
+     */
+    SessionPeer(final String label, final String role, final MockClientConfig config) {
+        this(label, role, config, () -> false);
+    }
+
+    /**
      * Builds the peer's components under its label. The {@code game_join_failed} and {@code
      * ConnectToPeer} recorders are registered before the lifecycle's own handlers, so each sees a
      * frame before the adapter does.
@@ -101,8 +113,14 @@ public final class SessionPeer {
      * @param label the instance label, e.g. {@code A}
      * @param role {@code host} or {@code joiner}
      * @param config the peer's validated config
+     * @param signalled the session's signal flag, which the peer's teardown reads (#438): raised
+     *     once a signal is stopping the session, whose processes it kills itself
      */
-    SessionPeer(final String label, final String role, final MockClientConfig config) {
+    SessionPeer(
+            final String label,
+            final String role,
+            final MockClientConfig config,
+            final BooleanSupplier signalled) {
         this.label = label;
         this.name = label + "(" + role + ")";
         this.config = config;
@@ -113,7 +131,7 @@ public final class SessionPeer {
             lobby.registerHandler("game_info", this::recordGameInfo);
             IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
             adapter.registerNotification("onConnected", this::recordVerdict);
-            this.teardown = new SessionTeardown(lobby);
+            this.teardown = new SessionTeardown(lobby, signalled);
             this.lifecycle =
                     new MockClientLifecycle(
                             config,
