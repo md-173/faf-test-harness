@@ -421,7 +421,8 @@ would make `SERVER_CONNECTION_LOST` deterministic here.
 The `launch-game` *subcommand* exits `70` (`RUNTIME`) regardless, because it
 returns `RUNTIME` whenever the child exits before its run window. So `70` from
 the subcommand means "the game stopped early", not "the game could not reach an
-adapter" — for that, read the game's own status line.
+adapter"; for that, read the game's own status line, which is logged before the
+subcommand's ERROR.
 
 `mock-game` itself is no longer an obstacle, and the reason a bare
 `launch-game` — with **no adapter running at all**, the other case worth

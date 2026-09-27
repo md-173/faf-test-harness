@@ -100,6 +100,10 @@ public final class LaunchGameCommand implements Callable<Integer> {
 
         try {
             int earlyCode = game.onExit().get(durationSeconds, TimeUnit.SECONDS);
+            // The game has exited, so terminate() sends no signal. It waits up to a second for
+            // the game's last lines, which usually say why, so they are logged before this report
+            // (#495).
+            game.terminate();
             log.error(
                     "mock-game exited on its own before the {}s run window; exit code {}",
                     durationSeconds,
