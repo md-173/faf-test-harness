@@ -597,8 +597,8 @@ The teardown sequence has three layers, each a fallback for the previous.
 ### 7.2 Forceful (any graceful step fails or times out)
 
 ```text
-6. process.toHandle().destroy(): POSIX SIGTERM. Wait up to 3 s.
-7. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to 2 s.
+6. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
+7. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to the grace again.
 8. Log ERROR if still alive after 10 s total; abandon and continue.
 ```
 
