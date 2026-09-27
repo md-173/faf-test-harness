@@ -403,9 +403,11 @@ Two practical notes:
   `ProcessOutputLogger` on this side holds a line only until the next one shows
   whether it continues a stack trace, or for 200 ms if nothing follows. What
   the adapter writes while `launch-ice` terminates it at the end of the run
-  window is logged too, before the command exits. For a `.jar` adapter, as
-  here, the harness log is its only record: the console-only Logback config
-  the harness injects has no file appender.
+  window is logged too, before the command exits. An adapter that exits on its
+  own before the window ends has its last lines logged before the ERROR that
+  reports its exit. For a `.jar` adapter, as here, the harness log is its only
+  record: the console-only Logback config the harness injects has no file
+  appender.
 - **Give the adapter the longer window.** If `launch-ice` ends first, its
   termination reaches the game as a lost connection and the game exits `69`
   (`SERVER_CONNECTION_LOST`) — a correct report of what happened to it, and easy
