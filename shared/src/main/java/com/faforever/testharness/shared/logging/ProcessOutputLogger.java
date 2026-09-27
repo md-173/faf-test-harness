@@ -191,7 +191,8 @@ public final class ProcessOutputLogger {
      *
      * @param reader the reader positioned at the start of the stream
      * @param isStderr if {@code true}, completed blocks are logged at WARN; otherwise at INFO
-     * @param componentTag used only to identify the stream in a line-observer failure log
+     * @param componentTag used only to identify the stream in a line-observer or idle-flush failure
+     *     log
      * @param lineObserver invoked with each raw line before it is buffered for logging
      * @throws IOException if the reader encounters an I/O error
      */
@@ -201,7 +202,7 @@ public final class ProcessOutputLogger {
             final String componentTag,
             final Consumer<String> lineObserver)
             throws IOException {
-        HeldBlock held = new HeldBlock(isStderr);
+        HeldBlock held = new HeldBlock(isStderr, componentTag);
         HELD_BLOCKS.add(held);
         try {
             String line;
@@ -257,8 +258,8 @@ public final class ProcessOutputLogger {
     }
 
     /**
-     * Emits the accumulated content of {@code block} as a single log event, then clears the
-     * builder. Does nothing if {@code block} is empty.
+     * Clears {@code block} and emits what it held as a single log event. Does nothing if {@code
+     * block} is empty.
      *
      * <p>The builder is cleared before the event is logged, so a block whose logging throws is
      * dropped rather than offered to the idle flusher again every time it looks.
@@ -314,7 +315,10 @@ public final class ProcessOutputLogger {
             try {
                 held.flushIfIdle(now);
             } catch (Throwable t) {
-                LOG.warn("Idle flush of subprocess output failed; output capture continues", t);
+                LOG.warn(
+                        "Idle flush of subprocess output for {} failed; output capture continues",
+                        held.componentTag,
+                        t);
             }
         }
     }
@@ -329,6 +333,12 @@ public final class ProcessOutputLogger {
 
         /** Whether the block comes from stderr, which is logged at WARN rather than INFO. */
         private final boolean isStderr;
+
+        /**
+         * The stream's component tag, which names the child in the idle flusher's failure warning;
+         * that warning is logged after the reader's MDC has been cleared again.
+         */
+        private final String componentTag;
 
         /**
          * The reader thread's MDC, component and instance label included, applied while the idle
@@ -356,9 +366,11 @@ public final class ProcessOutputLogger {
          * Creates an empty block that remembers the calling reader thread's MDC.
          *
          * @param isStderr whether the block comes from stderr
+         * @param componentTag the stream's component tag
          */
-        private HeldBlock(final boolean isStderr) {
+        private HeldBlock(final boolean isStderr, final String componentTag) {
             this.isStderr = isStderr;
+            this.componentTag = componentTag;
             this.readerContext = MDC.getCopyOfContextMap();
         }
 

@@ -113,7 +113,7 @@ class SubprocessManagerTerminateTest {
     }
 
     @Test
-    void terminateAfterNaturalExitIsNoop() throws Exception {
+    void terminateAfterNaturalExitSendsNoSignal() throws Exception {
         SubprocessManager m =
                 SubprocessManager.start(TestSupport.testChild("exit", "0"), TAG, DEFAULT_GRACE);
         m.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);

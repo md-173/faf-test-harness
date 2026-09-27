@@ -1,5 +1,7 @@
 package com.faforever.testharness.shared.process;
 
+import java.util.Arrays;
+
 /** Tiny configurable child program used by SubprocessManager tests. */
 public final class TestChild {
 
@@ -21,6 +23,12 @@ public final class TestChild {
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> System.out.println(args[2])));
                 System.out.println(args[1]);
                 Thread.sleep(60_000);
+            }
+            case "chunk" -> {
+                // Prints the remaining args as lines with one print call, so they reach the pipe
+                // in one write and a reader finds the rest readable as soon as it has the first.
+                String[] lines = Arrays.copyOfRange(args, 1, args.length);
+                System.out.print(String.join("\n", lines) + "\n");
             }
             case "lines" -> {
                 // Each arg is a line to print, to stderr if it starts "err:", or a pause of

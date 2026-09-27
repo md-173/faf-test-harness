@@ -258,8 +258,8 @@ public final class SessionTeardown {
      * Terminates the ICE adapter, quit-first (WBS-3.1.2.5): {@link #quitAdapterIfOpen()} gives the
      * adapter a bounded chance to shut itself down gracefully via RPC, mirroring the real client's
      * {@code iceAdapterProxy.quit()}. Unconditionally falls through to {@link
-     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, already a no-op once quit has
-     * ended the process — a quit that never lands still leaves this step bounded.
+     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, which sends no signal once quit
+     * has ended the process, so a quit that never lands still leaves this step bounded.
      */
     private void terminateAdapter() {
         quitAdapterIfOpen();
