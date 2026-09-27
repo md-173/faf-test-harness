@@ -3,16 +3,15 @@ package com.faforever.testharness.client.state;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectEvent;
 import com.faforever.testharness.client.ice.IceAdapterConnection.DisconnectReason;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.process.SubprocessManager;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
 import com.faforever.testharness.shared.statemachine.State;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,9 +36,6 @@ final class SessionFailures {
 
     /** The lifecycle's logger, not this class's; see the class javadoc. */
     private static final Logger LOG = LoggerFactory.getLogger(MockClientLifecycle.class);
-
-    /** How deep {@link #describe} follows a cause chain, so one that loops cannot hang a line. */
-    private static final int MAX_CAUSE_DEPTH = 16;
 
     /**
      * How long {@link #adapterAtTeardown} gives an adapter whose JSON-RPC link closed from its side
@@ -105,7 +101,8 @@ final class SessionFailures {
     }
 
     /**
-     * A launch that never came up (#437), recorded as {@link SessionVerdicts#launchFailed()}.
+     * A launch that never came up (#437), a {@code game_launch} the client could not use among them
+     * (#457), recorded as {@link SessionVerdicts#launchFailed()}.
      *
      * @param what the action that failed, for the log line
      * @param reason why it failed
@@ -261,6 +258,40 @@ final class SessionFailures {
     }
 
     /**
+     * The CONNECTING to TERMINATED action for {@code AuthFailed} (WBS-3.1.1.4-fix, #455): the
+     * handshake's failure ended the session, so it is named ahead of {@code state entry:
+     * TERMINATED}. A connection that fails ends the session first, through the lobby's disconnect,
+     * and the failure then reaches TERMINATED's no-op instead of a WARN after the session had
+     * ended. The caller of {@code start} names the cause either way.
+     *
+     * @param event the {@code AuthFailed} event
+     */
+    void handshakeFailed(final Event event) {
+        LOG.warn("Handshake could not be completed");
+    }
+
+    /**
+     * The IDLE and SEARCHING action for a {@code game_launch} the client cannot use
+     * (WBS-3.1.1.6-fix, #457): a launch that never came up, recorded as {@link #launch}. The frame
+     * used to be dropped with a WARN, leaving the run waiting for a launch it had already received,
+     * in IDLE for good or in SEARCHING until faf-server's {@code match_cancelled}. faf-server
+     * writes {@code game_launch} only to a player who is idle or starting a matched game, so no
+     * other state has the edge, as none has one for {@code LaunchGame}. When a match's host fails
+     * to host in time, faf-server still sends each guest its {@code game_launch}, then {@code
+     * match_cancelled}, which then reaches TERMINATED's no-op.
+     *
+     * <p>A refused frame starts no launch, so it records no {@link SessionVerdicts#launchStarted()}
+     * and teardown owes the lobby no {@code GameState Ended} (#462). Nothing is lost by that: the
+     * lobby close that ends the run frees the player on faf-server the way that frame would.
+     *
+     * @param event the {@link LaunchRejected} event
+     * @throws FailedTransitionException always, which takes the session to TERMINATED
+     */
+    void launchRejected(final Event event) throws FailedTransitionException {
+        throw launch("read the game_launch frame", ((LaunchRejected) event).reason());
+    }
+
+    /**
      * An unchecked throw during a launch (#439), recorded as {@link
      * SessionVerdicts#launchFailed()}; see {@link #defect}.
      *
@@ -323,50 +354,24 @@ final class SessionFailures {
     }
 
     /**
-     * Strips the {@link ExecutionException} and {@link CompletionException} wrappers a future adds,
-     * so a failure is judged by what actually caused it.
+     * Strips the wrappers a future adds; the lifecycle's name for {@link Failures#unwrap}, which
+     * the lobby's lines share (#455).
      *
      * @param failure the failure as a future reported it
      * @return the first cause that is not such a wrapper
      */
     static Throwable unwrap(final Throwable failure) {
-        Throwable cause = failure;
-        while ((cause instanceof ExecutionException || cause instanceof CompletionException)
-                && cause.getCause() != null) {
-            cause = cause.getCause();
-        }
-        return cause;
+        return Failures.unwrap(failure);
     }
 
     /**
-     * Names a failure for a log line: its type, which carries the meaning, then its message when it
-     * has one (the {@code TimeoutException} a call's timer completes it with has none), then the
-     * failure at the bottom of its cause chain, when there is one. That last part is what tells a
-     * closed connection's kinds apart: nothing for a clean end of the stream, a {@code
-     * SocketException} for a reset, a {@code JsonProcessingException} for a stream that stopped
-     * parsing.
+     * Names a failure for a log line; the lifecycle's name for {@link Failures#describe}, which the
+     * lobby's lines share (#455).
      *
      * @param cause the failure to name
      * @return its simple class name and message, and its root cause's when it has one
      */
     static String describe(final Throwable cause) {
-        Throwable root = cause;
-        for (int depth = 0; depth < MAX_CAUSE_DEPTH && root.getCause() != null; depth++) {
-            root = root.getCause();
-        }
-        return root == cause ? name(cause) : name(cause) + ", caused by " + name(root);
-    }
-
-    private static String name(final Throwable failure) {
-        // A Jackson error's getMessage() puts its source location on a second line, which would
-        // split the one line naming it; its original message is the cause on its own, as
-        // LobbyConnection logs a malformed frame.
-        String message =
-                failure instanceof JsonProcessingException json
-                        ? json.getOriginalMessage()
-                        : failure.getMessage();
-        return message == null
-                ? failure.getClass().getSimpleName()
-                : failure.getClass().getSimpleName() + ": " + message;
+        return Failures.describe(cause);
     }
 }

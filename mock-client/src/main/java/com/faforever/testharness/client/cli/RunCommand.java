@@ -13,6 +13,7 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.client.state.ClientState;
 import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.client.state.SessionVerdicts;
+import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.time.Duration;
 import java.util.concurrent.Callable;
@@ -83,12 +84,13 @@ public final class RunCommand implements Callable<Integer> {
      *
      * @return {@link ExitCodes#OK} after a clean close; {@link ExitCodes#RUNTIME} if the session
      *     could not be established, its ICE adapter or game never came up, the connection dropped
-     *     unexpectedly, or the session failed after it came up (a lobby frame it could not read, an
-     *     adapter call answered with an error or not at all, an adapter still running without its
-     *     JSON-RPC link, a match the server cancelled); {@link ExitCodes#ADAPTER_LOST} if the
-     *     session ran but its ICE adapter died unaccounted for; {@link ExitCodes#GAME_CRASHED} if
-     *     the session ran but its game process died unaccounted for. When more than one applies,
-     *     {@link #sessionExitCode(boolean, boolean, SessionVerdicts, Logger)} orders them.
+     *     unexpectedly, the lobby answered one of its commands with {@code invalid}, or the session
+     *     failed after it came up (a lobby frame it could not read, an adapter call answered with
+     *     an error or not at all, an adapter still running without its JSON-RPC link, a match the
+     *     server cancelled); {@link ExitCodes#ADAPTER_LOST} if the session ran but its ICE adapter
+     *     died unaccounted for; {@link ExitCodes#GAME_CRASHED} if the session ran but its game
+     *     process died unaccounted for. When more than one applies, {@link
+     *     #sessionExitCode(boolean, boolean, boolean, SessionVerdicts, Logger)} orders them.
      *     Superseded by the signal's own exit code whenever a signal is what ended the run, and
      *     then no verdict is logged.
      */
@@ -174,12 +176,19 @@ public final class RunCommand implements Callable<Integer> {
                     .stateReached(ClientState.IDLE)
                     .get(FSM_SYNC_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            log.error("lobby session timed out before welcome");
+            log.error(
+                    "lobby session with {} timed out before welcome",
+                    session.connection().endpoint());
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (ExecutionException e) {
+            // Named by type and root cause (#455): the message alone is null for a refused
+            // connect, an unknown host or a refused upgrade, and this is the line read first.
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            log.error("lobby session failed: {}", cause.getMessage());
+            log.error(
+                    "lobby session with {} failed: {}",
+                    session.connection().endpoint(),
+                    Failures.describe(cause));
             teardown.run();
             return ExitCodes.RUNTIME;
         } catch (InterruptedException e) {
@@ -219,7 +228,12 @@ public final class RunCommand implements Callable<Integer> {
         LobbyConnection.DisconnectEvent event = session.disconnectEvent().orElse(null);
         boolean lobbyDropped =
                 event != null && event.reason() == LobbyConnection.DisconnectReason.ABRUPT_CLOSE;
-        return sessionExitCode(shuttingDown.get(), lobbyDropped, lifecycle.verdicts(), log);
+        return sessionExitCode(
+                shuttingDown.get(),
+                lobbyDropped,
+                session.lobbyRefusedACommand(),
+                lifecycle.verdicts(),
+                log);
     }
 
     /**
@@ -246,20 +260,23 @@ public final class RunCommand implements Callable<Integer> {
     }
 
     /**
-     * Picks a finished session's exit code from the five verdicts it can carry, and logs the one
+     * Picks a finished session's exit code from the six verdicts it can carry, and logs the one
      * being reported.
      *
      * <p>The order is deliberate. The lobby drop comes first: a connection that died under the
      * session is a different and more fundamental finding than anything that happened inside one,
-     * and it was here first. A launch that never came up is next (#437). It shares {@code RUNTIME}
-     * with the lobby drop, so between those two only the logged line differs, and in practice it
-     * never meets the two below it: no session ran for an adapter or a game to die in. The adapter
-     * comes before the game because it is the verdict with an ordering against this read (#406
-     * writes it in the transition action that drives TERMINATED, while {@code gameCrashed} is
-     * written on a continuation that may not have run yet), so consulting the game first would let
-     * a race pick the code for a run whose adapter died. It also matches cause and effect: an
-     * adapter dying is what makes the game react, and never the reverse, since java-ice-adapter
-     * closes the game's connection and keeps serving when the game dies.
+     * and it was here first. A command the lobby answered with {@code invalid} follows it (#486):
+     * the lobby failing on the harness's own traffic is a finding about the lobby too, and
+     * faf-server closes the connection straight after it. A launch that never came up is next
+     * (#437). It shares {@code RUNTIME} with the two lobby findings, so between those only the
+     * logged line differs, and in practice it never meets the two below it: no session ran for an
+     * adapter or a game to die in. The adapter comes before the game because it is the verdict with
+     * an ordering against this read (#406 writes it in the transition action that drives
+     * TERMINATED, while {@code gameCrashed} is written on a continuation that may not have run
+     * yet), so consulting the game first would let a race pick the code for a run whose adapter
+     * died. It also matches cause and effect: an adapter dying is what makes the game react, and
+     * never the reverse, since java-ice-adapter closes the game's connection and keeps serving when
+     * the game dies.
      *
      * <p>A session that failed after it came up is last (#445, #344): a lobby frame it could not
      * read, an adapter call that failed while the adapter was still connected, or a match the
@@ -282,6 +299,8 @@ public final class RunCommand implements Callable<Integer> {
      * @param shuttingDown whether the JVM is already shutting down, which while a run is live can
      *     only mean a signal ended it
      * @param lobbyDropped whether the lobby connection closed abruptly under the session
+     * @param lobbyRefused whether the lobby answered one of the session's commands with {@code
+     *     invalid} after {@code welcome} (#486)
      * @param verdicts what the session's lifecycle found: a launch that never came up, a lost
      *     adapter, a crashed game, a session that failed after it came up
      * @param log the configured logger, for the single line naming what is reported
@@ -290,11 +309,18 @@ public final class RunCommand implements Callable<Integer> {
     static int sessionExitCode(
             final boolean shuttingDown,
             final boolean lobbyDropped,
+            final boolean lobbyRefused,
             final SessionVerdicts verdicts,
             final Logger log) {
         Logger verdict = shuttingDown ? NOPLogger.NOP_LOGGER : log;
         if (lobbyDropped) {
             verdict.warn("lobby connection dropped unexpectedly");
+            return ExitCodes.RUNTIME;
+        }
+        if (lobbyRefused) {
+            verdict.warn(
+                    "the lobby answered one of this run's commands with invalid; reporting it in"
+                            + " this run's exit code");
             return ExitCodes.RUNTIME;
         }
         if (verdicts.launchFailed()) {

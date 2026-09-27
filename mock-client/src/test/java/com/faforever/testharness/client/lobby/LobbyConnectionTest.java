@@ -1,6 +1,8 @@
 package com.faforever.testharness.client.lobby;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,6 +18,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -23,6 +27,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -334,12 +340,112 @@ final class LobbyConnectionTest {
         server.abruptlyTerminate();
 
         assertTrue(disconnected.await(3, TimeUnit.SECONDS), "disconnect listener never fired");
-        DisconnectReason reason = captured.get().reason();
-        // Some platforms surface an abrupt server-side terminate as CLEAN_CLOSE with code 1006;
-        // the contract requirement is just "observable", not a specific bucket.
+        // The JDK reports a drop either as an error or as a close with code 1006, which a peer
+        // never sends; both are the drop they are, not a clean close (#473).
+        assertEquals(DisconnectReason.ABRUPT_CLOSE, captured.get().reason(), "" + captured.get());
+    }
+
+    /**
+     * A lobby that sends nothing for the silence limit counts as dropped (#485). The JDK can lose a
+     * drop that lands while a frame is being handled, reporting neither a close nor an error, and
+     * faf-server pings every connection every 45 s, so silence is what is left to go on.
+     */
+    @Test
+    void aSilentLobbyIsTreatedAsDropped() throws Exception {
+        lobby = withSilenceLimit(Duration.ofSeconds(1));
+        CompletableFuture<DisconnectEvent> disconnect = new CompletableFuture<>();
+        lobby.onDisconnect(disconnect::complete);
+        long start = System.nanoTime();
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        DisconnectEvent event = disconnect.get(10, TimeUnit.SECONDS);
+        long waited = System.nanoTime() - start;
+
+        assertEquals(DisconnectReason.ABRUPT_CLOSE, event.reason(), "" + event);
+        assertInstanceOf(TimeoutException.class, event.error(), "" + event);
+        assertEquals("lobby sent nothing for 1 s", event.error().getMessage());
+        assertTrue(waited >= Duration.ofSeconds(1).toNanos(), "fired after " + waited + " ns");
+        String warn = "lobby sent nothing for 1 s; treating the connection as dropped";
         assertTrue(
-                reason == DisconnectReason.ABRUPT_CLOSE || reason == DisconnectReason.CLEAN_CLOSE,
-                "expected ABRUPT_CLOSE or CLEAN_CLOSE bucket, got " + reason);
+                logAppender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && warn.equals(e.getFormattedMessage())),
+                "the silence must be logged as a WARN");
+        // The socket is released rather than left open: the server sees the connection go, with
+        // no Close frame.
+        assertEquals(1006, server.awaitClose(5, TimeUnit.SECONDS));
+    }
+
+    /**
+     * Lobby traffic, faf-server's pings included, keeps the connection alive, and the limit is
+     * counted again from the last frame once the traffic stops (#485).
+     */
+    @Test
+    void lobbyTrafficKeepsTheConnectionAlive() throws Exception {
+        lobby = withSilenceLimit(Duration.ofSeconds(2));
+        CompletableFuture<DisconnectEvent> disconnect = new CompletableFuture<>();
+        lobby.onDisconnect(disconnect::complete);
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        // One and a half limits of traffic, a ping every twentieth of one, so only a stall of
+        // nearly the whole limit could end it: the 2 s this class's other waits allow.
+        for (int i = 0; i < 30; i++) {
+            server.broadcastText("{\"command\":\"ping\"}");
+            Thread.sleep(100);
+        }
+        assertFalse(
+                disconnect.isDone(),
+                "pings must keep the connection alive: " + disconnect.getNow(null));
+
+        DisconnectEvent event = disconnect.get(10, TimeUnit.SECONDS);
+        assertEquals(DisconnectReason.ABRUPT_CLOSE, event.reason(), "" + event);
+    }
+
+    /**
+     * A frame the listener is still handling is not the lobby's silence (#485). A {@code
+     * game_launch} runs the whole launch on the listener, which can take longer than the limit, and
+     * the lobby's frames wait unread meanwhile.
+     */
+    @Test
+    void aFrameStillBeingHandledIsNotSilence() throws Exception {
+        Duration limit = Duration.ofSeconds(1);
+        lobby = withSilenceLimit(limit);
+        AtomicLong handled = new AtomicLong();
+        lobby.registerHandler(
+                "game_launch",
+                frame -> {
+                    try {
+                        Thread.sleep(2 * limit.toMillis());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    handled.set(System.nanoTime());
+                });
+        AtomicLong fired = new AtomicLong();
+        CompletableFuture<DisconnectEvent> disconnect = new CompletableFuture<>();
+        lobby.onDisconnect(
+                event -> {
+                    fired.set(System.nanoTime());
+                    disconnect.complete(event);
+                });
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        server.broadcastText("{\"command\":\"game_launch\"}");
+        // A later write makes the fixture write the frame even if its selector dropped the
+        // write interest (#480); the ping is read once the handler returns.
+        server.broadcastText("{\"command\":\"ping\"}");
+
+        DisconnectEvent event = disconnect.get(10, TimeUnit.SECONDS);
+        assertEquals(DisconnectReason.ABRUPT_CLOSE, event.reason(), "" + event);
+        assertTrue(handled.get() != 0, "the connection was dropped while the frame was handled");
+        assertTrue(
+                fired.get() - handled.get() >= limit.toNanos(),
+                "fired " + (fired.get() - handled.get()) + " ns after the handler returned");
     }
 
     @Test
@@ -455,5 +561,20 @@ final class LobbyConnectionTest {
             seen++;
         }
         assertEquals(expected, seen);
+    }
+
+    /**
+     * A connection to the scripted server with a silence limit short enough for a test (#485).
+     *
+     * @param limit how long the lobby may send nothing
+     * @return the unconnected connection
+     */
+    private LobbyConnection withSilenceLimit(final Duration limit) {
+        return new LobbyConnection(
+                server.uri(),
+                HttpClient.newHttpClient(),
+                new ObjectMapper(),
+                LobbyConnection.DEFAULT_CONNECT_TIMEOUT,
+                limit);
     }
 }

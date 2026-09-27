@@ -226,7 +226,7 @@ Once a WebSocket connection is established and the client holds a valid OAuth JW
 | 1 | Client → Server | `ask_session` | Request a session ID |
 | 2 | Server → Client | `session` | Assign session ID |
 | 3 | Client → Server | `auth` | Authenticate with JWT |
-| 4 | Server → Client | `welcome` or `authentication_failed` | Success or failure |
+| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close | Success or failure |
 
 After a successful welcome, the client should be prepared to receive additional state-sync messages such as player_info, game_info, and social. The server also supports matchmaker_info, which is sent in response to requests and periodic updates.
 
@@ -292,6 +292,22 @@ After a successful welcome, the client should be prepared to receive additional 
   "text": "Login not found or password incorrect. They are case sensitive."
 }
 ```
+
+**4c. Failure: server sends `invalid`, then closes the connection**
+```json
+{
+  "command": "invalid"
+}
+```
+
+faf-server's generic handler sends it when handling the `auth` raised, for example when its
+policy server refuses the `unique_id` or checking the token raises, as when it cannot fetch its
+signing keys, then closes the connection. A token that fails the check is answered with
+`authentication_failed` instead.
+Since faf-server v1.18.0 (FAForever/server#1093) that close is a Close frame, code 1000, with no
+reason. A banned account and a database outage end the login with an error `notice` and the same
+close instead, `{"command":"notice","style":"error","text":"…"}`, whose text says why. The Mock
+Client ends the login at once on either, naming it, and logs every `notice` with its text (#473).
 
 ### `unique_id` Handling
 
@@ -518,7 +534,7 @@ process. It is sent by the server at the end of both custom and matchmaker setup
 | `args` | array | no | Additional launch arguments passed to the game executable |
 | `mapname` | string | matchmaker only | Map folder name |
 | `team` | integer | matchmaker only | Team assignment |
-| `faction` | integer | matchmaker only | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim |
+| `faction` | integer | matchmaker only | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad |
 | `map_position` | integer | matchmaker only | Start spot on the map |
 | `expected_players` | integer | matchmaker only | Expected player count |
 | `game_options` | object | matchmaker only | Additional game options |
@@ -541,6 +557,9 @@ triggers the local orchestration sequence defined in **4.4 Orchestration Note**
    Each field must therefore be constrained to its expected type and character set
    (for example: `uid` is a non-negative integer; `mapname` and `mod` match a strict
    identifier pattern; enumerated fields are checked against their allowed values).
+   The Mock Client decodes `game_launch` without Jackson's coercion (#474): a float or a
+   string where an integer belongs, or a number or a boolean where a string does, is refused
+   rather than converted, although the real client converts them.
 4. **Subprocess boot** — launch `faf-ice-adapter` and `mock-game` per §4.4, mapping the
    validated fields into the CLI arguments each executable expects.
 5. **IPC handshake** — hold orchestration state until both local TCP channels
@@ -840,6 +859,14 @@ The mock client **must**:
   (backoff, re-authentication, session re-establishment per [§3](#section-3-auth))
   is implementation-defined and is not mandated by the protocol.
 
+The mock client applies the last point with a 100 s limit, two missed pings and a
+margin: a lobby that sends nothing for that long ends the session as a dropped
+connection, with no reconnect (#485). Only the time it spends waiting for a frame
+counts, since a handler such as `game_launch` can hold its listener for longer. It
+sends no `ping` of its own. The real client's `FafLobbyClient` (faf-java-commons)
+has no such limit, and sends its own `ping` after 60 s without traffic in either
+direction.
+
 ### Related Timing Constants
 
 | Constant | Value | Purpose |
@@ -888,7 +915,9 @@ sequenceDiagram
         LS-->>MC: welcome
         LS-->>MC: player_info / game_info / social
     else failure
-        LS-->>MC: authentication_failed + close
+        LS-->>MC: authentication_failed
+    else refused (server error, ban, outage)
+        LS-->>MC: invalid or an error notice, then a close
     end
 
     Note over MC,LS: Phase 3 — Game setup (§4)
@@ -1170,7 +1199,7 @@ Trigger for the Mock Client to start subprocesses. See §§4–5.
 | `args` | array | no | Extra CLI args passed to the game executable. |
 | `mapname` | string | matchmaker | Map folder name. |
 | `team` | integer | matchmaker | Team assignment. |
-| `faction` | integer | matchmaker | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim. |
+| `faction` | integer | matchmaker | 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad. |
 | `map_position` | integer | matchmaker | Start spot. |
 | `expected_players` | integer | matchmaker | Expected player count. |
 | `map_pool_map_version_id` | integer | matchmaker | Map pool version reference. |

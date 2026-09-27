@@ -23,10 +23,10 @@ import java.util.List;
  * interleaved), so it is exposed as {@code List<JsonNode>} rather than a typed list.
  *
  * <p>Required fields are boxed types with a canonical-constructor presence check, so a frame that
- * omits one decodes to {@code null} and is dropped by the dispatcher rather than silently
- * defaulting (a primitive {@code int uid} would mask a missing game id as {@code 0}). {@code
- * initMode} is the exception: it is boxed but <em>not</em> required, because the spec marks it
- * deprecated ("infer from {@code game_type}") and a server may legitimately omit it.
+ * omits one fails to decode, and the handler rejects it, rather than silently defaulting (a
+ * primitive {@code int uid} would mask a missing game id as {@code 0}). {@code initMode} is the
+ * exception: it is boxed but <em>not</em> required, because the spec marks it deprecated ("infer
+ * from {@code game_type}") and a server may legitimately omit it.
  *
  * @param uid game ID; required
  * @param mod featured mod name (e.g. {@code "faf"}, {@code "ladder1v1"}); required
@@ -39,7 +39,7 @@ import java.util.List;
  *     server omits it
  * @param mapname matchmaker only — map folder name
  * @param team matchmaker only — team assignment
- * @param faction matchmaker only — 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim
+ * @param faction matchmaker only — 1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad
  * @param mapPosition matchmaker only — start spot on the map
  * @param expectedPlayers matchmaker only — expected player count
  * @param mapPoolMapVersionId matchmaker only — map pool version reference
