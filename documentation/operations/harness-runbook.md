@@ -1559,8 +1559,13 @@ its Gradle steps gone: it downloads the mock-client and mock-game jars from
 them, checks the jar carries the flag it is about to use, and points
 `--ice-adapter-binary-path` at the adapter it just built instead of the pinned
 one. The evidence-summary step is dropped, the two `faf-uid` steps are merged,
-the job cap is raised to cover the consumer's own build step, and the log
-upload fires on a cancelled run as well as a failed one.
+and the log upload fires on a cancelled run as well as a failed one. The
+sessions this repository runs after the first, which prove its verdict can
+fail (WBS-2.3.3.3), are dropped too, with its check that none left a process
+behind: that is why the repository keeps its session command in
+`scripts/ci/run-session.sh`, while the job below inlines it. Both jobs cap at
+60 minutes, the one below to cover the consumer's own build step, the
+repository's to cover its extra sessions.
 
 The flag reference, the credential-layering rule and the full exit-code table
 are [`mock-client/README.md`](../../mock-client/README.md)'s, and are not

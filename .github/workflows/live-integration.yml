@@ -6,7 +6,9 @@
 # Two steps differ for them, and #87's runbook section carries that variant: they download the
 # mock-client and mock-game jars from releases/latest instead of building them here, and they point
 # --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
-# pins. Everything else, including the session invocation, is the same.
+# pins. The session command itself is the same, kept here in scripts/ci/run-session.sh because this
+# job runs it again after the passing session, for the runs that prove its verdict can fail
+# (WBS-2.3.3.3), which a consumer's job need not copy.
 #
 # Advisory, never a PR gate: the shared test lobby's availability is outside our control, so a
 # failure here is a finding rather than a reason to block a merge. ci.yml stays the gate.
@@ -152,7 +154,10 @@ jobs:
   session:
     name: Two-peer session (accounts C and D)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Above every session step's 12-minute backstop together, with room for provisioning. A job cap
+    # cancels the run rather than failing a step, so a session caught by it never reports its
+    # verdict at all. A normal run takes about five minutes.
+    timeout-minutes: 60
 
     env:
       # Pinned, with the digest GitHub publishes for the release asset. faf-uid produces the
@@ -165,12 +170,13 @@ jobs:
       # inputs are). Each is exported to GITHUB_ENV by the step that first needs it, from the
       # RUNNER_TEMP variable the runner sets in the shell.
       #
-      # The session's working directory: its logs land in session-run/logs/, which is what the
-      # failure upload collects.
+      # The passing session's working directory: its logs land in session-run/logs/, the one log the
+      # evidence step reads. Each session after it gets its own directory beside this one
+      # (session-drop, session-crash), since a session appends to any log it finds there.
       WORK: ${{ github.workspace }}/session-run
-      # One place, because both the session invocation and the evidence check below depend on it:
-      # the evidence check expects one faf-uid line and one login per peer. The job and step names
-      # say "two-peer" in prose and would need editing too.
+      # One place, because both the session command (scripts/ci/run-session.sh) and the evidence
+      # check below depend on it: the evidence check expects one faf-uid line and one login per
+      # peer. The job and step names say "two-peer" in prose and would need editing too.
       PEERS: "2"
 
     steps:
@@ -219,10 +225,10 @@ jobs:
           import base64, json, os, string, sys, time
 
           B64URL = set(string.ascii_letters + string.digits + "-_")
-          # Everything between this step and the session's login: provisioning, then the Gradle
-          # build, which is the only part that takes minutes rather than seconds. A token with
-          # less than this left may not survive to be used, so say so while there is still time
-          # to mint another.
+          # Everything between this step and the last session's login: provisioning, the Gradle
+          # build, then the sessions before the last, about two minutes of them. A token with less
+          # than this left may not survive to be used, so say so while there is still time to mint
+          # another.
           WARN_BELOW = 15 * 60
 
 
@@ -368,50 +374,13 @@ jobs:
       # is a backstop rather than the bound that matters. A failed checkpoint exits 70 having logged
       # `session: FAIL <peer>: <stage>: <detail>`. Raise the 12 minutes if --peers grows or that
       # deadline moves: #87 defers whether the deadline scales with the peer count, and this step
-      # would start cutting runs short before the session could report its own verdict.
+      # would start cutting runs short before the session could report its own verdict. The
+      # command is scripts/ci/run-session.sh, which every later session runs too, and the steps
+      # after the evidence step read this one's outcome by its id.
       - name: Run a two-peer session through the live lobby
+        id: session
         timeout-minutes: 12
-        run: |
-          umask 077
-          mkdir -p "$WORK"
-          # nullglob matters: without it a pattern that matches nothing is passed through
-          # literally, so the count check below would see one "jar" and java would fail later with
-          # an unexplained "unable to access jarfile <pattern>".
-          shopt -s nullglob
-          set -- "$GITHUB_WORKSPACE"/mock-client/build/libs/mock-client-*-all.jar
-          [ "$#" -eq 1 ] || { echo "::error::expected one mock-client shadow jar, found $#"; exit 1; }
-          client=$1
-          set -- "$GITHUB_WORKSPACE"/mock-game/build/libs/mock-game-*-all.jar
-          [ "$#" -eq 1 ] || { echo "::error::expected one mock-game shadow jar, found $#"; exit 1; }
-          game=$1
-          shopt -u nullglob
-
-          # One variable for both peers, because they have to agree: `session` refuses a run that
-          # mixes the two credential channels, so naming the flag once makes that structural.
-          CREDENTIAL_FLAG=--peer-access-token-file
-
-          cd "$WORK"
-          java -jar "$client" \
-            --lobby-websocket-url=wss://ws.faforever.xyz \
-            --uid-binary-path="$FAF_UID_BINARY" \
-            --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
-            --mock-game-binary-path="$game" \
-            session \
-              --peers="$PEERS" \
-              "$CREDENTIAL_FLAG=$TOKENS/c.txt" \
-              "$CREDENTIAL_FLAG=$TOKENS/d.txt"
-
-      # Immediately after the run, on every path including the step timeout. The session rewrites
-      # nothing on this channel, so the file still holds the token it was given: a bearer token
-      # good until the expiry the first step printed, and a live credential for as long as that
-      # lasts. It never outlives the step that used it.
-      - name: Remove the token files
-        if: always()
-        timeout-minutes: 1
-        # The fallback matters: TOKENS is exported by the first step, so a job cancelled before it
-        # would otherwise run `rm -rf ""`, which succeeds without removing anything and looks
-        # identical to a real cleanup.
-        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
+        run: scripts/ci/run-session.sh "$WORK"
 
       # Uploads are failure-only, so a passing run would otherwise leave its evidence only in this
       # log. The policy answer (#365 Q1) is exactly what a passing run has to record: that faf-uid
@@ -482,6 +451,139 @@ jobs:
             echo "::warning::expected $peers faf-uid lines and $peers distinct logins, saw ${uids:-0} and ${logins:-0}; this run does not answer the policy question"
           fi
 
+      # From here the job proves the verdict can fail (WBS-2.3.3.3, #431). A green run above shows
+      # the happy path and nothing else, and a verdict that stopped failing would stay green until
+      # a consumer noticed. Each run below needs the passing session to have passed, since a lobby
+      # that failed it says nothing about the verdict, but not the other runs: one red run must not
+      # hide the rest. `session` exits 70 for every failed checkpoint and for an exception that
+      # escaped it, so each step pins the line its failure must log, not just the code, and refuses
+      # a `session: FAIL teardown:` line, which a leaked process adds to any failure. Game output
+      # only ever explains a red run here, never passes one: the client relays it from the game's
+      # pipes, and a relayed line can go missing (#449).
+      #
+      # Every datagram dropped. The adapters still connect, because a link's liveness is the
+      # offering adapter's own echo rather than game traffic (PeerConnectivityCheckerModule,
+      # adapter 3.3.14), so the session must fail at the traffic checkpoint and nowhere earlier.
+      - name: Prove a session with every datagram dropped fails at traffic
+        if: ${{ !cancelled() && steps.session.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          dir="$GITHUB_WORKSPACE/session-drop"
+          code=0
+          scripts/ci/run-session.sh "$dir" --mock-game-udp-drop-percent=100 || code=$?
+          log="$dir/logs/mockclient.jsonl"
+          # `[^"]*` stops at the JSON string's closing quote, as in the evidence step.
+          verdict=$(grep -oE 'session: (PASS|FAIL)[^"]*' "$log" 2>/dev/null | head -1)
+          if [ "$code" -eq 70 ] \
+            && grep -qE 'session: FAIL [^"]*: traffic: no two-way game traffic within' "$log" \
+            && ! grep -q 'session: FAIL teardown:' "$log"; then
+            echo "failed at the traffic checkpoint, as it must: $verdict"
+            {
+              echo "### Every datagram dropped: failed at traffic, as it must"
+              echo
+              echo '```text'
+              echo "$verdict"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            if grep -q 'dropping 100%' "$log"; then
+              reason="the session passed with every datagram dropped, so the traffic verdict no longer fails"
+            else
+              reason="the session passed, and no game logged 'dropping 100%', so the drop may never have reached the games"
+            fi
+          elif [ "$code" -ne 70 ]; then
+            reason="it exited $code, and only 70 means a checkpoint failed"
+          elif grep -q 'session: FAIL teardown:' "$log"; then
+            reason="a process outlived its teardown"
+          else
+            reason="it failed somewhere other than the traffic checkpoint: ${verdict:-no verdict line}"
+          fi
+          # A token that lapsed after the pre-flight is the likeliest cause of an early failure,
+          # and only this session's own log shows the lobby's rejection.
+          auth=$(grep -oE 'lobby authentication_failed: [^"]*' "$log" 2>/dev/null | head -1)
+          echo "::error::every-datagram-dropped run: $reason${auth:+; the lobby said: $auth}"
+          exit 1
+
+      # Both games crash as soon as they have a peer: --mock-game-crash-after-seconds=0 arms on the
+      # host's first ConnectToPeer and the joiner's JoinGame and fires at once, while a later value
+      # can land after the traffic checkpoint, and the session then passes. Which checkpoint
+      # reports it depends on timing (full mesh when run by hand), so the stage is not pinned, and
+      # the step needs a pair of lines instead. `session ended (TERMINATED) before` is what every
+      # checkpoint says of a peer whose session ended, a lobby drop included; exit code 134 is
+      # 128 + SIGABRT, which mock-game gives only its injected crash, though a real JVM abort exits
+      # with it too. Only together do they say the crash failed the session.
+      - name: Prove a session whose games crash fails
+        if: ${{ !cancelled() && steps.session.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          dir="$GITHUB_WORKSPACE/session-crash"
+          code=0
+          scripts/ci/run-session.sh "$dir" --mock-game-crash-after-seconds=0 || code=$?
+          log="$dir/logs/mockclient.jsonl"
+          verdict=$(grep -oE 'session: (PASS|FAIL)[^"]*' "$log" 2>/dev/null | head -1)
+          if [ "$code" -eq 70 ] \
+            && grep -qE 'session: FAIL [^"]*session ended \(TERMINATED\) before' "$log" \
+            && grep -q 'mock-game exited abnormally with exit code 134' "$log" \
+            && ! grep -q 'session: FAIL teardown:' "$log"; then
+            echo "failed on the crashed games, as it must: $verdict"
+            {
+              echo "### Games crashed: failed on the crash, as it must"
+              echo
+              echo '```text'
+              echo "$verdict"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" -eq 0 ]; then
+            if grep -q 'injected crash armed' "$log"; then
+              reason="the session passed although a game armed its crash, so the verdict no longer fails when a game dies"
+            else
+              reason="the session passed, and no game logged 'injected crash armed', so the crash may never have happened"
+            fi
+          elif [ "$code" -ne 70 ]; then
+            reason="it exited $code, and only 70 means a checkpoint failed"
+          elif grep -q 'session: FAIL teardown:' "$log"; then
+            reason="a process outlived its teardown"
+          elif ! grep -q 'mock-game exited abnormally with exit code 134' "$log"; then
+            reason="no game exited 134, so it failed for another reason: ${verdict:-no verdict line}"
+          else
+            reason="a game crashed, but the verdict did not name a peer whose session ended: ${verdict:-no verdict line}"
+          fi
+          auth=$(grep -oE 'lobby authentication_failed: [^"]*' "$log" 2>/dev/null | head -1)
+          echo "::error::crashed-games run: $reason${auth:+; the lobby said: $auth}"
+          exit 1
+
+      # After the last session, on every path including a step timeout. The session rewrites
+      # nothing on this channel, so each file still holds the token it was given: a bearer token
+      # good until the expiry the first step printed, and a live credential for as long as that
+      # lasts. It never outlives the last step that used it.
+      - name: Remove the token files
+        if: always()
+        timeout-minutes: 1
+        # The fallback matters: TOKENS is exported by the first step, so a job cancelled before it
+        # would otherwise run `rm -rf ""`, which succeeds without removing anything and looks
+        # identical to a real cleanup.
+        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
+
+      # The last of #431's criteria, checked from outside the harness: each session sweeps its own
+      # JVM's descendants and fails on a survivor, but a process that left that tree would be
+      # invisible to every later sweep. The pattern matches a JVM by the jar it runs (the
+      # launchers start both subprocesses as `java ... -jar <jar>`), so a client that never exited
+      # is caught too, and a process that merely names one of these paths is not.
+      - name: Check no adapter or game outlived the sessions
+        if: always()
+        timeout-minutes: 1
+        run: |
+          if survivors=$(pgrep -af -- '-jar [^ ]*(faf-ice-adapter\.jar|mock-(game|client)-[^ ]*-all\.jar)'); then
+            echo "::error::these outlived every session's teardown:"
+            printf '%s\n' "$survivors"
+            exit 1
+          fi
+          echo "no adapter, game or client process is left"
+
       # Only the session's own JSONL logs: the client's lines with every adapter's and game's
       # captured output, plus each game's own file. The token files are under RUNNER_TEMP and are
       # deleted above, so no path here can reach them.
@@ -491,6 +593,11 @@ jobs:
         timeout-minutes: 5
         with:
           name: session-logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: session-run/logs/*.jsonl*
+          # Every session's directory. With more than one path the artifact keeps each run's logs
+          # under its own directory rather than at the artifact's root.
+          path: |
+            session-run/logs/*.jsonl*
+            session-drop/logs/*.jsonl*
+            session-crash/logs/*.jsonl*
           retention-days: 14
           if-no-files-found: warn
