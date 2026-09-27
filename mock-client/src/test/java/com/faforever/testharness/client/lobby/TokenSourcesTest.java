@@ -44,7 +44,7 @@ final class TokenSourcesTest {
                 "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
                 oauthRefreshTokenFile,
                 oauthAccessTokenFile,
-                "00000000-0000-0000-0000-000000000000",
+                Optional.of("00000000-0000-0000-0000-000000000000"),
                 "0.0.0-mock",
                 "faf-test-harness",
                 Optional.empty(),

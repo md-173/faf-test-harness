@@ -41,6 +41,11 @@ final class ConfigLoaderDefaultsOnlyTest {
         assertTrue(
                 message.contains("--oauth-client-id"),
                 "Missing-parameter message should name --oauth-client-id. Got: " + message);
+
+        assertTrue(
+                message.contains("--uid-binary-path"),
+                "Missing-parameter message should name --uid-binary-path. Got: " + message);
+
         assertTrue(
                 message.contains("--unique-id"),
                 "Missing-parameter message should name --unique-id. Got: " + message);
