@@ -1560,9 +1560,10 @@ them, checks the jar carries the flag it is about to use, and points
 `--ice-adapter-binary-path` at the adapter it just built instead of the pinned
 one. The evidence-summary step is dropped, the two `faf-uid` steps are merged,
 and the log upload fires on a cancelled run as well as a failed one. The
-sessions this repository runs after the first, which prove its verdict can
-fail (WBS-2.3.3.3), are dropped too, with its check that none left a process
-behind: that is why the repository keeps its session command in
+sessions this repository runs after the first, which exercise ICE delay
+(WBS-5.1.1) and prove its verdict can fail (WBS-2.3.3.3), are dropped too,
+with its delay input and its check that none left a process behind: that is
+why the repository keeps its session command in
 `scripts/ci/run-session.sh`, while the job below inlines it. Both jobs cap at
 60 minutes, the one below to cover the consumer's own build step, the
 repository's to cover its extra sessions.

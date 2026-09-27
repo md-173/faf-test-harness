@@ -7,8 +7,8 @@
 # mock-client and mock-game jars from releases/latest instead of building them here, and they point
 # --ice-adapter-binary-path at their own adapter build instead of the version downloadIceAdapter
 # pins. The session command itself is the same, kept here in scripts/ci/run-session.sh because this
-# job runs it again after the passing session, for the runs that prove its verdict can fail
-# (WBS-2.3.3.3), which a consumer's job need not copy.
+# job runs it again after the passing session: once with ICE signalling delayed (WBS-5.1.1) and
+# twice to prove its verdict can fail (WBS-2.3.3.3), runs a consumer's job need not copy.
 #
 # Advisory, never a PR gate: the shared test lobby's availability is outside our control, so a
 # failure here is a finding rather than a reason to block a merge. ci.yml stays the gate.
@@ -21,6 +21,14 @@ name: Live integration (advisory)
 
 on:
   workflow_dispatch:
+    inputs:
+      # The delay run's value (WBS-5.1.1): how long each client holds every relayed ICE candidate.
+      # The default is CI's delay, chosen from the runner baseline in harness-runbook.md section 10;
+      # another value is for measuring, not for a routine dispatch.
+      ice-relay-delay-ms:
+        description: "Delay run: ms each client holds a relayed ICE candidate (runbook section 10)"
+        type: number
+        default: 600
 
 permissions:
   contents: read
@@ -172,12 +180,18 @@ jobs:
       #
       # The passing session's working directory: its logs land in session-run/logs/, the one log the
       # evidence step reads. Each session after it gets its own directory beside this one
-      # (session-drop, session-crash), since a session appends to any log it finds there.
+      # (session-delay, session-drop, session-crash), since a session appends to any log it finds
+      # there.
       WORK: ${{ github.workspace }}/session-run
       # One place, because both the session command (scripts/ci/run-session.sh) and the evidence
       # check below depend on it: the evidence check expects one faf-uid line and one login per
       # peer. The job and step names say "two-peer" in prose and would need editing too.
       PEERS: "2"
+      # The delay run's relay delay in milliseconds (WBS-5.1.1), from the dispatch input. Only that
+      # run passes it on, as --ice-relay-delay-ms. Never give it the FAF_MOCK_CLIENT_ prefix:
+      # mock-client reads every variable with that prefix as an option, which would delay every
+      # session in the job.
+      ICE_RELAY_DELAY_MS: ${{ inputs.ice-relay-delay-ms }}
 
     steps:
       # First, so a run without its secrets fails in seconds rather than after a build, and names
@@ -313,6 +327,25 @@ jobs:
           printf '%s' "$FAF_CI_ACCESS_TOKEN_D" > "$TOKENS/d.txt"
           echo "wrote one token file per peer, owner-readable only"
 
+      # The delay run's value comes from the dispatch form, so it is checked before anything
+      # depends on it: a whole number of milliseconds from 1 to 99999. Zero would make that run's
+      # leg check vacuous, and a number past int's range would fail only after the build and the
+      # passing session, as a usage error. The value is quoted when refused, never echoed raw.
+      - name: Check the dispatch input
+        timeout-minutes: 1
+        run: |
+          if [[ ! "$ICE_RELAY_DELAY_MS" =~ ^[1-9][0-9]{0,4}$ ]]; then
+            echo "::error::the ice-relay-delay-ms input must be a whole number of milliseconds from 1 to 99999"
+            printf 'got: %q\n' "$ICE_RELAY_DELAY_MS"
+            exit 1
+          fi
+          # A leg with one hold is the delay plus a lobby crossing of about 250 ms on a runner, so
+          # below about 300 ms a peer that missed the flag would still clear twice the delay.
+          if [ "$ICE_RELAY_DELAY_MS" -lt 300 ]; then
+            echo "::warning::ice-relay-delay-ms is $ICE_RELAY_DELAY_MS; below about 300 ms the delay run cannot tell a peer that missed the flag from one that held its candidates"
+          fi
+          echo "the delay run holds each relayed ICE candidate for $ICE_RELAY_DELAY_MS ms at each client"
+
       - uses: actions/checkout@v7
         timeout-minutes: 5
         with:
@@ -438,6 +471,11 @@ jobs:
               else
                 echo '(no session verdict line: the run ended before the session could report)'
               fi
+              # The passing session's ICE timing at zero delay (WBS-5.1.1): the runner baseline
+              # harness-runbook.md section 10 records, reported and never failed on. A restarted
+              # run is no sample of it, and its line says so and names the likely cause.
+              python3 scripts/ci/ice-timing.py "$log" --peers "$peers" \
+                || echo '(no ICE timing: scripts/ci/ice-timing.py failed)'
               echo '```'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -451,11 +489,57 @@ jobs:
             echo "::warning::expected $peers faf-uid lines and $peers distinct logins, saw ${uids:-0} and ${logins:-0}; this run does not answer the policy question"
           fi
 
-      # From here the job proves the verdict can fail (WBS-2.3.3.3, #431). A green run above shows
-      # the happy path and nothing else, and a verdict that stopped failing would stay green until
-      # a consumer noticed. Each run below needs the passing session to have passed, since a lobby
-      # that failed it says nothing about the verdict, but not the other runs: one red run must not
-      # hide the rest. `session` exits 70 for every failed checkpoint and for an exception that
+      # Three more sessions follow on the same accounts, each in its own directory, since a session
+      # appends to any log it finds and the evidence step reads only the passing run's. Each needs
+      # the passing session to have passed, since a lobby that failed it says nothing about these
+      # runs, but not the other runs: one red run must not hide the rest.
+      #
+      # First, ICE signalling delayed inside the ceiling (WBS-5.1.1, #366). Every peer takes the
+      # root flag, so the offer and the answer each wait in both clients' relays, and the adapter's
+      # 6000 ms offerer timer restarts ICE if the answer has not come back by then. The run must
+      # pass, each ICE leg must be at least twice the delay, and the offerer must not restart ICE:
+      # exit 0 alone cannot show a restart, since the adapter's retry can still connect inside the
+      # mesh budget. scripts/ci/ice-timing.py reads the legs, and harness-runbook.md section 10 has
+      # the arithmetic and the runner baseline CI's delay was chosen from.
+      - name: Run a session with ICE signalling delayed inside the ceiling
+        if: ${{ !cancelled() && steps.session.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          dir="$GITHUB_WORKSPACE/session-delay"
+          code=0
+          scripts/ci/run-session.sh "$dir" --ice-relay-delay-ms="$ICE_RELAY_DELAY_MS" || code=$?
+          log="$dir/logs/mockclient.jsonl"
+          verdict=$(grep -oE 'session: (PASS|FAIL)[^"]*' "$log" 2>/dev/null | head -1)
+          timing_code=0
+          timing=$(python3 scripts/ci/ice-timing.py "$log" --peers "$PEERS" \
+            --expect-delay-ms "$ICE_RELAY_DELAY_MS") || timing_code=$?
+          echo "$timing"
+          {
+            echo "### ICE signalling delayed $ICE_RELAY_DELAY_MS ms at each client"
+            echo
+            echo '```text'
+            echo "${verdict:-(no session verdict line)}"
+            echo "$timing"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 0 ] && [[ "$verdict" == "session: PASS"* ]] && [ "$timing_code" -eq 0 ]; then
+            echo "passed inside the ceiling, with every relay holding its candidates"
+            exit 0
+          fi
+          if [ "$code" -ne 0 ]; then
+            reason="it exited $code: ${verdict:-no verdict line}"
+          elif [[ "$verdict" != "session: PASS"* ]]; then
+            reason="it exited 0 without a session: PASS line"
+          else
+            reason="the session passed, but its ICE timing did not, as the FAIL lines above say"
+          fi
+          auth=$(grep -oE 'lobby authentication_failed: [^"]*' "$log" 2>/dev/null | head -1)
+          echo "::error::delayed-ICE run: $reason${auth:+; the lobby said: $auth}"
+          exit 1
+
+      # The last two prove the verdict can fail (WBS-2.3.3.3, #431). A green run above shows the
+      # happy path and nothing else, and a verdict that stopped failing would stay green until a
+      # consumer noticed. `session` exits 70 for every failed checkpoint and for an exception that
       # escaped it, so each step pins the line its failure must log, not just the code, and refuses
       # a `session: FAIL teardown:` line, which a leaked process adds to any failure. Game output
       # only ever explains a red run here, never passes one: the client relays it from the game's
@@ -597,6 +681,7 @@ jobs:
           # under its own directory rather than at the artifact's root.
           path: |
             session-run/logs/*.jsonl*
+            session-delay/logs/*.jsonl*
             session-drop/logs/*.jsonl*
             session-crash/logs/*.jsonl*
           retention-days: 14
