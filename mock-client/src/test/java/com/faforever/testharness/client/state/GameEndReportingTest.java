@@ -113,6 +113,7 @@ final class GameEndReportingTest {
     private LobbyConnection lobby;
     private final List<DummyGameLauncher> gameLaunchers = new ArrayList<>();
     private final List<DummyIceLauncher> iceLaunchers = new ArrayList<>();
+    private final List<ListAppender<ILoggingEvent>> appenders = new ArrayList<>();
 
     @BeforeEach
     void setUp() throws Exception {
@@ -126,6 +127,10 @@ final class GameEndReportingTest {
 
     @AfterEach
     void tearDown() throws Exception {
+        for (ListAppender<ILoggingEvent> appender : appenders) {
+            ((Logger) LoggerFactory.getLogger(MockClientLifecycle.class)).detachAppender(appender);
+            appender.stop();
+        }
         // Tests that don't reach TERMINATED never run SessionTeardown, so the hanging "game"/"ICE
         // adapter" subprocesses they started would otherwise outlive the test.
         for (DummyGameLauncher launcher : gameLaunchers) {
@@ -167,7 +172,14 @@ final class GameEndReportingTest {
     @Test
     void normalCleanEndRunsTeardownExactlyOnce() throws Exception {
         FakeIceAdapterConnection iceConn = new FakeIceAdapterConnection(MINIMAL_CONFIG);
-        MockClientLifecycle lifecycle = playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
+        ListAppender<ILoggingEvent> appender = lifecycleAppender();
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "clean-end");
+        MockClientLifecycle lifecycle;
+        try {
+            lifecycle = playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
+        } finally {
+            MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        }
 
         iceConn.emitGpgNet("GameEnded");
         lifecycle.post(new GameExited(0));
@@ -175,10 +187,11 @@ final class GameEndReportingTest {
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
         assertTrue(lifecycle.isCleanEndSeen());
 
-        // The safety net must have been cancelled by GameExited: waiting past its window must not
-        // move the (already terminal) state again or throw.
+        // GameExited must have disarmed the net. One firing now would move nothing, since
+        // ShutdownRequested is a TERMINATED self-loop, so its warning is the only sign of it.
         Thread.sleep(TEST_SAFETY_NET_WINDOW.toMillis() * 3);
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertFalse(netWarned(appender, "clean-end"), () -> "the net fired: " + appender.list);
     }
 
     @Test
@@ -281,7 +294,39 @@ final class GameEndReportingTest {
                         throw new Error("close blew up");
                     }
                 };
-        Logger lifecycleLogger = (Logger) LoggerFactory.getLogger(MockClientLifecycle.class);
+        ListAppender<ILoggingEvent> appender = lifecycleAppender();
+        // Built under a label and armed without one, so only the label the lifecycle captured can
+        // reach the thread the net runs on.
+        MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "peer-a");
+        try {
+            playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
+        } finally {
+            MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
+        }
+
+        iceConn.emitGpgNet("GameEnded");
+
+        // Teardown terminates the hanging "game" and "ICE adapter" before it reaches close(), and
+        // that dominates this wait, as in safetyNetFiresOnlyWhenNoExitArrives.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        ILoggingEvent logged;
+        while ((logged = errorCarrying(appender, "close blew up")) == null) {
+            assertTrue(
+                    System.nanoTime() < deadline,
+                    () -> "the net's Error was never logged; log was " + appender.list);
+            Thread.sleep(10);
+        }
+        assertEquals(
+                "peer-a",
+                logged.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY),
+                "the net's lines must carry the lifecycle's instance label");
+    }
+
+    /**
+     * A thread-safe capture of {@link MockClientLifecycle}'s log that keeps each event's MDC,
+     * detached again after the test by {@link #tearDown()}.
+     */
+    private ListAppender<ILoggingEvent> lifecycleAppender() {
         ListAppender<ILoggingEvent> appender =
                 new ListAppender<>() {
                     @Override
@@ -291,40 +336,21 @@ final class GameEndReportingTest {
                         super.append(event);
                     }
                 };
-        // The net logs from another thread while this one polls.
         appender.list = new CopyOnWriteArrayList<>();
         appender.start();
-        lifecycleLogger.addAppender(appender);
-        try {
-            // Built under a label and armed without one, so only the label the lifecycle captured
-            // can reach the thread the net runs on.
-            MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "peer-a");
-            try {
-                playingLifecycle(iceConn, TEST_SAFETY_NET_WINDOW);
-            } finally {
-                MDC.remove(LoggingSetup.INSTANCE_MDC_KEY);
-            }
+        ((Logger) LoggerFactory.getLogger(MockClientLifecycle.class)).addAppender(appender);
+        appenders.add(appender);
+        return appender;
+    }
 
-            iceConn.emitGpgNet("GameEnded");
-
-            // Teardown terminates the hanging "game" and "ICE adapter" before it reaches close(),
-            // and that dominates this wait, as in safetyNetFiresOnlyWhenNoExitArrives.
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
-            ILoggingEvent logged;
-            while ((logged = errorCarrying(appender, "close blew up")) == null) {
-                assertTrue(
-                        System.nanoTime() < deadline,
-                        () -> "the net's Error was never logged; log was " + appender.list);
-                Thread.sleep(10);
-            }
-            assertEquals(
-                    "peer-a",
-                    logged.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY),
-                    "the net's lines must carry the lifecycle's instance label");
-        } finally {
-            lifecycleLogger.detachAppender(appender);
-            appender.stop();
-        }
+    /** Whether the lifecycle labelled {@code instance} logged the safety net's warning. */
+    private static boolean netWarned(ListAppender<ILoggingEvent> appender, String instance) {
+        return appender.list.stream()
+                .filter(
+                        e ->
+                                instance.equals(
+                                        e.getMDCPropertyMap().get(LoggingSetup.INSTANCE_MDC_KEY)))
+                .anyMatch(e -> e.getFormattedMessage().startsWith("Game did not exit within"));
     }
 
     /** The first ERROR in {@code appender} whose throwable's message is {@code thrown}, or null. */
