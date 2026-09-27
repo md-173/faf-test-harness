@@ -438,6 +438,11 @@ public final class LobbyConnection {
      * {@code Output closed}, which teardown logged as a WARN on every session whose lobby had
      * already gone. {@link LobbySession#close()} has always documented the no-op.
      *
+     * <p>A close that finds this side's output already closed completes normally too (#390): a
+     * second {@code close} before the server has answered the first, or one that races the server's
+     * own close. A status code the WebSocket API rejects still fails the returned future, because
+     * that is checked before the output is touched.
+     *
      * @param statusCode WebSocket close status code (1000 = normal)
      * @param reason human-readable close reason (empty string allowed)
      * @return future that completes when the close frame has been sent, or at once if there is
@@ -454,7 +459,27 @@ public final class LobbyConnection {
         if (disconnectFired.get()) {
             return CompletableFuture.completedFuture(null);
         }
-        return socket.sendClose(statusCode, reason).thenAccept(ignored -> {});
+        // Judged after the attempt, not by another check before it: the server's Close can land
+        // between any such check and sendClose, and the JDK's reply to it closes the output first.
+        return socket.sendClose(statusCode, reason)
+                .handle(
+                        (ignored, error) -> {
+                            if (error == null) {
+                                return null;
+                            }
+                            if (socket.isOutputClosed()) {
+                                try (InstanceLabel.Scope scope = label.apply()) {
+                                    LOG.debug(
+                                            "lobby close: output already closed, nothing to send"
+                                                    + " ({})",
+                                            error.toString());
+                                }
+                                return null;
+                            }
+                            throw error instanceof CompletionException completion
+                                    ? completion
+                                    : new CompletionException(error);
+                        });
     }
 
     /**

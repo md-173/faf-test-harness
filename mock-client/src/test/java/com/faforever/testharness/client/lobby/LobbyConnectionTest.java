@@ -325,6 +325,35 @@ final class LobbyConnectionTest {
     }
 
     @Test
+    void closeIsIdempotent() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        lobby.close().get(2, TimeUnit.SECONDS);
+        // The first close shut the output, so this one has nothing to send.
+        lobby.close().get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void closeWithAnInvalidStatusCodeStillFails() throws Exception {
+        // The already-closed tolerance must not swallow every failure. The WebSocket API rejects
+        // 1005 as an outgoing code before touching the output, so the output is still open and
+        // the rejection has to reach the caller.
+        lobby = new LobbyConnection(server.uri());
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        ExecutionException thrown =
+                assertThrows(
+                        ExecutionException.class,
+                        () -> lobby.close(1005, "").get(2, TimeUnit.SECONDS));
+        assertTrue(
+                thrown.getCause() instanceof IllegalArgumentException,
+                "expected the status-code rejection, got: " + thrown.getCause());
+    }
+
+    @Test
     void abruptCloseSurfacesAsAbruptCloseDisconnect() throws Exception {
         lobby = new LobbyConnection(server.uri());
         CountDownLatch disconnected = new CountDownLatch(1);
