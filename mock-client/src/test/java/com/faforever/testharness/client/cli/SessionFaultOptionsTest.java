@@ -130,6 +130,43 @@ final class SessionFaultOptionsTest {
     }
 
     @Test
+    void aCommaOnlyListIsRefusedRatherThanReadAsNotGiven() {
+        // A template such as =${DROP_A},${DROP_B} with both unset leaves only the comma, which
+        // picocli splits to no values at all.
+        ParameterException flag =
+                assertThrows(
+                        ParameterException.class,
+                        () ->
+                                resolve(
+                                        Map.of(),
+                                        "--mock-game-udp-drop-percent=30",
+                                        "--peer-mock-game-udp-drop-percent=,"));
+        ParameterException env =
+                assertThrows(
+                        ParameterException.class,
+                        () -> resolve(Map.of("FAF_MOCK_CLIENT_PEER_ICE_RELAY_DELAY_MS", ",")));
+
+        assertTrue(flag.getMessage().contains("but 0 given"), flag.getMessage());
+        assertTrue(env.getMessage().contains("but 0 given"), env.getMessage());
+    }
+
+    @Test
+    void aCommaOnlyFaultPeerIsRefusedRatherThanReachingEveryPeer() {
+        ParameterException e =
+                assertThrows(
+                        ParameterException.class,
+                        () ->
+                                resolve(
+                                        Map.of(),
+                                        "--mock-game-crash-after-seconds=0",
+                                        "--fault-peer=,"));
+
+        assertTrue(
+                e.getMessage().contains("--fault-peer was given but names no peer"),
+                e.getMessage());
+    }
+
+    @Test
     void faultPeerNamingNoPeerOfThisSessionIsRefused() {
         ParameterException e =
                 assertThrows(

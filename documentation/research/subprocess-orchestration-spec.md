@@ -334,7 +334,11 @@ FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
 (`lobbyconnection.command_game_join`) and moves it out of that state as soon as
 the host reports `GameState Launching` (`gameconnection._handle_game_state` →
 `game.launch()`), so a host that auto-launches on a timer makes its own game
-unjoinable while the joiner is still booting its adapter and game.
+unjoinable while the joiner is still booting its adapter and game. The one
+exception is a session that has to leave the lobby phase (WBS-4.3.4, and
+`mock-client session --crash-peer`, WBS-5.2.1): its host gets a delay no
+shorter than `MultiPeerSession.minHostLaunchDelaySeconds`, which leaves every
+joiner time to join first.
 
 The two fault-injection arguments are emitted **conditionally**. The launcher
 passes `--udp-drop-percent` only when the client's own

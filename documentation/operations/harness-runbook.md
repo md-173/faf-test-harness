@@ -1668,8 +1668,9 @@ once the game is live, and a non-host leaving a live game does not end it.
 5. and only then snapshots the traffic evidence and waits for every
    survivor-to-survivor direction to advance again (stage `play on`).
 
-Stages 4 and 5 share one 45 s budget from the crash. A survivor that ends
-anywhere in 2 to 5 fails the run.
+Stages 4 and 5 share one 45 s budget, counted from the crashed joiner's
+session ending. A survivor whose session ends at any point in stages 2 to 5
+fails the run, even at two peers, where stage 5 has nothing else to check.
 
 Why the session picks the crash time itself. The joiner's crash timer starts
 when it joins, not at launch (see `--crash-after-seconds` above), and a joiner
@@ -1680,12 +1681,16 @@ lands at most one launch delay plus 30 s after launch, well before the host's
 match ends at twice the launch delay after launch. `MultiPeerSessionTest`
 checks that arithmetic at every peer count.
 
-What the survivors notice. The adapter does not exit when its game dies (it
-closes the game's GPGNet connection and keeps serving), but the crashed peer's
-client tears its adapter down once its game has gone, as the real client does:
-downlords-faf-client's `GameRunner` calls `iceAdapter.stop()` after handling any
-game exit (`develop` at `8be1a118`). The survivors' adapters then stop getting
-echoes from it.
+What the survivors notice. The crashed peer's adapter does not exit when its
+game dies, but it drops every peer at that moment: losing the game's GPGNet
+connection runs `IceAdapter.onFAShutdown()`, which logs `FA SHUTDOWN, closing
+everything` and closes the game session and every peer's ICE agent with it
+(`GPGNetServer.onGpgnetConnectionLost`, adapter 3.3.14). So the survivors'
+adapters stop getting echoes from it at the crash itself, and the offering ones
+declare the loss about ten seconds later. The crashed peer's client stops its
+adapter too, as the real client does (downlords-faf-client's `GameRunner` calls
+`iceAdapter.stop()` after handling any game exit, `develop` at `8be1a118`), but
+the loss does not depend on that.
 
 Why only the offering side must report the loss. In adapter 3.3.14 only the
 side that made the ICE offer runs `PeerConnectivityCheckerModule`
@@ -2032,7 +2037,7 @@ mistakes as somebody else's.
 
 | Exit | What it means | What the job should do |
 |---|---|---|
-| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running; with `--crash-peer`, also that joiner's crash after launch and the survivors playing on. | Pass. |
+| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running; with `--crash-peer`, also that joiner's crash after launch, the loss reported by every survivor that offered on its link to it, and at three peers or more the survivors' traffic still advancing. | Pass. |
 | `70` | A checkpoint failed, logged as `session: FAIL <peer>: <stage>: <detail>`, or a subprocess survived teardown and was killed, or an exception escaped the command. | Read the stage before filing anything. See below. |
 | `2` | A bad invocation: no credential list, fewer credential files than peers, two peers on one file or one account, an unreadable or empty file, a missing binary, `INSTANCE_NAME` set, `--log-level` above INFO, or a fault option that does not say one thing clearly (§10). | Fix the job. Nothing started, so there is nothing to clean up. |
 
@@ -2053,7 +2058,10 @@ A run with `--crash-peer` (§10) adds four stages after those. `launch` is the
 host and the lobby; `crash` is the harness's own injected fault not landing as
 planned; `loss` and `play on` are the adapter under test: a surviving adapter
 that never declared the crashed peer lost, or stopped forwarding the survivors'
-traffic once it had.
+traffic once it had. A `launch` or `crash` failure whose detail says a
+survivor's session ended is about that survivor instead, and its own log lines
+say why; a `crash` failure in which a survivor's adapter reported another
+player's id is the adapter under test, as it would be at `full mesh`.
 
 Two codes below the harness are not session verdicts at all: a cancelled or
 killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
@@ -2114,7 +2122,9 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   from the first login, tears down outside that bound, and reports its own
   verdict. A step timeout below the two together turns a reportable failure
   into a killed step with no verdict at all, so leave headroom: twelve minutes
-  for two peers, as above. The deadline does not yet grow with `--peers`, and
+  for two peers, as above. With `--crash-peer` its four extra stages run
+  outside the 420 s, so add the time given in "A fault scenario in the same
+  job" below. The deadline does not yet grow with `--peers`, and
   #87's ceiling step will resize it
   ([`mock-client/README.md`](../../mock-client/README.md)), so re-read this
   bullet when it does.

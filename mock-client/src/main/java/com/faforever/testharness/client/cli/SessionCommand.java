@@ -255,7 +255,7 @@ public final class SessionCommand implements Callable<Integer> {
                         + " running",
                 peers,
                 session.deliberateCrash().isPresent()
-                        ? crashSummary(session.deliberateCrash().getAsInt())
+                        ? crashSummary(peers, session.deliberateCrash().getAsInt())
                         : "");
         return ExitCodes.OK;
     }
@@ -281,12 +281,13 @@ public final class SessionCommand implements Callable<Integer> {
      * What a passing deliberate-crash run proved, for its PASS line. At two peers there is no
      * survivor pair, so the play-on traffic check had nothing to check, and the line says so.
      *
+     * @param peerCount the session's peer count
      * @param joiner the crashed joiner's position
      * @return the clause, ending in a comma and a space
      */
-    private String crashSummary(final int joiner) {
+    static String crashSummary(final int peerCount, final int joiner) {
         String crashed = MultiPeerSession.labelFor(joiner) + "(joiner) crashed after launch";
-        return peers > MultiPeerSession.MIN_PEERS
+        return peerCount > MultiPeerSession.MIN_PEERS
                 ? crashed + " and the survivors played on, "
                 : crashed + " and the host reported the loss (no survivor pair to trade traffic), ";
     }

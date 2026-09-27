@@ -188,10 +188,11 @@ public final class MultiPeerSession implements AutoCloseable {
     static final Duration PER_JOINER_LAUNCH_ALLOWANCE = Duration.ofSeconds(30);
 
     /**
-     * Budget for the whole session, from the first login to the full mesh. Every named wait draws
-     * from it as well as from its own budget, and a failure says which ran out. Observed sessions
-     * take 20 to 40 s at two to four peers; this is headroom for slower ICE negotiation on a CI
-     * runner (#343, #366), not a target. Teardown is not part of it.
+     * Budget for the session's bring-up, from the first login to its traffic check. Every bring-up
+     * wait draws from it as well as from its own budget, and a failure says which ran out; a
+     * deliberate crash's waits after launch have their own budgets only. Observed sessions take 20
+     * to 40 s at two to four peers; this is headroom for slower ICE negotiation on a CI runner
+     * (#343, #366), not a target. Teardown is not part of it.
      */
     static final Duration SESSION_DEADLINE = Duration.ofSeconds(420);
 
@@ -1071,7 +1072,7 @@ public final class MultiPeerSession implements AutoCloseable {
                                     offerer.name(),
                                     "no onConnected(..., false) about "
                                             + crashed.name()
-                                            + " standing since the crash, verdicts seen "
+                                            + " standing since the match went live, verdicts seen "
                                             + offerer.observed());
                         }
                     }
@@ -1134,13 +1135,19 @@ public final class MultiPeerSession implements AutoCloseable {
         long waitUntil = System.nanoTime() + budget.toNanos();
         int uid = host.lifecycle().gameLaunched().getNow(null).uid();
         while (true) {
+            // The crash is due before this wait's budget runs out, so a match that never goes live
+            // ends here rather than at the timeout below; hence the host's side as well.
             if (crashed.lifecycle().getState() == ClientState.TERMINATED) {
                 throw new CheckpointFailure(
                         crashed.name(),
                         "launch",
                         "the deliberate crash landed before the match went live, or the session"
                                 + " ended for another reason: "
-                                + crashOutcome(crashed));
+                                + crashOutcome(crashed)
+                                + "; host state "
+                                + host.lifecycle().getState()
+                                + ", server game state "
+                                + host.serverGameState(uid).orElse("unknown"));
             }
             List<String> ended = survivorsEnded.get();
             if (!ended.isEmpty()) {
@@ -1302,9 +1309,8 @@ public final class MultiPeerSession implements AutoCloseable {
             throws InterruptedException {
         while (true) {
             Map<String, String> now = missing.get();
-            if (now.isEmpty()) {
-                return;
-            }
+            // Before the success check too: at two peers play on has no pair and is met at once,
+            // so this is the only look at the survivor after its loss report.
             List<String> terminated = ended.get();
             if (!terminated.isEmpty()) {
                 throw new CheckpointFailure(
@@ -1313,6 +1319,9 @@ public final class MultiPeerSession implements AutoCloseable {
                         "session ended (TERMINATED) before this checkpoint; its log lines say why."
                                 + " Still waiting: "
                                 + now);
+            }
+            if (now.isEmpty()) {
+                return;
             }
             if (System.nanoTime() >= waitUntil) {
                 throw new CheckpointFailure(

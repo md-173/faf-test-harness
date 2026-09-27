@@ -61,7 +61,7 @@ final class SessionFaultOptions {
     /** The highest drop percentage, as the root flag allows. */
     private static final int MAX_DROP_PERCENT = 100;
 
-    /** The peers the root fault flags reach, by instance label; empty for every peer. */
+    /** The peers the root fault flags reach, by instance label; {@code null} for every peer. */
     @Option(
             names = FAULT_PEER_FLAG,
             split = ",",
@@ -71,7 +71,7 @@ final class SessionFaultOptions {
                             + "--mock-game-crash-after-seconds to these peers, by label: A is the "
                             + "host, B the first joiner, and so on. Repeat the flag or separate "
                             + "labels with commas. Unset, those flags reach every peer.")
-    private List<String> faultPeer = new ArrayList<>();
+    private List<String> faultPeer;
 
     /** The joiner whose game crashes deliberately after launch, by label; {@code null} for none. */
     @Option(
@@ -84,7 +84,7 @@ final class SessionFaultOptions {
                             + "Cannot be combined with any other crash.")
     private String crashPeer;
 
-    /** One ICE relay delay per peer, host first. */
+    /** One ICE relay delay per peer, host first; {@code null} when not given. */
     @Option(
             names = PEER_RELAY_DELAY_FLAG,
             split = ",",
@@ -92,9 +92,9 @@ final class SessionFaultOptions {
             description =
                     "Each peer's --ice-relay-delay-ms, host first, exactly one value per peer, "
                             + "instead of the root flag.")
-    private List<Integer> peerIceRelayDelayMs = new ArrayList<>();
+    private List<Integer> peerIceRelayDelayMs;
 
-    /** One outbound drop percentage per peer, host first. */
+    /** One outbound drop percentage per peer, host first; {@code null} when not given. */
     @Option(
             names = PEER_DROP_FLAG,
             split = ",",
@@ -102,9 +102,9 @@ final class SessionFaultOptions {
             description =
                     "Each peer's --mock-game-udp-drop-percent, host first, exactly one value per "
                             + "peer, instead of the root flag.")
-    private List<Integer> peerMockGameUdpDropPercent = new ArrayList<>();
+    private List<Integer> peerMockGameUdpDropPercent;
 
-    /** One crash delay per peer, host first. */
+    /** One crash delay per peer, host first; {@code null} when not given. */
     @Option(
             names = PEER_CRASH_FLAG,
             split = ",",
@@ -114,7 +114,7 @@ final class SessionFaultOptions {
                             + "per peer, instead of the root flag; negative never crashes. Not an "
                             + "expected crash: at 0 it fails the session, and one due after the "
                             + "session has proven its traffic never fires.")
-    private List<Integer> peerMockGameCrashAfterSeconds = new ArrayList<>();
+    private List<Integer> peerMockGameCrashAfterSeconds;
 
     /**
      * One fault as the options describe it.
@@ -125,7 +125,7 @@ final class SessionFaultOptions {
      * @param min the lowest value the per-peer option accepts
      * @param max the highest value the per-peer option accepts
      * @param read the fault's value in a config
-     * @param list the per-peer values, empty when the list is not given
+     * @param list the per-peer values, {@code null} when the list is not given
      */
     private record Fault(
             String rootFlag,
@@ -145,7 +145,7 @@ final class SessionFaultOptions {
          * @return the list's value when given, else the root value or the off value
          */
         int valueFor(final int root, final int peer, final boolean targeted) {
-            if (!list.isEmpty()) {
+            if (list != null) {
                 return list.get(peer);
             }
             return targeted ? root : off;
@@ -195,7 +195,7 @@ final class SessionFaultOptions {
         for (Fault fault : faults) {
             checkList(spec, fault, peers);
             boolean rootOn = isOn(fault, fault.read().applyAsInt(root));
-            if (rootOn && !fault.list().isEmpty()) {
+            if (rootOn && fault.list() != null) {
                 throw new ParameterException(
                         spec.commandLine(),
                         fault.listFlag()
@@ -212,8 +212,9 @@ final class SessionFaultOptions {
         if (crashPeer(spec, peers).isPresent()) {
             boolean anyCrash =
                     root.mockGameCrashAfterSeconds() >= 0
-                            || peerMockGameCrashAfterSeconds.stream()
-                                    .anyMatch(seconds -> seconds >= 0);
+                            || (peerMockGameCrashAfterSeconds != null
+                                    && peerMockGameCrashAfterSeconds.stream()
+                                            .anyMatch(seconds -> seconds >= 0));
             if (anyCrash) {
                 throw new ParameterException(
                         spec.commandLine(),
@@ -309,7 +310,7 @@ final class SessionFaultOptions {
      */
     private static void checkList(final CommandSpec spec, final Fault fault, final int peers) {
         List<Integer> list = fault.list();
-        if (list.isEmpty()) {
+        if (list == null) {
             return;
         }
         if (list.size() != peers) {
@@ -358,10 +359,18 @@ final class SessionFaultOptions {
      * @param spec the command's spec
      * @param peers the peer count
      * @return their indexes, empty when the flag is not given
-     * @throws ParameterException for a label that is not one of this session's
+     * @throws ParameterException for a label that is not one of this session's, or a value that
+     *     names no label at all, such as a bare comma
      */
     private Set<Integer> targets(final CommandSpec spec, final int peers) {
         Set<Integer> indexes = new TreeSet<>();
+        if (faultPeer == null) {
+            return indexes;
+        }
+        if (faultPeer.isEmpty()) {
+            throw new ParameterException(
+                    spec.commandLine(), FAULT_PEER_FLAG + " was given but names no peer");
+        }
         for (String label : faultPeer) {
             indexes.add(indexOf(spec, FAULT_PEER_FLAG, label, peers));
         }

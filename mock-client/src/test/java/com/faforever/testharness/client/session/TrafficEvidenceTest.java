@@ -199,6 +199,25 @@ final class TrafficEvidenceTest {
     }
 
     @Test
+    void awaitAllFailsWhenASurvivorEndedEvenIfNothingIsMissing() {
+        // Play on at two peers: no survivor pair, so nothing is ever missing.
+        CheckpointFailure failure =
+                assertThrows(
+                        CheckpointFailure.class,
+                        () ->
+                                MultiPeerSession.awaitAll(
+                                        "play on",
+                                        Map::of,
+                                        () -> List.of("A(host)"),
+                                        System.nanoTime() + Duration.ofMinutes(1).toNanos(),
+                                        "PT1M"));
+
+        assertTrue(
+                failure.getMessage().startsWith("A(host): play on: session ended"),
+                failure.getMessage());
+    }
+
+    @Test
     void awaitAllFailsAsSoonAsASurvivorEnds() {
         long started = System.nanoTime();
 

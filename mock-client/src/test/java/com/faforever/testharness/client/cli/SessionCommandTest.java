@@ -353,6 +353,17 @@ final class SessionCommandTest {
     }
 
     @Test
+    void theCrashPassClauseSaysWhatTwoPeersCouldNotCheck() {
+        assertEquals(
+                "B(joiner) crashed after launch and the host reported the loss (no survivor pair"
+                        + " to trade traffic), ",
+                SessionCommand.crashSummary(2, 1));
+        assertEquals(
+                "C(joiner) crashed after launch and the survivors played on, ",
+                SessionCommand.crashSummary(3, 2));
+    }
+
+    @Test
     void crashPeerReachesTheSession() throws IOException {
         Path adapter = Files.writeString(dir.resolve("adapter.jar"), "");
         Path game = Files.writeString(dir.resolve("mock-game"), "");

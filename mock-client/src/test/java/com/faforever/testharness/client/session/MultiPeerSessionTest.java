@@ -221,6 +221,24 @@ final class MultiPeerSessionTest {
     }
 
     @Test
+    void aDeliberateCrashKeepsTheJoinersOtherFaults() throws IOException {
+        List<MockClientConfig> bases =
+                List.of(
+                        base(token("a")),
+                        base(
+                                token("b"),
+                                "--ice-relay-delay-ms=250",
+                                "--mock-game-udp-drop-percent=20"),
+                        base(token("c")));
+
+        MockClientConfig crashing = MultiPeerSession.crashBases(bases, 1).get(1);
+
+        assertEquals(250, crashing.iceRelayDelayMs());
+        assertEquals(20, crashing.mockGameUdpDropPercent());
+        assertEquals(MultiPeerSession.crashAfterSeconds(3), crashing.mockGameCrashAfterSeconds());
+    }
+
+    @Test
     void refusesADeliberateCrashOnTheHostOrOutsideTheSession() throws IOException {
         List<MockClientConfig> bases =
                 List.of(base(token("a")), base(token("b")), base(token("c")));
