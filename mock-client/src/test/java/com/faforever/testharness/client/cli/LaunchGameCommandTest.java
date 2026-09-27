@@ -90,11 +90,9 @@ final class LaunchGameCommandTest {
 
     @Test
     void stubGameRunsForTheWindowThenTerminatesAndLogsExitCode() throws Exception {
-        Path stub =
-                createStub(
-                        "#!/bin/sh\n"
-                                + "echo MOCK-GAME-STUB-UP\n"
-                                + "while true; do sleep 1; done\n");
+        // exec, so terminating the stub ends its output too, rather than leaving a sleep holding
+        // the pipe while terminate waits for the output.
+        Path stub = createStub("#!/bin/sh\n" + "echo MOCK-GAME-STUB-UP\n" + "exec sleep 60\n");
 
         int exit = execute(launchGameArgs(stub, "--duration-seconds=1"));
 

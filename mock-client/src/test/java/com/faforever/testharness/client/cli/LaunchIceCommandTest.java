@@ -330,10 +330,13 @@ final class LaunchIceCommandTest {
                         + error.getFormattedMessage());
     }
 
-    /** A stub adapter that starts, says so, and stays up until it is terminated. */
+    /**
+     * A stub adapter that starts, says so, and stays up until it is terminated. exec, so
+     * terminating the stub ends its output too, rather than leaving a sleep holding the pipe while
+     * terminate waits for the output.
+     */
     private Path createSleepingStub() throws IOException {
-        return createStub(
-                "#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-UP\n" + "while true; do sleep 1; done\n");
+        return createStub("#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-UP\n" + "exec sleep 60\n");
     }
 
     private Path createStub(final String body) throws IOException {

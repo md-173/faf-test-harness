@@ -15,6 +15,13 @@ public final class TestChild {
             case "sleep" -> Thread.sleep(Long.parseLong(args[1]));
             case "print" -> System.out.println(args[1]);
             case "env" -> System.out.println(System.getenv(args[1]));
+            case "hook" -> {
+                // Prints args[1] and waits. A SIGTERM runs the shutdown hook, which prints args[2]
+                // on the way out, as mock-game logs its totals.
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> System.out.println(args[2])));
+                System.out.println(args[1]);
+                Thread.sleep(60_000);
+            }
             case "lines" -> {
                 // Each arg is a line to print, to stderr if it starts "err:", or a pause of
                 // "sleep:<ms>" between lines.
