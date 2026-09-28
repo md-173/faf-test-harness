@@ -12,9 +12,9 @@ import picocli.CommandLine;
 
 /**
  * Verifies that {@code mock-client <unknown>} produces a non-zero exit and an error message that
- * names the offending token. Picocli's default {@link CommandLine.IParameterExceptionHandler}
- * supplies a perfectly serviceable error here; this test guards against accidentally swapping it
- * out for one that hides the problem.
+ * names the offending token. The project's {@link ParameterExceptionHandler}, installed by {@code
+ * ConfigLoader.newCommandLine}, supplies the error; this test guards against a replacement that
+ * hides the offending token.
  */
 final class MockClientCliUnknownSubcommandTest {
 

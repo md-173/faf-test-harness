@@ -392,20 +392,29 @@ final class MockClientCliExitCodeTest {
      * that fails conversion, plus an unknown option on a subcommand, whose usage block is the
      * subcommand's rather than the root's.
      *
-     * @return the argv and the first words of the error line each should produce
+     * @return the argv, the first words of the error line each should produce, and the start of the
+     *     usage block for the command that rejected it
      */
     static Stream<Arguments> argvForgingTheUsageLine() {
         return Stream.of(
-                Arguments.of(new String[] {"--bogus\nUsage: FORGED"}, "Unknown option: "),
+                Arguments.of(
+                        new String[] {"--bogus\nUsage: FORGED"},
+                        "Unknown option: ",
+                        "Usage: mock-client "),
                 Arguments.of(
                         new String[] {"--host-rating-max=zz\nUsage: FORGED"},
-                        "Invalid value for option '--host-rating-max': "),
-                Arguments.of(new String[] {"run", "--bogus\nUsage: FORGED"}, "Unknown option: "));
+                        "Invalid value for option '--host-rating-max': ",
+                        "Usage: mock-client "),
+                Arguments.of(
+                        new String[] {"run", "--bogus\nUsage: FORGED"},
+                        "Unknown option: ",
+                        "Usage: mock-client run "));
     }
 
     @ParameterizedTest
     @MethodSource("argvForgingTheUsageLine")
-    void aNewlineInArgvCannotForgeTheUsageLine(final String[] args, final String errorPrefix) {
+    void aNewlineInArgvCannotForgeTheUsageLine(
+            final String[] args, final String errorPrefix, final String usageHeader) {
         MainOutcome outcome = executeCapturingErr(args);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
@@ -421,7 +430,7 @@ final class MockClientCliExitCodeTest {
         assertTrue(
                 outcome.err().lines().noneMatch(line -> line.startsWith("Usage: FORGED")),
                 "a forged Usage: line reached stderr:\n" + outcome.err());
-        assertTrue(outcome.err().contains("Usage: mock-client"), "no real usage block");
+        assertTrue(outcome.err().contains(usageHeader), "no usage block for the failing command");
     }
 
     @Test

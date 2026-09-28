@@ -244,10 +244,13 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
      * drawn from fixed sets, such as the stale-key names, are exempt.
      *
      * <p>This covers only the diagnostics raised while the {@code CommandLine} is being built,
-     * which is all this class produces. The single-line property holds for the whole CLI because
-     * the two handlers {@code ConfigLoader.newCommandLine} installs apply the same escaping to
-     * everything reported from inside {@code execute}: {@code ParameterExceptionHandler} to parse
-     * errors (#307) and {@code ExecutionExceptionHandler} to exceptions escaping a subcommand.
+     * which is all this class produces. The single-line property holds for every error the CLI
+     * reports because the two handlers {@code ConfigLoader.newCommandLine} installs apply the same
+     * escaping to everything reported from inside {@code execute}: {@code
+     * ParameterExceptionHandler} to parse errors (#307) and {@code ExecutionExceptionHandler} to
+     * exceptions escaping a subcommand. {@code LoggingSetup} escapes its {@code --log-file} notice
+     * the same way. Picocli's own {@code [picocli WARN]} trace lines, which it prints straight to
+     * {@code System.err}, are outside it.
      *
      * @param value the value to interpolate — a {@link Path}, or a message from a caught exception
      * @return the value's text with every line terminator replaced by a literal {@code \n}
