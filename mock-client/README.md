@@ -73,9 +73,10 @@ B, ..., and each game also writes `logs/mockgame-<label>.jsonl`. Do not set
 at Hydra and rewrites in place on every run, so point it at the real files, never
 copies or a process substitution. `--peer-access-token-file` takes pre-signed
 access tokens, the channel `--oauth-access-token-file` uses (WBS-3.1.6.4): each is
-sent as-is, never renewed or rewritten, and reads neither `--oauth-token-url` nor
-`--oauth-client-id`. Nothing in the harness checks a token's expiry, so an expired
-one fails at the `welcome` stage with the lobby's own rejection; see
+sent as-is and never renewed or rewritten, and the channel reads neither
+`--oauth-token-url` nor `--oauth-client-id`. Nothing in the harness checks a
+token's expiry, so an expired one fails at the `welcome` stage with the lobby's
+own rejection; see
 [`harness-runbook.md`
 §3](../documentation/operations/harness-runbook.md#the-other-credential-channel-a-pre-signed-access-token)
 for what a token must carry and what a rejection looks like. Either flag can be
@@ -317,7 +318,8 @@ access token, so with `oauthAccessTokenFile` set these two are not read. Both
 default to the FAF test environment, as `lobbyWebSocketUrl` does (#421), so
 pointing the harness at another environment means setting the lobby and token
 URLs together, and the client id too if that Hydra registers a different one.
-The three bootstrap settings above
+A blank environment variable or config key counts as unset, so it leaves the
+default in place rather than failing. The three bootstrap settings above
 (`oauthAuthEndpoint`, `oauthRedirectUri`, `oauthScopes`) are required by
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
@@ -804,16 +806,19 @@ what two consecutive lines with a rising `highest sequence` show.
 
 ## Failure mode
 
-Running `run` with nothing configured prints a single error line listing every
-missing required option, then the command's usage block. The lobby URL, token
-URL and client id have defaults, so the list names only the UID source; with
-one set, the missing credential file is reported next, in the same shape:
+Running `run` with nothing configured prints one error line, then the command's
+usage block. The lobby URL, token URL and client id have defaults, so the line
+names only the UID source:
 
 ```text
 missing required configuration: --uid-binary-path or --unique-id. Supply each via its CLI flag, the matching FAF_MOCK_CLIENT_* environment variable, or a --config file.
 Usage: mock-client run [-hV] [--host-enforce-rating-range]
        (full picocli usage block)
 ```
+
+With a UID source set, the next run reports the missing credential instead,
+`no OAuth credentials supplied: set --oauth-refresh-token-file …`, followed by
+the same usage block.
 
 The JVM exits with status `2` so CI can distinguish config errors from runtime
 failures.
