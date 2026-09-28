@@ -290,8 +290,8 @@ class SubprocessManagerStartTest {
      * @throws InterruptedException if the wait is interrupted
      */
     private static void awaitDeregistered(final SubprocessManager m) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
-        while (System.currentTimeMillis() < deadline) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(POLL_BUDGET_MS);
+        while (System.nanoTime() < deadline) {
             if (!SubprocessRegistry.contains(m)) {
                 return;
             }
@@ -301,8 +301,8 @@ class SubprocessManagerStartTest {
     }
 
     private void awaitLog(Predicate<ILoggingEvent> matcher) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + POLL_BUDGET_MS;
-        while (System.currentTimeMillis() < deadline) {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(POLL_BUDGET_MS);
+        while (System.nanoTime() < deadline) {
             for (ILoggingEvent e : appender.list) {
                 if (matcher.test(e)) {
                     return;

@@ -129,9 +129,35 @@ final class StateMachineCancelTest {
     }
 
     /**
+     * cancel() leaves the thread running a timeout uninterrupted (WBS-2.3.7-fix, #465). A timeout's
+     * own transition can call it and carry on: mock-game's GameShutdown does, from ENDED's entry
+     * hook, whenever a timeout drives the game there, and an interrupt would cut its later steps
+     * short. The executor's shutdownNow() would interrupt this thread; shutdown() cannot.
+     */
+    @Test
+    void cancelFromATimeoutsOwnTransitionDoesNotInterruptIt() throws Exception {
+        State a = new State("A");
+        State ended = new State("ENDED");
+        StateMachine machine = new StateMachine(a);
+        CompletableFuture<Boolean> interrupted = new CompletableFuture<>();
+        ended.onEntry(
+                () -> {
+                    machine.cancel();
+                    interrupted.complete(Thread.currentThread().isInterrupted());
+                });
+
+        machine.setTimeout(0, ended);
+
+        assertFalse(
+                interrupted.get(CANCEL_WAIT_SECONDS, TimeUnit.SECONDS),
+                "cancel() must not interrupt the thread running the timeout that called it");
+    }
+
+    /**
      * Pins #312's contract where it lives: cancel() is terminal, and a later setTimeout arms
-     * nothing rather than throwing on the dead timer. A cancel() landing between that check and the
-     * schedule is ruled out by construction, since both run under the machine's scheduling lock.
+     * nothing rather than throwing on the shut-down executor. A cancel() landing between that check
+     * and the schedule is ruled out by construction, since both run under the machine's scheduling
+     * lock.
      */
     @Test
     void setTimeoutAfterCancelDoesNotThrow() {

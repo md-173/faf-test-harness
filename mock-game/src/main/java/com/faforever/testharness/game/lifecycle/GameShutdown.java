@@ -26,7 +26,10 @@ import org.slf4j.LoggerFactory;
  * for timeouts and another for launch-delay and match-duration tasks. This is why there are two
  * very similar steps. Step 2 cancels the StateMachine's own timer while step 1 cancels the other
  * MockGameLifecycle scheduler, so both have stopped before anything is closed, and neither waits
- * for the StateMachine monitor.
+ * for the StateMachine monitor. Nor does either interrupt the thread running this sequence, which
+ * is often one of those schedulers' own: a timeout, or a match that ends on its own, drives the
+ * game into ENDED, whose entry hook runs this sequence, and an interrupt would cut the traffic
+ * step's wait for its receiver short (WBS-2.3.7-fix, #465; WBS-3.2.4.1-fix, #487).
  *
  * <p><b>Stopping scheduling first is safe because {@link StateMachine#cancel()} never waits for the
  * StateMachine monitor</b> (WBS-2.3.7-fix, #328). Every outbound frame is written from a transition
@@ -58,7 +61,7 @@ import org.slf4j.LoggerFactory;
  * held it. With no socket open there is no write to stall behind, so the wait would be short, but
  * it would break the property everything above relies on: that no step in this sequence waits for
  * that monitor. That filter is therefore part of this sequence's design and not merely a log-noise
- * fix, which is how it is described at its own call site.
+ * fix.
  *
  * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
  * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
@@ -71,21 +74,21 @@ import org.slf4j.LoggerFactory;
  * returns — bounded to a single line each, with the bootstrap's log shutdown following.
  *
  * <p><b>Steps one and two are not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels
- * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} calls {@code
- * shutdownNow()} on the launch-delay and match-duration scheduler, which drains the tasks that have
- * not started yet. Neither can recall work already running: a scheduler task past its cancellation
- * check can still post an event after teardown, and a timeout whose transition is already under way
- * when {@code cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the
- * optional lobby give-up timer, target ENDED. That residue is inert: the invalid-transition policy
- * is IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that does
- * fire converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears down
- * twice.
+ * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} shuts down the
+ * launch, match-end and crash scheduler, which discards every task whose delay has not run out.
+ * Neither can recall work already running: a scheduler task past its cancellation check can still
+ * post an event after teardown, and a timeout whose transition is already under way when {@code
+ * cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the optional
+ * lobby give-up timer, target ENDED. That residue is inert: the invalid-transition policy is
+ * IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that does fire
+ * converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears down twice.
  *
  * <p>Step one is what makes that true. Before WBS-3.2.4.1-fix (#265) added it, nothing stopped that
  * scheduler: a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in
  * that state (the local close is filtered, see {@code MockGameLifecycle.setupStateMachine}), and
  * the orphaned {@code LaunchMatch} then drove the registered transition to LIVE against a socket
- * this sequence had already closed. Draining the queue removes that case.
+ * this sequence had already closed. Shutting the scheduler down removes that case: a launch still
+ * waiting is discarded, and one already due finds the scheduler shut down and returns (#487).
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
