@@ -185,7 +185,10 @@ public final class SubprocessManager {
 
     /**
      * Returns a future that completes with the process exit code once the process exits. The reader
-     * executor is shut down as part of the completion chain.
+     * executor is shut down as part of the completion chain, which does not wait for the readers,
+     * so the child's last lines can reach the log after this completes. A caller that reports the
+     * exit calls {@link #terminate()} first: an exited process gets no signal, only the wait of up
+     * to a second for those lines (#495).
      *
      * <p>Each call returns an independent copy; cancelling or externally completing the returned
      * future does not affect the internal completion chain or other callers.

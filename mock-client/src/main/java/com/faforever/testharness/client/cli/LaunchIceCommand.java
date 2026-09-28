@@ -205,9 +205,8 @@ public final class LaunchIceCommand implements Callable<Integer> {
 
         try {
             int earlyCode = adapter.onExit().get(durationSeconds, TimeUnit.SECONDS);
-            // The peer goes first, as on every other path here. The adapter has exited, so
-            // terminate() sends no signal; it waits up to a second for the adapter's last lines,
-            // so they are logged before this report (#495).
+            // The peer goes first, as on every other path here; terminate() then waits for the
+            // exited adapter's last lines, as above (#495).
             rpc.close();
             adapter.terminate();
             log.error(

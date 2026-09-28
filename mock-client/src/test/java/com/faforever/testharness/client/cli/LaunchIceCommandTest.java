@@ -29,6 +29,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
@@ -338,6 +340,9 @@ final class LaunchIceCommandTest {
      * and exits after 0.5 s, and a background child writes a line unique to the run 0.4 s later.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason = "POSIX-only: spawns a shell script")
     void anAdapterThatExitsOnItsOwnIsReportedAfterItsLastLine() throws Exception {
         String lastLine = "ICE-ADAPTER-LAST-LINE-" + System.nanoTime();
         Path stub =
