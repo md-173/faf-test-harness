@@ -161,6 +161,8 @@ final class ConfigLoaderAuthChoiceTest {
         // exited 2 demanding --oauth-auth-endpoint, --oauth-redirect-uri and --oauth-scopes.
         // The live run against the test lobby carried placeholders for those three, so it
         // showed they are not read, not that this exact argv has been run end to end.
+        // Since #421 the defaults fill the token URL and client id here, so this no longer shows
+        // the channel skips those two; aBlankClientIdIsNotReadOnTheAccessTokenChannel does.
         Path access = credentialFile(dir, "access.jwt");
         String[] args =
                 new String[] {

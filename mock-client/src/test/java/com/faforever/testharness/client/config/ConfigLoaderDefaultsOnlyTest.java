@@ -84,6 +84,37 @@ final class ConfigLoaderDefaultsOnlyTest {
     }
 
     @Test
+    void aBlankClientIdIsStillMissingOnTheRefreshChannel() {
+        // The default fills an absent --oauth-client-id, not an empty one, so a blank one is the
+        // command-line route left to MockClientConfig's client-id check (#421).
+        String[] args = {
+            "--oauth-refresh-token-file=" + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+            "--uid-binary-path=./faf-uid",
+            "--oauth-client-id=",
+        };
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(ex.getMessage().contains("--oauth-client-id"), ex.getMessage());
+    }
+
+    @Test
+    void aBlankClientIdIsNotReadOnTheAccessTokenChannel() {
+        // The same argv on the access-token channel validates: that channel reads no client id
+        // (#340). With the defaults filling an absent one, only a blank one still shows this.
+        String[] args = {
+            "--oauth-access-token-file=/nonexistent/test-access-token",
+            "--uid-binary-path=./faf-uid",
+            "--oauth-client-id=",
+        };
+
+        assertTrue(ConfigLoader.load(args, Map.of()).isPresent());
+    }
+
+    @Test
     void iceAdapterBinaryPathDefaultsToFafIceAdapterJarWhenUnset() {
         // --ice-adapter-binary-path is optional (subprocess-orchestration-spec §2.2): when unset
         // it resolves to faf-ice-adapter.jar in the working directory.
