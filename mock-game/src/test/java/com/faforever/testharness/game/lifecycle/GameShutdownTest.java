@@ -18,6 +18,8 @@ import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.State;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -375,6 +377,69 @@ final class GameShutdownTest {
                     outcome.get(),
                     "the stalled write should have failed, not caught up");
         }
+    }
+
+    /**
+     * A local close never takes the lifecycle's StateMachine monitor (#329). On a connection that
+     * never opened its socket, {@link GpgNetConnection#close()} can fire the disconnect listener on
+     * the calling thread, so were {@code MockGameLifecycle}'s listener to post {@code
+     * ServerDisconnected} for it, the shutdown's close step would wait for whatever transition
+     * holds the monitor. With no socket there is no write to stall behind, so that wait is short
+     * rather than #299's hang, but teardown should not queue behind a transition at all. {@link
+     * #completesWhileATransitionActionIsStalledMidWrite()} cannot see this: its connection is live,
+     * so its disconnect is dispatched on the reader thread.
+     *
+     * <p>The state after the close says nothing here, because the transition guard rejects {@code
+     * LOCAL_CLOSE} in every state and the FSM would not move either way. What distinguishes the two
+     * is whether the closing thread asks for the monitor, so that is what this observes: with the
+     * monitor held here, the closer either finishes or blocks on it. Both outcomes are final while
+     * the monitor is held, so neither waits on a timer; the {@code @Timeout} is only a net for a
+     * close that hangs on something else entirely.
+     */
+    @Test
+    @Timeout(30)
+    void aLocalCloseNeverTakesTheFsmMonitor() throws Exception {
+        MockGameConfig config =
+                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+        // Never connected, which is what makes close() dispatch on the thread that calls it.
+        GpgNetConnection connection = new GpgNetConnection(1);
+        MockGameLifecycle lifecycle = new MockGameLifecycle(config, connection, null, null);
+        StateMachine monitor = lifecycle.stateMachine();
+        try {
+            Thread closer;
+            synchronized (monitor) {
+                closer = startDaemon(connection::close, "never-connected-close");
+                while (closer.isAlive() && !isBlockedOn(closer, monitor)) {
+                    if (Thread.interrupted()) {
+                        throw new InterruptedException(
+                                "close() neither returned nor asked for the monitor");
+                    }
+                    Thread.onSpinWait();
+                }
+                assertFalse(
+                        isBlockedOn(closer, monitor),
+                        "a local close asked for the StateMachine monitor, so teardown's close"
+                                + " step would wait behind any transition holding it (#329)");
+            }
+            closer.join(5_000);
+            assertFalse(closer.isAlive(), "the close should have returned");
+            assertEquals(GameState.INITIALIZING, lifecycle.getState());
+        } finally {
+            lifecycle.shutdown().run();
+        }
+    }
+
+    /**
+     * Whether {@code thread} is blocked waiting to enter {@code lock}'s monitor. Checked against
+     * the lock's identity rather than the thread state alone, so contention on some unrelated
+     * monitor inside {@code close()} cannot be mistaken for this one.
+     */
+    private static boolean isBlockedOn(final Thread thread, final Object lock) {
+        ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(thread.threadId());
+        return info != null
+                && info.getThreadState() == Thread.State.BLOCKED
+                && info.getLockInfo() != null
+                && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(lock);
     }
 
     /** Event with no meaning beyond triggering the stalling transition. */
