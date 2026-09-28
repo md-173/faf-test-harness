@@ -465,9 +465,6 @@ final class LobbyConnectionTest {
         server.awaitFirstClient();
 
         server.broadcastText("{\"command\":\"game_launch\"}");
-        // A later write makes the fixture write the frame even if its selector dropped the
-        // write interest (#480); the ping is read once the handler returns.
-        server.broadcastText("{\"command\":\"ping\"}");
 
         DisconnectEvent event = disconnect.get(10, TimeUnit.SECONDS);
         assertEquals(DisconnectReason.ABRUPT_CLOSE, event.reason(), "" + event);
