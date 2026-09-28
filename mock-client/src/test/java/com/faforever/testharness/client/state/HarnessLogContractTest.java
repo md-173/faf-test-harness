@@ -309,6 +309,35 @@ final class HarnessLogContractTest {
         lifecycle.shutdown();
     }
 
+    /**
+     * The line scripts/ci/ice-timing.py reads each ICE link's offering side from (WBS-5.1.1): the
+     * live-integration delay run's leg check and every dispatch's baseline both start from it.
+     */
+    @Test
+    void reportsWhichSideOffersOnConnectToPeer() {
+        MockClientLifecycle lifecycle = newLifecycle();
+        lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+        lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+        lifecycle.post(new HostGame(HOST_GAME_MESSAGE));
+        assertEquals(
+                ClientState.HOSTING,
+                lifecycle.getState(),
+                "sanity: ConnectToPeer is handled only while hosting or joining");
+
+        ObjectNode connect =
+                MAPPER.createObjectNode().put("command", "ConnectToPeer").put("target", "game");
+        connect.set("args", MAPPER.createArrayNode().add("Peer").add(2).add(true));
+        lifecycle.post(new ConnectToPeer(connect));
+
+        List<String> captured = messages();
+        assertTrue(
+                captured.contains("peer connect: login=Peer id=2 offer=true"),
+                "a ConnectToPeer must log the peer and which side offers: " + captured);
+
+        // The launch started a game process, and this session never reaches TERMINATED on its own.
+        lifecycle.shutdown();
+    }
+
     @Test
     void reportsTerminatedOnceWhenLaunchFails() {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
