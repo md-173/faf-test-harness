@@ -43,6 +43,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
@@ -292,6 +294,10 @@ final class SessionFailuresTest {
      * WARN its own exit event logs. It is not waited for, being dead already.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterFoundDeadIsLostWithOneWarning() throws Exception {
         exitedAdapter(3);
 
@@ -309,6 +315,10 @@ final class SessionFailuresTest {
      * with no timing involved.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterThatDiesDuringTheWaitIsLost() throws Exception {
         SubprocessManager adapter = liveAdapter();
         onWaiting = adapter::terminate;
@@ -331,6 +341,10 @@ final class SessionFailuresTest {
      * what closed it.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aLiveAdapterWhoseLinkDroppedFailsTheSession() throws Exception {
         liveAdapter();
 
@@ -359,6 +373,10 @@ final class SessionFailuresTest {
      * location on a second line, which a stand-in exception built without a parser never shows.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aParseErrorIsNamedOnOneLine() throws Exception {
         JsonProcessingException parseError =
                 assertThrows(
@@ -383,6 +401,10 @@ final class SessionFailuresTest {
 
     /** A live adapter that closed its end cleanly is named for that: the stream simply ended. */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aLinkThatEndedCleanlyIsNamedAsTheEndOfTheStream() throws Exception {
         liveAdapter();
 
@@ -397,6 +419,10 @@ final class SessionFailuresTest {
 
     /** An adapter that quit with {@code 0} did so on its own, which records nothing, as ever. */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterThatQuitCleanlyRecordsNothing() throws Exception {
         exitedAdapter(0);
 
@@ -411,6 +437,10 @@ final class SessionFailuresTest {
      * would hang into the class timeout rather than pass.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void onlyALinkTheAdapterClosedIsWaitedOn() throws Exception {
         liveAdapter();
         SessionFailures check = waitingFailures(FOREVER);
@@ -431,6 +461,10 @@ final class SessionFailuresTest {
      * death is not a finding.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aSignalledTeardownRecordsNothing() throws Exception {
         exitedAdapter(143);
         signalled.set(true);
@@ -445,6 +479,10 @@ final class SessionFailuresTest {
      * Here the signal comes as {@code SubprocessRegistry}'s hook does, killing the adapter.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aSignalDuringTheWaitRecordsNothing() throws Exception {
         SubprocessManager adapter = liveAdapter();
         onWaiting =
@@ -468,6 +506,10 @@ final class SessionFailuresTest {
      */
     @ParameterizedTest
     @ValueSource(strings = {"launchFailed", "adapterLost", "gameCrashed", "sessionFailed"})
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aSessionThatHasAVerdictIsLeftAlone(final String verdict) throws Exception {
         switch (verdict) {
             case "launchFailed" -> verdicts.recordLaunchFailed();
@@ -498,6 +540,10 @@ final class SessionFailuresTest {
      * its start, holding the state machine all the while.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void theWaitDoesNotNeedTheCommonPool() throws Exception {
         // Below two, CompletableFuture runs async stages on fresh threads, not the common pool.
         assumeTrue(ForkJoinPool.getCommonPoolParallelism() > 1, "no common pool to occupy");

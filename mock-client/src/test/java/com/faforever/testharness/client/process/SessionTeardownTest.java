@@ -146,6 +146,10 @@ final class SessionTeardownTest {
      * the lifecycle reports the game's end, with the lobby still open.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void theAfterGameStepRunsBetweenTheGameAndTheAdapter() throws Exception {
         SubprocessManager game = startSleeper();
         SubprocessManager adapter = startSleeper();
@@ -169,6 +173,10 @@ final class SessionTeardownTest {
 
     /** A step that throws is the owner's defect, logged, and the rest of teardown still runs. */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void aThrowingAfterGameStepStillTearsDownTheRest() throws Exception {
         SubprocessManager adapter = startSleeper();
         SessionTeardown teardown = new SessionTeardown(recordingLobby());
