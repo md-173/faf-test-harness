@@ -166,6 +166,9 @@ public record MockClientConfig(
         // config-file values unreachable for every subcommand. Validating here lets those layers
         // populate the fields first, while a genuinely missing value still surfaces as a clean
         // usage error (toValidatedConfig wraps this as a picocli ParameterException).
+        // MockClientCli defaults the lobby URL, token URL and client id to the FAF test
+        // environment (#421), so from the command line only a blank --oauth-client-id= reaches
+        // their checks. They stay for callers that build this record directly.
         List<String> missing = new ArrayList<>();
         if (lobbyWebSocketUrl == null) {
             missing.add("--lobby-websocket-url");
