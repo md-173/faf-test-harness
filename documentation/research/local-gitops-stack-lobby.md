@@ -83,8 +83,11 @@ in `.traefik.default`. With that certificate in the JVM's truststore, `run` fail
 handshake (`No subject alternative DNS name matching ws.faforever.localhost found`, exit 70).
 
 Both local entrypoints set `readTimeout: 60`, as test's `websecure` does
-([values-test.yaml:46][gs-traefik-test-timeout]). An idle `run` held open through traefik for
-100 s stayed connected, so the timeout does not cut an upgraded connection.
+([values-test.yaml:46][gs-traefik-test-timeout]). A `run` left logged in with no game stayed
+connected through traefik for about 91 s (a `sleep 100`, which this machine's clock runs fast; see
+[question 7](#7-cost)), so the timeout does not cut an upgraded connection at 60 s. The
+connection is never silent for long: the lobby pings every 45 s ([config.py:65][srv-ping]) and
+the harness answers.
 
 ### 3. Secrets
 
@@ -123,7 +126,7 @@ accounts:
 
 Checked live on the admin route: tokens for all eight accounts took 1.4 s together. Each was
 RS256 with a `kid` in Hydra's JWKS, `scp` of `openid offline lobby`, issuer
-`http://ory-hydra:4444` and a lifetime of 3,600 s. Seven accounts reached `session ready`.
+`http://ory-hydra:4444` and a lifetime of 3,600 or 3,601 s. Seven accounts reached `session ready`.
 Rhiza's login ended with the lobby's `You are banned from FAF forever` notice and exit 70. Five of
 the seven have no ownership link, which confirms the lobby itself does not check ownership.
 
@@ -154,10 +157,10 @@ The Tilt path does not use the Argo appsets. It renders the checked-out gitops-s
 | --- | --- | --- | --- |
 | Lobby | `faf-python-server:v1.18.3` | the same | [deployment.yaml:24][gs-lobby-image], no per-environment values |
 | Lobby config | policy check off; JWKS from the in-cluster Hydra over http | policy check on; JWKS from `https://hydra.faforever.xyz` | [Tiltfile:190-200][gs-tilt-policy], [Tiltfile:411-414][gs-tilt-lobby], [config.yaml:13][gs-lobby-configmap] |
-| Hydra | `v26.2.0`; issuer `http://ory-hydra:4444`; dev mode; no janitor | `v26.2.0`; issuer `https://hydra.faforever.xyz`; CORS for localhost | [Tiltfile:364-370][gs-tilt-hydra], [config.yaml:9][gs-hydra-issuer] with [test.yaml:7][gs-config-test], [values-test.yaml][gs-hydra-test] |
+| Hydra | `v26.2.0`; issuer `http://ory-hydra:4444`; dev mode | `v26.2.0`; issuer `https://hydra.faforever.xyz`; CORS for localhost | [Tiltfile:364-370][gs-tilt-hydra], [config.yaml:9][gs-hydra-issuer] with [test.yaml:7][gs-config-test], [values-test.yaml][gs-hydra-test] |
 | Policy server | not deployed | `faf-policy-server:v1.23` | [Tiltfile:382][gs-tilt-policy-config], [deployment.yaml:31][gs-policy-image] |
 | faf-user-service | `4.2.0`, rendered with `values-prod.yaml` | `master`, a rolling tag | [Tiltfile:393][gs-tilt-user], [values-prod.yaml:2][gs-user-prod], [values-test.yaml:7][gs-user-test] |
-| Schema | `faf-db-migrations:v146` | the same | [cronjob.yaml:23][gs-migrations] |
+| Schema | `faf-db-migrations:v146`, run as a Job at bring-up | the same image, run by hand: the CronJob is suspended | [cronjob.yaml:9-11][gs-migrations-schedule], [cronjob.yaml:23][gs-migrations] |
 | Test data | FAForever/db `develop` at run time unless pinned; this run pinned `v146` | the environment's own long-lived database | [populate-database.sh][gs-populate] |
 | Traefik | no TLS store; `web` and `websecure` both route | Cloudflare in front; a TLS store holding Cloudflare's certificate | [values-local.yaml][gs-traefik-local], [values-test.yaml:88-95][gs-traefik-test] |
 
@@ -199,9 +202,14 @@ setup jobs, 50 of the Tiltfile's 109 resources).
 
 About 4 minutes of the 285 s went on the nine image pulls, which the kubelet runs one at a time.
 Other work on the machine was not held still, so the VM-wide figures are approximate and the
-node's own figures are the firmer ones. The WSL clock also steps back 2 to 3 s about every 30 s,
-so intervals under a minute carry that error: a fourth session read 7.6 s under `/usr/bin/time`,
-and the 100 s idle run's log spans 92.6 s.
+node's own figures are the firmer ones. This machine's kernel clock also runs 10% fast (measured
+against Windows' clock on 2026-09-28; `adjtimex` reads a `tick` of 11000 where 10000 is normal),
+and WSL steps the wall clock back 2 to 3 s about every 30 s to keep it on Windows time. The times
+above come from `date`, so those of a minute or more are right to within one step. Shorter ones
+can read up to 10% long, or 2 to 3 s short when a step falls inside them: a fourth session read
+7.6 s under `/usr/bin/time`. Anything timed by the monotonic clock runs 10% long, `sleep` and the
+kubelet's pull times included: the `sleep 100` in question 2 lasted about 91 s, and `date` read
+93 s across it.
 
 The checkout sat under `/tmp`, which kind mounts as tmpfs inside the node, so the databases'
 files (244 MB) counted as memory rather than disk. The Tiltfile builds no images and sets up no
@@ -225,10 +233,12 @@ resource ([Tiltfile:257][gs-tilt-populate]) that `tilt ci` never triggers.
 
 ## Running it
 
-Needs Docker, kind, ctlptl, Tilt, Helm, kubectl, curl, jq and openssl, plus JDK 21 and the jars,
-adapter and `faf-uid` that runbook §11 uses. On a Linux host, raise the inotify limits kind
-documents (`fs.inotify.max_user_instances=512`, `fs.inotify.max_user_watches=524288`) and, unless
-your resolver answers `*.localhost`, add the host names to `/etc/hosts`:
+Needs Docker, kind, ctlptl, Tilt, Helm, kubectl, curl, jq and openssl, plus JDK 21, the adapter
+and `faf-uid` that runbook §11 uses, and harness jars built from `main` at `d916ad8b` or later
+(the 0.3.0 release still requires `--unique-id`, so §11's flags exit 2 on it; see #499). On a
+Linux host, raise the inotify limits kind documents (`fs.inotify.max_user_instances=512`,
+`fs.inotify.max_user_watches=524288`) and, unless your resolver answers `*.localhost`, add the
+host names to `/etc/hosts`:
 
 ```bash
 echo '127.0.0.1 ws.faforever.localhost lobby.faforever.localhost hydra.faforever.localhost' | sudo tee -a /etc/hosts
@@ -245,10 +255,11 @@ tilt up -- --run faf-lobby-server --run ory-hydra-create-client-2
 # In another shell, once `tilt get uiresource faf-lobby-server` answers:
 tilt wait --for=condition=Ready --timeout=20m uiresource/faf-lobby-server uiresource/ory-hydra-create-client-2
 
-# `tilt trigger populate-db` fails on Linux (see the questions for FAF), so run its pipeline,
-# pinned to the FAForever/db tag that matches the migrations image.
-curl -fsS https://raw.githubusercontent.com/FAForever/db/v146/test-data.sql |
-    kubectl exec -i -n faf-infra statefulset/mariadb -- mariadb --host=mariadb --user=root --password=banana faf_lobby
+# `tilt trigger populate-db` fails on Linux (see the questions for FAF), so run its two steps,
+# pinned to the FAForever/db tag that matches the migrations image. Download first: piped, a
+# failed fetch would load nothing and still succeed.
+curl -fsS --retry 3 -o test-data.sql https://raw.githubusercontent.com/FAForever/db/v146/test-data.sql
+kubectl exec -i -n faf-infra statefulset/mariadb -- mariadb --host=mariadb --user=root --password=banana faf_lobby < test-data.sql
 # The lobby reads its next game id once, at startup, so restart it after loading the data.
 kubectl rollout restart deployment/faf-lobby-server -n faf-apps
 kubectl rollout status deployment/faf-lobby-server -n faf-apps
@@ -270,7 +281,7 @@ Tokens, one per peer, with this script (the ids are `login.id` values from the t
 set -euo pipefail
 id=$1
 out=$2
-pub=http://hydra.faforever.localhost   # Hydra's URLS_SELF_PUBLIC; every redirect points here
+pub=http://hydra.faforever.localhost   # Hydra's URLS_SELF_PUBLIC; admin redirect_to URLs use it
 adm=http://127.0.0.1:4445              # Hydra's admin port, forwarded by Tilt
 cid=95ecec08-29c1-4c48-ae0a-b000ff349cb8
 redirect=http://127.0.0.1
@@ -332,7 +343,7 @@ down: `ctlptl delete cluster kind` and `ctlptl delete registry ctlptl-registry`.
 ### What a passing session looked like
 
 Session 1 of 4, with `test` (id 1) hosting and `steambie` (id 7) joining, trimmed to the
-checkpoints:
+checkpoints, with the date, component and level columns dropped:
 
 ```text
 [21:05:07.414] [A] lobby WebSocket connected: ws://ws.faforever.localhost:8080
@@ -354,21 +365,35 @@ read.
 
 - **Bring-up.** `tilt ci -- --run faf-lobby-server --run ory-hydra-create-client-2` follows FAF's
   own `checks.yml`. The Tiltfile's patches are what make the stack usable locally: the policy
-  check off, the in-cluster JWKS, Hydra's local URLs, the `web` entrypoint, the suspended
-  migrations CronJob run as a Job ([cronjob.yaml:9-11][gs-migrations-schedule],
-  [Tiltfile:87-98][gs-tilt-cronjob]), and the `local` PersistentVolumes turned into hostPath ones
+  check off, the in-cluster JWKS, Hydra's local URLs and dev mode (outside it Hydra marks its CSRF
+  cookies `Secure` ([provider.go:321-326][hydra-cookie]), which curl does not send over `http://`,
+  so the mint script fails), the `web` entrypoint, the suspended migrations CronJob run as a Job
+  ([cronjob.yaml:9-11][gs-migrations-schedule], [Tiltfile:87-98][gs-tilt-cronjob]), and the
+  `local` PersistentVolumes turned into hostPath ones
   ([persistent-volume.yaml:14-23][gs-storage-pv], [Tiltfile:172-188][gs-tilt-hostpath]). Rendering
   the charts with Helm instead means reproducing them; without the last two, a plain render never
   migrates the schema and its database pods stay Pending.
 - **Addresses.** `tilt ci` exits once everything is Ready and takes its port-forwards with it, so
   the job holds its own: traefik for the session, as above, and Hydra's public and admin ports for
-  the mint script (`kubectl port-forward -n faf-apps svc/ory-hydra 4444 4445`). The JVM must also
-  resolve `ws.faforever.localhost`, since traefik routes on `Host()`.
-- **Data and tokens.** Load the pinned test data with the pipeline above, not `tilt trigger`, then
-  restart the lobby. Mint tokens in the job with the script. They last an hour, and minting takes a
-  fraction of a second, so the job mints per run and token lifetime stops mattering.
+  the mint script (`kubectl port-forward -n faf-apps svc/ory-hydra 4444 4445`). Started in the
+  background, a forward takes a moment to bind and stays tied to the one pod it picked, so wait
+  before minting or connecting: for `http://127.0.0.1:4444/health/ready` to answer 200, and for
+  the upgrade in live check 1 to answer 101. The JVM must also resolve `ws.faforever.localhost`,
+  since traefik routes on `Host()`.
+- **Data and tokens.** Load the pinned test data with the two commands above, not `tilt trigger`,
+  then restart the lobby. `kubectl rollout status` returns while the old lobby pod is still
+  shutting down, and its grace period is 3600 s ([deployment.yaml:22][gs-lobby-grace]), so name
+  that pod before the restart and wait for it to go (`kubectl wait --for=delete pod/<old pod>`)
+  before the first login. With no game open the wait is short, since faf-server's drain returns
+  at once ([game_service.py:340-345][srv-drain]). Mint tokens in the job with the script. They
+  last an hour, and minting takes a fraction of a second, so the job mints per run and token
+  lifetime stops mattering.
 - **Pins.** The gitops-stack commit, the FAForever/db tag that matches the migrations image, and
-  the tool versions.
+  the tool versions. The commit does not pin every image: `mariadb:12.2`
+  ([values.yaml:3][gs-mariadb-tag]), `pgautoupgrade/pgautoupgrade:17-bookworm`
+  ([values.yaml:6-7][gs-pg-upgrade-tag]) and the untagged `alpine/kubectl` of the setup jobs
+  ([init-database-with-user.yaml:35][gs-kubectl-tag]) move under it. Record the digests each run
+  pulled, or pin them, so upstream drift can be told apart from a harness failure.
 - **Telemetry.** Settle the adapters' target ([question 3 for FAF](#questions-for-faf)) before
   the job runs unattended; as things stand, every run reports to FAF's production service.
 - **Measurements this note cannot give.** The stack and the session together on a hosted runner,
@@ -436,8 +461,9 @@ USE_POLICY_SERVER: false
 $ kubectl get deploy -A --no-headers | grep -ci policy
 0
 
-# 4. One token's header and claims, as the mint run printed them; the other seven matched apart
-#    from sub, with lifetimes of 3600 or 3601 s. Then the key ids Hydra publishes.
+# 4. One token's header and claims, as the tested copy of the mint script printed them (the copy
+#    above leaves that printer out); the other seven matched apart from sub, with lifetimes of
+#    3600 or 3601 s. Then the key ids Hydra publishes.
 kid=98fb1e05-6a6e-4b69-957e-5ef15b6a35e9 alg=RS256 sub=1 scp=['openid', 'offline', 'lobby'] iss=http://ory-hydra:4444 lifetime=3600s
 $ curl -fsS http://127.0.0.1:4444/.well-known/jwks.json | jq -r '[.keys[].kid] | join(" ")'
 4307e693-e715-4e73-bd5a-e3d76ebe0660 98fb1e05-6a6e-4b69-957e-5ef15b6a35e9
@@ -483,6 +509,10 @@ tmpfs           3.7G  244M  3.5G   7% /tmp
 [gs-hydra-issuer]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/ory-hydra/templates/config.yaml#L9
 [gs-config-test]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/config/test.yaml#L7
 [gs-migrations-schedule]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-db-migrations/templates/cronjob.yaml#L9-L11
+[gs-lobby-grace]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-lobby-server/templates/deployment.yaml#L22
+[gs-mariadb-tag]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/infra/mariadb/values.yaml#L3
+[gs-pg-upgrade-tag]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/infra/postgres/values.yaml#L6-L7
+[gs-kubectl-tag]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/infra/mariadb/templates/init-database-with-user.yaml#L35
 [gs-tilt-cronjob]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L87-L98
 [gs-storage-pv]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/storage/templates/persistent-volume.yaml#L14-L23
 [gs-tilt-hostpath]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L172-L188
@@ -491,6 +521,9 @@ tmpfs           3.7G  244M  3.5G   7% /tmp
 [srv-auth]: https://github.com/FAForever/server/blob/v1.18.3/server/lobbyconnection.py#L633-L648
 [srv-policy]: https://github.com/FAForever/server/blob/v1.18.3/server/lobbyconnection.py#L577
 [srv-ignore]: https://github.com/FAForever/server/blob/v1.18.3/server/lobbyconnection.py#L725
+[srv-ping]: https://github.com/FAForever/server/blob/v1.18.3/server/config.py#L65
+[srv-drain]: https://github.com/FAForever/server/blob/v1.18.3/server/game_service.py#L340-L345
+[hydra-cookie]: https://github.com/ory/hydra/blob/v26.2.0/driver/config/provider.go#L321-L326
 [db]: https://github.com/FAForever/db/tree/v146
 [db-logins]: https://github.com/FAForever/db/blob/v146/test-data.sql#L54-L63
 [db-links]: https://github.com/FAForever/db/blob/v146/test-data.sql#L66
