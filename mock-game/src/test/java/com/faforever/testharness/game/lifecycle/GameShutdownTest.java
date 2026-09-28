@@ -380,13 +380,14 @@ final class GameShutdownTest {
     }
 
     /**
-     * The precondition the close-before-cancel order rests on (#329): a local close never takes the
-     * lifecycle's StateMachine monitor. On a connection that never opened, {@link
-     * GpgNetConnection#close()} fires the disconnect listener synchronously on the calling thread,
-     * so were {@code MockGameLifecycle}'s listener to post {@code ServerDisconnected} for it, the
-     * close step would block behind any action stalled mid-write — #299 again, one line further
-     * down. {@link #completesWhileATransitionActionIsStalledMidWrite()} cannot see this: its
-     * connection is live, so its disconnect is dispatched on the reader thread.
+     * A local close never takes the lifecycle's StateMachine monitor (#329). On a connection that
+     * never opened its socket, {@link GpgNetConnection#close()} can fire the disconnect listener on
+     * the calling thread, so were {@code MockGameLifecycle}'s listener to post {@code
+     * ServerDisconnected} for it, the shutdown's close step would wait for whatever transition
+     * holds the monitor. With no socket there is no write to stall behind, so that wait is short
+     * rather than #299's hang, but teardown should not queue behind a transition at all. {@link
+     * #completesWhileATransitionActionIsStalledMidWrite()} cannot see this: its connection is live,
+     * so its disconnect is dispatched on the reader thread.
      *
      * <p>The state after the close says nothing here, because the transition guard rejects {@code
      * LOCAL_CLOSE} in every state and the FSM would not move either way. What distinguishes the two
@@ -409,12 +410,16 @@ final class GameShutdownTest {
             synchronized (monitor) {
                 closer = startDaemon(connection::close, "never-connected-close");
                 while (closer.isAlive() && !isBlockedOn(closer, monitor)) {
+                    if (Thread.interrupted()) {
+                        throw new InterruptedException(
+                                "close() neither returned nor asked for the monitor");
+                    }
                     Thread.onSpinWait();
                 }
                 assertFalse(
                         isBlockedOn(closer, monitor),
-                        "a local close asked for the StateMachine monitor; a stalled transition"
-                                + " would hang teardown here (#299, #329)");
+                        "a local close asked for the StateMachine monitor, so teardown's close"
+                                + " step would wait behind any transition holding it (#329)");
             }
             closer.join(5_000);
             assertFalse(closer.isAlive(), "the close should have returned");

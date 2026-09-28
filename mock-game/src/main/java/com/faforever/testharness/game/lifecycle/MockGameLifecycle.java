@@ -565,15 +565,14 @@ public final class MockGameLifecycle {
                 "DisconnectFromPeer", frame -> machine.receiveEvent(new PeerDisconnected(frame)));
 
         // A local close is our own shutdown sequence closing the socket, never news to the FSM.
-        // This filter is a precondition of the shutdown ordering, not a log-noise fix (#329).
-        // GameShutdown closes the socket before it stops the FSM's scheduling, so that a transition
-        // action stalled mid-write, holding the StateMachine monitor, is released by the close
-        // (#299). On a connection that never opened, close() fires this listener synchronously on
-        // the closing thread, the JVM shutdown hook included. Posting an event from here would take
-        // that monitor inside the close step and block behind the very write the ordering exists to
-        // break. Filtering at the source keeps the close step off the monitor entirely; the
-        // ServerDisconnected guard above also rejects LOCAL_CLOSE, but only once the monitor is
-        // held. Pinned by GameShutdownTest.aLocalCloseNeverTakesTheFsmMonitor.
+        // Filtering it here, not only in the ServerDisconnected guard above, keeps GameShutdown's
+        // close step off the StateMachine monitor (#329). On a connection that never opened its
+        // socket, close() can fire this listener on the closing thread, the JVM shutdown hook
+        // included, and posting from here would make that step wait for whatever transition holds
+        // the monitor. With no socket there is no write to stall behind, so that wait is short
+        // rather than the #299 hang, but teardown should not queue behind a transition at all
+        // (#328 takes cancel() off the monitor for the same reason). Pinned by
+        // GameShutdownTest.aLocalCloseNeverTakesTheFsmMonitor.
         //
         // It also keeps clean exits quiet: ENDED, where the shutdown sequence runs, has no
         // ServerDisconnected transition at all, so posting there logged "No matching transitions".
