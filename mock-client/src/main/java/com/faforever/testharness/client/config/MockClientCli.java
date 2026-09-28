@@ -105,10 +105,10 @@ public final class MockClientCli implements Callable<Integer> {
     private Path configFile;
 
     /**
-     * WebSocket endpoint of the FAF lobby server. Defaults to the FAF test lobby, the host
-     * FAForever/client's test config connects to ({@code ws.faforever.xyz}, port 443), with the
-     * token URL and client id below defaulting to the same environment (#421). Pointing the harness
-     * at another environment therefore means overriding the lobby and token URLs together.
+     * WebSocket endpoint of the FAF lobby server. Defaults to the FAF test lobby, the lobby host
+     * FAForever/client's test config names ({@code ws.faforever.xyz}, port 443), with the token URL
+     * and client id below defaulting to the same environment (#421). Pointing the harness at
+     * another environment therefore means overriding the lobby and token URLs together.
      *
      * <p>Each of the three ends its description with its default on a line of its own ({@code %n})
      * and nothing after it. Inline, picocli wrapped the token URL after a dot, so a reader copying
