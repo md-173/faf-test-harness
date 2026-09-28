@@ -48,7 +48,7 @@ Everything the 3.1.2.7 demo needs (adapter jar, mock-game distribution), plus:
    refresh token on use. Never run two sessions on the same accounts at once.
    None of the four may be one of CI's two accounts, `Tagada` and `Paralon`,
    which were C and D in the 2026-09-15 passes above: a local run on either
-   during a dispatch signs out whichever of the two logged in first
+   during a dispatch signs out whichever logged in first
    ([`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#the-live-integration-workflow-manual-advisory)).
 
 The endpoint defaults to `wss://ws.faforever.xyz`, the FAF test lobby, which is

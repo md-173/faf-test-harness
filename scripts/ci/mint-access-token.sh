@@ -15,8 +15,8 @@
 #   scripts/ci/mint-access-token.sh .secrets/ci/refresh_token_d.txt FAF_CI_ACCESS_TOKEN_D
 #   scripts/ci/mint-access-token.sh .secrets/ci/refresh_token_c.txt FAF_CI_ACCESS_TOKEN_C --dry-run
 #
-# CI's refresh tokens live in .secrets/ci/, which no live test reads, because a local run on one of
-# CI's accounts during a dispatch signs out whichever logged in first (CONTRIBUTING.md §3).
+# CI's refresh tokens live in .secrets/ci/, apart from the files the live tests read: a local run
+# on a CI account during a dispatch signs out whichever logged in first (CONTRIBUTING.md §3).
 #
 # --dry-run does everything except set the secret, so the token's subject, scopes and expiry can be
 # checked before a dispatch depends on them. It still spends one rotation, because Hydra rotates on
