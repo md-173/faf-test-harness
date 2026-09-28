@@ -84,7 +84,7 @@ if [ "$http_code" != "200" ]; then
     echo "$0: token endpoint returned HTTP $http_code" >&2
     printf '%s' "$body" | jq -r '"  " + (.error // "unknown") + ": " + (.error_description // "")' >&2 \
         || echo "  (unparseable response body)" >&2
-    echo "  a spent or expired refresh token needs a fresh bootstrap: see harness-runbook.md section 3" >&2
+    echo "  a spent or expired refresh token needs a fresh bootstrap into $token_file: see harness-runbook.md section 3" >&2
     exit 1
 fi
 
