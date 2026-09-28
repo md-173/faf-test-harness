@@ -16,9 +16,10 @@ answerer's `gathering` (the offer has arrived). The answerer then gathers its ow
 the answer leg runs from its `awaitingCandidates` (the answer is sent) to the offerer's `checking`
 (the answer has arrived). The gap, the offerer's `awaitingCandidates` to `checking`, is all three
 together and is what the adapter's 6000 ms offerer timer bounds. A restart is the offerer reporting
-`disconnected` before its first `connected`, and the adapter starting over: before `checking`, the
-timer fired with no answer back; after it, the answer arrived and the connectivity checks failed.
-A restarted run is no sample of the baseline, since its gap spans the retry.
+`disconnected` before its first `connected`, and the adapter starting over: before
+`awaitingCandidates`, its own gathering failed or hit the adapter's 5000 ms cap; before `checking`,
+the timer fired with no answer back; after it, the answer arrived and the connectivity checks
+failed. A restarted run is no sample of the baseline, since its gap spans the retry.
 
 Every peer of a session logs from the one client JVM, so these spans are read off one clock. That
 clock is the wall clock, though, and a WSL2 host steps it back by seconds; a record more than
@@ -92,16 +93,23 @@ def first(events, state):
 
 def restart(events):
     """How the offerer restarted ICE before its first `connected`, read in file order, which a
-    wall-clock step cannot reorder: None for no restart, "timer" when it went `disconnected` still
-    waiting for the answer, "checks" when the answer had arrived and the checks then failed."""
+    wall-clock step cannot reorder: None for no restart, "gathering" when it went `disconnected`
+    before sending an offer (its own gathering failed or hit the adapter's 5000 ms cap), "timer"
+    when it went `disconnected` still waiting for the answer, "checks" when the answer had arrived
+    and the checks then failed."""
+    sent = False
     checking = False
     for _, state in events:
         if state == "connected":
             return None
-        if state == "checking":
+        if state == "awaitingCandidates":
+            sent = True
+        elif state == "checking":
             checking = True
         elif state == "disconnected":
-            return "checks" if checking else "timer"
+            if checking:
+                return "checks"
+            return "timer" if sent else "gathering"
     return None
 
 
@@ -163,6 +171,12 @@ def restart_cause(spans, delay):
         return (
             "the answer arrived and the connectivity checks then failed, so neither the timer nor "
             "gathering explains it"
+        )
+    if spans["restarted"] == "gathering":
+        # Every span here is the retry's, since the first attempt sent nothing to measure.
+        return (
+            "the offerer's own gathering failed or hit the adapter's 5000 ms cap before it sent an "
+            "offer, which points at STUN rather than the timer" + (" or the delay" if delay else "")
         )
     offer, gathering = spans["offer"], spans["gathering"]
     if offer is None or gathering is None:

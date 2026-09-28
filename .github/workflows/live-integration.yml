@@ -543,7 +543,8 @@ jobs:
       # escaped it, so each step pins the line its failure must log, not just the code, and refuses
       # a `session: FAIL teardown:` line, which a leaked process adds to any failure. Game output
       # only ever explains a red run here, never passes one: the client relays it from the game's
-      # pipes, and relayed lines have gone missing before (#449).
+      # pipes, and relayed lines have gone missing before (#449), so those explanations read each
+      # game's own log as well.
       #
       # Every datagram dropped. The adapters still connect, because a link's liveness is the
       # offering adapter's own echo rather than game traffic (PeerConnectivityCheckerModule,
@@ -572,7 +573,7 @@ jobs:
             exit 0
           fi
           if [ "$code" -eq 0 ]; then
-            if grep -q 'dropping 100%' "$log"; then
+            if grep -qs 'dropping 100%' "$log" "$dir"/logs/mockgame-*.jsonl; then
               reason="the session passed with every datagram dropped, so the traffic verdict no longer fails"
             else
               reason="the session passed, and no game logged 'dropping 100%', so the drop may never have reached the games"
@@ -622,10 +623,10 @@ jobs:
             exit 0
           fi
           if [ "$code" -eq 0 ]; then
-            if grep -q 'injected crash armed' "$log"; then
+            if grep -qsE 'injected crash (armed|firing)' "$log" "$dir"/logs/mockgame-*.jsonl; then
               reason="the session passed although a game armed its crash, so the verdict no longer fails when a game dies"
             else
-              reason="the session passed, and no game logged 'injected crash armed', so the crash may never have happened"
+              reason="the session passed, and no game logged its injected crash arming or firing, so the crash may never have happened"
             fi
           elif [ "$code" -ne 70 ]; then
             reason="it exited $code, and only 70 means a checkpoint failed"
@@ -657,7 +658,7 @@ jobs:
       # invisible to every later sweep. The pattern matches a JVM by the jar it runs (the
       # launchers start both subprocesses as `java ... -jar <jar>`), so a client that never exited
       # is caught too, and a process that merely names one of these paths is not.
-      - name: Check no adapter or game outlived the sessions
+      - name: Check no adapter, game or client outlived the sessions
         if: always()
         timeout-minutes: 1
         run: |

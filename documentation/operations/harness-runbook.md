@@ -1368,9 +1368,11 @@ What to look for when it is on:
   [actions/runner-images#14748](https://github.com/actions/runner-images/issues/14748)
   rolls out from 2026-10-19 to 2026-11-19; until then a dispatch can land on
   either image. A restart in both runs points at STUN or gathering. In the
-  delay run alone it points at the delay, unless the joiner's gathering outran
-  what the timer left it (about `6000 - 4 x delay - 500` ms) or the answer had
-  already arrived and the connectivity checks failed; the step prints which.
+  delay run alone it points at the delay, unless the host's own gathering
+  failed or hit the adapter's 5000 ms cap before it sent an offer, the
+  joiner's gathering outran what the timer left it (about
+  `6000 - 4 x delay - 500` ms), or the answer had already arrived and the
+  connectivity checks failed; the step prints which.
 
   Treat a measured baseline as a lower bound for real play. A real FAF client
   also passes TURN servers via `setIceServers`, which the adapter harvests, and
@@ -1388,8 +1390,8 @@ What to look for when it is on:
   to `checking` (the host is the side that logs `peer connect: ... offer=true`),
   and says when ICE restarted. Apply the formula to the gap. Do this on the
   machine that will run the delay, or stay at a few hundred milliseconds there.
-  On a WSL2 host the wall clock steps back by a second or so about every half
-  minute, and the script says when a log holds such a step, since a leg
+  On a WSL2 host the wall clock steps back by one to three seconds about every
+  half minute, and the script says when a log holds such a step, since a leg
   spanning it reads short.
 
   Past the ceiling you get an ICE restart loop rather than slow negotiation: on

@@ -73,7 +73,6 @@ mkdir -p "$work"
 cd "$work"
 exec java -jar "$client" \
     --lobby-websocket-url=wss://ws.faforever.xyz \
-    --unique-id=00000000-0000-0000-0000-000000000000 \
     --uid-binary-path="$FAF_UID_BINARY" \
     --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
     --mock-game-binary-path="$game" \
