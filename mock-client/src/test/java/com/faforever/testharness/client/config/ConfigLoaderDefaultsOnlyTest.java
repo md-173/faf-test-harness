@@ -1,12 +1,16 @@
 package com.faforever.testharness.client.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
 
@@ -31,24 +35,52 @@ final class ConfigLoaderDefaultsOnlyTest {
         String message = ex.getMessage();
 
         assertTrue(
-                message.contains("--lobby-websocket-url"),
-                "Missing-parameter message should name --lobby-websocket-url. "
-                        + "Got: "
-                        + message);
-        assertTrue(
-                message.contains("--oauth-token-url"),
-                "Missing-parameter message should name --oauth-token-url. Got: " + message);
-        assertTrue(
-                message.contains("--oauth-client-id"),
-                "Missing-parameter message should name --oauth-client-id. Got: " + message);
-
-        assertTrue(
                 message.contains("--uid-binary-path"),
                 "Missing-parameter message should name --uid-binary-path. Got: " + message);
 
         assertTrue(
                 message.contains("--unique-id"),
                 "Missing-parameter message should name --unique-id. Got: " + message);
+
+        // These three default to the FAF test environment (#421), so an empty command line no
+        // longer lacks them.
+        List<String> defaultedFlags =
+                List.of("--lobby-websocket-url", "--oauth-token-url", "--oauth-client-id");
+        for (String defaulted : defaultedFlags) {
+            assertFalse(
+                    message.contains(defaulted),
+                    "Missing-parameter message should not name " + defaulted + ". Got: " + message);
+        }
+    }
+
+    @Test
+    void aRefreshTokenFileAndFafUidAreAllTheRefreshChannelNeeds() {
+        // #421: the one credential and the one binary only the operator can supply are enough;
+        // the lobby URL, token URL and client id come from the built-in defaults.
+        String[] args = {
+            "--oauth-refresh-token-file=" + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+            "--uid-binary-path=./faf-uid",
+        };
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(URI.create(TestFixtures.DEFAULT_LOBBY_URL), config.lobbyWebSocketUrl());
+        assertEquals(URI.create(TestFixtures.DEFAULT_OAUTH_TOKEN_URL), config.oauthTokenUrl());
+        assertEquals(TestFixtures.DEFAULT_OAUTH_CLIENT_ID, config.oauthClientId());
+    }
+
+    @Test
+    void anAccessTokenFileAndFafUidAreAllTheAccessTokenChannelNeeds() {
+        // Before #421 this channel still needed --lobby-websocket-url, though no OAuth option.
+        Path accessTokenFile = Path.of("/nonexistent/test-access-token");
+        String[] args = {
+            "--oauth-access-token-file=" + accessTokenFile, "--uid-binary-path=./faf-uid",
+        };
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(URI.create(TestFixtures.DEFAULT_LOBBY_URL), config.lobbyWebSocketUrl());
+        assertEquals(Optional.of(accessTokenFile), config.oauthAccessTokenFile());
     }
 
     @Test
