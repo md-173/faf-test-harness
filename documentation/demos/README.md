@@ -347,7 +347,9 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
    # ensure: "oauthRefreshTokenFile": "./.secrets/refresh_token.txt"
    #         "uidBinaryPath":         "./faf-uid"
    ```
-   Every endpoint and credential comes from this config — nothing is hardcoded.
+   The credential and the `faf-uid` path come from this config. The lobby URL,
+   token URL and client id default to the FAF test environment, and a key here
+   overrides them.
 
 ### Run
 
@@ -358,9 +360,9 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
 Let it sit for **at least five minutes** to show the heartbeat keeps the
 connection alive, then press **Ctrl-C** to close cleanly.
 
-**Override chain (CLI > env > file).** Put a deliberately wrong URL in the config
-file, then override it — the `lobby WebSocket connected: <url>` line shows which
-source won:
+**Override chain (CLI > env > file).** Add a deliberately wrong
+`lobbyWebSocketUrl` to the config file, then override it; the
+`lobby WebSocket connected: <url>` line shows which source won:
 
 ```bash
 # CLI flag wins over the (wrong) file value → connects to ws.faforever.xyz

@@ -72,7 +72,6 @@ umask 077
 mkdir -p "$work"
 cd "$work"
 exec java -jar "$client" \
-    --lobby-websocket-url=wss://ws.faforever.xyz \
     --uid-binary-path="$FAF_UID_BINARY" \
     --ice-adapter-binary-path="$GITHUB_WORKSPACE/faf-ice-adapter.jar" \
     --mock-game-binary-path="$game" \
