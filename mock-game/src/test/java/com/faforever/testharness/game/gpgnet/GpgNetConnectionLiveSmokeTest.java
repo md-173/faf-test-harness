@@ -151,6 +151,14 @@ final class GpgNetConnectionLiveSmokeTest {
     private static final int INIT_MODE_NORMAL = 0;
 
     /**
+     * FAF's test telemetry service, which mock-client's {@code IceAdapterLauncher} also passes to
+     * every adapter the harness starts, so this test never reports to production. It must stay a
+     * live server: the findings in the class javadoc need the adapter's telemetry debugger
+     * registered, and a failed connect unregisters it.
+     */
+    private static final String TELEMETRY_SERVER = "wss://ice-telemetry.faforever.xyz";
+
+    /**
      * Console-only logback config for the adapter child JVM; see the class javadoc.
      *
      * <p>Pins {@code GPGNetServer}'s own logger to DEBUG regardless of the inherited {@code
@@ -436,7 +444,9 @@ final class GpgNetConnectionLiveSmokeTest {
                         "--gpgnet-port",
                         Integer.toString(ports.gpgnet()),
                         "--lobby-port",
-                        Integer.toString(ports.lobby()));
+                        Integer.toString(ports.lobby()),
+                        "--telemetry-server",
+                        TELEMETRY_SERVER);
         System.out.println("[live smoke] launching adapter: " + String.join(" ", argv));
         return SubprocessManager.start(
                 new ProcessBuilder(argv), "ICEAdapter", TERMINATE_GRACE, adapterOutput);

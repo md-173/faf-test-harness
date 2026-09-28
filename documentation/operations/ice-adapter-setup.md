@@ -74,9 +74,12 @@ EOF
 ```
 
 `downloadIceAdapter` is idempotent: a re-run verifies the existing jar's SHA-256 and skips the
-download. It is deliberately **not** wired into `build`/`check`, so CI stays offline; run it
-explicitly. The jar lands at `./faf-ice-adapter.jar`, which is the launcher's default
-`--ice-adapter-binary-path`, so `launch-ice` / `run` find it with no extra config.
+download. A network error or a 5xx or 429 response is retried twice, 5 and 10 s apart, before
+the task fails; any other response fails it at once, and a failed task leaves no partial jar. It
+is deliberately **not** wired into `build`/`check`, because it hits the network and only the live
+tests need the jar; run it explicitly, as `ci.yml`'s `live-tests` job does. The jar lands at
+`./faf-ice-adapter.jar`, which is the launcher's default `--ice-adapter-binary-path`, so
+`launch-ice` / `run` find it with no extra config.
 
 `launch-ice` needs no lobby or OAuth flags: it opens no lobby connection, so it validates only the
 adapter settings (WBS-3.1.5.2-fix, #308). It does attach a JSON-RPC peer and hold it open for the
@@ -169,9 +172,16 @@ below):
 - **Telemetry phone-home:** on launch the adapter opens a websocket to
   `ice-telemetry.faforever.com`. 3.3.14 has **no clean disable** — `--telemetry-server=""` just
   fails with `unknown scheme: null`, and an unreachable host errors too; either way telemetry
-  failure is **non-blocking** (the adapter still binds and answers `status`). In offline CI it
-  logs an error and continues. Left as-is — a flag that only changes which error is logged isn't
-  worth plumbing.
+  failure is **non-blocking** (the adapter still binds and answers `status`). Offline, it
+  logs an error and continues. Online, it reports the tests' made-up game and player ids to
+  whichever service it was pointed at. The harness points every adapter it launches at FAF's test
+  service, `wss://ice-telemetry.faforever.xyz` (`IceAdapterLauncher.TELEMETRY_SERVER`, and
+  `GpgNetConnectionLiveSmokeTest`'s own launch), so no harness run reaches production, `ci.yml`'s
+  `live-tests` job on every pull request included. The test service accepts 3.3.14's connection
+  as production does (checked 2026-09-25) and closes it with `Internal Error` the same way; the
+  adapter reconnects. It has to stay a live server: a connect that fails unregisters the telemetry
+  debugger and hides the gpgnet-format-spec.md section 8.1 condition 2 crash that mock-game's
+  500 ms first-frame wait guards against, so never point it at a closed port to silence it.
 - Runtime reports `Version: SNAPSHOT` — a cosmetic upstream build-stamp quirk; the artifact is the
   `3.3.14` release.
 - **The adapter's GPGNet server is unusable until a JSON-RPC peer connects.** The GPGNet port binds
@@ -187,7 +197,10 @@ below):
 
 STUN/TURN configuration (`setIceServers`, arrives later), actual ICE negotiation / peer
 connectivity (needs peers — R71 / multi-peer), and CI integration of the adapter (decide
-separately). This task only provisions the binary and proves it binds + answers `status` headless.
+separately: now done, and
+[`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#3-local-formatting-and-verification) says which live
+tests run on pull requests and which on dispatch). This task only provisions the binary and proves
+it binds + answers `status` headless.
 
 ## Sources
 

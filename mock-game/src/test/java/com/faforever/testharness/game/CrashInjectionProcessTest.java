@@ -37,9 +37,10 @@ import org.junit.jupiter.api.io.TempDir;
  * spelled out here rather than left to be inferred.
  *
  * <p><b>Why this is not tagged {@code integration}.</b> That tag means "launches the real
- * faf-ice-adapter binary" and is excluded from {@code build}, which is where CI runs. This test
- * needs only loopback and about a second, and it is the only automated evidence for the card's
- * first acceptance criterion, so it belongs in the suite that actually runs.
+ * faf-ice-adapter binary" and is excluded from {@code build}. CI runs tagged tests only by class
+ * name, in ci.yml's {@code live-tests} job, so a newly tagged test would not run on a pull request
+ * at all. This test needs only loopback and about a second, and it is the only automated evidence
+ * for the card's first acceptance criterion, so it belongs in the suite that actually runs.
  */
 final class CrashInjectionProcessTest {
 

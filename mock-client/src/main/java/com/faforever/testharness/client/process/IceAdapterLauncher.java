@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
  * <pre>{@code
  * <binary> --id <id> --login <login> --game-id <uid>
  *          --rpc-port <rpc> --gpgnet-port <gpgnet> --lobby-port <lobby>
+ *          --telemetry-server <TELEMETRY_SERVER>
  * }</pre>
  *
  * <p>Those three identity values have two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is
@@ -71,6 +72,15 @@ public class IceAdapterLauncher {
 
     /** Player id used when {@link MockClientConfig#playerIdOverride()} is empty. */
     static final int DEFAULT_PLAYER_ID = 1;
+
+    /**
+     * Where the adapter reports its telemetry: FAF's test service, never production. Left to
+     * itself, 3.3.14 dials {@code wss://ice-telemetry.faforever.com}, and the harness only ever
+     * targets FAF's test environment, as it does for the lobby. It has to be a live server: a
+     * connect that fails unregisters the adapter's telemetry debugger, which hides the first-frame
+     * crash of gpgnet-format-spec.md §8.1 that mock-game's 500 ms wait guards against.
+     */
+    static final String TELEMETRY_SERVER = "wss://ice-telemetry.faforever.xyz";
 
     /**
      * Diagnostic logger for the launcher itself; adapter output is tagged {@link #COMPONENT_TAG}.
@@ -275,6 +285,8 @@ public class IceAdapterLauncher {
         argv.add(Integer.toString(settings.gpgNetPort()));
         argv.add("--lobby-port");
         argv.add(Integer.toString(settings.lobbyPort()));
+        argv.add("--telemetry-server");
+        argv.add(TELEMETRY_SERVER);
         return argv;
     }
 

@@ -68,7 +68,13 @@ final class IceSmokeLiveTest {
                             "--ice-adapter-rpc-port=" + ports[0],
                             "--ice-adapter-gpg-net-port=" + ports[1],
                             "--ice-adapter-lobby-port=" + ports[2],
-                            "--timeout-seconds=" + BUDGET.toSeconds()
+                            "--timeout-seconds=" + BUDGET.toSeconds(),
+                            // The command writes its --log-level into the LOG_LEVEL system
+                            // property before the first logger exists (LoggingSetup javadoc,
+                            // #306), and this test runs first in the shared integrationTest JVM.
+                            // Left at the INFO default it pins every later class at INFO too,
+                            // overriding the DEBUG the task sets for their evidence.
+                            "--log-level=" + taskLogLevel()
                         });
         Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
 
@@ -77,6 +83,16 @@ final class IceSmokeLiveTest {
                 ExitCodes.OK,
                 exit,
                 "ice-smoke must pass against a real adapter; it ran for " + elapsed);
+    }
+
+    /**
+     * The level the task asked for through {@code LOG_LEVEL}, or {@code INFO} when it is unset or
+     * blank. A blank value would reach the command as {@code --log-level=}, which it refuses, and
+     * the test would then fail as if the adapter were at fault.
+     */
+    private static String taskLogLevel() {
+        String level = System.getenv("LOG_LEVEL");
+        return level == null || level.isBlank() ? "INFO" : level;
     }
 
     private static int execute(final String[] args) {

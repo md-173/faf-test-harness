@@ -7,7 +7,7 @@ a real environment, captured by hand and committed here.
 | Demo | WBS | Proves | Artifact |
 |------|-----|--------|----------|
 | `lobby-connect-idle` | 3.1.1.4 | `run` connects, authenticates, logs the player id, and sits idle | ✅ [`lobby-connect-idle.log`](lobby-connect-idle.log) (live capture, 2026-07-14, on the FSM-integrated code path) |
-| `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, run on demand — see below |
+| `client-game-lifecycle` | 3.1.2.7 | the client launches the real adapter and the real mock game, the handshake completes, the FSM runs the session on real signals, and teardown leaves nothing running | ▶️ live test, runs on every pull request in `ci.yml`'s `live-tests` job; see below |
 | `multi-peer-session` | 4.3.1, 4.3.2, 4.3.3 | two, three and four clients host and join the same game through the live lobby, ICE candidates relay across it, every adapter reports a link to every other peer, and every line is attributable to its instance | ▶️ live test, run on demand. 4.3.1 verified 2026-08-25 (`test` ↔ `Foo`); 3 and 4 peers verified 2026-09-15, three passes (`test`, `Foo`, `Tagada`, `Paralon` against `ws.faforever.xyz`); see below |
 
 ---
@@ -177,7 +177,8 @@ game plays out its match and self-exits 0, and teardown leaves no process behind
 
 It is a live-tagged test rather than a CLI run, because the checkpoints have to be asserted, not
 eyeballed: [`ClientGameLifecycleLiveTest`](../../mock-client/src/test/java/com/faforever/testharness/client/state/ClientGameLifecycleLiveTest.java).
-Excluded from `./gradlew :mock-client:test` and from CI — it needs the local adapter binary.
+Excluded from `./gradlew :mock-client:test`, since it needs the adapter binary. CI runs it on every
+pull request, in `ci.yml`'s `live-tests` job, which downloads the pinned adapter first.
 
 **Deliberately lobby-independent.** Client↔lobby integration is already proven (see the demo
 above), so this one isolates the previously-unproven client↔adapter↔game seam: it posts the three
@@ -274,7 +275,8 @@ processes.
 
 - `[ICEAdapter] … TelemetryDebugger - Error on sending message object: …
   WebsocketNotConnectedException` — the adapter phones home to
-  `ice-telemetry.faforever.com` and 3.3.14 has no working off switch
+  FAF's test service `ice-telemetry.faforever.xyz`, where the harness points it, and 3.3.14
+  has no working off switch
   ([`ice-adapter-setup.md`](../operations/ice-adapter-setup.md)). Harmless.
 - `[ICEAdapter] … Error while communicating with FA (input), assuming shutdown … EOFException` —
   this is the adapter noticing the game closed its GPGNet socket on the way out, i.e. the clean
