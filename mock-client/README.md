@@ -73,7 +73,7 @@ B, ..., and each game also writes `logs/mockgame-<label>.jsonl`. Do not set
 at Hydra and rewrites in place on every run, so point it at the real files, never
 copies or a process substitution. `--peer-access-token-file` takes pre-signed
 access tokens, the channel `--oauth-access-token-file` uses (WBS-3.1.6.4): each is
-sent as-is, never renewed or rewritten, and needs no `--oauth-token-url` or
+sent as-is, never renewed or rewritten, and reads neither `--oauth-token-url` nor
 `--oauth-client-id`. Nothing in the harness checks a token's expiry, so an expired
 one fails at the `welcome` stage with the lobby's own rejection; see
 [`harness-runbook.md`
@@ -277,14 +277,14 @@ fields. None of the lobby or OAuth rows applies to any of them.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
-| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | — | yes | WebSocket endpoint of the FAF lobby server. |
-| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | — | yes² | OAuth2 token endpoint (Hydra `/oauth2/token`). |
+| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | `wss://ws.faforever.xyz` | no | WebSocket endpoint of the FAF lobby server; the default is the FAF test lobby. |
+| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | `https://hydra.faforever.xyz/oauth2/token` | no² | OAuth2 token endpoint (Hydra `/oauth2/token`); the default is the FAF test environment's. |
 | `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | no | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | no | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | no | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
-| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | — | yes² | OAuth2 public client identifier. |
+| `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` | `95ecec08-29c1-4c48-ae0a-b000ff349cb8` | no² | OAuth2 public client identifier; the default is the seeded `FAF Classic Client (Python)`. |
 | `oauthRefreshTokenFile` | `FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE` | `--oauth-refresh-token-file` | — | yes¹ | Path to the file holding the long-lived refresh token (sensitive); rewritten atomically on each rotation. |
-| `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not needed, since nothing is exchanged. An expired token surfaces as the lobby's own rejection — a static token cannot renew itself. What the lobby requires of the token, and how to tell one rejection from another, is in the access-token section of runbook §3. |
+| `oauthAccessTokenFile` | `FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE` | `--oauth-access-token-file` | — | yes¹ | Path to a file holding a pre-signed access token, sent as-is with no exchange and no renewal (WBS 3.1.6.4). Mutually exclusive with `oauthRefreshTokenFile`; exactly one of the two is required. On this channel `oauthTokenUrl` and `oauthClientId` are not read, since nothing is exchanged. An expired token surfaces as the lobby's own rejection, since a static token cannot renew itself. What the lobby requires of the token, and how to tell one rejection from another, is in the access-token section of runbook §3. |
 | `uniqueId` | `FAF_MOCK_CLIENT_UNIQUE_ID` | `--unique-id` | — | yes³ | Stable hardware identifier sent in the lobby `auth` message. |
 | `clientVersion` | `FAF_MOCK_CLIENT_CLIENT_VERSION` | `--client-version` | `0.0.0-mock` | no | Client version string sent in the lobby `ask_session` message. |
 | `userAgent` | `FAF_MOCK_CLIENT_USER_AGENT` | `--user-agent` | `faf-test-harness` | no | Client identifier string sent in the lobby `ask_session` message. |
@@ -312,9 +312,12 @@ silently picking one would hand the operator a failure mode they did not choose.
 Omitting both produces a picocli `ParameterException` pointing at the bootstrap
 procedure in `documentation/research/lobby-protocol-spec.md` §2 (WBS-2.2.10).
 
-² Required on the refresh-token channel only. Nothing is exchanged for a
-pre-signed access token, so with `oauthAccessTokenFile` set these two are not
-read and need not be supplied. The three bootstrap settings above
+² Read on the refresh-token channel only: nothing is exchanged for a pre-signed
+access token, so with `oauthAccessTokenFile` set these two are not read. Both
+default to the FAF test environment, as `lobbyWebSocketUrl` does (#421), so
+pointing the harness at another environment means setting the lobby and token
+URLs together, and the client id too if that Hydra registers a different one.
+The three bootstrap settings above
 (`oauthAuthEndpoint`, `oauthRedirectUri`, `oauthScopes`) are required by
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
@@ -373,9 +376,9 @@ these via environment variables or CLI flags, never via a checked-in JSON file.
 
 A typical setup:
 
-- Public values (`lobbyWebSocketUrl`, `oauthTokenUrl`, `oauthAuthEndpoint`,
-  `oauthRedirectUri`, `oauthScopes`, `oauthClientId`, ports, binary paths) →
-  `mock-client.json`, tracked in version control.
+- Public values (ports, binary paths, and any lobby or OAuth setting that differs
+  from its test-environment default) → `mock-client.json`, tracked in version
+  control.
 - The secret: `oauthRefreshTokenFile` pointing at a gitignored file, with the
   path injected as a `FAF_MOCK_CLIENT_*` env var at runtime (the file itself
   lives in the CI secret store or a local `.secrets/` directory).
@@ -614,12 +617,6 @@ lifecycle tests.
 ### Environment variables only
 
 ```bash
-export FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL=wss://ws.faforever.xyz
-export FAF_MOCK_CLIENT_OAUTH_TOKEN_URL=https://hydra.faforever.xyz/oauth2/token
-export FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT=https://hydra.faforever.xyz/oauth2/auth
-export FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI=http://127.0.0.1
-export FAF_MOCK_CLIENT_OAUTH_SCOPES="openid offline lobby"
-export FAF_MOCK_CLIENT_OAUTH_CLIENT_ID=95ecec08-29c1-4c48-ae0a-b000ff349cb8
 export FAF_MOCK_CLIENT_OAUTH_REFRESH_TOKEN_FILE=./.secrets/refresh_token.txt
 export FAF_MOCK_CLIENT_UID_BINARY_PATH=./faf-uid
 export FAF_MOCK_CLIENT_ICE_ADAPTER_BINARY_PATH=/usr/local/bin/faf-ice-adapter
@@ -633,12 +630,6 @@ export FAF_MOCK_CLIENT_MOCK_GAME_BINARY_PATH=./mock-game/build/install/mock-game
 ```bash
 ./gradlew :mock-client:run --args="\
   run \
-  --lobby-websocket-url wss://ws.faforever.xyz \
-  --oauth-token-url https://hydra.faforever.xyz/oauth2/token \
-  --oauth-auth-endpoint https://hydra.faforever.xyz/oauth2/auth \
-  --oauth-redirect-uri http://127.0.0.1 \
-  --oauth-scopes 'openid offline lobby' \
-  --oauth-client-id 95ecec08-29c1-4c48-ae0a-b000ff349cb8 \
   --oauth-refresh-token-file ./.secrets/refresh_token.txt \
   --uid-binary-path ./faf-uid \
   --ice-adapter-binary-path /usr/local/bin/faf-ice-adapter \
@@ -813,16 +804,14 @@ what two consecutive lines with a rising `highest sequence` show.
 
 ## Failure mode
 
-Running with nothing configured produces a usage block followed by a single
-error listing every missing required option:
+Running `run` with nothing configured prints a single error line listing every
+missing required option, then the command's usage block. The lobby URL, token
+URL and client id have defaults, so the list names only the UID source; with
+one set, the missing credential file is reported next, in the same shape:
 
 ```text
-Missing required options: '--lobby-websocket-url=<lobbyWebSocketUrl>',
-'--oauth-token-url=<oauthTokenUrl>', '--oauth-auth-endpoint=<oauthAuthEndpoint>',
-'--oauth-redirect-uri=<oauthRedirectUri>', '--oauth-scopes=<oauthScopes>',
-'--oauth-client-id=<oauthClientId>', '--unique-id=<uniqueId>'
-
-Usage: mock-client [-hV] [--config=<configFile>] ...
+missing required configuration: --uid-binary-path or --unique-id. Supply each via its CLI flag, the matching FAF_MOCK_CLIENT_* environment variable, or a --config file.
+Usage: mock-client run [-hV] [--host-enforce-rating-range]
        (full picocli usage block)
 ```
 

@@ -188,7 +188,7 @@ The mock client ultimately needs a valid OAuth2 **access token** (JWT bearer tok
 
 ### Credential Handling
 
-The mock client must never hardcode or commit OAuth credentials. Tokens, client IDs, and refresh tokens must be supplied strictly via environment variables, for example:
+The mock client must never hardcode or commit OAuth credentials, and the credentials are the tokens: a refresh token, or an access token, must be supplied at run time. The client ID is not one of them. The chosen client is public (below), so like the endpoints its ID is ordinary configuration. This note first sketched every value as an environment variable, for example:
 
 | Variable | Purpose |
 |---|---|
@@ -203,7 +203,7 @@ The chosen client (`95ecec08-...`) is a *public* client — no `FAF_MOCK_CLIENT_
 
 **Names above are this research note's shorthand, not the implemented ones.** The mock client resolves configuration through built-in defaults → a JSON config file (`--config`) → `FAF_MOCK_CLIENT_*` environment variables → CLI flags; [`mock-client/README.md`](../../mock-client/README.md#configuration) is the authoritative table of every key in all three forms.
 
-Non-secret values (hosts, ports, public client IDs, redirect URIs) belong in a JSON config file, in the environment, or on the command line. The repository holds no `.env` file and reads none. The one secret — the refresh token — lives in its own untracked file named by `--oauth-refresh-token-file` (the repo gitignores `.secrets/` for this), rewritten atomically on each rotation, or is injected via CI secrets. [`mock-client/mock-client.example.json`](../../mock-client/mock-client.example.json) shows every value a new contributor must set without exposing any real credential.
+Non-secret values (hosts, ports, public client IDs, redirect URIs) belong in a JSON config file, in the environment, or on the command line. The lobby URL, the token URL and the public client ID default to the FAF test environment's (#421), so none of them has to be set, and any of those layers overrides the default. The repository holds no `.env` file and reads none. The one secret, the refresh token, lives in its own untracked file named by `--oauth-refresh-token-file` (the repo gitignores `.secrets/` for this), rewritten atomically on each rotation, or is injected via CI secrets. [`mock-client/mock-client.example.json`](../../mock-client/mock-client.example.json) shows every value a new contributor must set without exposing any real credential.
 
 ### Sources
 - [downlords-faf-client `application-test.yml`](https://github.com/FAForever/downlords-faf-client/blob/develop/src/main/resources/application-test.yml) — `.xyz` client_id, scopes, endpoints
