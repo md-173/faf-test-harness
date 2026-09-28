@@ -46,6 +46,10 @@ Everything the 3.1.2.7 demo needs (adapter jar, mock-game distribution), plus:
    `lobby-protocol-spec.md` §2 and the `lobby-connect-idle` prerequisites below).
    **Every file used is rewritten on every run**, because Hydra rotates the
    refresh token on use. Never run two sessions on the same accounts at once.
+   None of the four may be one of CI's two accounts, `Tagada` and `Paralon`,
+   which were C and D in the 2026-09-15 passes above: a local run on either
+   during a dispatch signs out whichever logged in first
+   ([`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#the-live-integration-workflow-manual-advisory)).
 
 The endpoint defaults to `wss://ws.faforever.xyz`, the FAF test lobby, which is
 public: no VPN or allowlist is needed. Set `FAF_LOBBY_URL` to point elsewhere,
