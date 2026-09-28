@@ -203,9 +203,11 @@ public final class LoggingSetup {
         if (configured == null || isUsableLogFile(configured)) {
             return;
         }
+        // The path is caller-controlled: escape line breaks so it cannot forge picocli's Usage:
+        // line (#307), as ExecutionExceptionHandler.oneLine does for mock-client's own errors.
         System.err.println(
                 "log file path cannot be used by the log rotator and was ignored: "
-                        + configured
+                        + configured.replaceAll("\\R", "\\\\n")
                         + " (it cannot be used as a log-rotation pattern; characters such as '[',"
                         + " '{', '(' and '%' are not usable here); logging to "
                         + fallback

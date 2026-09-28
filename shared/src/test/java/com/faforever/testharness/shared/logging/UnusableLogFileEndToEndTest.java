@@ -63,6 +63,19 @@ final class UnusableLogFileEndToEndTest {
                 "the child's own record must still reach the log");
     }
 
+    /**
+     * A newline in the rejected path is escaped, so it cannot forge a {@code Usage:} line (#307).
+     */
+    @Test
+    void aNewlineInAnUnusableLogFileStaysOnTheNoticeLine() throws Exception {
+        String console = runChild("a[b\nUsage: FORGED");
+
+        assertTrue(console.contains("a[b\\nUsage: FORGED"), "path not escaped: " + console);
+        assertTrue(
+                console.lines().noneMatch(line -> line.startsWith("Usage: FORGED")),
+                "a forged Usage: line reached stderr: " + console);
+    }
+
     /** The control: a usable path is untouched, and produces no notice. */
     @Test
     void aUsableLogFileIsLeftAlone() throws Exception {

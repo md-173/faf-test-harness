@@ -163,6 +163,13 @@ counterpart. A bare `LOG_LEVEL` variable in the environment is Logback's own
 channel and is overridden by the resolved value, on this path and on every
 other.
 
+A parse error is also one line. Picocli quotes the offending argument back in its
+message, and `ParameterExceptionHandler` escapes any line break in it as a literal
+`\n`, so stderr carries exactly one error line, followed by either picocli's
+`Possible solutions:` / `Did you mean:` line or the usage block. The exit code is
+still `2`. Picocli's own `[picocli WARN]` lines, printed while it splits a
+comma-separated value with an unbalanced `"`, are not escaped.
+
 Two things sit outside the table by design, not by oversight. A **signal** exits
 with the JVM's signal code — `130` for SIGINT, `143` for SIGTERM — which is the
 documented, intended exit path for `run` (see above). And an **`Error`** rather
