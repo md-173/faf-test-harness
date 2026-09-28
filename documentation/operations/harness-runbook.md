@@ -579,7 +579,7 @@ token is whatever was minted whenever it was minted, so an expired one is still
 identifies a bad token far more precisely than a local expiry guess could. Expect
 the lobby's own auth failure, not a harness error, and re-mint the token.
 
-`--oauth-token-url` and `--oauth-client-id` are not required on this channel,
+`--oauth-token-url` and `--oauth-client-id` are not read on this channel,
 since nothing is exchanged. `--oauth-auth-endpoint`, `--oauth-redirect-uri` and
 `--oauth-scopes` are required by neither channel: they describe the one-time
 browser bootstrap earlier in this section, which no run performs.
@@ -702,7 +702,6 @@ token file:
 ./gradlew :mock-client:installDist
 ./mock-client/build/install/mock-client/bin/mock-client run \
   --oauth-access-token-file=.secrets/access_token.jwt \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./faf-ice-adapter.jar \
   --mock-game-binary-path=mock-game/build/libs/mock-game-<version>-all.jar \
@@ -772,24 +771,21 @@ The minimum set of values for one live session:
 cp mock-client/mock-client.example.json mock-client.json
 ```
 
-then edit `mock-client.json` so it has:
+The copy already has both, so edit it only if your paths differ:
 
 | Key | Value for this session |
 |---|---|
-| `lobbyWebSocketUrl` | `wss://ws.faforever.xyz` — the verified FAF test-env lobby endpoint. This is the **one, unambiguous** value; see §8 for the endpoints this corrects. |
-| `oauthTokenUrl` | `https://hydra.faforever.xyz/oauth2/token` |
-| `oauthAuthEndpoint` | `https://hydra.faforever.xyz/oauth2/auth` |
-| `oauthRedirectUri` | `http://127.0.0.1` |
-| `oauthScopes` | `openid offline lobby` |
-| `oauthClientId` | `95ecec08-29c1-4c48-ae0a-b000ff349cb8` (seeded `FAF Classic Client (Python)`) |
 | `oauthRefreshTokenFile` | `./.secrets/refresh_token.txt` — the file §3 wrote |
 | `uidBinaryPath` | `./faf-uid` (or wherever §3's binary landed) |
 
-`mock-client.example.json`, tracked in version control, already carries the
-first six as its committed defaults — you only need to add
-`oauthRefreshTokenFile` and `uidBinaryPath`, both of which point at
-machine-local, gitignored paths. **Never commit a real refresh token or
-access token** — see the Secrets section of
+Both point at machine-local, gitignored paths. Nothing else is needed:
+`lobbyWebSocketUrl`, `oauthTokenUrl` and `oauthClientId` default to the FAF test
+environment, `wss://ws.faforever.xyz` (the one lobby endpoint; see §8 for the
+ones it corrects), `https://hydra.faforever.xyz/oauth2/token` and the seeded
+`FAF Classic Client (Python)`, `95ecec08-29c1-4c48-ae0a-b000ff349cb8`. A key in
+the file overrides its default, so to point at another environment, set the
+lobby and token URLs there together. **Never commit a real refresh token or
+access token**: see the Secrets section of
 [`mock-client/README.md`](../../mock-client/README.md#secrets) for the
 CI-shaped alternative (public values in the tracked file, the secret injected
 as an env var).
@@ -865,7 +861,7 @@ and is not repeated here.**
 | `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1000)`, usually after a `lobby notice (…)` line | The lobby ended the login, and its notice says why: an error notice for a ban or a lobby database outage, an info one for maintenance. With no notice at all, it could not parse the `auth` frame. `the lobby connection dropped before welcome` means the connection was lost rather than closed. |
 | `run` exits `70` after the session was up, and the lobby closed the connection | `the lobby answered one of this run's commands with invalid; reporting it in this run's exit code`, after a WARN `the lobby answered a command with invalid, …` | faf-server failed while handling one of `run`'s own commands (`game_host`, `game_join`, `game_matchmaking`, or a GPGNet frame relayed for the game) and closed the connection (#486). The lobby's logs hold the exception; at DEBUG, `run`'s log shows the frames it sent just before. |
 | `run` exits `70` after the session was up, though the lobby never closed the connection | `lobby connection dropped unexpectedly`, after a WARN `lobby sent nothing for 100 s; treating the connection as dropped` | The connection went quiet (#485). faf-server pings every connection every 45 s, so 100 s without a frame means it is gone: a drop on the network path, a proxy, or a lobby that crashed, which the JDK did not report. A run in a match plays on until its game exits, and exits then. Check the network path to the lobby. |
-| `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. Full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery — get a fresh `code=` and refresh token. |
+| `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. If the lobby URL points at another environment, first check the token URL does too: it defaults to the test environment's Hydra, which rejects a token another Hydra issued in exactly this way, and that token is still good. Otherwise, full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery: get a fresh `code=` and refresh token. |
 | `run` hangs on connect, then times out with no `lobby WebSocket connected` line | `lobby session with <url> failed: HttpConnectTimeoutException: HTTP connect timed out, …` after the 10 s connect timeout, just after a WARN beginning `lobby WebSocket connect to <url> failed`. The same pair names a connect that fails at once by its root cause: `ClosedChannelException` for a refused port, `UnresolvedAddressException` for an unknown host, `Unexpected HTTP response status code 404` for a wrong path (the lobby is served at the host root). | `wss://ws.faforever.xyz` is Cloudflare-fronted and publicly reachable (§3, §8 verified this directly) — no FAF allowlist or VPN is needed for it. Look locally first: DNS resolution, an intercepting proxy, or an outbound firewall rule on this machine/network. Confirm with a raw TCP probe to `ws.faforever.xyz:443` before assuming a code problem. |
 | Any of the above, but you're not sure which component is at fault | — | Narrow it with [`component-isolation.md`](component-isolation.md) — the fault-localisation walk from full-stack failure down to one seam or one subprocess, with the exact command and expected result for each. |
 | `ice-smoke` exits `70` and you cannot tell why | `ice-smoke: FAIL [<verdict>] …` | `70` covers both a missing binary and busy ports. The verdict line distinguishes them: `PORTS_IN_USE` names the port to free, anything about the binary means the path is wrong. This is the no-account path's most common first failure. |
@@ -981,12 +977,12 @@ and passes or fails on its own, with nothing to assert by hand:
 
 Run both from the repo root — the credential paths above are relative (§5).
 
-`--config mock-client.json` supplies what §4 already has you write — the
-lobby URL, OAuth endpoints, `uidBinaryPath`, and the adapter/game binary
-paths, since every peer shares them — except its `oauthRefreshTokenFile` and
-`oauthAccessTokenFile` fields, both of which `session` ignores entirely in
-favour of the per-peer flags: one file per peer, host first, comma- or
-flag-separated. `2` is `--peers`'s own default, shown only for clarity. A
+`--config mock-client.json` supplies what every peer shares: `uidBinaryPath`
+and the adapter/game binary paths, while the lobby URL and OAuth settings keep
+their test-environment defaults (§4). Its `oauthRefreshTokenFile` and
+`oauthAccessTokenFile` fields are the exception, both of which `session` ignores
+entirely in favour of the per-peer flags: one file per peer, host first, comma-
+or flag-separated. `2` is `--peers`'s own default, shown only for clarity. A
 pre-signed access-token file works the same way on `--peer-access-token-file`
 instead (§9.1). `mock-client session --help` and
 [`mock-client/README.md`](../../mock-client/README.md)'s own writeup carry
@@ -1828,7 +1824,6 @@ clone, no Gradle:
 
 ```bash
 java -jar mock-client-<version>-all.jar \
-  --lobby-websocket-url=wss://ws.faforever.xyz \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./your-adapter-build.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -2088,7 +2083,6 @@ jobs:
           mkdir -p "$WORK"
           cd "$WORK"
           java -jar "$CLIENT_JAR" \
-            --lobby-websocket-url=wss://ws.faforever.xyz \
             --uid-binary-path="$FAF_UID_BINARY" \
             --ice-adapter-binary-path="$ADAPTER_JAR" \
             --mock-game-binary-path="$GAME_JAR" \
