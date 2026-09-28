@@ -210,12 +210,12 @@ final class GpgNetConnectionLiveSmokeTest {
 
     /**
      * Logged by the adapter's accept loop at the top of every iteration, including the one that
-     * follows the lambda that assigns {@code currentClient} — same thread, so seeing this line a
-     * second time proves that write by program order, unlike {@link #CONSTRUCTOR_TAIL_MARKER}
-     * alone. Kept as a second wait rather than a replacement because {@link
-     * #CONSTRUCTOR_TAIL_MARKER} documents the precondition itself (a JSON-RPC peer must be
-     * connected) and stays cheap to match against a rewritten adapter line if this one is ever
-     * reworded.
+     * follows the lambda that assigns {@code currentClient}, on the same thread, so seeing this
+     * line after {@link #CONSTRUCTOR_TAIL_MARKER} proves that write by program order, unlike {@link
+     * #CONSTRUCTOR_TAIL_MARKER} alone. The {@link #CONSTRUCTOR_TAIL_MARKER} wait must come first:
+     * the accept loop also logs this line once at startup, before the game connects, and waiting
+     * for the marker consumes that copy, so this wait can only match the one logged after {@code
+     * currentClient} was assigned.
      */
     private static final String ACCEPT_LOOP_REARM_MARKER =
             "Listening for incoming connections from game";
@@ -319,15 +319,14 @@ final class GpgNetConnectionLiveSmokeTest {
 
     /**
      * Waits for {@link #CONSTRUCTOR_TAIL_MARKER} and then {@link #ACCEPT_LOOP_REARM_MARKER} on the
-     * adapter's output — together, the deterministic proof that {@code currentClient} has been
+     * adapter's output: together, the deterministic proof that {@code currentClient} has been
      * assigned (see the class javadoc). Both calls share one try so a timeout on the first skips
      * the second rather than waiting out a second full budget for a line that cannot arrive.
      *
      * <p>If either line never arrives within {@link #CONSTRUCTOR_TAIL_TIMEOUT} this only logs and
      * returns: the bounded wait's own timeout is the fallback asked for on #204 and #225, not an
-     * additional fixed sleep, since the markers are upstream INFO/DEBUG strings with no
-     * compatibility guarantee and a caller cannot do better than "waited, then gave up" once they
-     * are missing.
+     * additional fixed sleep, since the markers are upstream INFO strings with no compatibility
+     * guarantee and a caller cannot do better than "waited, then gave up" once they are missing.
      */
     private static void awaitConstructorTail(final LineWaiter adapterOutput)
             throws InterruptedException {

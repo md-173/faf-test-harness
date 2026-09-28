@@ -37,8 +37,9 @@ import picocli.CommandLine;
 
 /**
  * End-to-end tests for the {@code launch-ice} subcommand (WBS-3.1.2.2): a stub shell script stands
- * in for the real {@code faf-ice-adapter} binary. Covers the spawn/run/terminate happy path and the
- * clear-error / non-zero-exit contract for a missing binary.
+ * in for the real {@code faf-ice-adapter} binary. Covers the spawn/run/terminate happy path, the
+ * clear-error / non-zero-exit contract for a missing binary, and an adapter that exits on its own,
+ * before or after its JSON-RPC peer attaches.
  *
  * <p>Since WBS-3.1.6.3 (#279) the command also attaches a JSON-RPC peer, which is what lets a
  * separate {@code launch-game} complete a GPGNet handshake against the adapter it is holding open.
@@ -352,10 +353,55 @@ final class LaunchIceCommandTest {
                         + error.getFormattedMessage());
     }
 
-    /** A stub adapter that starts, says so, and stays up until it is terminated. */
+    /**
+     * An adapter that exits on its own during the run window is reported only after its last lines,
+     * which usually say why (#495); for a {@code .jar} adapter they are its only record. Staged as
+     * in {@code LaunchGameCommandTest}, whose javadoc explains the timing: the stub writes nothing
+     * and exits after 0.5 s, and a background child writes a line unique to the run 0.4 s later.
+     */
+    @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason = "POSIX-only: spawns a shell script")
+    void anAdapterThatExitsOnItsOwnIsReportedAfterItsLastLine() throws Exception {
+        String lastLine = "ICE-ADAPTER-LAST-LINE-" + System.nanoTime();
+        Path stub =
+                createStub(
+                        "#!/bin/sh\n"
+                                + "(sleep 0.9; echo "
+                                + lastLine
+                                + ") &\n"
+                                + "sleep 0.5\n"
+                                + "exit 3\n");
+
+        int exit =
+                execute(
+                        launchIceArgs(
+                                stub,
+                                "--duration-seconds=10",
+                                rpcPortFlagForAListenerThatAccepts()));
+
+        assertEquals(ExitCodes.RUNTIME, exit, "an adapter that exits on its own is a failed run");
+        List<ILoggingEvent> logged = List.copyOf(appender.list);
+        ILoggingEvent report =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage().contains("run window"));
+        assertTrue(
+                logged.subList(0, logged.indexOf(report)).stream()
+                        .anyMatch(e -> e.getFormattedMessage().equals(lastLine)),
+                "the adapter's last line must be logged before its exit is reported; captured: "
+                        + logged);
+    }
+
+    /**
+     * A stub adapter that starts, says so, and stays up until it is terminated. exec, so
+     * terminating the stub ends its output too, rather than leaving a sleep holding the pipe while
+     * terminate waits for the output.
+     */
     private Path createSleepingStub() throws IOException {
-        return createStub(
-                "#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-UP\n" + "while true; do sleep 1; done\n");
+        return createStub("#!/bin/sh\n" + "echo ICE-ADAPTER-STUB-UP\n" + "exec sleep 60\n");
     }
 
     private Path createStub(final String body) throws IOException {

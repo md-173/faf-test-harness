@@ -181,11 +181,14 @@ public final class LaunchIceCommand implements Callable<Integer> {
             // makes the same check for the same reason.
             if (!adapter.isAlive()) {
                 OptionalInt code = adapter.exitCode();
+                // The adapter has exited, so terminate() sends no signal. It waits up to a second
+                // for the adapter's last lines, which usually say why, so they are logged before
+                // this report (#495).
+                adapter.terminate();
                 log.error(
                         "ICE adapter exited on its own before a JSON-RPC peer could attach;"
                                 + " exit code {}",
                         code.isPresent() ? code.getAsInt() : "unknown");
-                adapter.terminate();
                 return ExitCodes.RUNTIME;
             }
             // TimeoutException carries no message, so render the type when there is nothing else.
@@ -202,11 +205,14 @@ public final class LaunchIceCommand implements Callable<Integer> {
 
         try {
             int earlyCode = adapter.onExit().get(durationSeconds, TimeUnit.SECONDS);
+            // The peer goes first, as on every other path here; terminate() then waits for the
+            // exited adapter's last lines, as above (#495).
+            rpc.close();
+            adapter.terminate();
             log.error(
                     "ICE adapter exited on its own before the {}s run window; exit code {}",
                     durationSeconds,
                     earlyCode);
-            rpc.close();
             return ExitCodes.RUNTIME;
         } catch (TimeoutException e) {
             // Healthy path: the adapter is still running after the window — fall through and stop.

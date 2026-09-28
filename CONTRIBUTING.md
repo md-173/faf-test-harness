@@ -304,7 +304,7 @@ ice.waitFor();
 readers.shutdown();
 ```
 
-Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and tagged `[ICEAdapter]` in both console and JSONL output. Consecutive stack-trace lines (starting with a tab or `Caused by:`) are merged into a single log event.
+Every stdout/stderr line is then logged at INFO (stdout) or WARN (stderr) and tagged `[ICEAdapter]` in both console and JSONL output. Consecutive stack-trace lines (starting with a tab or `Caused by:`) are merged into a single log event, so a line is logged once the next one shows it is not continued, or after 200 ms with nothing more.
 
 ### Output formats
 

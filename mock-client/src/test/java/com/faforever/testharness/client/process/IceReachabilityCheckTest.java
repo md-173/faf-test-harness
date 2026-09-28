@@ -99,8 +99,8 @@ final class IceReachabilityCheckTest {
         Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
 
         assertEquals(Verdict.RPC_UNREACHABLE, result.verdict(), result.detail());
-        // Budget + twice the teardown grace is the documented bound; the ceiling here is loose
-        // enough that only a genuinely unbounded teardown trips it.
+        // Budget + twice the teardown grace + the one-second output drain is the documented bound;
+        // the ceiling here is loose enough that only a genuinely unbounded teardown trips it.
         assertTrue(
                 elapsed.compareTo(SHORT_BUDGET.plusSeconds(TEARDOWN_CEILING_SECONDS)) < 0,
                 "teardown must be bounded, not open-ended; the run took " + elapsed);

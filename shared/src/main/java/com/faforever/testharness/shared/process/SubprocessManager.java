@@ -37,8 +37,19 @@ public final class SubprocessManager {
     /** Diagnostic logger used by terminate; subprocess output goes through ProcessOutputLogger. */
     private static final Logger LOG = LoggerFactory.getLogger(SubprocessManager.class);
 
+    /**
+     * Longest {@link #terminate(Duration)} waits, once the process has exited, for the rest of its
+     * output to reach the log (WBS 3.1.2.1-fix, #361). The readers normally finish within
+     * milliseconds of the exit; this bounds the case where a descendant that inherited the pipes
+     * keeps them open.
+     */
+    private static final Duration OUTPUT_DRAIN_TIMEOUT = Duration.ofSeconds(1);
+
     /** The wrapped child process. */
     private final Process process;
+
+    /** Reader threads logging the child's stdout and stderr; terminate waits on them. */
+    private final ExecutorService readers;
 
     /**
      * MDC component label applied to captured subprocess log lines and to terminate diagnostics.
@@ -57,6 +68,7 @@ public final class SubprocessManager {
             final String componentTag,
             final Duration defaultGrace) {
         this.process = process;
+        this.readers = readers;
         this.componentTag = componentTag;
         this.defaultGrace = defaultGrace;
         this.exitFuture =
@@ -173,7 +185,10 @@ public final class SubprocessManager {
 
     /**
      * Returns a future that completes with the process exit code once the process exits. The reader
-     * executor is shut down as part of the completion chain.
+     * executor is shut down as part of the completion chain, which does not wait for the readers,
+     * so the child's last lines can reach the log after this completes. A caller that reports the
+     * exit calls {@link #terminate()} first: an exited process gets no signal, only the wait of up
+     * to a second for those lines (#495).
      *
      * <p>Each call returns an independent copy; cancelling or externally completing the returned
      * future does not affect the internal completion chain or other callers.
@@ -217,8 +232,15 @@ public final class SubprocessManager {
 
     /**
      * Asks the process to exit via SIGTERM (POSIX) or TerminateProcess (Windows), waits up to
-     * {@code grace}, then escalates to SIGKILL if still alive. No-op if the process has already
-     * exited. Safe to call concurrently; overlapping calls simply re-await the existing exit.
+     * {@code grace}, then escalates to SIGKILL if still alive. Once the process has exited, waits
+     * up to {@link #OUTPUT_DRAIN_TIMEOUT} (one second) for the rest of its output, including
+     * anything it wrote while shutting down, to reach the log. Sends no signal if the process has
+     * already exited, but still waits for its output. Returns within twice {@code grace} plus that
+     * wait. Safe to call concurrently; overlapping calls simply re-await the existing exit.
+     *
+     * <p>The signals go through the process handle rather than {@link Process#destroy()}, which on
+     * Linux and macOS also closes the child's pipes: what the child wrote after the signal was lost
+     * and its reader logged a read error (#361).
      *
      * @param grace time to wait between the SIGTERM and SIGKILL strikes; must be positive
      */
@@ -228,12 +250,14 @@ public final class SubprocessManager {
             throw new IllegalArgumentException("grace must be positive");
         }
         if (!process.isAlive()) {
+            awaitOutput();
             return;
         }
         long graceMs = grace.toMillis();
         LOG.debug("Terminating {} (pid={}, grace={}ms)", componentTag, process.pid(), graceMs);
-        process.destroy();
+        process.toHandle().destroy();
         if (awaitExit(graceMs)) {
+            awaitOutput();
             return;
         }
         LOG.debug(
@@ -241,8 +265,31 @@ public final class SubprocessManager {
                 componentTag,
                 process.pid(),
                 graceMs);
-        process.destroyForcibly();
-        awaitExit(graceMs);
+        process.toHandle().destroyForcibly();
+        if (awaitExit(graceMs)) {
+            awaitOutput();
+        }
+    }
+
+    /**
+     * Waits up to {@link #OUTPUT_DRAIN_TIMEOUT} for the readers to log the exited child's remaining
+     * output. Gives up rather than closing the streams: a close does not wake a reader parked on a
+     * pipe that a descendant still holds, and it would turn that descendant's next line into a read
+     * error.
+     */
+    private void awaitOutput() {
+        readers.shutdown();
+        try {
+            if (!readers.awaitTermination(OUTPUT_DRAIN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                LOG.debug(
+                        "{} (pid={}) exited but its output was still open after {}ms",
+                        componentTag,
+                        process.pid(),
+                        OUTPUT_DRAIN_TIMEOUT.toMillis());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     /**

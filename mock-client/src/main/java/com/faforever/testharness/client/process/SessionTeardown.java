@@ -34,11 +34,12 @@ import org.slf4j.LoggerFactory;
  * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
  * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
  * iceAdapterProxy.quit()}) this teardown previously lacked. That always falls through to the
- * existing SIGTERM→SIGKILL escalation below, which is a no-op once quit has already ended the
+ * existing SIGTERM→SIGKILL escalation below, which sends no signal once quit has already ended the
  * process, so a quit that never lands still leaves the step (and teardown) bounded.
  *
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
- * SIGTERM→grace→SIGKILL escalation (bounded internally by each manager's start-time grace); {@link
+ * SIGTERM→grace→SIGKILL escalation (bounded internally by twice each manager's start-time grace,
+ * plus up to a second for the child's output to reach the log); {@link
  * IceAdapterConnection#close()} is a synchronous socket close; the lobby close is awaited for at
  * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely. The
  * owner's step runs under this instance's lock and has to bound itself: the lifecycle's waits at
@@ -49,7 +50,7 @@ import org.slf4j.LoggerFactory;
  * action (R59b) share one instance, so the on-request and signal paths converge on this single
  * mechanism with no double-termination. The JVM-wide {@code SubprocessRegistry} exit hook remains
  * the independent safety net for when teardown never runs; overlapping with it is safe because
- * {@code terminate} is a no-op on an already-dead process.
+ * {@code terminate} sends no signal to an already-dead process.
  *
  * <p>Handles are registered as they come into existence: the lobby connection exists from startup
  * (constructor), while the adapter RPC connection and the two subprocess handles appear only once a
@@ -257,8 +258,8 @@ public final class SessionTeardown {
      * Terminates the ICE adapter, quit-first (WBS-3.1.2.5): {@link #quitAdapterIfOpen()} gives the
      * adapter a bounded chance to shut itself down gracefully via RPC, mirroring the real client's
      * {@code iceAdapterProxy.quit()}. Unconditionally falls through to {@link
-     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, already a no-op once quit has
-     * ended the process — a quit that never lands still leaves this step bounded.
+     * SubprocessManager#terminate()}'s SIGTERM→SIGKILL escalation, which sends no signal once quit
+     * has ended the process, so a quit that never lands still leaves this step bounded.
      */
     private void terminateAdapter() {
         quitAdapterIfOpen();

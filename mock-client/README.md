@@ -558,9 +558,10 @@ adapter would spend the budget on the connect and the phases after it would
 fail instantly, reporting a startup problem under the wrong name. Tearing the
 adapter down is deliberately *not* inside that cap, because skipping it to
 honour a budget would leave a stray adapter to break the next run's port
-pre-flight; it is bounded separately by a 2 s SIGTERM→SIGKILL grace. So the
-honest worst case for the whole command is the budget plus about four seconds,
-and only against an adapter that ignores SIGTERM (measured: `3.7 s` total for
+pre-flight; it is bounded separately by a 2 s SIGTERM→SIGKILL grace, then by up
+to 1 s for the adapter's output to reach the log. So the honest worst case for
+the whole command is the budget plus about five seconds, and only against an
+adapter that ignores SIGTERM (measured: `3.7 s` total for
 `--timeout-seconds=2` against one that does). The adapter may log a lost-connection line as the probe disconnects
 (`Error while communicating with FA (input), assuming shutdown` /
 `GPGNet connection lost`); that is the adapter noticing the probe going away, and

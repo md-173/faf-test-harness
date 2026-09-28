@@ -33,8 +33,9 @@ import picocli.CommandLine;
 
 /**
  * End-to-end tests for the {@code launch-game} subcommand (WBS-3.1.2.3): a stub shell script stands
- * in for the real {@code mock-game} binary. Covers the spawn/run/terminate happy path and the
- * clear-error / non-zero-exit contract for a missing binary.
+ * in for the real {@code mock-game} binary. Covers the spawn/run/terminate happy path, the
+ * clear-error / non-zero-exit contract for a missing binary, and a game that exits on its own being
+ * reported after its last lines.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 final class LaunchGameCommandTest {
@@ -96,11 +97,9 @@ final class LaunchGameCommandTest {
             disabledReason =
                     "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void stubGameRunsForTheWindowThenTerminatesAndLogsExitCode() throws Exception {
-        Path stub =
-                createStub(
-                        "#!/bin/sh\n"
-                                + "echo MOCK-GAME-STUB-UP\n"
-                                + "while true; do sleep 1; done\n");
+        // exec, so terminating the stub ends its output too, rather than leaving a sleep holding
+        // the pipe while terminate waits for the output.
+        Path stub = createStub("#!/bin/sh\n" + "echo MOCK-GAME-STUB-UP\n" + "exec sleep 60\n");
 
         int exit = execute(launchGameArgs(stub, "--duration-seconds=1"));
 
@@ -108,6 +107,51 @@ final class LaunchGameCommandTest {
         assertTrue(
                 appender.list.stream().anyMatch(e -> e.getFormattedMessage().contains("exit code")),
                 "the subprocess exit code must be logged. captured: " + appender.list);
+    }
+
+    /**
+     * A game that exits on its own is reported only after its last lines, which usually say why it
+     * exited (#495).
+     *
+     * <p>The stub writes nothing and exits after 0.5 s; a background child it started writes a line
+     * 0.4 s later, so a report that does not wait for the output comes first. Writing nothing keeps
+     * the stub's reader blocked in a read when the stub exits, and the JDK's reaper waits for that
+     * read to return before it drains and closes the pipe ({@code
+     * ProcessImpl.ProcessPipeInputStream.processExited()} is synchronized, as reads are for a
+     * {@code BufferedInputStream} subclass), so the late line gets through. A stub that wrote just
+     * before exiting could leave its reader outside a read: the pipe would be closed at once and
+     * the line lost whatever the command does. The line is unique to the run, so one that a
+     * previous run's background child wrote late cannot stand in for it.
+     */
+    @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason = "POSIX-only: spawns a shell script")
+    void aGameThatExitsOnItsOwnIsReportedAfterItsLastLine() throws Exception {
+        String lastLine = "MOCK-GAME-LAST-LINE-" + System.nanoTime();
+        Path stub =
+                createStub(
+                        "#!/bin/sh\n"
+                                + "(sleep 0.9; echo "
+                                + lastLine
+                                + ") &\n"
+                                + "sleep 0.5\n"
+                                + "exit 3\n");
+
+        int exit = execute(launchGameArgs(stub, "--duration-seconds=10"));
+
+        assertEquals(ExitCodes.RUNTIME, exit, "a game that exits on its own is a failed run");
+        List<ILoggingEvent> logged = List.copyOf(appender.list);
+        ILoggingEvent report =
+                findEvent(
+                        e ->
+                                e.getLevel() == Level.ERROR
+                                        && e.getFormattedMessage().contains("exited on its own"));
+        assertTrue(
+                logged.subList(0, logged.indexOf(report)).stream()
+                        .anyMatch(e -> e.getFormattedMessage().equals(lastLine)),
+                "the game's last line must be logged before its exit is reported; captured: "
+                        + logged);
     }
 
     private Path createStub(final String body) throws IOException {

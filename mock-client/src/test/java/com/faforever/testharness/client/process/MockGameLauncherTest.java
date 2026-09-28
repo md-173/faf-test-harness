@@ -326,14 +326,13 @@ final class MockGameLauncherTest {
 
     @Test
     void startCapturesTaggedOutputThenTerminatesCleanly() throws Exception {
-        // ProcessOutputLogger flushes a line only when the next line arrives (it coalesces
-        // stack-trace continuations), so the stub emits a heartbeat to flush the marker.
+        // The stub goes quiet after its marker, so the marker reaches the log through
+        // ProcessOutputLogger's idle flush, with no later line or exit to push it out. exec, so
+        // terminating the stub ends its output too.
         Path binary =
                 createStub(
                         "mock-game",
-                        "#!/bin/sh\n"
-                                + "echo MOCK-GAME-STUB-MARKER\n"
-                                + "while true; do echo heartbeat; sleep 1; done\n");
+                        "#!/bin/sh\n" + "echo MOCK-GAME-STUB-MARKER\n" + "exec sleep 60\n");
 
         SubprocessManager game = new MockGameLauncher(configWithBinary(binary)).start();
         try {
@@ -356,12 +355,14 @@ final class MockGameLauncherTest {
 
     @Test
     void labelledLauncherPassesItsInstanceToTheGameAndItsCapturedOutput() throws Exception {
+        // The stub goes quiet after its line, so the line is logged by the idle flush on its own
+        // thread, and the label has to cross to it from the reader.
         Path binary =
                 createStub(
                         "mock-game",
                         "#!/bin/sh\n"
                                 + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
-                                + "while true; do echo heartbeat; sleep 1; done\n");
+                                + "exec sleep 60\n");
 
         MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "B");
         MockGameLauncher launcher = new MockGameLauncher(configWithBinary(binary));
@@ -389,7 +390,7 @@ final class MockGameLauncherTest {
                         "mock-game",
                         "#!/bin/sh\n"
                                 + "echo \"instance=${INSTANCE_NAME:-none}\"\n"
-                                + "while true; do echo heartbeat; sleep 1; done\n");
+                                + "exec sleep 60\n");
 
         // The child inherits this JVM's environment, so an INSTANCE_NAME exported in the shell
         // running the build is expected to reach it; the launcher itself must add nothing.

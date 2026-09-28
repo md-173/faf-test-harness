@@ -68,7 +68,9 @@ import org.slf4j.LoggerFactory;
  * everything, so a slow start is reported as a slow start. Teardown is the one thing outside that
  * deadline: the adapter is always terminated in a {@code finally}, since leaving one alive to
  * honour a budget would poison the next run, and that step carries its own {@link #TEARDOWN_GRACE}.
- * A whole invocation is therefore bounded by the budget plus at most twice that grace.
+ * A whole invocation is therefore bounded by the budget plus at most twice that grace, and up to
+ * one second more while {@link SubprocessManager#terminate(Duration)} waits for the adapter's
+ * output.
  *
  * <p>Not thread-safe, and single-use: one instance performs one {@link #run()}.
  */
@@ -610,8 +612,8 @@ public final class IceReachabilityCheck {
      * <p>This runs outside the caller's deadline, on every path, using {@link #TEARDOWN_GRACE}
      * rather than the launcher's longer session grace. Killing the adapter is not something a blown
      * budget may skip — a stray adapter would break the next run's port pre-flight — so the honest
-     * bound on a whole invocation is the budget plus twice that grace, and only when the adapter
-     * ignores SIGTERM.
+     * bound on a whole invocation is the budget plus twice that grace, reached only when the
+     * adapter ignores SIGTERM, plus up to a second for the adapter's output to reach the log.
      *
      * @param adapter the adapter subprocess to stop
      */
