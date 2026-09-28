@@ -374,12 +374,13 @@ read.
 - **Measurements this note cannot give.** The stack and the session together on a hosted runner,
   including headroom on a private repository's 8 GB runner, and the job's own flake rate. Four
   passes on one machine are not a flake rate.
-- **#413's own text** expects disk to be the ceiling and names "whatever the policy check needs"
-  among the services. Neither holds: the session's images come to about 1 GB compressed, a hosted
-  runner showed about 85 GB free, and the policy check is off, with the policy server not
-  deployed. It also says the client falls back to the placeholder without `faf-uid`; it does not,
-  since it refuses to start without `--uid-binary-path` or `--unique-id`. Dropping `faf-uid` means
-  passing `--unique-id=placeholder`, which only `run` exercised here; the sessions ran `faf-uid`.
+- **Three corrections to #413, applied to its text on 2026-09-28.** Memory rather than disk is
+  the likely ceiling, since the session's images come to about 1 GB compressed and a hosted
+  runner showed about 85 GB free. The policy check is off and no policy server is deployed, so
+  no policy service needs to run. And the client does not fall back to a placeholder without
+  `faf-uid`. It refuses to start without `--uid-binary-path` or `--unique-id`, so dropping
+  `faf-uid` means passing `--unique-id=placeholder`, which only `run` exercised here; the
+  sessions ran `faf-uid`.
 
 ## Questions for FAF
 
