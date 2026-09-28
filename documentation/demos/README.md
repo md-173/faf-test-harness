@@ -351,9 +351,9 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
    # ensure: "oauthRefreshTokenFile": "./.secrets/refresh_token.txt"
    #         "uidBinaryPath":         "./faf-uid"
    ```
-   The credential and the `faf-uid` path come from this config. The lobby and
-   Hydra settings default to the FAF test environment, and a key here overrides
-   them.
+   The credential and the `faf-uid` path come from this config. The lobby URL,
+   token URL and client id default to the FAF test environment, and a key here
+   overrides them.
 
 ### Run
 

@@ -172,8 +172,8 @@ java -jar mock-client-<version>-all.jar \
 ```
 
 One FAF test account per peer and one credential file each: a pre-signed access token as
-above, or a refresh token with `--peer-refresh-token-file`. The lobby URL and the Hydra
-settings default to the FAF test environment, so the command sets none of them. Obtaining
+above, or a refresh token with `--peer-refresh-token-file`. The lobby URL, token URL and
+client id default to the FAF test environment, so the command sets none of them. Obtaining
 either credential, and the `faf-uid` binary, is
 [runbook §3](documentation/operations/harness-runbook.md#3-credentials). The complete
 flag list is [`mock-client/README.md`](mock-client/README.md#field-reference), and the
