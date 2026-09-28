@@ -20,7 +20,12 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class ShutdownTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 

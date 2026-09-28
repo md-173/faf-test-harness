@@ -15,6 +15,8 @@ import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
@@ -30,6 +32,9 @@ import org.junit.jupiter.api.io.TempDir;
  * listener open for the whole test rather than releasing one and assuming nothing else claims it.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class IceReachabilityCheckTest {
 
     /**

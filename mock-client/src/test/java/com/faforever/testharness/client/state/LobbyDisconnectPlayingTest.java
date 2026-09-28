@@ -23,6 +23,8 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 /**
  * Covers lobby-disconnect handling during PLAYING (#193): unlike every setup state, where losing
@@ -125,6 +127,10 @@ final class LobbyDisconnectPlayingTest {
     }
 
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void disconnectDuringPlayingStaysAndSessionEndsViaGameExit() throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         // Game exits on its own deterministic schedule, well after the disconnect below.
@@ -160,6 +166,10 @@ final class LobbyDisconnectPlayingTest {
     }
 
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void disconnectedWhileTerminatedIsSilentAndDoesNotRepeatTeardown() throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         DummyGameLauncher gameLauncher =

@@ -28,6 +28,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -169,6 +171,10 @@ final class AdapterConnectRaceTest {
      * is what ends the wait, and the failed transition drives the FSM to TERMINATED.
      */
     @Test
+    @EnabledOnOs(
+            value = {OS.LINUX, OS.MAC},
+            disabledReason =
+                    "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
     void anAdapterThatDiesEndsTheConnectWaitAtOnce() throws Exception {
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         // `true` exits 0 immediately — the same shape as the adapter's own usage-error exit, which

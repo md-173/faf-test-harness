@@ -38,6 +38,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 
@@ -57,6 +59,9 @@ import org.slf4j.LoggerFactory;
  * without a real adapter. The game is a real child too.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
+@EnabledOnOs(
+        value = {OS.LINUX, OS.MAC},
+        disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class AdapterVerdictAtTeardownTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
