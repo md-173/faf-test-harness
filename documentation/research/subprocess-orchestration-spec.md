@@ -334,7 +334,11 @@ FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
 (`lobbyconnection.command_game_join`) and moves it out of that state as soon as
 the host reports `GameState Launching` (`gameconnection._handle_game_state` →
 `game.launch()`), so a host that auto-launches on a timer makes its own game
-unjoinable while the joiner is still booting its adapter and game.
+unjoinable while the joiner is still booting its adapter and game. The one
+exception is a session that has to leave the lobby phase (WBS-4.3.4, and
+`mock-client session --crash-peer`, WBS-5.2.1): its host gets a delay no
+shorter than `MultiPeerSession.minHostLaunchDelaySeconds`, which leaves every
+joiner time to join first.
 
 The two fault-injection arguments are emitted **conditionally**. The launcher
 passes `--udp-drop-percent` only when the client's own
@@ -674,9 +678,10 @@ defaults to waiting indefinitely. A Mock Client killed before it gives the game
 a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
 delay; the adapter still moves it out of `IDLE` by sending `CreateLobby` itself.
 Once hosting or joining, mock-game ends when its launch and match timers finish,
-unless auto-launch is off, as `mock-client session` sets it for every peer and a
-negative `--mock-game-launch-delay-seconds` sets it for `run`; then it also
-waits indefinitely. It ends at once if the adapter closes its connection, and
+unless auto-launch is off, as `mock-client session` sets it for every joiner,
+and for the host unless `--crash-peer` asks for a launch, and a negative
+`--mock-game-launch-delay-seconds` sets it for `run`; then it also waits
+indefinitely. It ends at once if the adapter closes its connection, and
 within 30 s if the connection never comes up.
 
 ### 7.4 Process tracking

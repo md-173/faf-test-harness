@@ -130,6 +130,41 @@ final class TrafficEvidence extends AppenderBase<ILoggingEvent> {
     }
 
     /**
+     * Every direction's progress as it stands, so a later check can ask what moved after this point
+     * (WBS-5.2.1).
+     *
+     * @return an immutable copy
+     */
+    Map<Direction, Progress> snapshot() {
+        return Map.copyOf(progress);
+    }
+
+    /**
+     * Whether a direction has kept advancing since {@code before} was taken: {@value
+     * #MIN_PROGRESS_SAMPLES} more progress lines and a higher sequence, the same bar {@link
+     * #proven} sets for a direction's first proof. A progress line is logged only when the count
+     * moved, so a direction that went quiet adds no lines.
+     *
+     * @param before a {@link #snapshot()}
+     * @param receiverId the receiving player's id
+     * @param senderId the sending player's id
+     * @return {@code true} once the direction has advanced that far since the snapshot
+     */
+    boolean advancedSince(
+            final Map<Direction, Progress> before, final long receiverId, final long senderId) {
+        Direction direction = new Direction(receiverId, senderId);
+        Progress now = progress.get(direction);
+        if (now == null) {
+            return false;
+        }
+        Progress then = before.get(direction);
+        int linesThen = then == null ? 0 : then.lines();
+        long sequenceThen = then == null ? Long.MIN_VALUE : then.highestSequence();
+        return now.lines() >= linesThen + MIN_PROGRESS_SAMPLES
+                && now.highestSequence() > sequenceThen;
+    }
+
+    /**
      * What one direction has shown so far, for a failure message.
      *
      * @param receiverId the receiving player's id
