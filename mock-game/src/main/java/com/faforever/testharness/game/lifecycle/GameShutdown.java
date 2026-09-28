@@ -61,7 +61,7 @@ import org.slf4j.LoggerFactory;
  * held it. With no socket open there is no write to stall behind, so the wait would be short, but
  * it would break the property everything above relies on: that no step in this sequence waits for
  * that monitor. That filter is therefore part of this sequence's design and not merely a log-noise
- * fix, which is how it is described at its own call site.
+ * fix.
  *
  * <p>Peer traffic goes last because it is the only step with no protocol meaning: the adapter
  * learns the game is gone from the GPGNet socket closing, and datagrams still in flight at that
