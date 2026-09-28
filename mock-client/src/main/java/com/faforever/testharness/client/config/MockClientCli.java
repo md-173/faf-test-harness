@@ -110,17 +110,20 @@ public final class MockClientCli implements Callable<Integer> {
      * token URL and client id below defaulting to the same environment (#421). Pointing the harness
      * at another environment therefore means overriding the lobby and token URLs together.
      *
-     * <p>Each of the three prints its default on a line of its own ({@code %n}): run on after the
-     * description, picocli wraps the token URL after a dot, and a reader copying it from {@code
-     * --help} gets half a URL.
+     * <p>Each of the three ends its description with its default on a line of its own ({@code %n})
+     * and nothing after it. Inline, picocli wrapped the token URL after a dot, so a reader copying
+     * it from {@code --help} got half a URL. And picocli fills {@code ${DEFAULT-VALUE}} from an
+     * environment variable or config file that sets the option, so a label after the value could
+     * name the test environment for a value that came from somewhere else.
      */
     @Option(
             names = "--lobby-websocket-url",
             scope = ScopeType.INHERIT,
             defaultValue = "wss://ws.faforever.xyz",
             description =
-                    "WebSocket endpoint of the FAF lobby server.%n"
-                            + "Default: ${DEFAULT-VALUE}, the FAF test lobby.")
+                    "WebSocket endpoint of the FAF lobby server. The built-in default is the FAF "
+                            + "test lobby.%n"
+                            + "Default: ${DEFAULT-VALUE}")
     private URI lobbyWebSocketUrl;
 
     /**
@@ -134,7 +137,8 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "https://hydra.faforever.xyz/oauth2/token",
             description =
                     "OAuth2 token endpoint used to acquire lobby access tokens. Read on the "
-                            + "refresh-token channel only.%n"
+                            + "refresh-token channel only. The built-in default is the FAF test "
+                            + "environment's Hydra.%n"
                             + "Default: ${DEFAULT-VALUE}")
     private URI oauthTokenUrl;
 
@@ -170,8 +174,9 @@ public final class MockClientCli implements Callable<Integer> {
             scope = ScopeType.INHERIT,
             defaultValue = "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
             description =
-                    "OAuth2 public client identifier. Read on the refresh-token channel only.%n"
-                            + "Default: ${DEFAULT-VALUE}, the FAF Classic Client (Python).")
+                    "OAuth2 public client identifier. Read on the refresh-token channel only. "
+                            + "The built-in default is the FAF Classic Client (Python).%n"
+                            + "Default: ${DEFAULT-VALUE}")
     private String oauthClientId;
 
     /** Path to a file holding the refresh token; rewritten atomically on each rotation. */
