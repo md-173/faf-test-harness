@@ -235,10 +235,11 @@ final class CrashInjectionProcessTest {
      * the same rolling log file the test worker is writing. Output is inherited rather than piped,
      * because a child blocked writing into a pipe nobody drains never reaches its own crash.
      *
-     * <p>{@code LOG_LEVEL} is pinned to {@code INFO} for the same reason {@code LOG_FILE} is set:
-     * the child inherits this process's environment, and the log it writes is evidence this test
-     * reads. An exported {@code LOG_LEVEL=WARN} would otherwise drop every INFO line from it, which
-     * the positive control in the halt test would catch but could not fix (#441).
+     * <p>{@code LOG_LEVEL} is clamped the way {@code mock-game/build.gradle} clamps it for the test
+     * worker: the child inherits this process's environment, and the log it writes is evidence this
+     * test reads. An exported {@code LOG_LEVEL=WARN} would otherwise drop every INFO line from it,
+     * which the positive control in the halt test would catch but could not fix (#441). DEBUG and
+     * TRACE pass through, since both include INFO and the child logs every GPGNet frame at DEBUG.
      *
      * @param tempDir the child's private directory for logs
      * @param extra arguments appended after the standard argv
@@ -276,7 +277,10 @@ final class CrashInjectionProcessTest {
         ProcessBuilder pb = new ProcessBuilder(argv);
         pb.directory(tempDir.toFile());
         pb.environment().put("LOG_FILE", tempDir.resolve("mock-game.jsonl").toString());
-        pb.environment().put("LOG_LEVEL", "INFO");
+        String inheritedLevel = pb.environment().get("LOG_LEVEL");
+        if (!"DEBUG".equals(inheritedLevel) && !"TRACE".equals(inheritedLevel)) {
+            pb.environment().put("LOG_LEVEL", "INFO");
+        }
         pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         pb.redirectError(ProcessBuilder.Redirect.INHERIT);
         return pb.start();
