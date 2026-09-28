@@ -99,7 +99,8 @@ def verifyMarkdownLinks = tasks.register('verifyMarkdownLinks') {
     def repoRoot = rootDir
     def markdown = fileTree(repoRoot) {
         include '**/*.md'
-        exclude '**/build/**', '**/.gradle/**', '.git/**', '.idea/**', '**/node_modules/**'
+        // .claude/ is gitignored, and Claude Code keeps its worktrees there: whole checkouts of other branches.
+        exclude '**/build/**', '**/.gradle/**', '.git/**', '.idea/**', '**/node_modules/**', '.claude/**'
     }
     inputs.files(markdown).withPropertyName('markdown')
     doLast {
