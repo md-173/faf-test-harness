@@ -15,19 +15,23 @@ of it.**
   apart from the lobby URL and the token files. No credential, account or secret came from FAF.
 - Tokens come from the local Hydra in a fraction of a second each, with no browser. Seven of the
   eight seeded accounts log in, and a job that owns the database can add more.
-- A cold start to a usable lobby took about 7 minutes of machine time on a developer machine,
-  from an empty image cache over a home connection. FAF's own CI brings the whole stack up in
-  under 3 minutes on a hosted runner.
+- A cold start to a usable lobby took about 7 minutes of wall-clock time on a developer machine,
+  from an empty image cache over a home connection. About 4 of those minutes went on nine image
+  pulls, which the kubelet runs one at a time. FAF's own CI brings the whole stack up in about
+  3 min 15 s on a hosted runner, kind cluster included.
 - A local run does not cover the policy path, faf-user-service's login rules, TLS, Cloudflare,
   or what `.xyz` actually runs (see [what a local run does not cover](#what-a-local-run-does-not-cover)).
   So the local run is the repeatable one and the shared run stays the realistic one, which
   answers #411's question 6 the way #413 assumes.
 - One thing still reaches FAF: the adapter's telemetry, which defaults to FAF's production
   service ([question 3 for FAF](#questions-for-faf)).
+- Runbook §11 does not change until #413 gives a consumer a local job to copy. For runs against
+  the local lobby, #411's questions 1 to 4 fall away, since the job owns Hydra and the accounts;
+  runs against `.xyz` keep them.
 
 ## What was run
 
-| | |
+| Item | Detail |
 | --- | --- |
 | gitops-stack | `develop` at [`808a05f`][gs] (committed 2026-09-20, still the head on 2026-09-28) |
 | Lobby server | faf-server [`v1.18.3`][srv], the tag the chart pins |
@@ -35,8 +39,8 @@ of it.**
 | Login service | faf-user-service [`4.2.0`][us], the tag the Tilt path deploys (not run here) |
 | Harness | jars built from `d916ad8b`; faf-ice-adapter 3.3.14, the build's pin; `faf-uid` v4.0.7, runbook §11's pin |
 | Tools | kind v0.31.0 (node v1.35.0, containerd 2.2.0), ctlptl v0.9.6, Tilt v0.37.7, Helm v4.3.0 (FAF's CI uses the same Helm), kubectl v1.34.1 |
-| Machine | WSL2 on a 16-thread Windows machine with 15.2 GB of RAM. The WSL VM is capped at 7.5 GB and already had 3.9 GB in use by other work; Docker Desktop 29.0.1 runs its engine in the same VM |
-| FAF's own CI | gitops-stack's Checks workflow, runs `35514999826` (`develop`) and `36318290606` (`main`) |
+| Machine | WSL2 on a 16-thread Windows machine with 15.2 GB of RAM. The WSL VM is capped at 7.4 GiB and already had 3.8 GiB in use by other work; Docker Desktop 29.0.1 runs its engine in the same VM |
+| FAF's own CI | gitops-stack's Checks workflow, runs `35514999826` (`develop`, on `808a05f` itself) and `36318290606` (`main`) |
 
 ## Answers
 
@@ -53,9 +57,10 @@ comment that it listens on `8003/ws` is out of date.
 
 Two things differ on a Linux developer machine. Binding ports 80 and 443 as a normal user needs
 `net.ipv4.ip_unprivileged_port_start` lowered from its default of 1024: Tilt's own forward failed
-with `bind: permission denied`, without holding anything else up. And `*.faforever.localhost`
-resolves only through the hosts file under `hosts: files dns`. curl resolves `*.localhost`
-itself, the JVM does not.
+with `bind: permission denied`, without holding anything else up. And the JVM, unlike curl, does
+not resolve `*.localhost` itself: on this machine, whose `/etc/resolv.conf` WSL generates,
+`ws.faforever.localhost` resolved only through the hosts file. A resolver that answers
+`*.localhost`, such as systemd-resolved's stub, needs no hosts line.
 
 Checked live: through `kubectl port-forward -n traefik deploy/release-name-traefik 8080:8000`, a
 WebSocket upgrade got `101 Switching Protocols` on both host names and `404` without a matching
@@ -65,7 +70,7 @@ through `ws://ws.faforever.localhost:8080`.
 ### 2. Transport
 
 Plain `ws://` on traefik's `web` entrypoint. The local traefik values configure no TLS store
-([values-local.yaml][gs-traefik-local]), unlike test's ([values-test.yaml:88-92][gs-traefik-test]),
+([values-local.yaml][gs-traefik-local]), unlike test's ([values-test.yaml:88-95][gs-traefik-test]),
 so `wss://` on 443 presents traefik's generated default certificate, which names only a random
 host under `traefik.default`. The JDK's WebSocket client verifies host names, so trusting that
 certificate with the steps in
@@ -148,17 +153,19 @@ The Tilt path does not use the Argo appsets. It renders the checked-out gitops-s
 | Component | Local (Tilt) | Test (`.xyz`) | Declared in |
 | --- | --- | --- | --- |
 | Lobby | `faf-python-server:v1.18.3` | the same | [deployment.yaml:24][gs-lobby-image], no per-environment values |
-| Lobby config | policy check off; JWKS from the in-cluster Hydra over http | policy check on; JWKS from `https://hydra.faforever.xyz` | [Tiltfile:411-414][gs-tilt-lobby], [config.yaml:13][gs-lobby-configmap] |
-| Hydra | `v26.2.0`; issuer `http://ory-hydra:4444`; dev mode; no janitor | `v26.2.0`; issuer `https://hydra.faforever.xyz`; CORS for localhost | [Tiltfile:364-370][gs-tilt-hydra], [values-test.yaml][gs-hydra-test] |
+| Lobby config | policy check off; JWKS from the in-cluster Hydra over http | policy check on; JWKS from `https://hydra.faforever.xyz` | [Tiltfile:190-200][gs-tilt-policy], [Tiltfile:411-414][gs-tilt-lobby], [config.yaml:13][gs-lobby-configmap] |
+| Hydra | `v26.2.0`; issuer `http://ory-hydra:4444`; dev mode; no janitor | `v26.2.0`; issuer `https://hydra.faforever.xyz`; CORS for localhost | [Tiltfile:364-370][gs-tilt-hydra], [config.yaml:9][gs-hydra-issuer] with [test.yaml:7][gs-config-test], [values-test.yaml][gs-hydra-test] |
 | Policy server | not deployed | `faf-policy-server:v1.23` | [Tiltfile:382][gs-tilt-policy-config], [deployment.yaml:31][gs-policy-image] |
 | faf-user-service | `4.2.0`, rendered with `values-prod.yaml` | `master`, a rolling tag | [Tiltfile:393][gs-tilt-user], [values-prod.yaml:2][gs-user-prod], [values-test.yaml:7][gs-user-test] |
 | Schema | `faf-db-migrations:v146` | the same | [cronjob.yaml:23][gs-migrations] |
 | Test data | FAForever/db `develop` at run time unless pinned; this run pinned `v146` | the environment's own long-lived database | [populate-database.sh][gs-populate] |
-| Traefik | no TLS store; `web` and `websecure` both route | Cloudflare in front; a TLS store | [values-local.yaml][gs-traefik-local], [values-test.yaml:88-92][gs-traefik-test] |
+| Traefik | no TLS store; `web` and `websecure` both route | Cloudflare in front; a TLS store holding Cloudflare's certificate | [values-local.yaml][gs-traefik-local], [values-test.yaml:88-95][gs-traefik-test] |
 
 The running images matched the declared tags. The lobby logged `Lobby v1.18.3 (Python 3.13.15)`
-and `Database version is v146`. Their image digests began `sha256:9ef7413a43c1` for the lobby
-and `sha256:ff67c7fb5f95` for Hydra.
+and `Database version is v146`. The lobby ran
+`sha256:9ef7413a43c1aace7f12347d0b467becfde5698b6f8ed46cf28d816908d90dce` and Hydra
+`sha256:ff67c7fb5f95074fa53374d41151713554960504b340cd3f95b09e65deaea2a9`, the digests Docker Hub
+lists for those tags.
 
 The lobby checks neither issuer nor audience (#411), so Hydra's local issuer changes nothing for
 the harness. What `.xyz` actually runs is out of reach: it needs Argo or cluster access, and the
@@ -179,16 +186,22 @@ setup jobs, 50 of the Tiltfile's 109 resources).
 | Load the test data, then restart the lobby | 13 s and 25 s |
 | **To a usable lobby** | **about 6 min 55 s** |
 | Mint eight tokens | 1.4 s |
-| One two-peer `session`, start to verdict | 7.6 to 10.7 s |
+| One two-peer `session`, process start to exit | 10.3 to 10.7 s |
 
 | Resource | Peak or total |
 | --- | --- |
-| Memory, the kind node | 2.5 GiB (`docker stats`) |
-| Memory, the whole VM | 1.9 GB above its baseline at the busiest point (the sessions), and swap up 0.43 GB |
-| Memory, one session | five short-lived JVMs; the largest process peaked at 177 MB RSS |
-| CPU, the kind node | 201 core-seconds to Ready, peaking at 6.2 cores; 72 more for loading the data, restarting the lobby, the logins, four sessions and 100 s idle |
+| Memory, the kind node | 2.5 GiB at peak (`docker stats`) |
+| Memory, the whole VM | about 1.5 GiB above its baseline with the stack at rest, 1.9 GiB at the busiest point (a session adds 0.35 to 0.45 GiB); swap grew 0.42 GiB |
+| Memory, one session | five short-lived JVMs; the largest process peaked at 173 MiB RSS |
+| CPU, the kind node | 201 core-seconds to Ready, peaking at 6.2 cores in one sample; then about 0.18 cores at rest, with the data load, the restart, the logins and the sessions barely above that (about 1 core-second per session) |
 | CPU, one session | 9.0 CPU-seconds on the host for the whole process tree: five JVMs and two `faf-uid` runs |
 | Disk | about 5.2 GB: the node image (1.35 GB) plus the node's volume (3.8 GB, containerd's store of the nine pulled images, 0.99 GB compressed, and kind's own) |
+
+About 4 minutes of the 285 s went on the nine image pulls, which the kubelet runs one at a time.
+Other work on the machine was not held still, so the VM-wide figures are approximate and the
+node's own figures are the firmer ones. The WSL clock also steps back 2 to 3 s about every 30 s,
+so intervals under a minute carry that error: a fourth session read 7.6 s under `/usr/bin/time`,
+and the 100 s idle run's log spans 92.6 s.
 
 The checkout sat under `/tmp`, which kind mounts as tmpfs inside the node, so the databases'
 files (244 MB) counted as memory rather than disk. The Tiltfile builds no images and sets up no
@@ -212,17 +225,21 @@ resource ([Tiltfile:257][gs-tilt-populate]) that `tilt ci` never triggers.
 
 ## Running it
 
-Needs Docker, kind, ctlptl, Tilt, Helm, kubectl, curl, jq and openssl. On a Linux host, raise
-the inotify limits kind documents (`fs.inotify.max_user_instances=512`,
-`fs.inotify.max_user_watches=524288`) and add the host names to `/etc/hosts`:
+Needs Docker, kind, ctlptl, Tilt, Helm, kubectl, curl, jq and openssl, plus JDK 21 and the jars,
+adapter and `faf-uid` that runbook §11 uses. On a Linux host, raise the inotify limits kind
+documents (`fs.inotify.max_user_instances=512`, `fs.inotify.max_user_watches=524288`) and, unless
+your resolver answers `*.localhost`, add the host names to `/etc/hosts`:
 
 ```bash
 echo '127.0.0.1 ws.faforever.localhost lobby.faforever.localhost hydra.faforever.localhost' | sudo tee -a /etc/hosts
 ```
 
-From a gitops-stack checkout at the pinned commit:
+Then clone gitops-stack at the pinned commit and bring the stack up from inside it:
 
 ```bash
+git clone https://github.com/FAForever/gitops-stack.git && cd gitops-stack
+git checkout 808a05fadf21989f00b444c43e649846c7d80957
+
 ctlptl create cluster kind --registry=ctlptl-registry
 tilt up -- --run faf-lobby-server --run ory-hydra-create-client-2
 # In another shell, once `tilt get uiresource faf-lobby-server` answers:
@@ -289,6 +306,12 @@ pub_curl --data-urlencode "code=$code" -d grant_type=authorization_code -d "clie
     -d "redirect_uri=$redirect" "$pub/oauth2/token" | jq -j .access_token > "$out"
 ```
 
+```bash
+chmod +x mint-local-token.sh
+./mint-local-token.sh 1 host.jwt     # test
+./mint-local-token.sh 7 joiner.jwt   # steambie
+```
+
 Then runbook §11's session, pointed at the local lobby:
 
 ```bash
@@ -330,23 +353,33 @@ read.
 ## What #413 inherits
 
 - **Bring-up.** `tilt ci -- --run faf-lobby-server --run ory-hydra-create-client-2` follows FAF's
-  own `checks.yml`. The Tiltfile's patches (policy check off, in-cluster JWKS, Hydra's local URLs,
-  the `web` entrypoint) are what make the stack usable locally, so rendering the charts with Helm
-  instead means reproducing them.
-- **The lobby's address.** `tilt ci` exits once everything is Ready and takes its port-forwards
-  with it, so the job holds its own `kubectl port-forward` to traefik for the session, as above.
+  own `checks.yml`. The Tiltfile's patches are what make the stack usable locally: the policy
+  check off, the in-cluster JWKS, Hydra's local URLs, the `web` entrypoint, the suspended
+  migrations CronJob run as a Job ([cronjob.yaml:9-11][gs-migrations-schedule],
+  [Tiltfile:87-98][gs-tilt-cronjob]), and the `local` PersistentVolumes turned into hostPath ones
+  ([persistent-volume.yaml:14-23][gs-storage-pv], [Tiltfile:172-188][gs-tilt-hostpath]). Rendering
+  the charts with Helm instead means reproducing them; without the last two, a plain render never
+  migrates the schema and its database pods stay Pending.
+- **Addresses.** `tilt ci` exits once everything is Ready and takes its port-forwards with it, so
+  the job holds its own: traefik for the session, as above, and Hydra's public and admin ports for
+  the mint script (`kubectl port-forward -n faf-apps svc/ory-hydra 4444 4445`). The JVM must also
+  resolve `ws.faforever.localhost`, since traefik routes on `Host()`.
 - **Data and tokens.** Load the pinned test data with the pipeline above, not `tilt trigger`, then
   restart the lobby. Mint tokens in the job with the script. They last an hour, and minting takes a
   fraction of a second, so the job mints per run and token lifetime stops mattering.
 - **Pins.** The gitops-stack commit, the FAForever/db tag that matches the migrations image, and
   the tool versions.
+- **Telemetry.** Settle the adapters' target ([question 3 for FAF](#questions-for-faf)) before
+  the job runs unattended; as things stand, every run reports to FAF's production service.
 - **Measurements this note cannot give.** The stack and the session together on a hosted runner,
   including headroom on a private repository's 8 GB runner, and the job's own flake rate. Four
   passes on one machine are not a flake rate.
 - **#413's own text** expects disk to be the ceiling and names "whatever the policy check needs"
   among the services. Neither holds: the session's images come to about 1 GB compressed, a hosted
   runner showed about 85 GB free, and the policy check is off, with the policy server not
-  deployed.
+  deployed. It also says the client falls back to the placeholder without `faf-uid`; it does not,
+  since it refuses to start without `--uid-binary-path` or `--unique-id`. Dropping `faf-uid` means
+  passing `--unique-id=placeholder`, which only `run` exercised here; the sessions ran `faf-uid`.
 
 ## Questions for FAF
 
@@ -356,10 +389,11 @@ read.
    green.
 3. Telemetry. faf-ice-adapter 3.3.14 defaults `--telemetry-server` to
    `wss://ice-telemetry.faforever.com`, and the harness passes no override on `main`, so a run
-   against a local lobby still reports to FAF's production telemetry (#458 moves the harness to
-   `.xyz`). In this run each adapter's telemetry socket kept opening and being closed by the
-   server with `Internal Error` within about a second, for the whole session, so events for local
-   game ids 2 to 5 may have reached it. Is there a target FAF wants a local run to use?
+   against a local lobby still reports to FAF's production telemetry (#458, still open, points
+   the adapters' telemetry at `.xyz`). In this run each adapter's telemetry socket kept opening
+   and being closed by the server with `Internal Error` within about a second, for the whole
+   session, so events for local game ids 2 to 5 may have reached it. Is there a target FAF wants
+   a local run to use?
 
 ## What a local run does not cover
 
@@ -368,12 +402,58 @@ read.
 - `wss://`, Cloudflare and the real certificate chain.
 - Real accounts, other players, and whatever `.xyz` runs beyond its declared tags.
 
+## Live checks, as run
+
+The commands behind the "Checked live" statements above, with their output, from the run on
+2026-09-28. Traefik was forwarded with
+`kubectl port-forward -n traefik deploy/release-name-traefik 8080:8000 8443:8443`.
+
+```text
+# 1. A WebSocket upgrade through traefik
+$ curl -s -o /dev/null --max-time 3 -w '%{http_code}\n' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://ws.faforever.localhost:8080/
+101
+# The same request gave 101 for lobby.faforever.localhost:8080 and 404 for 127.0.0.1:8080,
+# which matches no Host() rule.
+
+# 2. The certificate on 8443; `curl -k --http1.1` with the same headers to
+#    https://ws.faforever.localhost:8443/ gave 101
+$ echo | openssl s_client -connect 127.0.0.1:8443 -servername ws.faforever.localhost 2>/dev/null |
+    openssl x509 -noout -subject -ext subjectAltName
+subject=CN = TRAEFIK DEFAULT CERT
+X509v3 Subject Alternative Name:
+    DNS:04f6e1e702da4102d7d45e69ef5cb350.f9309f8f7d27b45b07e4e4f26f0f50aa.traefik.default
+
+# 3 and 5. No Infisical, and the policy check off (`kubectl get pods -A` showed every pod
+#    Running or Completed)
+$ kubectl api-resources | grep -ci infisical
+0
+$ kubectl get secrets -A --no-headers | grep -ci infisical
+0
+$ kubectl get cm faf-lobby-server -n faf-apps -o jsonpath='{.data.config\.yaml}' | grep USE_POLICY_SERVER
+USE_POLICY_SERVER: false
+$ kubectl get deploy -A --no-headers | grep -ci policy
+0
+
+# 4. One token's header and claims, as the mint run printed them; the other seven matched apart
+#    from sub, with lifetimes of 3600 or 3601 s. Then the key ids Hydra publishes.
+kid=98fb1e05-6a6e-4b69-957e-5ef15b6a35e9 alg=RS256 sub=1 scp=['openid', 'offline', 'lobby'] iss=http://ory-hydra:4444 lifetime=3600s
+$ curl -fsS http://127.0.0.1:4444/.well-known/jwks.json | jq -r '[.keys[].kid] | join(" ")'
+4307e693-e715-4e73-bd5a-e3d76ebe0660 98fb1e05-6a6e-4b69-957e-5ef15b6a35e9
+
+# 7. The resources `--run` enabled (109 in all), and the node's /tmp
+$ tilt get uiresources -o json | jq '[.items[] | select(.status.disableStatus.state=="Enabled")] | length'
+50
+$ docker exec kind-control-plane df -h /tmp
+tmpfs           3.7G  244M  3.5G   7% /tmp
+```
+
 [gs]: https://github.com/FAForever/gitops-stack/tree/808a05fadf21989f00b444c43e649846c7d80957
 [gs-ingress]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-lobby-server/templates/ingress.yaml#L9
 [gs-tilt-web]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L159-L162
 [gs-tilt-traefik]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L297
 [gs-traefik-local]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/traefik/values-local.yaml
-[gs-traefik-test]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/traefik/values-test.yaml#L88-L92
+[gs-traefik-test]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/traefik/values-test.yaml#L88-L95
 [gs-traefik-test-timeout]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/traefik/values-test.yaml#L46
 [gs-readme-infisical]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/README.MD?plain=1#L53
 [gs-readme-rolling]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/README.MD?plain=1#L23
@@ -399,6 +479,12 @@ read.
 [gs-user-test]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-user-service/values-test.yaml#L7
 [gs-migrations]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-db-migrations/templates/cronjob.yaml#L23
 [gs-populate]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/tilt/scripts/populate-database.sh
+[gs-hydra-issuer]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/ory-hydra/templates/config.yaml#L9
+[gs-config-test]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/config/test.yaml#L7
+[gs-migrations-schedule]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/apps/faf-db-migrations/templates/cronjob.yaml#L9-L11
+[gs-tilt-cronjob]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L87-L98
+[gs-storage-pv]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/cluster/storage/templates/persistent-volume.yaml#L14-L23
+[gs-tilt-hostpath]: https://github.com/FAForever/gitops-stack/blob/808a05fadf21989f00b444c43e649846c7d80957/Tiltfile#L172-L188
 [srv]: https://github.com/FAForever/server/tree/v1.18.3
 [srv-oauth]: https://github.com/FAForever/server/blob/v1.18.3/server/oauth_service.py#L76-L100
 [srv-auth]: https://github.com/FAForever/server/blob/v1.18.3/server/lobbyconnection.py#L633-L648
