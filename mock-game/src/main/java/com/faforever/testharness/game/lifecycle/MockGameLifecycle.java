@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
@@ -418,7 +419,26 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Gives a future that completes when the state is reached.
+     * How many tasks the lifecycle's scheduler holds that have not started yet: a pending launch,
+     * match end or injected crash. Package-private for {@code GameShutdownTest}, which checks that
+     * a launch was pending before teardown and that teardown drained it, rather than sleeping past
+     * the launch delay. The queue is what tells the two ways of stopping apart: {@code
+     * shutdownNow()} drains a task that has not started, so it never runs, while a plain {@code
+     * shutdown()} leaves a delayed one queued to run when its delay expires.
+     *
+     * @return the number of tasks still queued on the lifecycle's scheduler.
+     */
+    /* package-private */ int queuedSchedules() {
+        // Executors.newScheduledThreadPool builds a ScheduledThreadPoolExecutor.
+        return ((ThreadPoolExecutor) scheduler).getQueue().size();
+    }
+
+    /**
+     * Gives a future that completes the next time the lifecycle enters {@code state}, or at once if
+     * it is the current state. The wait is edge triggered, as {@link
+     * StateMachine#stateReached(State)} documents: a state already entered and left is seen only on
+     * a later entry, so a caller driving the game through several states must take every future it
+     * needs before the frame that starts the run (WBS-2.3.7-fix, #250).
      *
      * <p>Guarded against a pre-{@link #start()} call, matching {@link #getExitStatus()}. Nothing
      * moves the FSM until {@code start()} opens the connection and arms the timeout, so waiting on
@@ -426,7 +446,8 @@ public final class MockGameLifecycle {
      * exactly this future. Failing loudly at the call is better than hanging at the join.
      *
      * @param state the state to wait for.
-     * @return a future that only completes when the state is reached.
+     * @return a future that completes on the next entry to {@code state}, already complete if it is
+     *     the current state.
      * @throws IllegalStateException if called before {@link #start()}.
      */
     public CompletableFuture<Void> stateReached(GameState state) {
@@ -606,16 +627,17 @@ public final class MockGameLifecycle {
      * was asked is indistinguishable from one killed for hanging. Given the timer, the game exits
      * through the normal path with {@link ExitStatus#LOBBY_TIMEOUT}.
      *
-     * <p>Cancellation is the state machine's, not ours: {@code commitTransition} disarms every
-     * pending timeout on any state change, so a game driven into HOSTING or JOINING — or dropped
-     * into ENDED by a disconnect — never trips this. That is the whole reason it uses {@code
-     * setTimeout} rather than the lifecycle's own scheduler, which would need cancelling at each of
-     * the four ways out of LOBBY.
+     * <p>Cancellation is the state machine's, not ours: on every state change, {@code
+     * commitTransition} disarms each timeout already pending when that change began, so a game
+     * driven into HOSTING or JOINING, or dropped into ENDED by a disconnect, never trips this. That
+     * is the whole reason it uses {@code setTimeout} rather than the lifecycle's own scheduler,
+     * which would need cancelling at each of the four ways out of LOBBY.
      *
-     * <p>It is armed from a {@link StateMachine#stateReached} callback rather than from LOBBY's
-     * entry hook or the transition action, and that is load-bearing: both of those run
-     * <em>before</em> {@code commitTransition}, which then clears every pending timeout — including
-     * one they had just armed. The callback runs inside the same commit, after the clear.
+     * <p>It is armed from a {@link StateMachine#stateReached} callback, which runs inside the
+     * commit into LOBBY. Until WBS-2.3.7-fix (#259) that was load-bearing: LOBBY's entry hook and
+     * the transition action both run before {@code commitTransition}, which then discarded every
+     * pending timeout, including one they had just armed. The commit now keeps a timeout armed
+     * during its own transition, so LOBBY's entry hook would serve as well.
      */
     private void armLobbyTimeout() {
         Optional<Duration> lobbyTimeout = config.lobbyTimeout();
@@ -635,13 +657,12 @@ public final class MockGameLifecycle {
                                                     lobbyTimeout.get().toSeconds());
                                             status = ExitStatus.LOBBY_TIMEOUT;
                                         }))
-                // Observed, not discarded — the same reason start()'s chain carries one. A throw
-                // in the arming lambda would otherwise be captured into a future nobody holds:
-                // the timer would silently never arm and nothing would say so. Reachable today:
-                // GameShutdown.run() calls fsm.cancel() after closing the socket, and a
-                // CreateLobby already blocked on the StateMachine monitor still commits
-                // IDLE -> LOBBY afterwards, so setTimeout throws "Timer already cancelled".
-                // Benign — the JVM is halting — but silence is the part worth fixing.
+                // Observed, not discarded, for the same reason start()'s chain carries one: a throw
+                // in the arming lambda would otherwise be captured into a future nobody holds, and
+                // the timer would silently never arm. Nothing in the lambda throws today. A
+                // CreateLobby that commits IDLE -> LOBBY after GameShutdown.run() has cancelled the
+                // FSM's scheduling reaches setTimeout, which then arms nothing and returns rather
+                // than throwing (#312, #328).
                 .whenComplete(
                         (ignored, error) -> {
                             if (error != null) {
@@ -1068,8 +1089,8 @@ public final class MockGameLifecycle {
      * The injected crash itself (WBS-5.2): ends the process where it stands.
      *
      * <p>{@link Runtime#halt(int)} and never {@link System#exit(int)}. Exit runs the JVM shutdown
-     * hooks, and {@code Main} registers one that runs {@link GameShutdown}: closing the GPGNet
-     * socket in an orderly sequence, stopping the traffic session, cancelling the FSM. A consumer
+     * hooks, and {@code Main} registers one that runs {@link GameShutdown}: stopping scheduling,
+     * then closing the GPGNet socket and stopping the traffic session, in that order. A consumer
      * watching the adapter would see a tidy disconnect, which is the opposite of the fault being
      * injected. Halt runs no hook, writes no closing frame, and leaves the socket to be torn down
      * by the operating system exactly as it would be if the process had been killed.

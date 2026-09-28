@@ -11,6 +11,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,6 +25,11 @@ import org.slf4j.LoggerFactory;
  * failure state, and a self-loop. In both cases the event is handled but the machine does not
  * change state, so none of the bookkeeping that follows a real transition may run — in particular
  * pending timeouts must stay armed.
+ *
+ * <p>A test that arms a timeout and then posts the event that must beat it does both under the
+ * machine's own monitor. {@code UpdateStateTask.run} takes that monitor too, so the timeout cannot
+ * commit first however late the test thread runs, which would drop the event in C and fail the test
+ * for the wrong reason (#380).
  */
 final class StateMachineStayPutTest {
     private static final int AWAIT_SECONDS = 2;
@@ -131,12 +137,14 @@ final class StateMachineStayPutTest {
                 },
                 null);
         StateMachine machine = new StateMachine(a);
-        machine.setTimeout(TIMEOUT_MS, c);
+        synchronized (machine) {
+            machine.setTimeout(TIMEOUT_MS, c);
 
-        machine.receiveEvent(new Trigger());
+            machine.receiveEvent(new Trigger());
 
-        assertSame(a, machine.getState());
-        assertEquals(2, hookRuns.get(), "a re-entry fires exit and entry once each");
+            assertSame(a, machine.getState());
+            assertEquals(2, hookRuns.get(), "a re-entry fires exit and entry once each");
+        }
 
         // Treated as a real transition, so the pending timeout is cancelled.
         Thread.sleep(TIMEOUT_MS * 3);
@@ -158,12 +166,15 @@ final class StateMachineStayPutTest {
                 null);
         StateMachine machine = new StateMachine(a);
 
-        machine.setTimeout(TIMEOUT_MS, c);
-        var reachedC = machine.stateReached(c);
+        CompletableFuture<Void> reachedC;
+        synchronized (machine) {
+            machine.setTimeout(TIMEOUT_MS, c);
+            reachedC = machine.stateReached(c);
 
-        // A failed action must not disarm a timeout it has nothing to do with.
-        machine.receiveEvent(new Trigger());
-        assertSame(a, machine.getState());
+            // A failed action must not disarm a timeout it has nothing to do with.
+            machine.receiveEvent(new Trigger());
+            assertSame(a, machine.getState());
+        }
 
         reachedC.get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertSame(c, machine.getState());
@@ -181,13 +192,16 @@ final class StateMachineStayPutTest {
         a.registerTransition(Trigger.class, a, ignored -> actionRuns.incrementAndGet(), null);
         StateMachine machine = new StateMachine(a);
 
-        machine.setTimeout(TIMEOUT_MS, c);
-        var reachedC = machine.stateReached(c);
+        CompletableFuture<Void> reachedC;
+        synchronized (machine) {
+            machine.setTimeout(TIMEOUT_MS, c);
+            reachedC = machine.stateReached(c);
 
-        machine.receiveEvent(new Trigger());
-        assertEquals(1, actionRuns.get(), "the self-loop action still runs");
-        assertEquals(0, hookRuns.get(), "a self-loop must not re-fire exit or entry hooks");
-        assertSame(a, machine.getState());
+            machine.receiveEvent(new Trigger());
+            assertEquals(1, actionRuns.get(), "the self-loop action still runs");
+            assertEquals(0, hookRuns.get(), "a self-loop must not re-fire exit or entry hooks");
+            assertSame(a, machine.getState());
+        }
 
         reachedC.get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertSame(c, machine.getState());
@@ -202,8 +216,11 @@ final class StateMachineStayPutTest {
         var reachedC = machine.stateReached(c);
 
         // A timeout into the state we are already in changes nothing, so the later one survives.
-        machine.setTimeout(TIMEOUT_MS, a);
-        machine.setTimeout(TIMEOUT_MS * 2, c);
+        // Both are armed under the monitor so that the first cannot fire before the second exists.
+        synchronized (machine) {
+            machine.setTimeout(TIMEOUT_MS, a);
+            machine.setTimeout(TIMEOUT_MS * 2, c);
+        }
 
         reachedC.get(AWAIT_SECONDS, TimeUnit.SECONDS);
         assertSame(c, machine.getState());

@@ -275,9 +275,12 @@ final class MainTest {
     /**
      * The fourth SIGTERM phase, which the parameterized test above cannot reach: the signal lands
      * <em>while</em> the FSM is transitioning into ENDED. This is the interleaving the card calls
-     * out, and the one the old {@code synchronized run()} deadlocked on — the FSM thread held the
-     * StateMachine monitor and wanted GameShutdown's, the hook thread held GameShutdown's and
-     * wanted the StateMachine's.
+     * out, and the one the old {@code synchronized run()} deadlocked on while {@code
+     * StateMachine.cancel()} was synchronized too: the FSM thread held the StateMachine monitor and
+     * wanted GameShutdown's, the hook thread held GameShutdown's and wanted the StateMachine's.
+     * {@code cancel()} no longer takes that monitor (#328), so the crossing cannot recur here;
+     * {@code GameShutdownTest.secondCallerDoesNotBlockWhileTheFirstIsStillTearingDown} pins the
+     * lock-free guard deterministically.
      *
      * <p>{@code endMatch()} posts its event on the calling thread, which is the seam this needs:
      * its racer thread becomes the FSM thread, entering the synchronized {@code receiveEvent} and
@@ -285,11 +288,14 @@ final class MainTest {
      * releases the hook thread into that same window. Whichever wins the once-guard, the other must
      * not block behind it.
      *
-     * <p>Repeated because the window is a genuine race rather than a pinned interleaving, and the
-     * measurement is not academic: with the old guard restored, repetitions 1 and 3 still passed
-     * while most of the rest timed out, so a single-shot version of this test would be flaky in
-     * exactly the direction that matters. Both timers are set long enough that the lifecycle's own
-     * scheduler is not a third racer — the only {@code GameEnded} here is the one posted below.
+     * <p>Repeated because the window is a genuine race rather than a pinned interleaving. The hook
+     * usually wins the once-guard, since the {@code endMatch()} thread reaches ENDED's entry hook
+     * only after {@code gameEnds} has sent its closing frames, so the repetitions mainly vary where
+     * the hook's close lands among those sends. That gives a lock cycle introduced later between a
+     * teardown step and the FSM thread more chances to show than a single run would. Before #328,
+     * with the old guard restored, repetitions 1 and 3 still passed while most of the rest timed
+     * out. Both timers are set long enough that the lifecycle's own scheduler is not a third racer:
+     * the only {@code GameEnded} here is the one posted below.
      */
     @RepeatedTest(20)
     void shutdownHookCompletesDuringTheEndedTransition() throws Exception {
@@ -311,8 +317,8 @@ final class MainTest {
 
         // Both racers run on their own daemon threads and the test thread only waits. That matters:
         // a reintroduced lock inversion deadlocks whichever threads are racing, so if the test
-        // thread were one of them it would hang the build instead of failing. Verified by putting
-        // the synchronized guard back — this fails in seconds rather than hanging.
+        // thread were one of them it would hang the build instead of failing. Before #328, putting
+        // the synchronized guard back failed this in seconds rather than hanging.
         CyclicBarrier bothReady = new CyclicBarrier(2);
         CompletableFuture<Void> hookReturned = new CompletableFuture<>();
         CompletableFuture<Void> endMatchReturned = new CompletableFuture<>();
