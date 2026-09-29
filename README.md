@@ -50,6 +50,8 @@ all.
 | ICE signalling delay | [`--ice-relay-delay-ms`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52) | yes |
 | UDP packet loss | [`--udp-drop-percent`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-udp-drop-percent` to inject it through `launch-game` or `session` | no |
 | Game crash | [`--crash-after-seconds`](documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52), or `--mock-game-crash-after-seconds` to inject it through `launch-game` or `session` | no |
+| Faults on chosen peers only | [`session --fault-peer`](documentation/operations/harness-runbook.md#faults-on-one-peer-of-a-session-wbs-512-521), or one value per peer with the three `--peer-*` fault lists | one per peer |
+| A joiner's game crashing after the match launches, with the loss reported and the rest playing on | [`session --crash-peer`](documentation/operations/harness-runbook.md#faults-on-one-peer-of-a-session-wbs-512-521) | one per peer |
 | Token-file login, refresh or pre-signed access | [`run --oauth-refresh-token-file`, `--oauth-access-token-file`](documentation/operations/harness-runbook.md#3-credentials) | yes |
 
 To localise a failure rather than choose a capability, use
