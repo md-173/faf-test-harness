@@ -23,8 +23,9 @@ of it.**
   or what `.xyz` actually runs (see [what a local run does not cover](#what-a-local-run-does-not-cover)).
   So the local run is the repeatable one and the shared run stays the realistic one, which
   answers #411's question 6 the way #413 assumes.
-- One thing still reaches FAF: the adapter's telemetry, which defaults to FAF's production
-  service ([question 3 for FAF](#questions-for-faf)).
+- One thing still reaches FAF: the adapters' telemetry. This run's jars sent it to FAF's
+  production service, and since #458 the harness sends it to FAF's test service instead
+  ([question 3 for FAF](#questions-for-faf)).
 - Runbook §11 does not change until #413 gives a consumer a local job to copy. For runs against
   the local lobby, #411's questions 1 to 4 fall away, since the job owns Hydra and the accounts;
   runs against `.xyz` keep them.
@@ -394,8 +395,9 @@ read.
   ([values.yaml:6-7][gs-pg-upgrade-tag]) and the untagged `alpine/kubectl` of the setup jobs
   ([init-database-with-user.yaml:35][gs-kubectl-tag]) move under it. Record the digests each run
   pulled, or pin them, so upstream drift can be told apart from a harness failure.
-- **Telemetry.** Settle the adapters' target ([question 3 for FAF](#questions-for-faf)) before
-  the job runs unattended; as things stand, every run reports to FAF's production service.
+- **Telemetry.** Since #458 merged on 2026-09-28, after this run, the harness points its adapters
+  at FAF's test service, `wss://ice-telemetry.faforever.xyz`. Confirm with FAF that it is an
+  acceptable target ([question 3 for FAF](#questions-for-faf)) before the job runs unattended.
 - **Measurements this note cannot give.** The stack and the session together on a hosted runner,
   including headroom on a private repository's 8 GB runner, and the job's own flake rate. Four
   passes on one machine are not a flake rate.
@@ -414,12 +416,11 @@ read.
    `tilt trigger populate-db` fails on Linux and macOS. FAF's CI never triggers it, so it stays
    green.
 3. Telemetry. faf-ice-adapter 3.3.14 defaults `--telemetry-server` to
-   `wss://ice-telemetry.faforever.com`, and the harness passes no override on `main`, so a run
-   against a local lobby still reports to FAF's production telemetry (#458, still open, points
-   the adapters' telemetry at `.xyz`). In this run each adapter's telemetry socket kept opening
-   and being closed by the server with `Internal Error` within about a second, for the whole
-   session, so events for local game ids 2 to 5 may have reached it. Is there a target FAF wants
-   a local run to use?
+   `wss://ice-telemetry.faforever.com`. This run's jars passed no override, so each adapter's
+   telemetry socket kept opening and being closed by the server with `Internal Error` within
+   about a second, for the whole session, and events for local game ids 2 to 5 may have reached
+   it. Since #458 merged on 2026-09-28, the harness passes FAF's test service instead. Is that the
+   target FAF wants a local run to use?
 
 ## What a local run does not cover
 
