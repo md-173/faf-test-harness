@@ -1,16 +1,20 @@
 package com.faforever.testharness.client.session;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.SessionState;
 import com.faforever.testharness.client.state.ClientState;
+import com.faforever.testharness.client.state.MockClientLifecycle;
 import com.faforever.testharness.game.config.ExitCodes;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 /**
  * The parts of {@link MultiPeerSession} that decide what each peer runs with, checked without a
@@ -549,6 +554,93 @@ final class MultiPeerSessionTest {
                 Optional.empty(),
                 MultiPeerSession.ownerOf("java -jar mock-game.jar --gpgnet-port 400021", peers));
         assertEquals(Optional.empty(), MultiPeerSession.ownerOf("java -jar other.jar", peers));
+    }
+
+    /**
+     * Which sessions check each peer's path at the end of {@link MultiPeerSession#run()}
+     * (WBS-4.2.6): those where the session knows where every peer ends.
+     */
+    @Test
+    void runChecksEachPathItselfOnlyWhenItKnowsWhereEveryPeerEnds() throws IOException {
+        Path adapter = Files.createFile(dir.resolve("faf-ice-adapter"));
+        Path game = Files.createFile(dir.resolve("mock-game"));
+        String[] binaries = {
+            "--ice-adapter-binary-path=" + adapter, "--mock-game-binary-path=" + game
+        };
+        List<MockClientConfig> two =
+                List.of(base(token("a"), binaries), base(token("b"), binaries));
+        List<MockClientConfig> three = new ArrayList<>(two);
+        three.add(base(token("c"), binaries));
+
+        assertEquals(
+                Optional.of(Map.of()),
+                new MultiPeerSession(two, "t").finalPaths(),
+                "auto-launch off: every peer stays in its role");
+        assertEquals(
+                Optional.of(
+                        Map.of(
+                                "A",
+                                List.of(ClientState.PLAYING),
+                                "C",
+                                List.of(ClientState.TERMINATED))),
+                MultiPeerSession.withDeliberateCrash(three, "t", 2).finalPaths(),
+                "a deliberate crash: the host plays on and the crashed joiner's client ends");
+        assertEquals(
+                Optional.empty(),
+                new MultiPeerSession(two, "t", (int) MultiPeerSession.minHostLaunchDelaySeconds(2))
+                        .finalPaths(),
+                "a host on a timer: only the caller knows whether it launched");
+    }
+
+    @Test
+    void checksEachPeersPathUnderItsLabelAgainstTheOthersIds() throws IOException {
+        SessionPeer host = peer("A", "host", 7982, token("a"));
+        SessionPeer joiner = peer("B", "joiner", 330072, token("b"));
+        TransitionEvidence evidence = new TransitionEvidence();
+        for (String state : List.of("CONNECTING", "IDLE", "STARTING_GAME", "HOSTING")) {
+            evidence.accept("A", "state entry: " + state);
+        }
+        evidence.accept("A", "peer connect: login=login-b id=330072 offer=true");
+        List<String> ended =
+                List.of("CONNECTING", "IDLE", "STARTING_GAME", "JOINING", "TERMINATED");
+        for (String state : ended) {
+            evidence.accept("B", "state entry: " + state);
+        }
+
+        assertDoesNotThrow(
+                () ->
+                        evidence.verifySession(
+                                List.of(host, joiner),
+                                Map.of("B", List.of(ClientState.TERMINATED))));
+        CheckpointFailure e =
+                assertThrows(
+                        CheckpointFailure.class,
+                        () -> evidence.verifySession(List.of(host, joiner), Map.of()));
+        assertTrue(
+                e.getMessage().startsWith("B(joiner): transitions: B(joiner) logged state entries"),
+                e.getMessage());
+    }
+
+    /**
+     * The session's last stage reads the clients' own INFO lines, so a JVM that drops them would
+     * fail every session at that stage however it ran, after every login.
+     */
+    @Test
+    void refusesAJvmThatDropsTheClientsOwnInfoLines() throws IOException {
+        List<MockClientConfig> bases = List.of(base(token("a")), base(token("b")));
+        Logger lifecycle = (Logger) LoggerFactory.getLogger(MockClientLifecycle.class);
+        Level original = lifecycle.getLevel();
+        lifecycle.setLevel(Level.WARN);
+        try {
+            IllegalArgumentException e =
+                    assertThrows(
+                            IllegalArgumentException.class, () -> new MultiPeerSession(bases, "t"));
+            assertTrue(
+                    e.getMessage().startsWith("this JVM does not log the clients' own INFO lines"),
+                    e.getMessage());
+        } finally {
+            lifecycle.setLevel(original);
+        }
     }
 
     /**

@@ -55,7 +55,7 @@ import org.slf4j.MDC;
  * {@code System.exit} ends every peer, and any peer failing fails the session by design, the one
  * exception being a deliberate crash (below).
  *
- * <p><b>The verdict</b> has two parts, both required.
+ * <p><b>The verdict</b> has three parts, all required.
  *
  * <ul>
  *   <li><b>Full mesh:</b> the adapter's {@code onConnected(localId, remoteId, connected)}
@@ -68,6 +68,10 @@ import org.slf4j.MDC;
  *       claim; this is the games' independent proof that the adapter forwards what they send, so an
  *       adapter that connects but drops game packets fails the session. It needs the games and the
  *       client at INFO or finer, which the constructor enforces.
+ *   <li><b>Each peer's path (WBS-4.2.6):</b> once every other stage has passed, each peer's own
+ *       {@code state entry:} and {@code peer connect:} lines must be the path its role takes
+ *       ({@link TransitionEvidence}), or the session fails at stage {@code transitions}. The checks
+ *       above are outcomes, which a peer can reach the wrong way.
  * </ul>
  *
  * <p><b>One known cause of a slow traffic pass.</b> If an adapter re-announces a peer at a
@@ -269,6 +273,9 @@ public final class MultiPeerSession implements AutoCloseable {
     /** What each game has received from each other game, captured while the session runs. */
     private final TrafficEvidence traffic = new TrafficEvidence();
 
+    /** Each peer's own state and peer connect lines, captured while the session runs. */
+    private final TransitionEvidence transitions = new TransitionEvidence();
+
     /** Title the host advertises. */
     private final String hostTitle;
 
@@ -333,6 +340,9 @@ public final class MultiPeerSession implements AutoCloseable {
      * invariant it relaxes is load-bearing: the host must stay joinable until every joiner is in,
      * and a host that launches first makes itself unjoinable, which surfaces as a joiner's {@code
      * game_join} being refused with {@code game_not_ready}.
+     *
+     * <p>{@link #run()} leaves the check on each peer's path to the caller when a delay is given,
+     * because the host may launch at any point after bring-up; see {@link #transitions()}.
      *
      * @param peerBases one validated config per peer, as above
      * @param hostTitle the title the host advertises
@@ -460,6 +470,11 @@ public final class MultiPeerSession implements AutoCloseable {
                     "this JVM does not log subprocess output at INFO, so game traffic cannot be"
                             + " seen; set LOG_LEVEL to INFO or finer");
         }
+        if (!TransitionEvidence.capturable()) {
+            throw new IllegalArgumentException(
+                    "this JVM does not log the clients' own INFO lines, so no peer's path can be"
+                            + " checked; set LOG_LEVEL to INFO or finer");
+        }
         // Checked here rather than at launch: the host would otherwise log in, rotating its
         // refresh token, before a wrong path surfaced.
         for (MockClientConfig base : bases) {
@@ -542,7 +557,7 @@ public final class MultiPeerSession implements AutoCloseable {
      * traffic, and for a deliberate crash the launch, the crash and the survivors playing on.
      * Returns normally only when every peer's adapter reports every other peer connected and every
      * game has received every other game's datagrams, and, for a deliberate crash, when its stages
-     * have passed too.
+     * have passed too. Last, each peer's logged path is checked ({@link #finalPaths()}).
      *
      * @throws CheckpointFailure naming the peer and the stage, if any checkpoint does not pass
      * @throws InterruptedException if any bounded wait is interrupted
@@ -558,6 +573,7 @@ public final class MultiPeerSession implements AutoCloseable {
             // concurrent close() either detaches it or runs first and leaves it unattached.
             if (!closed) {
                 traffic.attach();
+                transitions.attach();
             }
         }
         deadline = System.nanoTime() + SESSION_DEADLINE.toNanos();
@@ -608,6 +624,13 @@ public final class MultiPeerSession implements AutoCloseable {
         if (crashingPeer != NO_CRASH) {
             awaitDeliberateCrash();
         }
+        Optional<Map<String, List<ClientState>>> after = finalPaths();
+        if (after.isPresent()) {
+            transitions.verifySession(peers, after.get());
+        } else {
+            LOG.info(
+                    "session: the host launches on a timer, so the caller checks each peer's path");
+        }
     }
 
     /**
@@ -629,6 +652,40 @@ public final class MultiPeerSession implements AutoCloseable {
     }
 
     /**
+     * The states each peer's path adds after its role by the end of {@link #run()} (WBS-4.2.6), by
+     * label, or empty when only the caller can know them.
+     *
+     * <p>With auto-launch off, nobody moves after bring-up. A deliberate crash ends with the host
+     * PLAYING and the crashed joiner TERMINATED: {@code awaitDeliberateCrash} has waited for both.
+     * A host on a timer without a planned crash may launch at any point after bring-up, even during
+     * the traffic check, so no path can be fixed in advance and the caller checks once it knows
+     * where the host is, through {@link #transitions()}.
+     *
+     * @return the added states by label, or empty to leave the check to the caller
+     */
+    Optional<Map<String, List<ClientState>>> finalPaths() {
+        if (crashingPeer != NO_CRASH) {
+            return Optional.of(
+                    Map.of(
+                            labelFor(0),
+                            List.of(ClientState.PLAYING),
+                            labelFor(crashingPeer),
+                            List.of(ClientState.TERMINATED)));
+        }
+        return hostLaunchDelaySeconds == LAUNCH_DISABLED ? Optional.of(Map.of()) : Optional.empty();
+    }
+
+    /**
+     * Each peer's logged path, for a caller whose scenario goes on after {@link #run()} returns
+     * (WBS-4.2.6). It keeps recording until {@link #close()}.
+     *
+     * @return the evidence the session's last stage reads
+     */
+    TransitionEvidence transitions() {
+        return transitions;
+    }
+
+    /**
      * Shuts every peer down, joiners first in reverse join order and the host last, and waits for
      * each teardown. One throwing shutdown never stops the others, so every adapter and game gets
      * its teardown. Idempotent; a {@link #run()} still in progress on another thread starts no
@@ -644,6 +701,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         closed = true;
         traffic.detach();
+        transitions.detach();
         for (int i = peers.size() - 1; i >= 0; i--) {
             SessionPeer peer = peers.get(i);
             try (MDC.MDCCloseable ignored = peer.labelled()) {

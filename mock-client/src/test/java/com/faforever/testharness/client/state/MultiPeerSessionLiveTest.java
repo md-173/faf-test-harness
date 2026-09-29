@@ -359,9 +359,11 @@ final class MultiPeerSessionLiveTest {
      * joiner and each earlier joiner {@code offer=false} for it. A joiner hears about the host
      * through {@code JoinGame}, never {@code ConnectToPeer}.
      *
-     * <p>Compared as sets, so a repeated frame does not fail the check. Checked after the mesh,
-     * which cannot complete before every frame has been dispatched: each peer's recorder is
-     * registered before its lifecycle's own handler, so it sees a frame before the adapter does.
+     * <p>Compared as sets: a repeated frame fails the session's own {@code transitions} stage
+     * instead (WBS-4.2.6), which holds each client to one {@code peer connect} line per link.
+     * Checked after the mesh, which cannot complete before every frame has been dispatched: each
+     * peer's recorder is registered before its lifecycle's own handler, so it sees a frame before
+     * the adapter does.
      *
      * @param peers every peer, host first and joiners in join order
      */
