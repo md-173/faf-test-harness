@@ -2230,33 +2230,42 @@ so a local run reports its local game and the seeded test accounts there.
 - About ten image pulls from Docker Hub per run. Docker Hub's rate limit is not
   applied to GitHub-hosted runners pulling public images, but a self-hosted
   runner is always subject to it, at 100 pulls per 6 hours per address when
-  anonymous, so log it in or mirror the images.
+  anonymous. Logging the host's Docker in covers only the kind node image,
+  since every other image is pulled inside the node: give the node its own
+  credentials, as kind's private registries guide does with a `config.json`
+  mounted at `/var/lib/kubelet/config.json`, or a registry mirror.
 - A machine to itself. The job binds ports 8080, 4444 and 4445 and names its
   cluster `faf-local-stack`, so two runs on one machine collide. Every job on a
   GitHub-hosted runner gets a fresh machine.
 
 **Adapting the job above.** Keep its checkout, JDK, jar download and check,
-adapter build, session, token-removal and upload steps. Drop the token-writing
-step, the `faf-uid` step and the `concurrency` group, since runs share no
-accounts. Between the adapter build and the session, add
+adapter build, session, token-removal and upload steps, and set `runs-on` to
+`ubuntu-24.04`, the image `local-stack.yml` pins and was measured on. Drop the
+token-writing step, the `faf-uid` step and the `concurrency` group, since runs
+share no accounts. Between the adapter build and the session, add
 `local-stack.yml`'s steps from "Install the pinned stack tools" to "Mint one
 token per peer from the local Hydra", with a copy of
-`scripts/ci/mint-local-token.sh` at the same path and the `env` entries those
-steps read: the pins, `CLUSTER`, `LOCAL_ACCOUNT_IDS`, `PEERS` and
-`STACK_LOGS`. Add its "Tear the stack down" step after the token removal. In
-the session step, set `--lobby-websocket-url=ws://ws.faforever.localhost:8080`,
-use `--unique-id=placeholder` in place of `--uid-binary-path`, and pass the
-minted `"$TOKENS/1.txt"` and `"$TOKENS/2.txt"` in place of `host.txt` and
+`scripts/ci/mint-local-token.sh` at the same path, committed with its execute
+bit, and the `env` entries those steps read: the pins, `CLUSTER`,
+`LOCAL_ACCOUNT_IDS`, `PEERS` and `STACK_LOGS`. Add its "Tear the stack down"
+step after the token removal. In the session step, set
+`--lobby-websocket-url=ws://ws.faforever.localhost:8080`, use
+`--unique-id=placeholder` in place of `--uid-binary-path`, and pass the minted
+`"$TOKENS/1.txt"` and `"$TOKENS/2.txt"` in place of `host.txt` and
 `joiner.txt`. The added steps' timeouts come to 47 minutes, so raise the job's
-cap by that much to keep it above every step timeout. `local-stack.yml`'s
-report and log-collection steps are optional.
+cap by that much to keep it above every step timeout. Its "Collect the stack's
+logs" step can come too, before the teardown, with `stack-logs/` added to the
+upload's `path`; its report step cannot, since it reads that job's own step
+ids. The pins age as FAF moves on, so take this repository's values whenever
+`local-stack.yml` changes them.
 
-*Provenance. On 2026-09-29 the paragraph above was applied to the job above
-literally, one edit per sentence, and the result, which passes `actionlint`
-with `shellcheck`, was run on WSL2 Linux the way the job above was: each
-`run:` step in order under `bash -e`, with `GITHUB_ENV` and `GITHUB_PATH`
-carried between them. It downloaded the published 0.4.0 jars and brought the
-stack up at the pinned commit, and the session exited `0` in 12 s, logging
+*Provenance. On 2026-09-30 the paragraph above, without the optional log
+collection, was applied to the job above literally, one edit per sentence, and
+the result, which passes `actionlint` with `shellcheck`, was run on WSL2 Linux
+the way the job above was: each `run:` step in order under `bash -e`, with
+`GITHUB_ENV` and `GITHUB_PATH` carried between them. It downloaded the
+published 0.4.0 jars and brought the stack up at the pinned commit, and the
+session exited `0` in 10 s, logging
 `session: PASS - 2 peers, full mesh and two-way game traffic, nothing left
 running`. The token files were removed, and the teardown deleted the cluster
 and found nothing left running. None of the job's `uses:` steps ran: the
