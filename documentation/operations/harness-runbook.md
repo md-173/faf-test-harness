@@ -318,9 +318,9 @@ harness, `[ICEAdapter]` = the real jar's own output):
 [MockClient] ICE adapter terminated; exit code <code>
 ```
 
-On Linux the launch line starts with `setpriv --pdeathsig TERM --` before
-`<java>` ([§1](#1-prerequisites)): if the harness JVM is killed, the kernel
-then sends the adapter SIGTERM.
+On Linux this launch line, and the mock-game one below, start with
+`setpriv --pdeathsig TERM --` ([§1](#1-prerequisites)): if the harness JVM is
+killed, the kernel then sends each child SIGTERM.
 
 `JSON-RPC peer attached` is the line that says this adapter can serve a game. If
 it is missing, the run failed (`70`, `RUNTIME`) rather than leaving you an

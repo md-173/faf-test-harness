@@ -7,7 +7,8 @@ package com.faforever.testharness.client.process;
  * without a stack trace — see the acceptance criteria of WBS-3.1.2.2 ("Missing or invalid binary
  * path produces a clear error and non-zero exit, not a stack trace"). The two cases it covers are
  * "binary not found" (the configured path does not point at a regular file) and "binary failed to
- * start" ({@link ProcessBuilder#start()} raised an {@link java.io.IOException}).
+ * start" (a native binary without an exec bit, or {@link ProcessBuilder#start()} raised an {@link
+ * java.io.IOException}).
  */
 public final class IceAdapterLaunchException extends Exception {
 

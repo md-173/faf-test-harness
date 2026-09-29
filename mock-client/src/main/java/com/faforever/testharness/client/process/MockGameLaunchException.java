@@ -6,8 +6,9 @@ package com.faforever.testharness.client.process;
  * <p>Carries a clear, single-line {@linkplain #getMessage() message} suitable for logging at ERROR
  * without a stack trace — see the acceptance criteria of WBS-3.1.2.3 ("Missing or invalid binary
  * path produces a clear, single-line error and non-zero exit"). The two cases it covers are "binary
- * not found" (the configured path does not point at a regular file) and "binary failed to start"
- * ({@link ProcessBuilder#start()} raised an {@link java.io.IOException}).
+ * not found" (the configured path does not point at a regular file) and "binary failed to start" (a
+ * native binary without an exec bit, or {@link ProcessBuilder#start()} raised an {@link
+ * java.io.IOException}).
  */
 public final class MockGameLaunchException extends Exception {
 

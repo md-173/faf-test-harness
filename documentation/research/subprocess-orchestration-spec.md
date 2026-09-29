@@ -213,7 +213,7 @@ The example below mirrors json-rpc-spec §9 phases A–B.
        lobbyUdpPort ← free UDP port
    (See §3 — bind-and-release pattern.)
 
-2. ProcessBuilder argv =
+2. ProcessBuilder argv =  // on Linux, after the §7.3 setpriv prefix
    [ javaBin,
      "-Dlogback.configurationFile=<console-only config>",  // headless: bypass JavaFX appender
      "-jar", iceAdapterJar,
@@ -302,7 +302,7 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
 ### 2.8 `mock-game` argv
 
 ```text
-[ mockGameBin,
+[ mockGameBin,                    // on Linux, after the §7.3 setpriv prefix
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
   "--lobby-port",  lobbyUdpPort,  // UDP, fallback only; CreateLobby's port wins
   "--player-id",   welcome.me.id,
@@ -508,7 +508,7 @@ copy does not affect internal cleanup or other listeners.
 | §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
 | §7.2 forceful teardown | `terminate([grace])`: SIGTERM, wait, SIGKILL, through the process handle so the pipes stay open, then up to 1 s for the output to reach the log (#361) |
 | §7.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
-| §7.3 layer 2 parent-death signal | `start()` runs `ProcessBuilder.start()` on `subprocess-spawner`, one thread that lives as long as the JVM, so a `ParentDeathSignal` prefix ties each child to a thread that outlives it |
+| §7.3 layer 2 parent-death signal | `start()` runs `ProcessBuilder.start()` on `subprocess-spawner`, one thread that lives as long as the JVM, so a `ParentDeathSignal` prefix signals a child only when the JVM itself ends |
 
 ### 5.3 Launcher pattern (ICE adapter and mock-game)
 
@@ -647,8 +647,9 @@ signal and `exec`s the child, so the PID the harness tracks is still the
 child's. SIGTERM is also the first signal `terminate()` sends (§7.2): the
 adapter's JVM exits on it, and mock-game runs its own teardown.
 `ParentDeathSignal` decides once per JVM whether the prefix works, by running
-it. On anything but Linux, or on a Linux host whose `setpriv` is BusyBox's or
-predates `--pdeathsig` (added in util-linux 2.33), the prefix is empty and the
+it. On anything but Linux the prefix is empty. On a Linux host without a
+`setpriv` that can set the signal (none on `PATH`, BusyBox's, or one from
+util-linux before 2.33, which added `--pdeathsig`) it is empty too, and the
 harness logs one INFO line saying so.
 
 The kernel sends the signal when the **thread** that started the child exits,
@@ -680,7 +681,8 @@ pinned 3.3.14 adapter (raw monotonic clock), after a `kill -9` of the client in
 `HOSTING` and in `PLAYING` the adapter was gone within 0.33 s and the game
 within 0.04 s. Not covered:
 
-- other operating systems, where a killed JVM leaves both children running;
+- other operating systems, and a Linux host without a usable `setpriv`, where
+  a killed JVM leaves both children running;
 - a kill between a child's spawn and `setpriv` setting the signal, a window of
   about a millisecond: the kernel sends nothing if the parent thread is
   already gone when the signal is set;
@@ -689,9 +691,11 @@ within 0.04 s. Not covered:
   file-capability binary, or on a security module's secure exec;
 - an executable file that still cannot run, such as a script whose
   interpreter is missing. Behind `setpriv` it starts, then exits `126` or
-  `127`, so it reads as a child that died (a game makes `run` exit `71`)
-  rather than one that never started (`70`). A native binary without an exec
-  bit is refused before the start, so it still fails as `70`;
+  `127`, so it reads as a child that died rather than one that never
+  started: a game makes `run` exit `71`, not `70`, and an adapter makes
+  `ice-smoke` report `ADAPTER_EXITED`, not `LAUNCH_FAILED`. A native binary
+  without an exec bit is refused before the start, so it still counts as
+  never started;
 - a JVM that outlives its CI step: a cancelled or timed-out GitHub Actions
   step signals only the step's shell, so the JVM and its children run on
   until the runner's own cleanup.
@@ -739,7 +743,7 @@ twice, plus up to 1 s for the output) rather than their sum.
 
 | Symptom | Source | Detection | Response |
 |---|---|---|---|
-| Adapter binary missing | wrong path | the launcher's regular-file check, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
+| Adapter binary missing, or a native one not executable | wrong path, or a lost exec bit | the launcher's regular-file and exec checks, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter exits immediately, with `0` either way | bad CLI args (§2.6), GPGNet port in use (`BindException`, then its own shutdown NPEs on the unstarted RPC server) | `onExit()` before the RPC connect completes (§2.7) | Log args, abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter's RPC port already held by another process | a stale process, or a port collision | the adapter logs `Could not start RPC server.`, its listener thread dies and it stays up serving GPGNet only, so the connect succeeds against whatever holds the port and the first setup call times out after 5 s | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |

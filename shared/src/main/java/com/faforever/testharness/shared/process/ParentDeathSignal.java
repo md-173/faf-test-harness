@@ -55,9 +55,9 @@ public final class ParentDeathSignal {
 
     /**
      * Whether {@code candidate} can set the signal here, found by running it in front of its own
-     * setpriv's {@code --version}. A missing setpriv, one that predates {@code --pdeathsig}
-     * (util-linux before 2.33, BusyBox), one that cannot set it, and one that hangs all answer
-     * {@code false}. Never throws: {@link Holder} runs this during class initialisation, where an
+     * setpriv's {@code --version}. A missing setpriv, one without {@code --pdeathsig} (util-linux
+     * before 2.33, or BusyBox's), one that cannot set it, and one that hangs all answer {@code
+     * false}. Never throws: {@link Holder} runs this during class initialisation, where an
      * exception would fail every later launch.
      *
      * @param candidate the prefix to try; its first element is the setpriv to run

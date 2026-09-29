@@ -200,6 +200,7 @@ outside anyone's control, so a red run is a finding, not a reason to block a mer
 | | |
 | :--- | :--- |
 | Java | 21 or newer to run the jars. To build, a JDK 21 must be installed and auto-detectable: there is no foojay resolver, so Gradle cannot fetch a missing toolchain. The JDK running Gradle itself may be newer. |
+| `setpriv` | Linux only: util-linux 2.33 or later. Without it a `kill -9` of the harness leaves its adapter and game running, and `./gradlew check` fails its parent-death tests. Windows and macOS need nothing. See [runbook §1](documentation/operations/harness-runbook.md#1-prerequisites). |
 | `faf-ice-adapter` | 3.3.14, pinned in [`gradle.properties`](gradle.properties). It is the current `java-ice-adapter` release and the version `downlords-faf-client` pins, so the harness tracks what the real client ships. |
 | `faf-uid` | Required for any live session: the lobby's policy server rejects a placeholder `unique_id`, and login ends in `{"command":"invalid"}` without it. CI provisions `v4.0.7`, which is also what `downlords-faf-client` pins. |
 | Lobby | The test lobby `ws.faforever.xyz`, publicly reachable. Never the production lobby. |

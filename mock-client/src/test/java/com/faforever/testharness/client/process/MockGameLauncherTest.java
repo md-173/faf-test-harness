@@ -121,6 +121,19 @@ final class MockGameLauncherTest {
     }
 
     /**
+     * A bare name runs the file {@code resolveBinary} found in the working directory (#378): behind
+     * setpriv it would otherwise be looked up on {@code PATH}, and a miss would read as a crash.
+     */
+    @Test
+    void bareNativeBinaryNameLaunchesByItsAbsolutePath() throws Exception {
+        Path binary = Path.of("mock-game");
+        List<String> argv = new MockGameLauncher(configWithBinary(binary)).buildArgv(binary);
+
+        assertEquals(
+                binary.toAbsolutePath().toString(), argv.get(ParentDeathSignal.prefix().size()));
+    }
+
+    /**
      * Refused before the start (#378): behind the setpriv prefix a file that cannot be executed
      * would still start setpriv, which exits 126, and the game would count as crashed ({@code 71})
      * instead of never coming up ({@code 70}).

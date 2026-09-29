@@ -12,6 +12,8 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -27,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 
 /** Exercises {@link SubprocessManager#start} and the read-only accessors it sets up. */
@@ -289,6 +292,18 @@ class SubprocessManagerStartTest {
                 m.terminate();
             }
         }
+    }
+
+    /**
+     * A start that fails throws the {@link IOException} itself, as {@link ProcessBuilder#start()}
+     * does, although it ran on the spawner thread (#378): both launchers catch that type to report
+     * a binary that failed to start. Off Linux, or without setpriv, it is how such a binary fails.
+     */
+    @Test
+    void failedStartThrowsTheIOExceptionUnwrapped(@TempDir final Path dir) {
+        ProcessBuilder pb = new ProcessBuilder(dir.resolve("missing").toString());
+
+        assertThrows(IOException.class, () -> SubprocessManager.start(pb, TAG, GRACE));
     }
 
     /**
