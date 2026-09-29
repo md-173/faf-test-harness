@@ -13,6 +13,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import com.faforever.testharness.shared.process.ParentDeathSignal;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -93,9 +94,12 @@ final class IceAdapterLauncherTest {
     void nativeBinaryArgvRunsBinaryDirectly() throws Exception {
         Path binary = createStub("adapter", "#!/bin/sh\nexit 0\n");
         List<String> argv = new IceAdapterLauncher(configWithBinary(binary)).buildArgv(binary);
+        // Empty off Linux: the binary is then argv[0].
+        int p = ParentDeathSignal.prefix().size();
 
-        assertEquals(binary.toString(), argv.get(0), "native binary should be argv[0]");
-        assertEquals("--id", argv.get(1), "--id must immediately follow the binary");
+        assertEquals(ParentDeathSignal.prefix(), argv.subList(0, p), "the prefix comes first");
+        assertEquals(binary.toString(), argv.get(p), "the native binary should follow the prefix");
+        assertEquals("--id", argv.get(p + 1), "--id must immediately follow the binary");
         assertFalse(
                 argv.stream().anyMatch(a -> a.startsWith("-Dlogback")),
                 "a native binary takes no JVM flags: " + argv);
@@ -105,16 +109,46 @@ final class IceAdapterLauncherTest {
     void jarBinaryArgvIsLaunchedViaJavaJar() throws Exception {
         Path jar = createStub("adapter.jar", "");
         List<String> argv = new IceAdapterLauncher(configWithBinary(jar)).buildArgv(jar);
+        int p = ParentDeathSignal.prefix().size();
 
-        assertTrue(argv.get(0).contains("java"), "a .jar must run via the java binary: " + argv);
+        assertEquals(ParentDeathSignal.prefix(), argv.subList(0, p), "the prefix comes first");
+        assertTrue(argv.get(p).contains("java"), "a .jar must run via the java binary: " + argv);
         int jarFlag = argv.indexOf("-jar");
-        assertTrue(jarFlag > 0, "java must be invoked with -jar: " + argv);
+        assertTrue(jarFlag > p, "java must be invoked with -jar: " + argv);
         assertEquals(jar.toString(), argv.get(jarFlag + 1), "the jar path must follow -jar");
         assertEquals("--id", argv.get(jarFlag + 2), "--id must follow the jar path");
         assertTrue(
-                argv.subList(0, jarFlag).stream()
+                argv.subList(p + 1, jarFlag).stream()
                         .anyMatch(a -> a.startsWith("-Dlogback.configurationFile=")),
-                "the headless logback override must precede -jar so it reaches the JVM: " + argv);
+                "the headless logback override must sit between java and -jar: " + argv);
+    }
+
+    /**
+     * Refused before the start (#378): behind the setpriv prefix a file that cannot be executed
+     * would still start setpriv, which exits 126, and read as an adapter that died.
+     */
+    @Test
+    void nonExecutableBinaryFailsToStart() throws Exception {
+        Path binary = createStub("adapter", "#!/bin/sh\nexit 0\n");
+        assertTrue(binary.toFile().setExecutable(false, false), "could not clear the exec bits");
+        IceAdapterLauncher launcher = new IceAdapterLauncher(configWithBinary(binary));
+
+        IceAdapterLaunchException ex =
+                assertThrows(IceAdapterLaunchException.class, launcher::start);
+
+        assertTrue(
+                ex.getMessage().contains("failed to start")
+                        && ex.getMessage().contains("not executable"),
+                "got: " + ex.getMessage());
+    }
+
+    /** A jar runs through java, so it needs no exec bit; the downloaded adapter jar has none. */
+    @Test
+    void jarWithoutExecBitIsAccepted() throws Exception {
+        Path jar = createStub("adapter.jar", "");
+        assertTrue(jar.toFile().setExecutable(false, false), "could not clear the exec bits");
+
+        assertEquals(jar, new IceAdapterLauncher(configWithBinary(jar)).resolveBinary());
     }
 
     @Test

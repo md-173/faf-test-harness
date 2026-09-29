@@ -13,6 +13,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
+import com.faforever.testharness.shared.process.ParentDeathSignal;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -95,21 +96,47 @@ final class MockGameLauncherTest {
     void nativeBinaryArgvRunsBinaryDirectly() throws Exception {
         Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
         List<String> argv = new MockGameLauncher(configWithBinary(binary)).buildArgv(binary);
+        // Empty off Linux: the binary is then argv[0].
+        int p = ParentDeathSignal.prefix().size();
 
-        assertEquals(binary.toString(), argv.get(0), "native binary should be argv[0]");
+        assertEquals(ParentDeathSignal.prefix(), argv.subList(0, p), "the prefix comes first");
+        assertEquals(binary.toString(), argv.get(p), "the native binary should follow the prefix");
         assertEquals(
-                "--gpgnet-port", argv.get(1), "--gpgnet-port must immediately follow the binary");
+                "--gpgnet-port",
+                argv.get(p + 1),
+                "--gpgnet-port must immediately follow the binary");
     }
 
     @Test
     void jarBinaryArgvIsLaunchedViaJavaJar() throws Exception {
         Path jar = createStub("mock-game.jar", "");
         List<String> argv = new MockGameLauncher(configWithBinary(jar)).buildArgv(jar);
+        int p = ParentDeathSignal.prefix().size();
 
-        assertTrue(argv.get(0).contains("java"), "a .jar must run via the java binary: " + argv);
-        assertEquals("-jar", argv.get(1), "java must be invoked with -jar");
-        assertEquals(jar.toString(), argv.get(2), "the jar path must follow -jar");
-        assertEquals("--gpgnet-port", argv.get(3), "--gpgnet-port must follow the jar path");
+        assertEquals(ParentDeathSignal.prefix(), argv.subList(0, p), "the prefix comes first");
+        assertTrue(argv.get(p).contains("java"), "a .jar must run via the java binary: " + argv);
+        assertEquals("-jar", argv.get(p + 1), "java must be invoked with -jar");
+        assertEquals(jar.toString(), argv.get(p + 2), "the jar path must follow -jar");
+        assertEquals("--gpgnet-port", argv.get(p + 3), "--gpgnet-port must follow the jar path");
+    }
+
+    /**
+     * Refused before the start (#378): behind the setpriv prefix a file that cannot be executed
+     * would still start setpriv, which exits 126, and the game would count as crashed ({@code 71})
+     * instead of never coming up ({@code 70}).
+     */
+    @Test
+    void nonExecutableBinaryFailsToStart() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        assertTrue(binary.toFile().setExecutable(false, false), "could not clear the exec bits");
+        MockGameLauncher launcher = new MockGameLauncher(configWithBinary(binary));
+
+        MockGameLaunchException ex = assertThrows(MockGameLaunchException.class, launcher::start);
+
+        assertTrue(
+                ex.getMessage().contains("failed to start")
+                        && ex.getMessage().contains("not executable"),
+                "got: " + ex.getMessage());
     }
 
     @Test
