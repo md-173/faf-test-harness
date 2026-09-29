@@ -270,6 +270,28 @@ class SubprocessManagerStartTest {
     }
 
     /**
+     * The child is started on the spawner thread and the caller waits for it (#378). That wait must
+     * not give up on an interrupt, as {@link ProcessBuilder#start()} never did: an abandoned wait
+     * would leave a started child that nothing manages. The caller keeps its flag.
+     */
+    @Test
+    void startFromAnInterruptedThreadStillStartsAndKeepsTheFlag() throws Exception {
+        SubprocessManager m = null;
+        Thread.currentThread().interrupt();
+        try {
+            m = SubprocessManager.start(TestSupport.testChild("sleep", "60000"), TAG, GRACE);
+            assertTrue(Thread.currentThread().isInterrupted(), "the interrupt flag was lost");
+            assertTrue(m.isAlive(), "the child should be running");
+        } finally {
+            // Cleared before terminate(), whose waits return at once while it is set.
+            Thread.interrupted();
+            if (m != null) {
+                m.terminate();
+            }
+        }
+    }
+
+    /**
      * Waits for {@code m} to leave {@link SubprocessRegistry}, failing if it has not within {@link
      * #POLL_BUDGET_MS}.
      *
