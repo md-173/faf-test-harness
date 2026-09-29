@@ -186,16 +186,23 @@ public class MockGameLauncher {
 
     /**
      * Resolves the configured mock-game binary path and verifies it points at an existing regular
-     * file.
+     * file that can be started ({@link BinaryLaunchCommand#canExecute}).
      *
      * @return the configured binary path
-     * @throws MockGameLaunchException if the path is missing or not a regular file
+     * @throws MockGameLaunchException if the path is missing, not a regular file, or a native
+     *     binary this process may not execute
      */
     Path resolveBinary() throws MockGameLaunchException {
         Path binary = settings.binaryPath();
         if (!Files.isRegularFile(binary)) {
             throw new MockGameLaunchException(
                     "mock-game binary not found: " + binary.toAbsolutePath());
+        }
+        if (!BinaryLaunchCommand.canExecute(binary)) {
+            throw new MockGameLaunchException(
+                    "mock-game binary failed to start: "
+                            + binary.toAbsolutePath()
+                            + " is not executable");
         }
         return binary;
     }

@@ -217,16 +217,23 @@ public class IceAdapterLauncher {
 
     /**
      * Resolves the configured adapter binary path and verifies it points at an existing regular
-     * file.
+     * file that can be started ({@link BinaryLaunchCommand#canExecute}).
      *
      * @return the configured binary path
-     * @throws IceAdapterLaunchException if the path is missing or not a regular file
+     * @throws IceAdapterLaunchException if the path is missing, not a regular file, or a native
+     *     binary this process may not execute
      */
     Path resolveBinary() throws IceAdapterLaunchException {
         Path binary = settings.binaryPath();
         if (!Files.isRegularFile(binary)) {
             throw new IceAdapterLaunchException(
                     "faf-ice-adapter binary not found: " + binary.toAbsolutePath());
+        }
+        if (!BinaryLaunchCommand.canExecute(binary)) {
+            throw new IceAdapterLaunchException(
+                    "faf-ice-adapter binary failed to start: "
+                            + binary.toAbsolutePath()
+                            + " is not executable");
         }
         return binary;
     }
@@ -261,8 +268,8 @@ public class IceAdapterLauncher {
      */
     List<String> buildArgv(final Path binary, final LaunchIdentity identity) {
         // Spec §2.2: JAR → java -jar on the same JRE; native binary → exec directly. The headless
-        // logback override is handed to commandPrefix so it lands right after the `java` token —
-        // robust against a future setpriv/setsid launch prefix (spec §7.3) that shifts argv[0].
+        // logback override is handed to commandPrefix so it lands right after the `java` token and
+        // reaches the JVM, not the setpriv launch prefix (spec §7.3) in front of it.
         List<String> jvmArgs =
                 BinaryLaunchCommand.isJar(binary)
                         ? List.of("-Dlogback.configurationFile=" + headlessLogbackPath())
