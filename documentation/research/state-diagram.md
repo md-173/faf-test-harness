@@ -31,6 +31,9 @@ stateDiagram-v2
         IDLE --> LOBBY : CreateLobby message from server / Send GameState(Lobby) message
         LOBBY --> HOSTING : HostGame message from server
         LOBBY --> JOINING : JoinGame message from server
+        LOBBY --> LOBBY : DisconnectFromPeer (a peer left) / Send Disconnected
+        HOSTING --> HOSTING : DisconnectFromPeer (a peer left) / Send Disconnected, then ClearSlot
+        JOINING --> JOINING : DisconnectFromPeer (a peer left) / Send Disconnected
 
         state "HOSTING" as HOSTING
         HOSTING : Configure game with commands
@@ -48,8 +51,7 @@ stateDiagram-v2
 
     LIVE --> LIVE : Peer desynchronises [desyncs <= 20] / Send Desync message
     LIVE --> ENDED : Game finished / Send GameResult (one per army), JsonStats, GameEnded, then GameState(Ended)
-    SETUP --> ENDED : DisconnectFromPeer message from server (a peer left)
-    LIVE --> ENDED : DisconnectFromPeer message from server (a peer left)
+    LIVE --> LIVE : DisconnectFromPeer (a peer left) / Ignored
     ENDED --> [*]
 
     # Error conditions
@@ -66,10 +68,15 @@ Losing the connection to the GPGNet server (the ICE adapter) causes the game to 
 After this occurs, the client initiates tear-down of the game process, ensuring any remaining connections are closed and the game binary is killed.
 That local connection is the only one whose loss the game acts on. An ICE adapter crash reaches it as a lost connection, but ICE negotiation timeouts, peer hangs, and a lost internet signal do not reach it at all: the adapter and the client are the components that observe those.
 
-A peer leaving is not a failure (WBS-4.3.4).
-While the game is still in the lobby, the lobby server tells the remaining players, the client relays that to its adapter, and the adapter forwards `DisconnectFromPeer` to the game, which ends normally through ENDED and exits 0.
-The same edge is drawn from LIVE because the game's own machine accepts it there too, and it stays reachable in one narrow window: the game enters LIVE when it sends `GameState(Launching)`, and its client only reaches `PLAYING` once the adapter relays that frame back, so a notice arriving inside that round trip is still relayed and still ends the game.
-Outside that window an orchestrated session does not produce one: once the client is `PLAYING` it stops relaying the notice, and once the host has launched the lobby server stops sending it, so the game plays on to the end of its own match.
+A peer leaving is not a failure (WBS-4.3.4), and it does not end the game (WBS-4.3.6).
+While the game is still in the lobby, the lobby server tells the remaining players, the client relays that to its adapter, and the adapter forwards `DisconnectFromPeer` to the game.
+The game answers the way FA's lobby does, with `Disconnected` naming the player and, on the host, `ClearSlot` for that player's slot, stops sending to that peer and plays on, whoever left.
+A host whose last joiner left keeps its lobby open, as it did before anyone joined.
+The lobby server tells nobody when the host itself leaves normally, because it ends its own game before it would pass the notice on, so the joiners' games wait in their lobby until they are torn down.
+FA's matchmaker lobby answers with `DisconnectedPeer` instead, which the mock game does not send.
+Once the game is LIVE the frame is ignored, since a running FA game processes no GPGNet input.
+It can still arrive there in one narrow window: the game enters LIVE when it sends `GameState(Launching)`, and its client only reaches `PLAYING` once the adapter relays that frame back, so a notice arriving inside that round trip is still relayed.
+Outside that window an orchestrated session does not produce one: once the client is `PLAYING` it stops relaying the notice, and once the host has launched the lobby server stops sending it.
 
 ## Client State Machine
 

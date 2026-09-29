@@ -18,9 +18,11 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
@@ -148,8 +150,25 @@ public final class MockGameLifecycle {
      */
     private volatile ScheduledFuture<?> matchEndFuture;
 
-    /** A record of all connected peers. */
+    /**
+     * Every peer this game was told about, in arrival order. Never pruned, because the host numbers
+     * armies by arrival ({@link #sendPlayerOptions}) and {@link #gameEnds} reports every army, so a
+     * peer that left keeps its number (WBS-4.3.6). {@link #present} says who is still here.
+     */
     private List<Peer> peers;
+
+    /**
+     * The ids of the peers still in this game (WBS-4.3.6): added where {@link #peers} is, removed
+     * when a {@code DisconnectFromPeer} names one. Touched only by FSM actions, under its monitor.
+     */
+    private final Set<Integer> present = new HashSet<>();
+
+    /**
+     * The {@code StartSpot} this game gave each player while hosting, which is the slot a
+     * departure's {@code ClearSlot} names (WBS-4.3.6). Stays empty on a joiner, which sends no
+     * {@code PlayerOption}. Touched only by FSM actions, under its monitor.
+     */
+    private final Map<Integer, Integer> slots = new HashMap<>();
 
     /**
      * Status of the lifecycle, to be mapped to a process exit code by the bootstrap (WBS-3.2.5.1).
@@ -526,16 +545,8 @@ public final class MockGameLifecycle {
             GameState.JOINING,
             GameState.LIVE
         };
+        registerPeerDepartureTransitions();
         for (var s : fromStates) {
-            // WBS-4.3.4: the action is what makes this exit report success. Registered without one
-            // the transition left `status` on its initial FAILED, so an orderly peer departure
-            // exited 70 and the surviving client classified it as a crash.
-            states.get(s)
-                    .registerTransition(
-                            PeerDisconnected.class,
-                            states.get(GameState.ENDED),
-                            this::peerDisconnected,
-                            null);
             // Go to ENDED state when the server disconnects and it wasn't due to our shutdown
             // sequence.
             // Also set the correct status.
@@ -599,6 +610,46 @@ public final class MockGameLifecycle {
         // registers a callback on stateReached(LOBBY), so it is wiring, not I/O, and it arms
         // correctly whenever LOBBY is committed regardless of when start() runs.
         armLobbyTimeout();
+    }
+
+    /**
+     * Registers what a {@code DisconnectFromPeer} does in each state (WBS-4.3.4, WBS-4.3.6). The
+     * adapter forwards it with no state guard of its own, so every state but ENDED gets an edge.
+     *
+     * <ul>
+     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way FA's
+     *       lobby does and plays on without that peer. From {@code CreateLobby} until launch FA has
+     *       a lobby, and a player leaving it frees a slot rather than ending anyone's game.
+     *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreDepartureDuringMatch}): FA destroys
+     *       its lobby when the match launches, and a running game processes no GPGNet input.
+     *   <li><b>INITIALIZING and IDLE</b> end the game as a success ({@link #peerDisconnected}), as
+     *       they have since WBS-4.3.4. There is no lobby to leave yet, and nothing sends one there:
+     *       the lobby server notifies only connections already in its game.
+     * </ul>
+     *
+     * <p>Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
+     * limit. The edges are registered nowhere else, because a state's first matching edge wins.
+     */
+    private void registerPeerDepartureTransitions() {
+        for (var s : List.of(GameState.INITIALIZING, GameState.IDLE)) {
+            states.get(s)
+                    .registerTransition(
+                            PeerDisconnected.class,
+                            states.get(GameState.ENDED),
+                            this::peerDisconnected,
+                            null);
+        }
+        for (var s : List.of(GameState.LOBBY, GameState.HOSTING, GameState.JOINING)) {
+            states.get(s)
+                    .registerTransition(
+                            PeerDisconnected.class, states.get(s), this::peerLeft, null);
+        }
+        states.get(GameState.LIVE)
+                .registerTransition(
+                        PeerDisconnected.class,
+                        states.get(GameState.LIVE),
+                        this::ignoreDepartureDuringMatch,
+                        null);
     }
 
     /**
@@ -825,6 +876,7 @@ public final class MockGameLifecycle {
                     playerId,
                     address);
             peers.add(new Peer(address, login, playerId));
+            present.add(playerId);
             // The address is the host's relay socket inside our own adapter; sending to it is what
             // puts game traffic on the ICE path (WBS-4.3.2). The first peer starts the cadence.
             traffic.registerPeer(address, playerId);
@@ -887,6 +939,7 @@ public final class MockGameLifecycle {
                     address);
             peer = new Peer(address, login, playerId);
             peers.add(peer);
+            present.add(playerId);
             // As in joinGame: this peer's relay socket is where its share of our traffic goes.
             traffic.registerPeer(address, playerId);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
@@ -917,15 +970,9 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Transition action for a peer departure, registered from every non-ENDED state into ENDED
-     * (WBS-4.3.4).
-     *
-     * <p>Reached from the {@code DisconnectFromPeer} GPGNet handler, which the adapter emits only
-     * because this side's mock client relayed faf-server's departure notice. That notice is sent
-     * only while the server's game is in its LOBBY phase ({@code GameConnection.abort} guards
-     * {@code disconnect_all_peers} on it), so after launch this action is unreachable and the
-     * survivor learns of a departure from its own adapter instead. See the runbook's multi-peer
-     * limitations for that second path.
+     * Transition action for a departure notice before any lobby exists, INITIALIZING or IDLE into
+     * ENDED (WBS-4.3.4). See {@link #registerPeerDepartureTransitions()} for why nothing sends one
+     * there in practice.
      *
      * <p><b>Why this sets OK.</b> The transitions for this event predate any handler and carried no
      * action, so {@code status} kept its initial {@link ExitStatus#FAILED} and the process exited
@@ -939,14 +986,6 @@ public final class MockGameLifecycle {
      * throw targets ENDED, which is where this transition was going anyway, so it changes the exit
      * status and nothing else.
      *
-     * <p><b>Scope, and what WBS-4.3.3 inherits.</b> Any single peer loss ends the game, because the
-     * transitions are registered per state rather than per remaining peer. Correct at two players
-     * and wrong above them. The departing id is read and logged here so that the decision to play
-     * on until the last peer leaves can start from an event that already names who left. It is only
-     * a starting point, not the whole job: {@code peers} is never pruned and {@link
-     * GameTrafficSession} has no counterpart to {@code registerPeer}, so playing on means teaching
-     * both of those about departure as well.
-     *
      * <p>Runs on the GPGNet reader thread, as every inbound handler does. ENDED's entry hook closes
      * that same socket, which is safe because {@link GpgNetConnection#close()} does not join the
      * reader, and the resulting local close is filtered before it reaches the FSM.
@@ -955,22 +994,104 @@ public final class MockGameLifecycle {
      * @throws FailedTransitionException if the frame carries no usable player id.
      */
     private void peerDisconnected(Event event) throws FailedTransitionException {
+        int playerId = departingId(event);
+        LOG.info("Peer (ID: {}) disconnected, ending game", playerId);
+        status = ExitStatus.OK;
+    }
+
+    /**
+     * Stay-in-state action for a departure notice from {@code CreateLobby} until launch, in LOBBY,
+     * HOSTING or JOINING (WBS-4.3.6): answers it the way FA's lobby does and plays on without that
+     * peer. No departure ends the game here, whoever left.
+     *
+     * <p>What FA's {@code lobby.lua} does, in the same order: its {@code DisconnectFromPeer}
+     * replies {@code Disconnected} with the id for any id at all, then drops the peer, and its
+     * {@code PeerDisconnected} callback has the host clear that player's slot, which sends {@code
+     * ClearSlot}. Nothing ends: the lobby carries on with a free slot, and a host whose last joiner
+     * left keeps its lobby open, as it waited before anyone joined. A joiner is normally not even
+     * told when its host leaves, because faf-server ends its own game first and {@code abort()}
+     * then no longer fans out; told, as when the server aborts the host directly, FA's joiner only
+     * shows "Connection to host timed out". faf-server ignores both replies here: {@code
+     * handle_disconnected} only logs, and {@code clear_slot} finds nobody, because the leaver was
+     * removed before the notice went out.
+     *
+     * <p>Dropping the peer means {@link #present} forgets it and {@link GameTrafficSession} stops
+     * sending to it. {@link #peers} and {@link #slots} keep it, so army numbering and the results
+     * {@link #gameEnds} reports do not move. A notice about a peer this game never had, such as a
+     * joiner that aborted before it finished joining, gets the reply and changes nothing else.
+     *
+     * <p>A self-loop, so no entry or exit hook runs and every pending FSM timeout stays armed: a
+     * departure cannot cancel a launch that is already scheduled.
+     *
+     * @param event the {@link PeerDisconnected} event; guaranteed by registration.
+     * @throws FailedTransitionException into ENDED if the frame carries no usable player id, as
+     *     {@link #peerDisconnected} does, or if a reply cannot be sent.
+     */
+    private void peerLeft(Event event) throws FailedTransitionException {
+        int playerId = departingId(event);
+        boolean known = present.remove(playerId);
+        if (known) {
+            LOG.info(
+                    "Peer (ID: {}) disconnected, playing on; {} peers remain",
+                    playerId,
+                    present.size());
+        } else {
+            LOG.info("Peer (ID: {}) disconnected but never joined this game; ignoring", playerId);
+        }
+        try {
+            gpgnetSender.disconnected(playerId);
+            if (!known) {
+                return;
+            }
+            traffic.unregisterPeer(playerId);
+            // Only a host has slots to clear: a joiner sends no PlayerOption, so it records none.
+            Integer slot = slots.get(playerId);
+            if (slot != null) {
+                gpgnetSender.clearSlot(slot);
+            }
+        } catch (IOException e) {
+            throw recordSendFailure(e);
+        }
+    }
+
+    /**
+     * Stay-in-state action for a departure notice once the match is live (WBS-4.3.6): logged, and
+     * otherwise ignored, malformed or not. FA destroys its lobby when the match launches ({@code
+     * lobby.lua}'s {@code GameLaunched} ends with {@code lobbyComm:Destroy()}), and a running game
+     * processes no GPGNet input, so nothing answers and nothing ends.
+     *
+     * <p>Reachable in one narrow window: this game enters LIVE when it sends {@code GameState
+     * Launching}, and its client stops relaying departures only once the adapter has passed that
+     * frame back, so a notice that arrives in between still reaches this state.
+     *
+     * @param event the {@link PeerDisconnected} event; guaranteed by registration.
+     */
+    private void ignoreDepartureDuringMatch(Event event) {
+        LOG.info(
+                "ignoring DisconnectFromPeer during a live match: {}",
+                ((PeerDisconnected) event).frame().args());
+    }
+
+    /**
+     * The id a {@code DisconnectFromPeer} names.
+     *
+     * @param event the {@link PeerDisconnected} event
+     * @return the departing player's id
+     * @throws FailedTransitionException into ENDED if the frame carries no usable player id
+     */
+    private int departingId(Event event) throws FailedTransitionException {
         if (!(event instanceof PeerDisconnected)) {
             throw new AssertionError(
-                    "peerDisconnected called without a PeerDisconnected event, "
+                    "a departure action was called without a PeerDisconnected event, "
                             + "should be impossible");
         }
         GpgNetFrame frame = ((PeerDisconnected) event).frame();
-        int playerId;
         try {
-            playerId = frame.intArg(0);
+            return frame.intArg(0);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("DisconnectFromPeer frame did not have a player id argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
-
-        LOG.info("Peer (ID: {}) disconnected, ending game", playerId);
-        status = ExitStatus.OK;
     }
 
     /* Transition action for LIVE -> ENDED. */
@@ -1008,10 +1129,11 @@ public final class MockGameLifecycle {
             // wrongly or not at all. PeerResultAgreementTest derives its expectation from the
             // host's frames to catch exactly that.
             //
-            // The agreement between games depends on nobody leaving. peers is never pruned, so a
-            // departed player's army stays in the range of every game that knew them, but a player
-            // joining afterwards never hears of them and its range falls short. Playing on after a
-            // departure needs more than pruning peers, since the host does not renumber.
+            // Games play on after a lobby-phase departure (WBS-4.3.6), and peers is never pruned,
+            // so a departed player's army stays in the range of every game that knew them, and
+            // faf-server ignores a result for an army no player held at launch. A player joining
+            // afterwards never hears of them and its range falls short; nothing in the harness
+            // joins after a departure.
             for (int army = 1; army <= peers.size() + 1; army++) {
                 String result = teamForArmy(army) == TEAMS[0] ? "victory" : "defeat";
                 gpgnetSender.gameResult(army, result, SCORES.get(result));
@@ -1164,6 +1286,7 @@ public final class MockGameLifecycle {
         // Players assigned army number (and start spot, faction, and color) in arrival order, with
         // the host being first.
         int army = peers.size() + 1;
+        slots.put(playerId, army);
         gpgnetSender.playerOption(playerId, "Army", army);
         gpgnetSender.playerOption(playerId, "Team", teamForArmy(army));
         gpgnetSender.playerOption(playerId, "StartSpot", army);
