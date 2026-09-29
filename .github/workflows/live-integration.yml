@@ -168,6 +168,9 @@ jobs:
       # (session-delay, session-drop, session-crash), since a session appends to any log it finds
       # there.
       WORK: ${{ github.workspace }}/session-run
+      # The lobby every session in this job logs into: FAF's shared test environment.
+      # scripts/ci/run-session.sh names none of its own, and local-stack.yml sets a local one.
+      LOBBY_URL: wss://ws.faforever.xyz
       # One place, because both the session command (scripts/ci/run-session.sh) and the evidence
       # check below depend on it: the evidence check expects one faf-uid line and one login per
       # peer. The job and step names say "two-peer" in prose and would need editing too.
