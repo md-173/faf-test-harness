@@ -53,6 +53,15 @@ see the note at the end of that section. Running a session unattended in CI is
   Run it once per clone; it verifies the existing jar's checksum and skips the
   download on a re-run. Lands at `./faf-ice-adapter.jar`, which is the
   launcher's default `--ice-adapter-binary-path`.
+- **On Linux, `setpriv` from util-linux 2.33 or later.** The harness puts
+  `setpriv --pdeathsig TERM --` in front of every adapter and game it launches,
+  so the kernel sends them SIGTERM if the harness JVM is killed
+  ([spec §7.3](../research/subprocess-orchestration-spec.md#73-catastrophic-parent-dying)).
+  Ubuntu 24.04, which CI's `ubuntu-latest` runs, ships 2.39; RHEL 8 (2.32) and
+  Ubuntu 18.04 (2.31) are too old. Without it the harness still runs and logs
+  one INFO line saying so, but a `kill -9` leaves the adapter and game running,
+  and `./gradlew check` fails its parent-death tests. Windows and macOS need
+  nothing: there the harness launches its children as it always did.
 
 That is the complete list for the adapter-only path in §2. **Do not go
 further down this list unless you are going to use the live lobby** — the
@@ -308,6 +317,10 @@ harness, `[ICEAdapter]` = the real jar's own output):
 [MockClient] Run window of 15s elapsed; terminating ICE adapter
 [MockClient] ICE adapter terminated; exit code <code>
 ```
+
+On Linux the launch line starts with `setpriv --pdeathsig TERM --` before
+`<java>` ([§1](#1-prerequisites)): if the harness JVM is killed, the kernel
+then sends the adapter SIGTERM.
 
 `JSON-RPC peer attached` is the line that says this adapter can serve a game. If
 it is missing, the run failed (`70`, `RUNTIME`) rather than leaving you an
