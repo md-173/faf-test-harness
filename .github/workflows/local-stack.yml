@@ -210,8 +210,9 @@ jobs:
           # Without a grace period tilt ci ends at the first pod in an error state, and one transient
           # image pull failure, or a setup job that loses its first race with its database, is
           # enough: FAF's own run 35442824945 ended on a single ErrImagePull. This is the only change
-          # made to the checkout.
-          echo "ci_settings(k8s_grace_period='3m')" | tee -a Tiltfile
+          # made to the checkout, on a line of its own, since the Tiltfile has not always ended with a
+          # newline.
+          printf '\n%s\n' "ci_settings(k8s_grace_period='3m')" | tee -a Tiltfile
           tilt ci --timeout 10m -- --run faf-lobby-server --run ory-hydra-create-client-2 2>&1 |
             tee "$STACK_LOGS/tilt-ci.log"
 
@@ -257,13 +258,13 @@ jobs:
           # A forward takes a moment to bind. Wait for what the next steps use, and stop at once,
           # naming it, if its kubectl has already exited.
           wait_for() { # what, forward, expected status, curl arguments...
-            local what=$1 pid want=$3 code=none
-            pid=$(cat "$RUNNER_TEMP/forward-$2.pid")
+            local what=$1 forward=$2 want=$3 pid code=none
+            pid=$(cat "$RUNNER_TEMP/forward-$forward.pid")
             shift 3
             local deadline=$((SECONDS + 60))
             while [ "$SECONDS" -lt "$deadline" ]; do
               if ! kill -0 "$pid" 2>/dev/null; then
-                echo "::error::$what: its port-forward exited; stack-logs/forward-$2.log says why"
+                echo "::error::$what: its port-forward exited; stack-logs/forward-$forward.log says why"
                 return 1
               fi
               # curl holds a 101 until --max-time and then exits 28, having printed the status.
@@ -303,7 +304,8 @@ jobs:
           done
 
       # The same command as live-integration.yml's sessions. The session's own deadline is 420 s, plus
-      # at most 140 s of teardown, so this step's timeout is a backstop, as it is there.
+      # at most 140 s of teardown, so this step's timeout is a backstop, as it is there. Raise its 12
+      # minutes, and the job's 40, if PEERS grows (#494) or that deadline moves (#429).
       - name: Run a session against the local lobby
         id: session
         timeout-minutes: 12
@@ -352,18 +354,17 @@ jobs:
             fi
           done
           verdict=$(grep -oE 'session: (PASS|FAIL)[^"]*' "$log" 2>/dev/null | head -1 || true)
-          # After a failed session only: was the stack still sound? A forward that exited, a lobby
-          # that no longer answers, or a pod that is not running or (re)started after the stack was
-          # ready would all fail a session without any fault in the harness. Finished pods are
-          # skipped: a setup job whose first pod failed during the bring-up, inside tilt's grace
-          # period, leaves that pod Failed.
+          # After a failed session only: was the stack still sound on the session's path? The
+          # traefik forward exiting, the lobby no longer answering, or a pod that is not running or
+          # (re)started after the stack was ready would each fail a session with no fault in the
+          # harness. Hydra, its Postgres and its forward are left out: the tokens are minted by then,
+          # and the lobby already holds Hydra's keys. Finished pods are skipped too: a setup job whose
+          # first pod failed during the bring-up, inside tilt's grace period, leaves that pod Failed.
           broken=""
           if [ "$first" = session ] && [ -n "${STACK_READY_AT:-}" ]; then
-            for name in traefik hydra; do
-              if ! kill -0 "$(cat "$RUNNER_TEMP/forward-$name.pid")" 2>/dev/null; then
-                broken="$broken the $name port-forward exited;"
-              fi
-            done
+            if ! kill -0 "$(cat "$RUNNER_TEMP/forward-traefik.pid")" 2>/dev/null; then
+              broken="$broken the traefik port-forward exited;"
+            fi
             code=$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' \
               -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
               -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://ws.faforever.localhost:8080/ || true)
@@ -373,8 +374,9 @@ jobs:
             for ns in faf-apps faf-infra traefik; do
               while read -r container; do
                 broken="$broken $container is not running or restarted during the session;"
-              done < <(kubectl get pods -n "$ns" -o json | jq -r --argjson ready "$STACK_READY_AT" '
+              done < <(kubectl get pods -n "$ns" -o json --request-timeout=20s | jq -r --argjson ready "$STACK_READY_AT" '
                 .items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                | select(.metadata.name | test("^(ory-hydra-|postgres-)") | not)
                 | .metadata.name as $pod
                 | .status.containerStatuses[]?
                 | select(.state.running == null
@@ -446,6 +448,9 @@ jobs:
               echo '```text'
               echo "${verdict:-(no session verdict line)}"
               grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u || true
+              # The lobby's own reason when it refused a login: after a pin bump, the likeliest way
+              # for the stack to fail a session while every check above still passes.
+              grep -oE 'lobby authentication_failed: [^"]*' "$log" | sort -u | sed -n '1,4p'
               echo '```'
             fi
             if [ -n "$ready_s" ]; then
@@ -462,7 +467,7 @@ jobs:
             echo '```text'
             echo "$KIND_NODE_IMAGE"
             for ns in faf-apps faf-infra traefik; do
-              kubectl get pods -n "$ns" -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}' 2>/dev/null || true
+              kubectl get pods -n "$ns" --request-timeout=20s -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}' 2>/dev/null || true
             done | sort -u
             echo '```'
             echo
@@ -480,6 +485,13 @@ jobs:
             for pod in $(kubectl get pods -n "$ns" -o name 2>/dev/null); do
               kubectl logs -n "$ns" "$pod" --all-containers --prefix --timestamps \
                 > "$STACK_LOGS/$ns-${pod#pod/}.log" 2>&1 || true
+              # A container that restarted left its crash in the run before this one.
+              previous="$STACK_LOGS/$ns-${pod#pod/}.previous.log"
+              kubectl logs -n "$ns" "$pod" --all-containers --prefix --timestamps --previous \
+                > "$previous" 2>/dev/null || true
+              if [ ! -s "$previous" ]; then
+                rm -f "$previous"
+              fi
             done
           done
 
@@ -512,8 +524,10 @@ jobs:
               left="$left the $(basename "$file" .pid) port-forward;"
             fi
           done
+          # A failed delete is recorded rather than ending the step, so the checks below still name
+          # whatever it left.
           if command -v kind > /dev/null; then
-            kind delete cluster --name "$CLUSTER"
+            kind delete cluster --name "$CLUSTER" || left="$left kind could not delete the $CLUSTER cluster;"
           fi
           if [ -n "$(docker ps -aq --filter "label=io.x-k8s.kind.cluster=$CLUSTER")" ]; then
             left="$left the $CLUSTER cluster's containers;"
