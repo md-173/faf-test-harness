@@ -161,10 +161,11 @@ public final class MultiPeerSession implements AutoCloseable {
     static final Duration CRASH_AFTER_LAUNCH = Duration.ofSeconds(30);
 
     /**
-     * Budget for the survivors once the crash has landed: every offering survivor's adapter
-     * declares the loss (upstream declares it after 10 s of silence), and then the survivors'
-     * traffic advances. Shared by both, and sized with the host's match length in mind; see {@code
-     * MultiPeerSessionTest}'s timing check.
+     * Budget for the survivors once a peer has gone, by the crash here or by a departure in {@code
+     * PeerDepartureLiveTest}: every offering survivor's adapter declares the loss (upstream
+     * declares it after 10 s of silence), and then the survivors' traffic advances. Shared by both,
+     * and sized with the host's match length in mind; see {@code MultiPeerSessionTest}'s timing
+     * check.
      */
     static final Duration SURVIVOR_TIMEOUT = Duration.ofSeconds(45);
 
@@ -1090,12 +1091,7 @@ public final class MultiPeerSession implements AutoCloseable {
         SessionPeer crashed = peers.get(crashingPeer);
         List<SessionPeer> survivors = new ArrayList<>(peers);
         survivors.remove(crashed);
-        Supplier<List<String>> survivorsEnded =
-                () ->
-                        survivors.stream()
-                                .filter(p -> p.lifecycle().getState() == ClientState.TERMINATED)
-                                .map(SessionPeer::name)
-                                .toList();
+        Supplier<List<String>> survivorsEnded = ended(survivors);
 
         awaitLaunch(host, crashed, survivorsEnded);
         LOG.info(
@@ -1104,44 +1100,107 @@ public final class MultiPeerSession implements AutoCloseable {
                 crashAfterSeconds(peers.size()));
 
         // Marked before the crash, so a bring-up verdict cannot pass for the loss.
-        Map<SessionPeer, Integer> marks = new HashMap<>();
-        for (SessionPeer survivor : survivors) {
-            survivor.drainVerdicts("crash");
-            marks.put(survivor, survivor.observed().size());
-        }
+        Map<SessionPeer, Integer> marks = verdictMarks(survivors, "crash");
         awaitCrash(crashed, survivorsEnded);
         LOG.info(
                 "session: {} crashed as planned (exit {}); waiting for the survivors",
                 crashed.name(),
                 INJECTED_CRASH_EXIT);
 
-        List<SessionPeer> offerers = requiredReporters(survivors, crashed);
         long waitUntil = System.nanoTime() + SURVIVOR_TIMEOUT.toNanos();
+        awaitLoss(survivors, crashed, marks, waitUntil);
+        awaitPlayOn(survivors, waitUntil);
+    }
+
+    /**
+     * The survivors whose session has ended, which fails a survivor stage at once (WBS-5.2.1).
+     *
+     * @param survivors the peers expected to play on
+     * @return the names of those whose lifecycle has reached TERMINATED, read on each call
+     */
+    static Supplier<List<String>> ended(final List<SessionPeer> survivors) {
+        return () ->
+                survivors.stream()
+                        .filter(p -> p.lifecycle().getState() == ClientState.TERMINATED)
+                        .map(SessionPeer::name)
+                        .toList();
+    }
+
+    /**
+     * Drains each survivor's verdicts and marks how many it has seen, before a peer goes, so that
+     * {@link #awaitLoss} counts only the verdicts reported after it (WBS-5.2.1).
+     *
+     * @param survivors the peers expected to play on
+     * @param stage the checkpoint draining them, named in a failure
+     * @return each survivor's count of drained verdicts
+     * @throws CheckpointFailure if an adapter reports another player as itself
+     */
+    static Map<SessionPeer, Integer> verdictMarks(
+            final List<SessionPeer> survivors, final String stage) {
+        Map<SessionPeer, Integer> marks = new HashMap<>();
+        for (SessionPeer survivor : survivors) {
+            survivor.drainVerdicts(stage);
+            marks.put(survivor, survivor.observed().size());
+        }
+        return marks;
+    }
+
+    /**
+     * The {@code loss} stage (WBS-5.2.1): every survivor that offered to the peer that went reports
+     * it lost since its mark, and still lost. The others are not asked; see {@link
+     * #requiredReporters}.
+     *
+     * @param survivors the peers expected to play on, host first
+     * @param gone the peer that went
+     * @param marks each survivor's mark, from {@link #verdictMarks}
+     * @param waitUntil the {@link System#nanoTime()} deadline, shared with {@link #awaitPlayOn}
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure at stage {@code loss}
+     */
+    static void awaitLoss(
+            final List<SessionPeer> survivors,
+            final SessionPeer gone,
+            final Map<SessionPeer, Integer> marks,
+            final long waitUntil)
+            throws InterruptedException {
+        List<SessionPeer> offerers = requiredReporters(survivors, gone);
         awaitAll(
                 "loss",
                 () -> {
                     Map<String, String> missing = new LinkedHashMap<>();
                     for (SessionPeer offerer : offerers) {
                         offerer.drainVerdicts("loss");
-                        // The latest verdict too, so a flap before the crash cannot pass.
-                        if (!offerer.reportedLostSince(marks.get(offerer), crashed)
-                                || offerer.reportsConnected(crashed)) {
+                        // The latest verdict too, so a flap before the peer went cannot pass.
+                        if (!offerer.reportedLostSince(marks.get(offerer), gone)
+                                || offerer.reportsConnected(gone)) {
                             missing.put(
                                     offerer.name(),
                                     "no onConnected(..., false) about "
-                                            + crashed.name()
+                                            + gone.name()
                                             + " standing since the match went live, verdicts seen "
                                             + offerer.observed());
                         }
                     }
                     return missing;
                 },
-                survivorsEnded,
+                ended(survivors),
                 waitUntil,
                 SURVIVOR_TIMEOUT.toString());
+    }
 
-        // Snapshotted only now, so the traffic is proven to flow after the adapters declared the
-        // loss and began re-offering to the departed peer.
+    /**
+     * The {@code play on} stage (WBS-5.2.1): the survivors' traffic to each other advances from now
+     * on. At two peers there is no pair, so only a survivor's session ending can fail it.
+     *
+     * @param survivors the peers expected to play on
+     * @param waitUntil the {@link System#nanoTime()} deadline, shared with {@link #awaitLoss}
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure at stage {@code play on}
+     */
+    void awaitPlayOn(final List<SessionPeer> survivors, final long waitUntil)
+            throws InterruptedException {
+        // Snapshotted only now, so the traffic is proven to flow after whatever the caller waited
+        // for: after a crash, the adapters declaring the loss and re-offering to the departed peer.
         Map<TrafficEvidence.Direction, TrafficEvidence.Progress> before = traffic.snapshot();
         awaitAll(
                 "play on",
@@ -1168,7 +1227,7 @@ public final class MultiPeerSession implements AutoCloseable {
                     }
                     return missing;
                 },
-                survivorsEnded,
+                ended(survivors),
                 waitUntil,
                 SURVIVOR_TIMEOUT.toString());
     }
