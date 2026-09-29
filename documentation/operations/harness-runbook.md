@@ -1881,7 +1881,9 @@ fires. An ordinary access token lasts about an hour and a refresh token is
 spent on first use, so neither works; a pre-signed access token minted to
 outlive the schedule does, since nothing in the harness reads its expiry, but
 only FAF's Hydra can sign one, and its normal flow does not issue one, so it
-has to be arranged with FAF. §3 has the detail.
+has to be arranged with FAF. §3 has the detail. The
+[isolated option](#the-isolated-option-a-local-faf-stack) at the end of this
+section needs no credential, so it can run on every change and on a schedule.
 
 ```yaml
 name: FAF harness session (advisory)
@@ -2271,3 +2273,83 @@ artifact it yielded was not the one this section describes. Two things were
 not done at all and are not claimed: the job has never been dispatched on a
 runner, which needs the repository's own secrets, and its three `uses:` steps
 have never run.*
+
+### The isolated option: a local FAF stack
+
+The job above needs a person: each run spends tokens minted by hand within the
+hour, on accounts only one run may use at a time. This repository also runs
+the session unattended, in
+[`local-stack.yml`](../../.github/workflows/local-stack.yml), against a FAF
+stack the job brings up on its own runner: FAForever/gitops-stack in a kind
+cluster, started with `tilt ci` and limited to the lobby, Hydra on Postgres,
+MariaDB, RabbitMQ and traefik, seeded with FAForever/db's test data. Each
+peer's token comes from that Hydra's admin API, through
+[`scripts/ci/mint-local-token.sh`](../../scripts/ci/mint-local-token.sh). No
+account or secret is involved, so the job runs on every pull request, forks
+included, and on a schedule.
+
+**Which to pick.** Both, for different questions, which is how this repository
+splits them
+([`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#the-local-stack-workflow)). The
+local stack answers whether a change still completes a session, on every
+change, with no shared lobby or account in the path, so it can block a merge.
+The job above answers whether it works against what FAF runs, with FAF's
+lobby, policy check, login rules and Cloudflare in the path, so run it before a
+release.
+
+**What a green local run does not answer.** Whether a real client gets past
+the lobby's policy check: gitops-stack's Tiltfile turns that check off and
+deploys no policy server, so the session sends a fixed `unique_id` and
+`faf-uid` never runs. Nor does it exercise faf-user-service's login rules (the
+tokens come straight from Hydra's admin API), `wss://` or Cloudflare (the
+session connects over plain `ws://` through a port-forward), or anything `.xyz`
+runs that the pinned gitops-stack commit does not declare. It still sends
+telemetry to FAF: the harness points every adapter it launches at FAF's test
+telemetry service, `wss://ice-telemetry.faforever.xyz` (`IceAdapterLauncher`),
+so a local run reports its local game and the seeded test accounts there.
+
+**What it needs.**
+
+- Docker, with kind, Tilt, kubectl and Helm, which `local-stack.yml` downloads
+  at pinned versions and checks against pinned sha256 values; and `curl`, `jq`
+  and `openssl` for minting.
+- `sudo` for one `/etc/hosts` line, `127.0.0.1 ws.faforever.localhost`: the
+  JVM does not resolve `*.localhost` names itself, and traefik routes on the
+  host name. On a machine below kind's inotify limits, `sudo` raises those too;
+  GitHub-hosted runners are already above them.
+- About ten image pulls from Docker Hub per run. Docker Hub's rate limit is not
+  applied to GitHub-hosted runners pulling public images, but a self-hosted
+  runner is always subject to it, at 100 pulls per 6 hours per address when
+  anonymous, so log it in or mirror the images.
+- A machine to itself. The job binds ports 8080, 4444 and 4445 and names its
+  cluster `faf-local-stack`, so two runs on one machine collide. Every job on a
+  GitHub-hosted runner gets a fresh machine.
+
+**Adapting the job above.** Keep its checkout, JDK, jar download and check,
+adapter build, session, token-removal and upload steps. Drop the token-writing
+step, the `faf-uid` step and the `concurrency` group, since runs share no
+accounts. Between the adapter build and the session, add
+`local-stack.yml`'s steps from "Install the pinned stack tools" to "Mint one
+token per peer from the local Hydra", with a copy of
+`scripts/ci/mint-local-token.sh` at the same path and the `env` entries those
+steps read: the pins, `CLUSTER`, `LOCAL_ACCOUNT_IDS`, `PEERS` and
+`STACK_LOGS`. Add its "Tear the stack down" step after the token removal. In
+the session step, set `--lobby-websocket-url=ws://ws.faforever.localhost:8080`,
+use `--unique-id=placeholder` in place of `--uid-binary-path`, and pass the
+minted `"$TOKENS/1.txt"` and `"$TOKENS/2.txt"` in place of `host.txt` and
+`joiner.txt`. The added steps' timeouts come to 47 minutes, so raise the job's
+cap by that much to keep it above every step timeout. `local-stack.yml`'s
+report and log-collection steps are optional.
+
+*Provenance. On 2026-09-29 the paragraph above was applied to the job above
+literally, one edit per sentence, and the result, which passes `actionlint`
+with `shellcheck`, was run on WSL2 Linux the way the job above was: each
+`run:` step in order under `bash -e`, with `GITHUB_ENV` and `GITHUB_PATH`
+carried between them. It downloaded the published 0.4.0 jars and brought the
+stack up at the pinned commit, and the session exited `0` in 12 s, logging
+`session: PASS - 2 peers, full mesh and two-way game traffic, nothing left
+running`. The token files were removed, and the teardown deleted the cluster
+and found nothing left running. None of the job's `uses:` steps ran: the
+workspace was prepared by hand with the mint script in place, gitops-stack came
+from a local clone at the pinned commit, and nothing was uploaded. The pinned
+`faf-ice-adapter` 3.3.14 stood in for the adapter build.*

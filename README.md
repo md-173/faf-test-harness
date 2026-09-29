@@ -197,6 +197,12 @@ for a consumer: the jars come from `releases/latest` rather than a local build, 
 Keep it advisory rather than a required check: the shared test lobby's availability is
 outside anyone's control, so a red run is a finding, not a reason to block a merge.
 
+A job that can block a merge needs a lobby of its own. This repository also runs the session
+on every pull request in [`.github/workflows/local-stack.yml`](.github/workflows/local-stack.yml),
+against a FAF stack the job brings up on its runner, with no account and no secret. Runbook
+[§11, The isolated option](documentation/operations/harness-runbook.md#the-isolated-option-a-local-faf-stack)
+says what that covers, what it does not, and how to adapt §11's job to it.
+
 ## Requirements and compatibility
 
 | | |
@@ -234,7 +240,7 @@ that makes it rather than the next release.
 | [`mock-game/`](mock-game/) | The game stand-in: GPGNet codec and dispatcher, the simulated match, and the peer UDP traffic. Ships as a jar. |
 | [`shared/`](shared/) | What both use: the state machine and the subprocess manager and registry. Not published. |
 | [`documentation/`](documentation/) | Operations guides, protocol research, diagrams, and captured demo transcripts. |
-| [`scripts/`](scripts/) | Helper scripts for CI. Today that is minting an access token for a dispatch. |
+| [`scripts/`](scripts/) | Helper scripts the CI workflows run. |
 
 ## Documentation
 
