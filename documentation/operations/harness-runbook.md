@@ -1227,13 +1227,13 @@ Four consequences worth knowing before you read a post-launch log:
   connection, as the departed peer is by then. Reconnection and rejoin are
   out of scope for 4.3.4; this noise is upstream doing what it always does.
 - **The verdict brings a junk datagram or a dead listener thread.** Within a
-  few milliseconds of `connected=false`, either that survivor's game logs
+  few milliseconds of a survivor's `connected=false`, either its game logs
   `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>`, `<port>`
   being the lost peer's relay port, or its adapter logs `Exception in thread
   "Thread-<n>" java.lang.RuntimeException: java.lang.InterruptedException`.
   Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's
   ICE listener while it waits (`PeerIceModule.java:404`, adapter 3.3.14), and
-  ice4j answers by handing it a pooled 1500-byte buffer that was never filled
+  ice4j answers by handing it a pooled 1500-byte buffer this read never filled
   (ice4j `1c60acc`: `MergingDatagramSocket.java:553-558`,
   `MultiplexingXXXSocketSupport.java:631-666`). The listener dispatches that
   buffer before it checks the interrupt (`PeerIceModule.java:518-537`), so an
