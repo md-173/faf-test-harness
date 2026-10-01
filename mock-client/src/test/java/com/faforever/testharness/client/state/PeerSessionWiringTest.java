@@ -513,6 +513,33 @@ final class PeerSessionWiringTest {
     }
 
     @Test
+    void departureAfterTheSessionEndedIsANoOp() throws Exception {
+        // faf-server fans the notice out while its game is still in the lobby, so a client whose
+        // own game crashed first can get it after teardown, as the host did in live-integration's
+        // crash proof (#512). TERMINATED never reads one, so even a malformed notice fails nothing.
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        lifecycle.post(new GameExited(134));
+        awaitState(lifecycle, ClientState.TERMINATED);
+        ObjectNode malformed = MAPPER.createObjectNode().put("command", "DisconnectFromPeer");
+        malformed.putArray("args");
+
+        lifecycle.post(new DisconnectFromPeer(MAPPER.readTree(disconnectFromPeer(PEER_ID))));
+        lifecycle.post(new DisconnectFromPeer(malformed));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertNull(
+                adapter.receivedMessage("disconnectFromPeer"),
+                "a session that has ended has no relay left to drop");
+        List<String> unmatched =
+                captured.list.stream()
+                        .filter(e -> e.getLevel() == Level.WARN)
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .filter(m -> m.startsWith("No matching transitions for DisconnectFromPeer"))
+                        .toList();
+        assertEquals(List.of(), unmatched, "a late notice must be a deliberate no-op (#512)");
+    }
+
+    @Test
     void launchedSessionRelaysIceCandidatesBothWays() throws Exception {
         launchedLifecycle();
 

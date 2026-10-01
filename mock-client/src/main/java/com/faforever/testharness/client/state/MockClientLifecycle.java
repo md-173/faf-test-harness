@@ -633,7 +633,7 @@ public final class MockClientLifecycle {
     /**
      * Wires peer departure end to end (WBS-4.3.4): the lobby handler for faf-server's {@code
      * DisconnectFromPeer}, and the edges that accept it in every state this client can occupy while
-     * the server's game is still in its LOBBY phase.
+     * the server's game is still in its LOBBY phase, TERMINATED included, as a no-op (#512).
      *
      * <p>Both halves live here rather than beside the other lobby handlers in {@link
      * #setupStateMachine()} because that method is at its checkstyle length limit, and because a
@@ -685,6 +685,8 @@ public final class MockClientLifecycle {
                             this::disconnectFromPeer,
                             null);
         }
+        State terminated = states.get(ClientState.TERMINATED);
+        terminated.registerTransition(DisconnectFromPeer.class, terminated);
     }
 
     /**
