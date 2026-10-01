@@ -79,6 +79,19 @@ final class GpgNetSenderTest {
     }
 
     @Test
+    void disconnectedCarriesTheIdAsAStringAsFaDoes() throws IOException {
+        // FA's lobby.lua sends string.format("%d", uid): a string chunk on the wire, not an int.
+        sender.disconnected(330072);
+        assertEquals(List.of(GpgNetFrame.of("Disconnected", "330072")), sent);
+    }
+
+    @Test
+    void clearSlotCarriesTheSlotAsAnInt() throws IOException {
+        sender.clearSlot(3);
+        assertEquals(List.of(GpgNetFrame.of("ClearSlot", 3)), sent);
+    }
+
+    @Test
     void gameModsActivatedShape() throws IOException {
         // "activated" + count (int).
         sender.gameMods("activated", 0);

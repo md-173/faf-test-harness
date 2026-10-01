@@ -25,50 +25,63 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
 /**
- * Mid-session peer departure against the live lobby (WBS-4.3.4): a two-peer session is brought up,
- * one peer leaves, and the survivor is checked for the right reaction.
+ * Mid-session peer departure against the live lobby (WBS-4.3.4, WBS-4.3.6): a session of two to
+ * four peers is brought up, its last joiner leaves, and every survivor is checked for the right
+ * reaction.
  *
- * <p>The survivor learns of a departure two different ways, and which one depends entirely on
- * whether the host has launched, so there is a run for each.
+ * <p>A survivor learns of a departure two different ways, and which one depends entirely on whether
+ * the host has launched, so there is a run for each, at each size.
  *
  * <ul>
  *   <li><b>Lobby phase.</b> faf-server tells every remaining player: {@code GameConnection.abort}
- *       runs {@code disconnect_all_peers()} under a {@code GameState.LOBBY} guard, the client
- *       relays that to its adapter as {@code disconnectFromPeer}, and the frame the adapter
- *       forwards ends the survivor's own game. Provoked with {@code kill -9} on the joiner's game,
+ *       runs {@code disconnect_all_peers()} under a {@code GameState.LOBBY} guard, each client
+ *       relays that to its adapter as {@code disconnectFromPeer}, and each survivor's game answers
+ *       the frame the adapter forwards as FA's lobby does: it drops the leaver, the host frees the
+ *       leaver's slot, and the game plays on. Provoked with {@code kill -9} on the leaver's game,
  *       which also proves the client's crash-side {@code GameState Ended} fallback reaches the
  *       server at all.
- *   <li><b>After launch.</b> That guard closes and no targeted notice is sent. The survivor finds
- *       out from its own adapter, whose connectivity checker declares a silent peer lost after ten
- *       seconds and pushes {@code onConnected(local, remote, false)}. Nothing is built for this
- *       path; it is asserted.
+ *   <li><b>After launch.</b> That guard closes and no targeted notice is sent. A survivor finds out
+ *       from its own adapter, whose connectivity checker declares a silent peer lost after ten
+ *       seconds and pushes {@code onConnected(local, remote, false)}, but in adapter 3.3.14 only on
+ *       the side that made the ICE offer. faf-server gives the host the offer on every host link
+ *       and the later joiner the offer between joiners, so when the last joiner leaves only the
+ *       host must notice; what the other survivors report is logged, not asserted. Nothing is built
+ *       for this path; it is asserted.
  * </ul>
  *
+ * <p>Both runs then require the survivors' traffic to each other to keep advancing, and every
+ * peer's logged path to be its role's ({@link TransitionEvidence}): each survivor still in the role
+ * it took, the host PLAYING after launch, and the leaver TERMINATED.
+ *
  * <p><b>Why this lives beside {@link MultiPeerSession} rather than in {@code client.state}.</b> A
- * departure run has to stop one peer mid-session and read that peer's lifecycle, which the session
- * keeps package-private. Running from this package uses the controls that already exist instead of
- * widening the session's public API for a test.
+ * departure run has to stop one peer mid-session, read its lifecycle, and reuse the session's own
+ * survivor stages and path check, all of which the session keeps package-private. Running from this
+ * package uses the controls that already exist instead of widening the session's public API for a
+ * test.
  *
  * <p>The prerequisite and config plumbing below is a second, smaller copy of {@code
  * MultiPeerSessionLiveTest}'s: that test sits in {@code client.state} and keeps its own private, so
- * the two cannot share. Both resolve the same binaries and the same {@code .secrets} token files;
- * change one and check the other.
+ * the two cannot share. Both resolve the same binaries and the same four {@code .secrets} token
+ * files, and a case needs only the first N; change one and check the other.
  *
  * <p><b>Every wait is bounded and named</b>: a missed checkpoint fails with the budget that ran out
- * and what had been seen by then. The class-level {@link Timeout} is a per-method backstop, and it
- * sits above the sum of each run's own budgets on purpose: the post-launch run can spend the
- * session deadline (420 s) plus its launch wait, server-state gate, teardown and peer-loss budgets,
- * about 705 s in all. Set it any lower and a slow but valid run dies on a bare JUnit timeout
- * instead of the named checkpoint this class promises.
+ * and what had been seen by then. The class-level {@link Timeout} applies to each case as a
+ * backstop, and it sits above the sum of each case's own budgets on purpose: the four-peer
+ * post-launch case can spend the session deadline (420 s) plus its launch wait (a 150 s delay and
+ * 60 s of slack), server-state gate, teardown, survivor and log-line budgets, about 745 s in all.
+ * Set it any lower and a slow but valid run dies on a bare JUnit timeout instead of the named
+ * checkpoint this class promises.
  */
 @Tag("integration")
 @Timeout(value = 780, unit = TimeUnit.SECONDS)
@@ -83,12 +96,6 @@ final class PeerDepartureLiveTest {
     /** Environment override for the {@code faf-uid} binary. */
     private static final String UID_BINARY_ENV = "FAF_UID_BINARY";
 
-    /** Environment override for the hosting account's refresh-token file. */
-    private static final String TOKEN_A_ENV = "FAF_REFRESH_TOKEN_A";
-
-    /** Environment override for the joining account's refresh-token file. */
-    private static final String TOKEN_B_ENV = "FAF_REFRESH_TOKEN_B";
-
     /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
     private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
 
@@ -97,6 +104,27 @@ final class PeerDepartureLiveTest {
 
     /** Environment override for the post-launch run's host launch delay, in seconds. */
     private static final String LAUNCH_DELAY_ENV = "FAF_HOST_LAUNCH_DELAY_SECONDS";
+
+    /**
+     * One peer's account: where its refresh-token file comes from.
+     *
+     * @param label the instance label, A to D
+     * @param tokenEnv the environment variable overriding its refresh-token file
+     * @param tokenFile its refresh-token file relative to the repository root
+     */
+    private record PeerSlot(String label, String tokenEnv, String tokenFile) {}
+
+    /**
+     * Every peer a case can run, in join order: the host first. Each slot has its own variable and
+     * its own file and nothing falls back from one to another, so no peer can resolve another
+     * peer's account. A case with N peers uses the first N.
+     */
+    private static final List<PeerSlot> SLOTS =
+            List.of(
+                    new PeerSlot("A", "FAF_REFRESH_TOKEN_A", ".secrets/refresh_token.txt"),
+                    new PeerSlot("B", "FAF_REFRESH_TOKEN_B", ".secrets/refresh_token_b.txt"),
+                    new PeerSlot("C", "FAF_REFRESH_TOKEN_C", ".secrets/refresh_token_c.txt"),
+                    new PeerSlot("D", "FAF_REFRESH_TOKEN_D", ".secrets/refresh_token_d.txt"));
 
     /**
      * Lobby endpoint used when {@link #LOBBY_URL_ENV} is unset: the FAF test lobby. It is fronted
@@ -110,9 +138,6 @@ final class PeerDepartureLiveTest {
 
     /** Poll slice for every bounded wait built on a repeated probe. */
     private static final Duration POLL_SLICE = Duration.ofMillis(250);
-
-    /** Peers in a departure session: one host and one joiner. */
-    private static final int SESSION_PEERS = 2;
 
     /**
      * The class-level {@link Timeout}, repeated as a value the delay bound below can read. Keep the
@@ -128,19 +153,11 @@ final class PeerDepartureLiveTest {
     private static final Duration LAUNCH_SLACK = Duration.ofSeconds(60);
 
     /**
-     * Budget for the surviving side to observe a lobby-phase departure end to end: the server's
-     * {@code DisconnectFromPeer}, the adapter RPC it produces, and the survivor's own game exiting
-     * on the frame the adapter forwards.
+     * Budget for the survivors to observe a lobby-phase departure, spent once for the relays and
+     * once for the games: the server's {@code DisconnectFromPeer} reaching every survivor and the
+     * adapter RPC it produces, then each survivor's game answering the frame its adapter forwards.
      */
     private static final Duration DEPARTURE_TIMEOUT = Duration.ofSeconds(60);
-
-    /**
-     * Budget for the adapter's connectivity checker to declare a departed peer lost. Upstream
-     * echoes every 1 s and declares loss after 10 s of silence ({@code
-     * PeerConnectivityCheckerModule}), so this is that threshold with room for the departing side's
-     * own teardown to finish first.
-     */
-    private static final Duration PEER_LOST_TIMEOUT = Duration.ofSeconds(45);
 
     /** Budget for one peer's teardown to finish once its shutdown has been requested. */
     private static final Duration TEARDOWN_TIMEOUT = Duration.ofSeconds(30);
@@ -153,20 +170,13 @@ final class PeerDepartureLiveTest {
     private static final Duration SERVER_LIVE_TIMEOUT = Duration.ofSeconds(30);
 
     /**
-     * Seconds the post-launch run's host sits in the lobby before launching.
-     *
-     * <p>This is the one number that run times itself against, and it is a trade. The host's timer
-     * starts when its own game enters HOSTING, and the joiner's whole bring-up has to finish inside
-     * it, because faf-server accepts a {@code game_join} only while the game is in {@code
-     * GameState.LOBBY}. Too long and the run idles; too short and the join is refused, which fails
-     * loudly with the server's own {@code game_not_ready} rather than as a confusing timeout.
-     *
-     * <p>Overridable because a slow or distant network is exactly where the default stops being
-     * generous. {@link MultiPeerSession#MIN_HOST_LAUNCH_DELAY} is the floor the session enforces.
+     * Budget for the host's INFO line about a verdict the loss stage has already drained. The
+     * adapter's reader thread records the verdict and then logs it, so this is scheduling headroom
+     * rather than a wait on anything slow.
      */
-    private static final int HOST_LAUNCH_DELAY_SECONDS = hostLaunchDelaySeconds();
+    private static final Duration VERDICT_LINE_TIMEOUT = Duration.ofSeconds(10);
 
-    /** Logger for the per-run marker. */
+    /** Logger for the per-run marker and the answering survivors' report. */
     private static final org.slf4j.Logger LOG =
             LoggerFactory.getLogger(PeerDepartureLiveTest.class);
 
@@ -177,7 +187,7 @@ final class PeerDepartureLiveTest {
     private Logger root;
 
     /**
-     * Captures every log record in this JVM, which includes both adapters' and both mock games'
+     * Captures every log record in this JVM, which includes every adapter's and every mock game's
      * output as re-emitted by {@code ProcessOutputLogger}. Copy-on-write: subprocess reader
      * threads, client threads and the test thread touch it at once.
      */
@@ -242,129 +252,246 @@ final class PeerDepartureLiveTest {
         }
     }
 
-    @Test
-    void lobbyPhaseDepartureTearsTheSurvivorDownCleanly() throws Exception {
-        requireLiveEnvironment();
-        List<SessionPeer> peers = runSession(MultiPeerSession.LAUNCH_DISABLED);
-        SessionPeer host = peers.get(0);
-        SessionPeer joiner = peers.get(1);
+    @ParameterizedTest(name = "{0} peers")
+    @ValueSource(ints = {2, 3, 4})
+    void lobbyPhaseDepartureLeavesEverySurvivorPlayingOn(final int peerCount) throws Exception {
+        requireLiveEnvironment(peerCount);
+        List<SessionPeer> peers = runSession(peerCount, MultiPeerSession.LAUNCH_DISABLED);
+        SessionPeer leaver = peers.get(peers.size() - 1);
+        List<SessionPeer> survivors = peers.subList(0, peers.size() - 1);
 
         int mark = logMark();
-        // kill -9 on the joiner's game, leaving its client alive to notice. The client sends
+        // kill -9 on the leaver's game, leaving its client alive to notice. The client sends
         // GameState Ended for a game it never saw end cleanly, faf-server routes that to
         // on_connection_closed() then abort(), and abort() runs disconnect_all_peers() because the
         // game is still in GameState.LOBBY. Teardown sends it before it closes the lobby (#454),
         // and that close is a second path to the same frame should the send fail: the socket
         // closing reaches on_connection_lost() and so the same abort().
-        killGameOf(joiner);
+        killGameOf(leaver);
 
-        // The frame arrived and was relayed. This is the client half of the card.
+        // The fan-out reached every survivor, and each relayed it. This is the client half.
         awaitLogLine(
                 mark,
-                host.label(),
-                "peer disconnect: id=" + joiner.identity().id(),
+                survivors,
+                "peer disconnect: id=" + leaver.identity().id(),
                 DEPARTURE_TIMEOUT,
-                "the host never relayed the departure to its adapter"
-                        + adapterDisconnectHint(mark, host.label()));
+                "the departure was not relayed to every survivor's adapter",
+                peer -> adapterDisconnectHint(mark, peer));
 
-        // And the adapter acted on it. The RPC destroys the peer relay and makes the adapter emit a
-        // GPGNet DisconnectFromPeer to the host's own game, which is the only way that game can
-        // reach ENDED here. Asserting the game's own exit line rather than the adapter's keeps this
-        // pinned to our contract instead of upstream's wording.
+        // And each adapter acted on it. The RPC destroys the peer relay and makes the adapter emit
+        // a GPGNet DisconnectFromPeer to its own game, which drops the leaver and plays on. The
+        // count is the game's roster, so a game that dropped the wrong peer fails here too.
+        // Asserting the games' own line rather than the adapter's keeps this pinned to our
+        // contract instead of upstream's wording.
         //
-        // The line carries no player id, and both games' stdout funnels into this one JVM's root
-        // logger, so it is scoped to the host's instance label rather than left to be attributed
-        // by argument. That is what the capture's prepareForDeferredProcessing override is for.
+        // The line carries no label of its own, and every game's stdout funnels into this one
+        // JVM's root logger, so it is scoped to each survivor's instance label rather than left to
+        // be attributed by argument. That is what the capture's prepareForDeferredProcessing
+        // override is for.
         awaitLogLine(
                 mark,
-                host.label(),
-                "mock game finished: status=OK, exit code 0",
+                survivors,
+                "Peer (ID: "
+                        + leaver.identity().id()
+                        + ") disconnected, playing on; "
+                        + (peers.size() - 2)
+                        + " peers remain",
                 DEPARTURE_TIMEOUT,
-                "the host's game did not end cleanly on the adapter's DisconnectFromPeer"
-                        + adapterDisconnectHint(mark, host.label()));
+                "a survivor's game did not drop the leaver and play on",
+                peer -> adapterDisconnectHint(mark, peer));
 
-        awaitState(host, ClientState.TERMINATED, DEPARTURE_TIMEOUT);
+        // Dropping the leaver stopped no other stream: the survivors still reach each other.
+        check(
+                () ->
+                        session.awaitPlayOn(
+                                survivors,
+                                System.nanoTime() + MultiPeerSession.SURVIVOR_TIMEOUT.toNanos()));
+
+        awaitState(leaver, ClientState.TERMINATED, TEARDOWN_TIMEOUT);
+        // Every survivor still in the role it took, and only the leaver ended.
+        check(
+                () ->
+                        session.transitions()
+                                .verifySession(
+                                        peers,
+                                        Map.of(leaver.label(), List.of(ClientState.TERMINATED))));
     }
 
-    @Test
-    void postLaunchDepartureIsObservedFromTheAdapterAlone() throws Exception {
-        requireLiveEnvironment();
-        List<SessionPeer> peers = runSession(HOST_LAUNCH_DELAY_SECONDS);
+    @ParameterizedTest(name = "{0} peers")
+    @ValueSource(ints = {2, 3, 4})
+    void postLaunchDepartureIsObservedFromTheAdapterAlone(final int peerCount) throws Exception {
+        requireLiveEnvironment(peerCount);
+        int launchDelaySeconds = hostLaunchDelaySeconds(peerCount);
+        List<SessionPeer> peers = runSession(peerCount, launchDelaySeconds);
         SessionPeer host = peers.get(0);
-        SessionPeer joiner = peers.get(1);
+        SessionPeer leaver = peers.get(peers.size() - 1);
+        List<SessionPeer> survivors = peers.subList(0, peers.size() - 1);
 
         // Reaching PLAYING means the host's own adapter relayed GameState Launching, which is not
         // the same event as faf-server processing that frame: the forward to the lobby is fire and
         // forget. Waiting only for PLAYING would leave a window in which the server's game is still
         // LOBBY, and a departure inside it would produce exactly the DisconnectFromPeer this run
         // asserts the absence of. So the server's own view is what gates the departure.
-        awaitState(host, ClientState.PLAYING, launchTimeout());
+        awaitState(
+                host,
+                ClientState.PLAYING,
+                Duration.ofSeconds(launchDelaySeconds).plus(LAUNCH_SLACK));
         int hostedUid = host.lifecycle().gameLaunched().getNow(null).uid();
         awaitServerGameState(host, hostedUid, "playing");
 
-        // Everything from here is the departure. Marked so the assertions below read only the tail:
+        // Everything from here is the departure. Marked so the checks below read only the tail:
         // the adapter emits onConnected(..., false) from several points during ICE negotiation, so
-        // a scan of the whole run would find a bring-up line and pass without the departure having
-        // produced anything at all.
+        // a look at the whole run would find a bring-up verdict and pass without the departure
+        // having produced anything at all.
+        Map<SessionPeer, Integer> marks = MultiPeerSession.verdictMarks(survivors, "departure");
         int mark = logMark();
-        shutdown(joiner);
+        shutdown(leaver);
 
+        // The deliberate crash's survivor stages, reused: every survivor that offered to the
+        // leaver reports it lost, which is just the host when the last joiner leaves, and then
+        // the survivors' traffic still advances.
+        long waitUntil = System.nanoTime() + MultiPeerSession.SURVIVOR_TIMEOUT.toNanos();
+        check(() -> MultiPeerSession.awaitLoss(survivors, leaver, marks, waitUntil));
+        check(() -> session.awaitPlayOn(survivors, waitUntil));
+        reportAnswerers(survivors, leaver, marks);
+
+        // The client's INFO line for the verdict the loss stage drained: the proof that INFO
+        // capture was live across the window the next two checks claim a line absent from.
         awaitLogLine(
                 mark,
-                host.label(),
+                List.of(host),
                 "peer connected: local="
                         + host.identity().id()
                         + " remote="
-                        + joiner.identity().id()
+                        + leaver.identity().id()
                         + " connected=false",
-                PEER_LOST_TIMEOUT,
-                "the host's adapter never reported the departed peer unreachable");
+                VERDICT_LINE_TIMEOUT,
+                "the host's client never logged the loss its adapter reported",
+                peer -> "");
 
         // The card's central claim, and the reason the gate above is on the server's state rather
         // than on PLAYING: after launch faf-server sends no targeted departure notice at all,
         // because abort() guards disconnect_all_peers() on GameState.LOBBY. Both log variants are
-        // checked, because the host is in PLAYING for this whole window and a relayed frame would
-        // be logged there as "ignored" rather than as the plain relay line. Asserting only the
-        // relay line would pass no matter what the server sent.
+        // checked, because the host is in PLAYING for this whole window and would log a relayed
+        // frame as "ignored", where a joiner, still JOINING, would log the plain relay line.
+        // Asserting only the relay line would pass no matter what the server sent the host. Read
+        // under any label, so a line that lost its label cannot slip past.
         assertNoLogLine(
                 mark,
-                host.label(),
-                "peer disconnect: id=" + joiner.identity().id(),
+                "peer disconnect: id=" + leaver.identity().id(),
                 "the server must send no DisconnectFromPeer once the game has launched");
         assertNoLogLine(
                 mark,
-                host.label(),
-                "peer disconnect ignored during a live match: id=" + joiner.identity().id(),
+                "peer disconnect ignored during a live match: id=" + leaver.identity().id(),
                 "the server must send no DisconnectFromPeer once the game has launched");
+
+        // The host PLAYING, the leaver ended, and every other survivor still JOINING: no joiner's
+        // game launches in a session, and the departure moved none of them.
+        check(
+                () ->
+                        session.transitions()
+                                .verifySession(
+                                        peers,
+                                        Map.of(
+                                                host.label(),
+                                                List.of(ClientState.PLAYING),
+                                                leaver.label(),
+                                                List.of(ClientState.TERMINATED))));
     }
 
     /**
-     * Brings a two-peer session up to a full mesh with proven traffic.
+     * Brings a session up to a full mesh with proven traffic.
      *
+     * @param peerCount how many peers, host included, 2 to {@link #SLOTS}'s size
      * @param hostLaunchDelaySeconds the host's auto-launch policy, passed to the session
      * @return the session's peers, host first
      * @throws InterruptedException if a bounded wait is interrupted
      */
-    private List<SessionPeer> runSession(final int hostLaunchDelaySeconds)
+    private List<SessionPeer> runSession(final int peerCount, final int hostLaunchDelaySeconds)
             throws InterruptedException {
-        List<MockClientConfig> bases = List.of(baseConfig(tokenFileA()), baseConfig(tokenFileB()));
+        List<MockClientConfig> bases = new ArrayList<>();
+        for (PeerSlot slot : SLOTS.subList(0, peerCount)) {
+            bases.add(
+                    baseConfig(
+                            required(findRefreshToken(slot), slot.label() + "'s refresh token")));
+        }
         String runId = UUID.randomUUID().toString();
-        // One marker per run, so the two runs' lines can be told apart in a shared JSONL.
+        // One marker per run, so the runs' lines can be told apart in a shared JSONL.
         LOG.info(
-                "case: departure run {}, host launch delay {}",
+                "case: departure run {}, {} peers, host launch delay {}",
                 runId,
+                peerCount,
                 hostLaunchDelaySeconds == MultiPeerSession.LAUNCH_DISABLED
                         ? "disabled"
                         : hostLaunchDelaySeconds + "s");
         session =
                 new MultiPeerSession(
                         bases, "faf-test-harness 4.3.4 " + runId, hostLaunchDelaySeconds);
+        check(session::run);
+        return session.peers();
+    }
+
+    /** One session checkpoint, run by {@link #check}. */
+    @FunctionalInterface
+    private interface Checkpoint {
+
+        /**
+         * Runs the checkpoint.
+         *
+         * @throws InterruptedException if a bounded wait is interrupted
+         */
+        void run() throws InterruptedException;
+    }
+
+    /**
+     * Runs a session checkpoint, reporting its failure as this test's failure rather than as an
+     * error, with the session's own message.
+     *
+     * @param checkpoint the checkpoint
+     * @throws InterruptedException if a bounded wait is interrupted
+     */
+    private static void check(final Checkpoint checkpoint) throws InterruptedException {
         try {
-            session.run();
+            checkpoint.run();
         } catch (CheckpointFailure f) {
             throw new AssertionError(f.getMessage(), f);
         }
-        return session.peers();
+    }
+
+    /**
+     * Logs what each survivor that answered on its link to the leaver reported about it since the
+     * mark. Not asserted: in adapter 3.3.14 an answerer runs no connectivity checker, but it can
+     * still drop the link when an ICE send or receive fails, so its silence is expected rather than
+     * guaranteed.
+     *
+     * @param survivors the peers expected to play on
+     * @param leaver the peer that left
+     * @param marks each survivor's verdict count before the departure
+     */
+    private static void reportAnswerers(
+            final List<SessionPeer> survivors,
+            final SessionPeer leaver,
+            final Map<SessionPeer, Integer> marks) {
+        SessionPeer.Offer offered = new SessionPeer.Offer(leaver.identity().id(), true);
+        for (SessionPeer survivor : survivors) {
+            if (survivor.offers().contains(offered)) {
+                continue;
+            }
+            survivor.drainVerdicts("departure");
+            List<SessionPeer.PeerVerdict> observed = survivor.observed();
+            List<SessionPeer.PeerVerdict> about = new ArrayList<>();
+            for (int i = marks.get(survivor); i < observed.size(); i++) {
+                if (observed.get(i).remoteId() == leaver.identity().id()) {
+                    about.add(observed.get(i));
+                }
+            }
+            LOG.info(
+                    "departure: {} answered on its link to {}, so need not notice it leave; its"
+                            + " adapter reported {}",
+                    survivor.name(),
+                    leaver.name(),
+                    about.isEmpty() ? "nothing about it" : about);
+        }
     }
 
     /**
@@ -374,8 +501,8 @@ final class PeerDepartureLiveTest {
      * @param peer the peer to remove from the session
      */
     private static void shutdown(final SessionPeer peer) {
-        // Under the peer's own label, as MultiPeerSession.shutdown does, so the teardown lines of a
-        // two-peer run stay attributable in one shared JSONL.
+        // Under the peer's own label, as MultiPeerSession.shutdown does, so the teardown lines
+        // stay attributable in one shared JSONL.
         try (MDC.MDCCloseable ignored = peer.labelled()) {
             peer.lifecycle().shutdown();
             awaitState(peer, ClientState.TERMINATED, TEARDOWN_TIMEOUT);
@@ -390,11 +517,10 @@ final class PeerDepartureLiveTest {
      * <p>Located among this JVM's descendants, because the session owns its subprocesses and hands
      * out none. The discriminator is the peer's GPGNet port, not its player id: Gradle runs every
      * {@code integrationTest} class in one JVM, {@code MultiPeerSessionLiveTest} uses these same
-     * two accounts, and a game leaked by an earlier case would carry the same {@code --player-id}.
-     * The port is freshly allocated per peer per session, so it cannot collide with a stale
-     * process. Matched with its trailing separator, since {@code MockGameLauncher} always emits
-     * another flag after it and an unterminated number would match a longer one starting with the
-     * same digits.
+     * accounts, and a game leaked by an earlier case would carry the same {@code --player-id}. The
+     * port is freshly allocated per peer per session, so it cannot collide with a stale process.
+     * Matched with its trailing separator, since {@code MockGameLauncher} always emits another flag
+     * after it and an unterminated number would match a longer one starting with the same digits.
      *
      * <p>Exactly one match is required. More than one means a stale game is still running and the
      * run should say so rather than kill whichever the stream happened to yield first.
@@ -497,47 +623,66 @@ final class PeerDepartureLiveTest {
     }
 
     /**
-     * Bounded wait for a captured log line containing {@code needle}, ignoring everything logged
-     * before {@code mark}.
+     * Bounded wait for every one of {@code peers} to log a line containing {@code needle} under its
+     * own label, ignoring everything logged before {@code mark}. One deadline covers them all.
      *
      * @param mark the index returned by {@link #logMark()} before the event under test
+     * @param peers the peers that must each log the line
      * @param needle the text the line must contain
      * @param timeout the budget
-     * @param what what the line would have proven, used verbatim in the failure message
+     * @param what what the lines would have proven, used verbatim in the failure message
+     * @param hint what to add about each peer still missing the line
      * @throws InterruptedException if the wait is interrupted
      */
     private void awaitLogLine(
             final int mark,
-            final String label,
+            final List<SessionPeer> peers,
             final String needle,
             final Duration timeout,
-            final String what)
+            final String what,
+            final Function<SessionPeer, String> hint)
             throws InterruptedException {
         long deadline = System.nanoTime() + timeout.toNanos();
-        do {
-            if (!linesSince(mark, label, needle).isEmpty()) {
+        while (true) {
+            List<SessionPeer> missing =
+                    peers.stream()
+                            .filter(peer -> linesSince(mark, peer.label(), needle).isEmpty())
+                            .toList();
+            if (missing.isEmpty()) {
                 return;
             }
+            if (System.nanoTime() >= deadline) {
+                StringBuilder message =
+                        new StringBuilder(what)
+                                .append(": no log line containing '")
+                                .append(needle)
+                                .append("' within ")
+                                .append(timeout)
+                                .append(" from");
+                for (SessionPeer peer : missing) {
+                    message.append(' ').append(peer.name()).append(hint.apply(peer));
+                }
+                fail(message.toString());
+            }
             Thread.sleep(POLL_SLICE.toMillis());
-        } while (System.nanoTime() < deadline);
-        fail(what + ": no log line containing '" + needle + "' within " + timeout);
+        }
     }
 
     /**
-     * Assert that nothing logged since {@code mark} contains {@code needle}.
+     * Assert that nothing logged since {@code mark}, under any label or none, contains {@code
+     * needle}.
      *
-     * <p>What stops this being vacuous is the assertion that runs before it: the departure's
-     * positive signal and both of these lines are emitted at INFO, so a positive match proves INFO
-     * capture was live across the same window these are claimed absent from. Move any of them to
-     * DEBUG and this quietly stops proving anything.
+     * <p>What stops this being vacuous is the wait that runs before it: the departure's positive
+     * signal and both of these lines are emitted at INFO, so a positive match proves INFO capture
+     * was live across the same window these are claimed absent from. Move any of them to DEBUG and
+     * this quietly stops proving anything.
      *
      * @param mark the index returned by {@link #logMark()} before the event under test
      * @param needle the text no line may contain
      * @param why what its presence would mean, used verbatim in the failure message
      */
-    private void assertNoLogLine(
-            final int mark, final String label, final String needle, final String why) {
-        List<String> found = linesSince(mark, label, needle);
+    private void assertNoLogLine(final int mark, final String needle, final String why) {
+        List<String> found = linesSince(mark, null, needle);
         if (!found.isEmpty()) {
             fail(why + "; found: " + found);
         }
@@ -547,6 +692,7 @@ final class PeerDepartureLiveTest {
      * Captured messages logged at or after {@code mark} that contain {@code needle}.
      *
      * @param mark the index to start reading from
+     * @param label the instance label a message must carry, or {@code null} for any
      * @param needle the text to match
      * @return the matching messages, oldest first
      */
@@ -569,7 +715,7 @@ final class PeerDepartureLiveTest {
     }
 
     /**
-     * The adapter's own view of a departure, quoted into a failed checkpoint.
+     * One survivor's adapter's view of a departure, quoted into a failed checkpoint.
      *
      * <p>A hint rather than an assertion. {@code onDisconnectFromPeer} is upstream's log text,
      * pinned to no contract of ours, so a reworded line upstream should not fail this test. It is
@@ -577,13 +723,14 @@ final class PeerDepartureLiveTest {
      * adapter did nothing useful with it".
      *
      * @param mark the index to read from
+     * @param peer the survivor whose adapter to quote
      * @return the matching adapter lines in parentheses, or a note that there were none
      */
-    private String adapterDisconnectHint(final int mark, final String label) {
-        List<String> seen = linesSince(mark, label, "onDisconnectFromPeer");
+    private String adapterDisconnectHint(final int mark, final SessionPeer peer) {
+        List<String> seen = linesSince(mark, peer.label(), "onDisconnectFromPeer");
         return seen.isEmpty()
-                ? " (the host's adapter logged no onDisconnectFromPeer at all)"
-                : " (the host's adapter logged: " + seen + ")";
+                ? " (its adapter logged no onDisconnectFromPeer at all)"
+                : " (its adapter logged: " + seen + ")";
     }
 
     /** Command lines of every process descended from this JVM, skipping any we cannot read. */
@@ -596,43 +743,49 @@ final class PeerDepartureLiveTest {
     }
 
     /**
-     * The budget for the host to launch, derived from the delay it was given so the two cannot
-     * drift apart.
+     * The post-launch run's host launch delay at this size: {@link #LAUNCH_DELAY_ENV} when it
+     * parses to a usable number of seconds, otherwise two minutes or the size's floor, whichever is
+     * longer.
      *
-     * @return the launch budget
-     */
-    private static Duration launchTimeout() {
-        return Duration.ofSeconds(HOST_LAUNCH_DELAY_SECONDS).plus(LAUNCH_SLACK);
-    }
-
-    /**
-     * The post-launch run's host launch delay: {@link #LAUNCH_DELAY_ENV} when it parses to a usable
-     * number of seconds, two minutes otherwise.
+     * <p>This is the one number that run times itself against, and it is a trade. The host's timer
+     * starts when its own game enters HOSTING, and every joiner's bring-up has to finish inside it,
+     * because faf-server accepts a {@code game_join} only while the game is in {@code
+     * GameState.LOBBY}. Too long and the run idles; too short and a join is refused, which fails
+     * loudly with the server's own {@code game_not_ready} rather than as a confusing timeout.
+     * Overridable because a slow or distant network is exactly where the default stops being
+     * generous; {@link MultiPeerSession#minHostLaunchDelaySeconds} is the floor the session
+     * enforces at each size.
      *
      * <p>A value the session would reject, or one so small that the host's match ends before the
-     * adapter's ten-second detector can report the departure, is ignored rather than honoured: it
-     * would otherwise fail much later at a checkpoint that blames the adapter. The match length is
-     * derived as twice this delay (mock-game's {@code Main.matchDuration}), and the observation has
-     * to finish inside it.
+     * survivors' checks do, is ignored rather than honoured: it would otherwise fail much later at
+     * a checkpoint that blames the adapter. The match length is derived as twice this delay
+     * (mock-game's {@code Main.matchDuration}), and everything after launch has to finish inside
+     * it.
      *
+     * @param peerCount how many peers the session runs
      * @return the delay in seconds
      */
-    private static int hostLaunchDelaySeconds() {
+    private static int hostLaunchDelaySeconds(final int peerCount) {
+        // Everything the run can spend once the host has launched: the server-state gate, the
+        // departing peer's teardown, the survivor stages and the verdict line.
+        long afterLaunch =
+                SERVER_LIVE_TIMEOUT
+                        .plus(TEARDOWN_TIMEOUT)
+                        .plus(MultiPeerSession.SURVIVOR_TIMEOUT)
+                        .plus(VERDICT_LINE_TIMEOUT)
+                        .toSeconds();
         // Both bounds first, so the fallback itself cannot sit outside them if a constant moves.
+        // The match, twice the delay, has to outlast everything after launch.
         long floor =
                 Math.max(
-                        MultiPeerSession.minHostLaunchDelaySeconds(SESSION_PEERS),
-                        PEER_LOST_TIMEOUT.plus(TEARDOWN_TIMEOUT).toSeconds() / 2 + 1);
-        // Everything the post-launch run can spend besides the delay itself: bringing the session
-        // up, then the slack on the launch wait, the server-state gate, the departing peer's
-        // teardown and the peer-loss detection. What is left is what the delay may be.
+                        MultiPeerSession.minHostLaunchDelaySeconds(peerCount), afterLaunch / 2 + 1);
+        // What is left under the class timeout once bring-up, the slack on the launch wait and
+        // everything after launch are taken out is what the delay may be.
         long ceiling =
                 CLASS_TIMEOUT
                         .minus(MultiPeerSession.SESSION_DEADLINE)
                         .minus(LAUNCH_SLACK)
-                        .minus(SERVER_LIVE_TIMEOUT)
-                        .minus(TEARDOWN_TIMEOUT)
-                        .minus(PEER_LOST_TIMEOUT)
+                        .minusSeconds(afterLaunch)
                         .toSeconds();
         int fallback = (int) Math.max(120, floor);
         String override = System.getenv(LAUNCH_DELAY_ENV);
@@ -653,8 +806,7 @@ final class PeerDepartureLiveTest {
                             + "s");
             return fallback;
         }
-        // Compared, never multiplied: arithmetic on an unvalidated value would overflow out of
-        // this static initializer and error every test in the class rather than be ignored.
+        // Compared, never multiplied, so no value can overflow its way past these checks.
         if (seconds > ceiling) {
             System.out.println(
                     "[4.3.4] ignoring "
@@ -677,7 +829,9 @@ final class PeerDepartureLiveTest {
                             + override
                             + ": below the "
                             + floor
-                            + "s needed to keep the game joinable and the match long enough to"
+                            + "s needed at "
+                            + peerCount
+                            + " peers to keep the game joinable and the match long enough to"
                             + " observe a departure; using "
                             + fallback
                             + "s");
@@ -687,10 +841,13 @@ final class PeerDepartureLiveTest {
     }
 
     /**
-     * Skips, or fails under {@link #LIVE_REQUIRED_ENV}, when the machine cannot run a live session.
+     * Skips, or fails under {@link #LIVE_REQUIRED_ENV}, when the machine cannot run a live session
+     * of this size.
+     *
+     * @param peerCount how many peers the case needs, host included
      */
-    private static void requireLiveEnvironment() {
-        List<String> missing = missingPrerequisites();
+    private static void requireLiveEnvironment(final int peerCount) {
+        List<String> missing = missingPrerequisites(peerCount);
         if (!missing.isEmpty() && Boolean.parseBoolean(System.getenv(LIVE_REQUIRED_ENV))) {
             fail(LIVE_REQUIRED_ENV + "=true but missing live prerequisites: " + missing);
         }
@@ -698,11 +855,12 @@ final class PeerDepartureLiveTest {
     }
 
     /**
-     * Everything a live two-peer run needs and this machine does not have.
+     * Everything a live run of this size needs and this machine does not have.
      *
+     * @param peerCount how many peers the case needs, host included
      * @return one line per missing prerequisite, naming its override and its remedy
      */
-    private static List<String> missingPrerequisites() {
+    private static List<String> missingPrerequisites(final int peerCount) {
         List<String> missing = new ArrayList<>();
         expect(
                 missing,
@@ -722,18 +880,14 @@ final class PeerDepartureLiveTest {
                 findUidBinary(),
                 UID_BINARY_ENV,
                 "see documentation/demos/README.md");
-        expect(
-                missing,
-                "hosting account's refresh token",
-                findTokenA(),
-                TOKEN_A_ENV,
-                "bootstrap .secrets/refresh_token.txt");
-        expect(
-                missing,
-                "joining account's refresh token",
-                findTokenB(),
-                TOKEN_B_ENV,
-                "bootstrap .secrets/refresh_token_b.txt for a SECOND seeded account");
+        for (PeerSlot slot : SLOTS.subList(0, peerCount)) {
+            expect(
+                    missing,
+                    slot.label() + "'s refresh token",
+                    findRefreshToken(slot),
+                    slot.tokenEnv(),
+                    "bootstrap " + slot.tokenFile() + " for its own seeded account");
+        }
         // In the list rather than a separate assumption, so FAF_LIVE_REQUIRED covers it too
         // (WBS-2.3.3.1). A runner with no outbound network must fail rather than go green having
         // run nothing, which is the whole point of that variable.
@@ -833,14 +987,6 @@ final class PeerDepartureLiveTest {
         return required(findUidBinary(), "faf-uid binary");
     }
 
-    private static Path tokenFileA() {
-        return required(findTokenA(), "hosting account's refresh token");
-    }
-
-    private static Path tokenFileB() {
-        return required(findTokenB(), "joining account's refresh token");
-    }
-
     /**
      * Non-null variant for the test body; guaranteed present once the prerequisite gate passes.
      *
@@ -870,13 +1016,8 @@ final class PeerDepartureLiveTest {
         return resolve(UID_BINARY_ENV, "faf-uid", "../faf-uid");
     }
 
-    private static Path findTokenA() {
-        return resolve(TOKEN_A_ENV, ".secrets/refresh_token.txt", "../.secrets/refresh_token.txt");
-    }
-
-    private static Path findTokenB() {
-        return resolve(
-                TOKEN_B_ENV, ".secrets/refresh_token_b.txt", "../.secrets/refresh_token_b.txt");
+    private static Path findRefreshToken(final PeerSlot slot) {
+        return resolve(slot.tokenEnv(), slot.tokenFile(), "../" + slot.tokenFile());
     }
 
     /**

@@ -152,6 +152,14 @@ harness sets it per child when it spawns one; see
 7. Plays out the match for its duration, then reports one `GameResult` per army,
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
+A player leaving does not end the game (WBS-4.3.6). From `CreateLobby` until launch, a
+`DisconnectFromPeer` is answered the way FA's lobby answers it: `Disconnected` with the
+player's id, and on the host `ClearSlot` with that player's slot. The game then stops sending
+to that peer and plays on, whoever left, and a host whose last joiner left keeps its lobby
+open. Once the match is live the frame is only logged, because a running FA game processes no
+GPGNet input. FA's matchmaker lobby answers with `DisconnectedPeer` instead, which this game
+does not send.
+
 Players are split into two teams in arrival order: armies 1, 3, ... on team 2 and
 armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it marks a
 game with more `MULTI_TEAM` invalid). The end-of-match result is fixed by design: army

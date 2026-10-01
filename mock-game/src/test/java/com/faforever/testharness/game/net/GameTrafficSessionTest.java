@@ -217,6 +217,37 @@ final class GameTrafficSessionTest {
     }
 
     @Test
+    void aPeerThatLeftIsForgottenSoItsAddressRegistersAfresh() throws Exception {
+        session.bind(freePort());
+        session.registerPeer(peerAddress(), PEER_PLAYER_ID);
+        receiveFromGame();
+
+        session.unregisterPeer(PEER_PLAYER_ID);
+        awaitLog(
+                event ->
+                        event.getFormattedMessage()
+                                .equals("stopped sending peer traffic to player " + PEER_PLAYER_ID),
+                "the departure must be logged");
+        // Whatever was sent before the departure can still be queued at the stub, one datagram per
+        // 20 ms the test thread was held up; drop it, so the reads below see only later sends.
+        drain();
+        peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
+
+        // The same address again. Had the departure only silenced the peer, this would be skipped
+        // as an unchanged endpoint and the peer would get nothing at all; forgotten, it registers
+        // afresh and its sequence starts over. A round under way when the peer left can still
+        // deliver one datagram of the old sequence, hence the few tries.
+        session.registerPeer(peerAddress(), PEER_PLAYER_ID);
+        List<Long> sequences = new ArrayList<>();
+        for (int i = 0; i < 3 && !sequences.contains(0L); i++) {
+            sequences.add(receiveFromGame().sequence());
+        }
+        assertTrue(
+                sequences.contains(0L),
+                "a peer registered afresh starts its sequence at zero: " + sequences);
+    }
+
+    @Test
     void peerAnnouncedBeforeBindIsDroppedNotThrown() throws Exception {
         session.registerPeer(peerAddress(), PEER_PLAYER_ID);
 

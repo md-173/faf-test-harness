@@ -12,10 +12,11 @@ import java.util.Set;
  *
  * <p>Scope is the minimal set the mock-game lifecycle and result reporting need (gpgnet-format-spec
  * §7.1), not the full emit catalogue: the lifecycle frames {@code GameState} and {@code GameEnded};
- * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; and the
- * result frames {@code GameResult} and {@code JsonStats}. The long tail ({@code AIOption}, {@code
- * ClearSlot}, {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added on demand, not here.
- * There are deliberately no per-message-type classes — just frame-builders.
+ * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; the
+ * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} (WBS-4.3.6); and
+ * the result frames {@code GameResult} and {@code JsonStats}. The long tail ({@code AIOption},
+ * {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added on demand, not here. There are
+ * deliberately no per-message-type classes, just frame-builders.
  */
 public final class GpgNetSender {
 
@@ -142,5 +143,30 @@ public final class GpgNetSender {
      */
     public void gameEnded() throws IOException {
         sink.send(GpgNetFrame.of("GameEnded"));
+    }
+
+    /**
+     * Emit {@code Disconnected(uid)}, FA's answer to a {@code DisconnectFromPeer} from the adapter
+     * (WBS-4.3.6). FA's lobby formats the id with {@code string.format("%d", uid)} ({@code
+     * lobby.lua}'s {@code DisconnectFromPeer}), so it goes on the wire as a string chunk, not an
+     * int (§7.1).
+     *
+     * @param playerId the id of the player who left
+     * @throws IOException if the frame cannot be sent
+     */
+    public void disconnected(final int playerId) throws IOException {
+        sink.send(GpgNetFrame.of("Disconnected", Integer.toString(playerId)));
+    }
+
+    /**
+     * Emit {@code ClearSlot(slot)}, a host freeing the slot of a player who left (WBS-4.3.6), as
+     * FA's lobby does from its {@code PeerDisconnected} callback. faf-server takes it from the host
+     * only.
+     *
+     * @param slot the slot, which is the {@code StartSpot} the host gave that player
+     * @throws IOException if the frame cannot be sent
+     */
+    public void clearSlot(final int slot) throws IOException {
+        sink.send(GpgNetFrame.of("ClearSlot", slot));
     }
 }

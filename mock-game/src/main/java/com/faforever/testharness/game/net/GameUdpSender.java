@@ -131,6 +131,16 @@ public final class GameUdpSender {
     }
 
     /**
+     * Stops sending to a peer that left the game (WBS-4.3.6). A round already under way may still
+     * send it one datagram; no later round does.
+     *
+     * @param playerId the remote player's id; one that was never registered is ignored
+     */
+    public void unregisterPeer(final int playerId) {
+        peers.remove(playerId);
+    }
+
+    /**
      * Starts emitting a datagram to every registered peer once per cadence. Idempotent; a no-op
      * once {@link #stop()} has run.
      */

@@ -59,17 +59,17 @@ import picocli.CommandLine.Spec;
  * joiner's crash (WBS-5.2.1), and passes only if the survivors do; see {@link
  * MultiPeerSession#withDeliberateCrash}.
  *
- * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair
- * and no adapter or game left running; {@link ExitCodes#USAGE} for a bad invocation, including no
- * credential list, both lists at one layer, fewer credential files than peers, two peers on one
- * file or (on access tokens) one account, a refresh-token path that is not a regular file, an
- * unreadable or empty file, a missing binary, a {@code --log-level} above INFO (the traffic check
- * reads INFO lines), or a fault option that does not say one thing clearly (a per-peer list of the
- * wrong length or out of range, a list given with its root flag, a {@code --fault-peer} naming no
- * peer or no set fault, a {@code --crash-peer} on the host or beside another crash), all refused
- * before any process starts; {@link ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code
- * session: FAIL <peer>: <stage>: <detail>}) or a subprocess survives teardown, which is then
- * killed.
+ * <p>Exit codes: {@link ExitCodes#OK} on a full mesh with two-way game traffic between every pair,
+ * every peer's logged path the one its role takes (WBS-4.2.6), and no adapter or game left running;
+ * {@link ExitCodes#USAGE} for a bad invocation, including no credential list, both lists at one
+ * layer, fewer credential files than peers, two peers on one file or (on access tokens) one
+ * account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing
+ * binary, a {@code --log-level} above INFO (the traffic check reads INFO lines), or a fault option
+ * that does not say one thing clearly (a per-peer list of the wrong length or out of range, a list
+ * given with its root flag, a {@code --fault-peer} naming no peer or no set fault, a {@code
+ * --crash-peer} on the host or beside another crash), all refused before any process starts; {@link
+ * ExitCodes#RUNTIME} when a checkpoint fails (logged as {@code session: FAIL <peer>: <stage>:
+ * <detail>}) or a subprocess survives teardown, which is then killed.
  */
 @Command(
         name = "session",
@@ -79,8 +79,9 @@ import picocli.CommandLine.Spec;
         description =
                 "Run a multi-peer session through the live lobby: one host and --peers - 1 "
                         + "joiners, each with its own account, adapter and game. Exits 0 when "
-                        + "every adapter reports every other peer connected and every game has "
-                        + "received every other game's traffic; needs --log-level INFO or finer. "
+                        + "every adapter reports every other peer connected, every game has "
+                        + "received every other game's traffic, and every peer's own log shows "
+                        + "the path its role takes; needs --log-level INFO or finer. "
                         + "Give each peer one credential file with --peer-refresh-token-file or "
                         + "--peer-access-token-file. Sets each peer's credential, adapter ports, "
                         + "launch delay and host or join intent itself: the root "
@@ -153,8 +154,8 @@ public final class SessionCommand implements Callable<Integer> {
      * Validates the invocation, runs the session, tears it down, and maps the verdict to an exit
      * code.
      *
-     * @return {@link ExitCodes#OK} on a full mesh with two-way game traffic and nothing left
-     *     running, otherwise {@link ExitCodes#RUNTIME}
+     * @return {@link ExitCodes#OK} on a full mesh with two-way game traffic, every peer on its
+     *     role's path and nothing left running, otherwise {@link ExitCodes#RUNTIME}
      * @throws ParameterException for a bad invocation; picocli exits {@link ExitCodes#USAGE}
      */
     @Override

@@ -457,16 +457,15 @@ final class PeerSessionWiringTest {
 
         server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
 
-        // The play-on rule, and the whole reason this state is special. Relaying would end the
-        // match: the adapter forwards DisconnectFromPeer with no state guard, and the mock game
-        // ends on it from LIVE exactly as it does from the lobby, but without emitting its closing
-        // frames. The survivor would then report a delivery failure that never happened, which is
-        // the class of mis-diagnosis this card exists to remove. The departed peer's relay is
-        // reaped by the adapter's own connectivity checker about ten seconds later regardless.
+        // The play-on rule, and the whole reason this state is special: no lobby frame may cut a
+        // running match short. Relaying would, because the adapter closes the peer's relay on the
+        // RPC before it forwards the frame, even though the mock game, like FA's, only logs that
+        // frame once LIVE (WBS-4.3.6). On the side that made the ICE offer, the adapter's own
+        // connectivity checker declares the departed peer lost about ten seconds later anyway.
         awaitLogged("peer disconnect ignored during a live match: id=" + PEER_ID);
         assertNull(
                 adapter.receivedMessage("disconnectFromPeer"),
-                "relaying here would end the live match through the adapter's forwarded frame");
+                "relaying here would close the peer's relay in the adapter mid-match");
         assertEquals(
                 ClientState.PLAYING,
                 lifecycle.getState(),
@@ -502,15 +501,42 @@ final class PeerSessionWiringTest {
         server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
 
         // The deliberate asymmetry with connectToPeer, which ends the session on the same failure.
-        // A relay left behind for a peer that has gone is self-correcting: the adapter's own
-        // connectivity checker drops it about ten seconds later. Asserted on the warning rather
-        // than on the state alone, because "still HOSTING" would also pass on a build where the
-        // handler was never registered and nothing happened at all.
+        // A relay left behind for a peer that has gone is a harmless leftover, which teardown
+        // removes. Asserted on the warning rather than on the state alone, because "still HOSTING"
+        // would also pass on a build where the handler was never registered and nothing happened
+        // at all.
         awaitLogged("peer relay teardown failed for id=" + PEER_ID);
         assertEquals(
                 ClientState.HOSTING,
                 lifecycle.getState(),
                 "a failed teardown RPC must not end a live session");
+    }
+
+    @Test
+    void departureAfterTheSessionEndedIsANoOp() throws Exception {
+        // faf-server fans the notice out while its game is still in the lobby, so a client whose
+        // own game crashed first can get it after teardown, as the host did in live-integration's
+        // crash proof (#512). TERMINATED never reads one, so even a malformed notice fails nothing.
+        MockClientLifecycle lifecycle = hostingLifecycle();
+        lifecycle.post(new GameExited(134));
+        awaitState(lifecycle, ClientState.TERMINATED);
+        ObjectNode malformed = MAPPER.createObjectNode().put("command", "DisconnectFromPeer");
+        malformed.putArray("args");
+
+        lifecycle.post(new DisconnectFromPeer(MAPPER.readTree(disconnectFromPeer(PEER_ID))));
+        lifecycle.post(new DisconnectFromPeer(malformed));
+
+        assertEquals(ClientState.TERMINATED, lifecycle.getState());
+        assertNull(
+                adapter.receivedMessage("disconnectFromPeer"),
+                "a session that has ended has no relay left to drop");
+        List<String> unmatched =
+                captured.list.stream()
+                        .filter(e -> e.getLevel() == Level.WARN)
+                        .map(ILoggingEvent::getFormattedMessage)
+                        .filter(m -> m.startsWith("No matching transitions for DisconnectFromPeer"))
+                        .toList();
+        assertEquals(List.of(), unmatched, "a late notice must be a deliberate no-op (#512)");
     }
 
     @Test
