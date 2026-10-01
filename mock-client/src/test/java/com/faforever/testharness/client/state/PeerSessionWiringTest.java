@@ -461,7 +461,7 @@ final class PeerSessionWiringTest {
         // running match short. Relaying would, because the adapter closes the peer's relay on the
         // RPC before it forwards the frame, even though the mock game, like FA's, only logs that
         // frame once LIVE (WBS-4.3.6). On the side that made the ICE offer, the adapter's own
-        // connectivity checker reaps the departed peer's relay about ten seconds later anyway.
+        // connectivity checker declares the departed peer lost about ten seconds later anyway.
         awaitLogged("peer disconnect ignored during a live match: id=" + PEER_ID);
         assertNull(
                 adapter.receivedMessage("disconnectFromPeer"),
@@ -501,10 +501,10 @@ final class PeerSessionWiringTest {
         server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
 
         // The deliberate asymmetry with connectToPeer, which ends the session on the same failure.
-        // A relay left behind for a peer that has gone is self-correcting: the adapter's own
-        // connectivity checker drops it about ten seconds later. Asserted on the warning rather
-        // than on the state alone, because "still HOSTING" would also pass on a build where the
-        // handler was never registered and nothing happened at all.
+        // A relay left behind for a peer that has gone is a harmless leftover, which teardown
+        // removes. Asserted on the warning rather than on the state alone, because "still HOSTING"
+        // would also pass on a build where the handler was never registered and nothing happened
+        // at all.
         awaitLogged("peer relay teardown failed for id=" + PEER_ID);
         assertEquals(
                 ClientState.HOSTING,

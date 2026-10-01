@@ -1144,7 +1144,7 @@ guard, which sends every remaining connection a `DisconnectFromPeer` naming
 the departing player. Each Mock Client relays that to its adapter as
 `disconnectFromPeer(id)`; the adapter destroys the peer relay and forwards a
 GPGNet `DisconnectFromPeer` to the local Mock Game, which drops that peer and
-plays on. In every survivor's logs:
+plays on. In every survivor's logs (`ClearSlot` in the host's only):
 
 ```text
 [MockClient] peer disconnect: id=<departing id>

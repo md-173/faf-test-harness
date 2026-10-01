@@ -614,9 +614,10 @@ public final class MockGameLifecycle {
 
     /**
      * Registers what a {@code DisconnectFromPeer} does in each state (WBS-4.3.4, WBS-4.3.6).
-     * Adapter 3.3.14 holds every frame it sends until this game reports {@code GameState Lobby}
-     * ({@code GPGNetServer.sendToGpgNet}), so LOBBY is the earliest state one reaches. Every state
-     * but ENDED gets an edge all the same, so no adapter can leave the frame unhandled.
+     * Adapter 3.3.14 holds every frame but its own {@code CreateLobby} until this game reports
+     * {@code GameState Lobby} ({@code GPGNetServer.sendToGpgNet}), so LOBBY is the earliest state
+     * this frame reaches. Every state but ENDED gets an edge all the same, so no adapter can leave
+     * the frame unhandled.
      *
      * <ul>
      *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way FA's
