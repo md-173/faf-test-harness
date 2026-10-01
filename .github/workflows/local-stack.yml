@@ -53,6 +53,20 @@ jobs:
   # the job would leave a required check waiting forever, and the name must stay unique across
   # workflows (release.yml's gate says why).
   local-stack:
+    # TEMPORARY, reverted once measured (#413): ten plain legs, which count, and three proof legs,
+    # which must fail and say which side did. The counting rule is in the PR body.
+    name: local-stack (${{ matrix.leg }})
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        include:
+          - leg: stack-db
+            db_commit: "0000000000000000000000000000000000000000"
+          - leg: harness-drop
+            session_args: --mock-game-udp-drop-percent=100
+          - leg: tilt-timeout
+            tilt_timeout: 20s
     # Not ubuntu-latest, which moves to Ubuntu 26.04 between 2026-10-19 and 2026-11-19
     # (actions/runner-images#14748): the runs this job was measured on used 24.04, so moving on is a
     # bump like the pins below, measured again.
@@ -67,7 +81,7 @@ jobs:
       GITOPS_STACK_COMMIT: 808a05fadf21989f00b444c43e649846c7d80957
       # FAForever/db's tag v146, which matches the faf-db-migrations:v146 image the pin deploys; its
       # test-data.sql seeds the accounts. By commit, since a tag can move.
-      FAF_DB_COMMIT: 921e29aa5b31738dd57332dcdc2bd66ea36348fa
+      FAF_DB_COMMIT: ${{ matrix.db_commit || '921e29aa5b31738dd57332dcdc2bd66ea36348fa' }}
       # The tools that bring the stack up, at the versions the spike ran, each checked against the
       # digest its release publishes. The runner image ships its own kind, kubectl and Helm, which
       # move with the image, so these go first on PATH.
@@ -159,6 +173,23 @@ jobs:
           path: gitops-stack
           persist-credentials: false
 
+      # TEMPORARY, reverted once measured (#413): the runner's used and available memory and the kind
+      # node's own, every few seconds from here to the end of the session.
+      - name: Start the memory sampler
+        timeout-minutes: 1
+        run: |
+          mkdir -p "$STACK_LOGS"
+          node="$CLUSTER-control-plane"
+          {
+            while true; do
+              mem=$(free -m | awk '/^Mem:/ {print $3, $7}')
+              ctr=$(docker stats --no-stream --format '{{.MemUsage}}' "$node" 2>/dev/null | head -n 1 | cut -d/ -f1 | tr -d ' ')
+              echo "$(date +%s) $mem ${ctr:--}"
+              sleep 2
+            done
+          } < /dev/null > "$STACK_LOGS/sampler.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/sampler.pid"
+
       - name: Create the kind cluster
         id: cluster
         timeout-minutes: 5
@@ -203,6 +234,9 @@ jobs:
         # killed.
         timeout-minutes: 13
         working-directory: gitops-stack
+        env:
+          # TEMPORARY, reverted once measured (#413): the tilt-timeout proof leg's 20 s.
+          TILT_TIMEOUT: ${{ matrix.tilt_timeout }}
         run: |
           # The step shell has no pipefail, and without it the tee below would hide tilt's status.
           set -o pipefail
@@ -213,7 +247,7 @@ jobs:
           # made to the checkout, on a line of its own, since the Tiltfile has not always ended with a
           # newline.
           printf '\n%s\n' "ci_settings(k8s_grace_period='3m')" | tee -a Tiltfile
-          tilt ci --timeout 10m -- --run faf-lobby-server --run ory-hydra-create-client-2 2>&1 |
+          tilt ci --timeout "${TILT_TIMEOUT:-10m}" -- --run faf-lobby-server --run ory-hydra-create-client-2 2>&1 |
             tee "$STACK_LOGS/tilt-ci.log"
 
       - name: Load the pinned test data and restart the lobby
@@ -314,7 +348,11 @@ jobs:
           # The local lobby's policy check is off and returns before it reads unique_id, so faf-uid
           # would do no work here. The client still refuses to start without a value.
           UNIQUE_ID: placeholder
-        run: scripts/ci/run-session.sh "$WORK"
+          # TEMPORARY, reverted once measured (#413): the harness-drop proof leg's fault.
+          SESSION_ARGS: ${{ matrix.session_args }}
+        run: |
+          read -ra extra <<< "${SESSION_ARGS:-}"
+          scripts/ci/run-session.sh "$WORK" "${extra[@]}"
 
       # Before the teardown, since it reads the cluster. The first step that did not succeed says
       # which side failed: the harness (its build or its session) or the stack. A failed session is
@@ -474,6 +512,32 @@ jobs:
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # TEMPORARY, reverted once measured (#413): the peaks the sampler saw, and the disk at the
+      # session's end, as one `measure:` log line and in the summary.
+      - name: Record the memory and disk peaks
+        if: always()
+        timeout-minutes: 1
+        run: |
+          kill "$(cat "$RUNNER_TEMP/sampler.pid" 2>/dev/null)" 2>/dev/null || true
+          f="$STACK_LOGS/sampler.log"
+          total=$(free -m | awk '/^Mem:/ {print $2}')
+          used=$(awk 'NF >= 4 && $2 > m {m = $2} END {print m + 0}' "$f" 2>/dev/null || echo 0)
+          avail=$(awk 'NF >= 4 && (n == "" || $3 < n) {n = $3} END {print n + 0}' "$f" 2>/dev/null || echo 0)
+          node=$(awk 'NF >= 4 && $4 != "-" {v = $4 + 0; if ($4 ~ /GiB$/) v *= 1024; else if ($4 ~ /KiB$/) v /= 1024; if (v > m) m = v} END {printf "%d", m}' "$f" 2>/dev/null || echo 0)
+          disk=$(df -m / | awk 'NR == 2 {print $3 "/" $2}')
+          echo "measure: total_mib=$total peak_used_mib=$used min_available_mib=$avail peak_node_mib=$node disk_used_of_mib=$disk samples=$(awk 'END {print NR}' "$f" 2>/dev/null || echo 0)"
+          {
+            echo "<details><summary>Memory and disk (temporary measurement)</summary>"
+            echo
+            echo '```text'
+            echo "runner memory ${total} MiB: peak used ${used} MiB, lowest available ${avail} MiB; kind node peak ${node} MiB"
+            echo "disk /: ${disk} MiB used"
+            docker system df 2>/dev/null || true
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Collect the stack's logs
         if: failure() || cancelled()
         timeout-minutes: 5
@@ -551,7 +615,7 @@ jobs:
         uses: actions/upload-artifact@v7
         timeout-minutes: 5
         with:
-          name: local-stack-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: local-stack-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.leg }}
           path: |
             session-run/logs/*.jsonl*
             stack-logs/
