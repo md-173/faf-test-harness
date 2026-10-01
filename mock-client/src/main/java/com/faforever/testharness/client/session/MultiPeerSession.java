@@ -101,11 +101,13 @@ import org.slf4j.MDC;
  * be classified as a crash, then for every survivor that made the ICE offer on its link to that
  * joiner to report it lost, and last for every survivor-to-survivor direction of traffic to keep
  * advancing. Only the offering side is asked: in adapter 3.3.14 only it runs the connectivity
- * checker, and the answering side never notices. The timing: the joiner's crash timer starts when
- * it joins, after the host started hosting, so a crash delay of the host's launch delay plus {@link
- * #CRASH_AFTER_LAUNCH} lands after launch; and since every joiner is in before launch, it lands
- * well before the host's match ends, at twice the launch delay after launch. A crash in the lobby
- * phase is not this: faf-server then tells every survivor, whose game ends (WBS-4.3.6, #435).
+ * checker, and the answering side notices only if an ICE send or receive fails. The timing: the
+ * joiner's crash timer starts when it joins, after the host started hosting, so a crash delay of
+ * the host's launch delay plus {@link #CRASH_AFTER_LAUNCH} lands after launch; and since every
+ * joiner is in before launch, it lands well before the host's match ends, at twice the launch delay
+ * after launch. A crash in the lobby phase is not this: faf-server then tells every survivor, whose
+ * game drops the crashed peer and plays on (WBS-4.3.6), and the session still fails, on the crash
+ * itself.
  *
  * <p><b>The host uses {@code friends} visibility</b> (WBS-4.3.3). faf-server's {@code
  * command_game_join} checks foes, lobby state, init mode and password but never visibility, which
@@ -1351,10 +1353,10 @@ public final class MultiPeerSession implements AutoCloseable {
     /**
      * The survivors that must report a crashed joiner lost (WBS-5.2.1): those that made the ICE
      * offer on their link to it. Only the offering side runs the adapter's connectivity checker in
-     * adapter 3.3.14, and the answering side never notices a lost peer. The lobby's {@code
-     * ConnectToPeer} frames say which side offered, and faf-server gives the host the offer on
-     * every host link, so a host without one means the offers were not recorded, and asking nobody
-     * would pass the check vacuously.
+     * adapter 3.3.14; the answering side notices a lost peer only if an ICE send or receive fails,
+     * so it cannot be required to. The lobby's {@code ConnectToPeer} frames say which side offered,
+     * and faf-server gives the host the offer on every host link, so a host without one means the
+     * offers were not recorded, and asking nobody would pass the check vacuously.
      *
      * @param survivors the survivors, host first
      * @param crashed the crashed joiner

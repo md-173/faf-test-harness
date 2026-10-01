@@ -49,7 +49,10 @@ and the command exits `0` once every adapter reports every other peer connected
 and every game has received every other game's datagrams with an advancing
 sequence, so an adapter that connects but does not forward game packets fails the
 run (stage `traffic`). That evidence is each game's INFO progress line, so
-`session` needs `--log-level` INFO or finer. Runs have been verified at 2 to 4
+`session` needs `--log-level` INFO or finer. Last, each peer's own `state
+entry:` and `peer connect:` lines must be the path its role takes, or the run
+fails at stage `transitions` (WBS-4.2.6): the checks before it are outcomes,
+which a peer can reach the wrong way. Runs have been verified at 2 to 4
 peers. The 420 s session deadline does not yet grow with `--peers`, and joiners
 start one at a time, so a larger session can run out of it part-way through, after
 the peers started so far have logged in (and, on refresh-token files, rotated
@@ -135,7 +138,7 @@ is no manifest, and it prints `mock-client (development build)` instead.
 
 | Code | Constant          | When                                                                             |
 |------|-------------------|----------------------------------------------------------------------------------|
-| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, with no adapter or game left running, and with `--crash-peer` also that joiner's game crashing after launch, the loss reported by every survivor that offered on its link to it, and at three peers or more the survivors' traffic still advancing. |
+| `0`  | `OK`              | Successful run; `--help` and `--version`. For `ice-smoke`: the adapter is reachable. For `session`: a full mesh and two-way game traffic between every pair, every peer's own log showing the path its role takes, with no adapter or game left running, and with `--crash-peer` also that joiner's game crashing after launch, the loss reported by every survivor that offered on its link to it, and at three peers or more the survivors' traffic still advancing. |
 | `2`  | `USAGE`           | Bad invocation: invalid args, missing required options, unknown subcommand, no subcommand, unreadable config file, malformed JSON, bad URI, bad port. For `session`, also a `--peers` outside 2 to 26, no peer credential files or both channels at one layer, fewer credential files than peers, two peers on one file or (on access tokens) one account, a refresh-token path that is not a regular file, an unreadable or empty file, a missing binary, a `--log-level` above INFO, `INSTANCE_NAME` set, or a fault option that does not say one thing clearly (a `--peer-*` fault list of the wrong length or out of range, a list given with its root flag, a `--fault-peer` naming no peer or no set fault, a `--crash-peer` on the host or beside another crash), all refused before any process starts. |
 | `70` | `RUNTIME`         | A runtime failure after a subcommand started, e.g. `run` had no usable refresh-token file, the lobby session failed (a login the lobby ended before `welcome`, a lobby connection that dropped or sent nothing for 100 s, or a command of its own the lobby answered with `invalid`), its ICE adapter or game never came up (a `game_launch` frame it could not read or use, a binary that could not be started, an adapter that exited or never accepted its JSON-RPC connection, one that refused a setup call, or an unexpected exception on the way up; logged as `the ICE adapter or game never came up`, after a line naming the cause), or its session failed after they came up (a `HostGame`, `JoinGame` or `ConnectToPeer` frame it could not read, a `DisconnectFromPeer` one before the game started, an adapter that answered a host, join or peer-connect call with an error or not within 5 s, a match the server cancelled after `game_launch` and before the game started, an ICE adapter still running once the session ended although its JSON-RPC link had closed from its side, such as one whose stream stopped parsing (`ICE adapter JSON-RPC link dropped while the adapter kept running`), or an unexpected exception in the host, join or peer-connect step; logged as `the session failed after its ICE adapter and game came up`, after a line naming the cause), `launch-ice` / `launch-game` could not find/start its binary, the child exited before its run window, `launch-ice` could not attach a JSON-RPC peer to the adapter it started (WBS-3.1.6.3), `ice-smoke` returned any verdict other than reachable, or a `session` checkpoint failed (including no two-way game traffic) or a subprocess survived its teardown. Also any exception that escapes a subcommand uncaught. |
 | `71` | `GAME_CRASHED`    | `run` only: the session ran, but the game process died unaccounted for: a non-zero exit with no `GameEnded` frame observed and no harness-initiated teardown, the same condition that logs `mock-game exited abnormally`. Covers a game process that exited before its match as well as one that died mid-match (a game binary that could not be started at all is `70`), but not mock-game's own `69` (`ADAPTER_LOST`), which is logged as a lost adapter link and leaves this code alone; the adapter's own death is `72` below. Before this existed, such a run exited `0`. |
@@ -712,11 +715,12 @@ adapter writes itself.
 An automated harness observes a running client from the outside, through its
 log records alone (WBS-3.1.6.2). There is no health port and no readiness
 message — see the note at the end of this section. The formats below are a
-documented interface consumed by the N-client spawner (WBS 4.2.2) and the
-fault-injection cards (Phase 5). **Changing any of them is a breaking change**
-for those cards, and each is pinned by a test: `HarnessLogContractTest` and
-`IceEventLoggerTest` parse real JSONL records, and `WelcomeStateSyncTest` pins
-the `session ready` fields.
+documented interface consumed by the N-client spawner (WBS 4.2.2), the
+fault-injection cards (Phase 5) and `session` itself, which reads the `state
+entry` and `peer connect` lines to check each peer's path (WBS-4.2.6).
+**Changing any of them is a breaking change** for those consumers, and each is
+pinned by a test: `HarnessLogContractTest` and `IceEventLoggerTest` parse real
+JSONL records, and `WelcomeStateSyncTest` pins the `session ready` fields.
 
 Read the JSONL file rather than the console: every record is one line of JSON
 with a millisecond `timestamp`, a `component`, and an `instance` when one is
