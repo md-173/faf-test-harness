@@ -1208,7 +1208,7 @@ of the 2026-10-01 live runs, at two to four peers, the host reported the loss
 about ten seconds after the leaver's client ended (7 to 10 s as logged), and
 the earlier joiners reported nothing about it.
 
-Three consequences worth knowing before you read a post-launch log:
+Four consequences worth knowing before you read a post-launch log:
 
 - **The harness adds no peer silence detection of its own**, by design. Upstream's
   connectivity checker is the one that exists and we consume its verdict
@@ -1221,9 +1221,28 @@ Three consequences worth knowing before you read a post-launch log:
 - **The log will not go quiet after the verdict.** `onConnectionLost()` also
   schedules an ICE re-offer for the lost peer when this side holds the offer,
   immediately if the peer had connected and after 5 s otherwise, so the
-  adapter will keep trying to reach a player who has gone. Reconnection and
-  rejoin are out of scope for 4.3.4; this noise is upstream doing what it
-  always does.
+  adapter will keep trying to reach a player who has gone. Each re-offer's
+  `IceMsg` goes through the client to the lobby, and faf-server's
+  `handle_ice_message` drops it for a player who is offline or has no game
+  connection, as the departed peer is by then. Reconnection and rejoin are
+  out of scope for 4.3.4; this noise is upstream doing what it always does.
+- **The verdict brings a junk datagram or a dead listener thread.** Within a
+  few milliseconds of `connected=false`, either that survivor's game logs
+  `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>`, `<port>`
+  being the lost peer's relay port, or its adapter logs `Exception in thread
+  "Thread-<n>" java.lang.RuntimeException: java.lang.InterruptedException`.
+  Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's
+  ICE listener while it waits (`PeerIceModule.java:404`, adapter 3.3.14), and
+  ice4j answers by handing it a pooled 1500-byte buffer that was never filled
+  (ice4j `1c60acc`: `MergingDatagramSocket.java:553-558`,
+  `MultiplexingXXXSocketSupport.java:631-666`). The listener dispatches that
+  buffer before it checks the interrupt (`PeerIceModule.java:518-537`), so an
+  earlier packet from the lost peer comes out again. Game data goes to the
+  game, minus its `d` prefix. An echo goes to the connectivity checker, whose
+  report to the telemetry queue throws on the interrupt and ends the thread
+  (`TelemetryDebugger.java:86-88`). In the 2026-10-01 live runs every
+  checker-declared loss showed one or the other: ten junk datagrams,
+  including every post-launch departure, and two dead listeners.
 
 **`PeerDepartureLiveTest` runs both paths at two, three and four peers**, the
 last joiner leaving each time, on local accounts A to D. Before launch it
@@ -1733,7 +1752,8 @@ connection runs `IceAdapter.onFAShutdown()`, which logs `FA SHUTDOWN, closing
 everything` and closes the game session and every peer's ICE agent with it
 (`GPGNetServer.onGpgnetConnectionLost`, adapter 3.3.14). So the survivors'
 adapters stop getting echoes from it at the crash itself, and the offering ones
-declare the loss about ten seconds later. The crashed peer's client stops its
+declare the loss about ten seconds later, each with the junk datagram or dead
+listener thread §9.6 describes. The crashed peer's client stops its
 adapter too, as the real client does (downlords-faf-client's `GameRunner` calls
 `iceAdapter.stop()` after handling any game exit, `develop` at `8be1a118`), but
 the loss does not depend on that.
