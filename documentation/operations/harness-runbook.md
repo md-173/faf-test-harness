@@ -1228,9 +1228,10 @@ Four consequences worth knowing before you read a post-launch log:
   out of scope for 4.3.4; this noise is upstream doing what it always does.
 - **The verdict brings a junk datagram or a dead listener thread.** Within a
   few milliseconds of a survivor's `connected=false`, either its game logs
-  `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>`, `<port>`
-  being the lost peer's relay port, or its adapter logs `Exception in thread
-  "Thread-<n>" java.lang.RuntimeException: java.lang.InterruptedException`.
+  `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>: GameDatagram
+  is exactly 20 bytes, got 1499`, `<port>` being the lost peer's relay port, or
+  its adapter logs `Exception in thread "Thread-<n>"
+  java.lang.RuntimeException: java.lang.InterruptedException`.
   Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's
   ICE listener while it waits (`PeerIceModule.java:404`, adapter 3.3.14), and
   ice4j answers by handing it a pooled 1500-byte buffer this read never filled
