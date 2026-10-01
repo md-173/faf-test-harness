@@ -261,7 +261,7 @@ This catalog lists every GPGNet command observed crossing the local TCP socket. 
 | `IceMsg` | `receiver_id:int, ice_msg_json:string` | ICE | game-state-machine.md |
 | `Bottleneck` | `code:int, ...args` (see [§7.4](#section-7-4-bottleneck)) | **Fault** | game-state-machine.md |
 | `BottleneckCleared` | _(none)_ | **Fault** | game-state-machine.md |
-| `Disconnected` | `uid:string` (FA Lua sends `string.format("%d", uid)`, so the wire chunk is type `0x01`, NOT `0x00`). Sent from the custom lobby's `DisconnectFromPeer`, for any uid; the mock game sends it on a lobby-phase `DisconnectFromPeer` (WBS-4.3.6) | Lobby | [`lobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/lobby.lua) |
+| `Disconnected` | `uid:string` (FA Lua sends `string.format("%d", uid)`, so the wire chunk is type `0x01`, NOT `0x00`). Sent from the custom lobby's `DisconnectFromPeer`, for any uid, which its `ConnectToPeer` also calls first for every peer reached through the adapter's proxy (a `127.0.0.1` address), so FA sends one on each such connect too; the mock game sends it only on a lobby-phase `DisconnectFromPeer` (WBS-4.3.6) | Lobby | [`lobby.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/lobby.lua) |
 | `Rehost` | `...args` (marked unused by spec) | Lobby | game-state-machine.md |
 | `EstablishedPeer` | `peer_id:int` | LIVE | [`AutolobbyServerCommunicationsComponent.lua`](https://github.com/FAForever/fa/blob/develop/lua/ui/lobby/autolobby/components/AutolobbyServerCommunicationsComponent.lua) — emitted by FA, no server handler; consumed by ICE adapter only |
 | `DisconnectedPeer` | `peer_id:int` | LIVE | same file — adapter-only |

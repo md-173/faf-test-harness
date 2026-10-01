@@ -1624,9 +1624,9 @@ public final class MockClientLifecycle {
      * the RPC here would do exactly that, because the adapter closes the peer's relay and forwards
      * the frame with no state guard of its own. This side's game would ignore the frame once LIVE,
      * as FA's does with its lobby gone (WBS-4.3.6), but the link would already be cut. Nothing is
-     * lost by dropping it: the adapter's connectivity checker reaps the departed peer's relay about
-     * ten seconds later either way, which is precisely how a post-launch departure is meant to be
-     * noticed.
+     * lost by dropping it: on the side that made the ICE offer, the adapter's connectivity checker
+     * reaps the departed peer's relay about ten seconds later either way, which is how a
+     * post-launch departure is meant to be noticed.
      *
      * <p>The registration is kept for PLAYING all the same, so this is a deliberate, logged no-op
      * rather than a generic "No matching transitions" WARN. Same reason the IDLE/{@code
@@ -1642,9 +1642,9 @@ public final class MockClientLifecycle {
      * is deliberate.</b> That method ends the session on failure because without its relay the peer
      * is permanently unreachable and a session carrying on would look healthy while silently unable
      * to connect. This one is the mirror image: the peer is leaving regardless, and the worst a
-     * failure leaves behind is a relay for someone who has gone, which the adapter's own
-     * connectivity checker tears down about ten seconds later anyway. Ending a live session over
-     * that would turn a self-correcting condition into a lost run.
+     * failure leaves behind is a relay for someone who has gone, which the offering side's
+     * connectivity checker tears down about ten seconds later and teardown removes everywhere.
+     * Ending a live session over that would turn a harmless leftover into a lost run.
      *
      * <p>{@code whenComplete} rather than {@code whenCompleteAsync} follows from the same decision:
      * with no {@code ShutdownRequested} to post, this continuation only logs and never touches the

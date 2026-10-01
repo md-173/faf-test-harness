@@ -762,7 +762,7 @@ These are distinct signals. They are **not** interchangeable, and only
 |---|---|
 | `gpgnet link: state=<state>` | The local mock game connected to or disconnected from this client's adapter over GPGNet. Not a peer signal. |
 | `peer ice: local=<id> remote=<id> state=<state>` | ICE connection state for one peer. These are the transitions delayed-negotiation tests measure. |
-| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal, in both directions: `connected=false` is also how a peer departure surfaces once the match has launched. |
+| `peer connected: local=<id> remote=<id> connected=<bool>` | The adapter's verdict that a peer is reachable. The definitive peer-established signal, in both directions: `connected=false` is also how a peer departure surfaces once the match has launched, on the side that made the ICE offer. |
 | `peer connect: login=<login> id=<id> offer=<bool>` | The lobby told this client to connect to that player, and the client then asks its adapter to. `id` is the player's lobby ID, the `remote` of this client's `peer ice` lines for that player. `offer=true` marks the offering side, whose adapter sends the first candidates and restarts ICE when no answer comes back within 6000 ms. `scripts/ci/ice-timing.py` finds each ICE link's offerer by it. |
 | `peer disconnect: id=<id>` | The lobby told this client that player has left, and its adapter has been asked to drop the peer. Lobby phase only; see the runbook's peer-departure section for why nothing like it appears after launch. |
 

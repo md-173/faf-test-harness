@@ -457,16 +457,15 @@ final class PeerSessionWiringTest {
 
         server.broadcastText(disconnectFromPeer(PEER_ID) + "\n");
 
-        // The play-on rule, and the whole reason this state is special. Relaying would end the
-        // match: the adapter forwards DisconnectFromPeer with no state guard, and the mock game
-        // ends on it from LIVE exactly as it does from the lobby, but without emitting its closing
-        // frames. The survivor would then report a delivery failure that never happened, which is
-        // the class of mis-diagnosis this card exists to remove. The departed peer's relay is
-        // reaped by the adapter's own connectivity checker about ten seconds later regardless.
+        // The play-on rule, and the whole reason this state is special: no lobby frame may cut a
+        // running match short. Relaying would, because the adapter closes the peer's relay on the
+        // RPC before it forwards the frame, even though the mock game, like FA's, only logs that
+        // frame once LIVE (WBS-4.3.6). On the side that made the ICE offer, the adapter's own
+        // connectivity checker reaps the departed peer's relay about ten seconds later anyway.
         awaitLogged("peer disconnect ignored during a live match: id=" + PEER_ID);
         assertNull(
                 adapter.receivedMessage("disconnectFromPeer"),
-                "relaying here would end the live match through the adapter's forwarded frame");
+                "relaying here would close the peer's relay in the adapter mid-match");
         assertEquals(
                 ClientState.PLAYING,
                 lifecycle.getState(),

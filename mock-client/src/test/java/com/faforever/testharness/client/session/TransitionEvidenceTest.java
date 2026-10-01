@@ -26,8 +26,8 @@ import org.slf4j.MDC;
  */
 final class TransitionEvidenceTest {
 
-    /** The lobby-assigned ids of A to D, in join order. */
-    private static final long[] IDS = {7982, 330072, 441873, 512004};
+    /** The lobby-assigned ids of local accounts A to D, in join order, as the live runs logged. */
+    private static final long[] IDS = {7982, 330072, 121266, 167899};
 
     /** A host's lines up to its role. */
     private static final List<String> HOST =

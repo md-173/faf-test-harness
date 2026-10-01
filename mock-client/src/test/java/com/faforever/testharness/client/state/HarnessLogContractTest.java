@@ -47,8 +47,9 @@ import org.slf4j.MDC;
  * run through the real {@link JsonLineEncoder} and parsed as JSON, so these assertions read the
  * same records a harness reads from the JSONL file rather than matching console text.
  *
- * <p>Changing any format asserted here is a breaking change for WBS 4.2.2 and the Phase 5 fault
- * injection cards. See {@code mock-client/README.md} § "Harness log contract".
+ * <p>Changing any format asserted here is a breaking change for WBS 4.2.2, the Phase 5 fault
+ * injection cards and the session's own {@code transitions} stage (WBS-4.2.6), which reads the
+ * state and peer connect lines. See {@code mock-client/README.md} § "Harness log contract".
  */
 final class HarnessLogContractTest {
 

@@ -560,7 +560,8 @@ public final class MultiPeerSession implements AutoCloseable {
      * traffic, and for a deliberate crash the launch, the crash and the survivors playing on.
      * Returns normally only when every peer's adapter reports every other peer connected and every
      * game has received every other game's datagrams, and, for a deliberate crash, when its stages
-     * have passed too. Last, each peer's logged path is checked ({@link #finalPaths()}).
+     * have passed too. Last, each peer's logged path is checked ({@link #finalPaths()}), and a pass
+     * is logged as {@code session: transitions: every peer logged the path its role takes}.
      *
      * @throws CheckpointFailure naming the peer and the stage, if any checkpoint does not pass
      * @throws InterruptedException if any bounded wait is interrupted
@@ -630,6 +631,8 @@ public final class MultiPeerSession implements AutoCloseable {
         Optional<Map<String, List<ClientState>>> after = finalPaths();
         if (after.isPresent()) {
             transitions.verifySession(peers, after.get());
+            // The stage's only trace when it passes, so a log and a live test can see it ran.
+            LOG.info("session: transitions: every peer logged the path its role takes");
         } else {
             LOG.info(
                     "session: the host launches on a timer, so the caller checks each peer's path");

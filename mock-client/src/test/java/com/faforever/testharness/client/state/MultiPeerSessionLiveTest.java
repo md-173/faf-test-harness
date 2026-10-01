@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -113,6 +114,10 @@ final class MultiPeerSessionLiveTest {
 
     /** Set to {@code true} where a missing prerequisite is a failure, not a skip (WBS-2.3.3.1). */
     private static final String LIVE_REQUIRED_ENV = "FAF_LIVE_REQUIRED";
+
+    /** What {@link MultiPeerSession#run()} logs once every peer's path has checked out. */
+    private static final String TRANSITIONS_PASSED =
+            "session: transitions: every peer logged the path its role takes";
 
     /**
      * One peer's fixed slot: its label, role, and where its account's credential comes from.
@@ -285,6 +290,7 @@ final class MultiPeerSessionLiveTest {
         Throwable failure = null;
         try {
             runSession(joinerAmount + 1, runId);
+            assertTransitionsStageRan();
             // Checks on what the session produced, which the session command leaves out.
             assertOfferDirections(session.peers());
             assertInstanceLabels(session.peers());
@@ -350,6 +356,18 @@ final class MultiPeerSessionLiveTest {
         } catch (CheckpointFailure f) {
             throw new AssertionError(f.getMessage() + bindFailureHint(), f);
         }
+    }
+
+    /**
+     * The session ran its last stage, each peer's logged path (WBS-4.2.6), and it passed. Nothing
+     * else would notice if {@link MultiPeerSession#run()} stopped checking the paths, since a
+     * passing check leaves only this line.
+     */
+    private void assertTransitionsStageRan() {
+        assertTrue(
+                captured.list.stream()
+                        .anyMatch(event -> TRANSITIONS_PASSED.equals(event.getFormattedMessage())),
+                "the session never logged its transitions stage passing");
     }
 
     /**

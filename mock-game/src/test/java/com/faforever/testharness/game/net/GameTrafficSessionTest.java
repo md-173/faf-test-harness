@@ -228,6 +228,10 @@ final class GameTrafficSessionTest {
                         event.getFormattedMessage()
                                 .equals("stopped sending peer traffic to player " + PEER_PLAYER_ID),
                 "the departure must be logged");
+        // Whatever was sent before the departure can still be queued at the stub, one datagram per
+        // 20 ms the test thread was held up; drop it, so the reads below see only later sends.
+        drain();
+        peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
 
         // The same address again. Had the departure only silenced the peer, this would be skipped
         // as an unchanged endpoint and the peer would get nothing at all; forgotten, it registers

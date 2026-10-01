@@ -15,9 +15,9 @@ import com.fasterxml.jackson.databind.JsonNode;
  * with the target added by {@code GameConnection.send}.
  *
  * <p>The LOBBY guard is why this is a lobby-phase signal only. After the host reports {@code
- * GameState Launching} the server sends no targeted departure notice at all, and a survivor learns
- * of a departure from its own adapter instead, roughly ten seconds later. See the runbook's
- * multi-peer limitations.
+ * GameState Launching} the server sends no targeted departure notice at all, and a survivor that
+ * made the ICE offer on its link to the departed peer learns of the departure from its own adapter
+ * instead, roughly ten seconds later. See the runbook's peer-departure section.
  *
  * @param command the DisconnectFromPeer command received.
  */

@@ -613,8 +613,10 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * Registers what a {@code DisconnectFromPeer} does in each state (WBS-4.3.4, WBS-4.3.6). The
-     * adapter forwards it with no state guard of its own, so every state but ENDED gets an edge.
+     * Registers what a {@code DisconnectFromPeer} does in each state (WBS-4.3.4, WBS-4.3.6).
+     * Adapter 3.3.14 holds every frame it sends until this game reports {@code GameState Lobby}
+     * ({@code GPGNetServer.sendToGpgNet}), so LOBBY is the earliest state one reaches. Every state
+     * but ENDED gets an edge all the same, so no adapter can leave the frame unhandled.
      *
      * <ul>
      *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way FA's
@@ -623,8 +625,8 @@ public final class MockGameLifecycle {
      *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreDepartureDuringMatch}): FA destroys
      *       its lobby when the match launches, and a running game processes no GPGNet input.
      *   <li><b>INITIALIZING and IDLE</b> end the game as a success ({@link #peerDisconnected}), as
-     *       they have since WBS-4.3.4. There is no lobby to leave yet, and nothing sends one there:
-     *       the lobby server notifies only connections already in its game.
+     *       they have since WBS-4.3.4. Adapter 3.3.14 never delivers the frame there (above), and
+     *       there is no lobby to leave yet.
      * </ul>
      *
      * <p>Split out of {@link #setupStateMachine()} to keep that method under the checkstyle length
@@ -1012,8 +1014,8 @@ public final class MockGameLifecycle {
      * told when its host leaves, because faf-server ends its own game first and {@code abort()}
      * then no longer fans out; told, as when the server aborts the host directly, FA's joiner only
      * shows "Connection to host timed out". faf-server ignores both replies here: {@code
-     * handle_disconnected} only logs, and {@code clear_slot} finds nobody, because the leaver was
-     * removed before the notice went out.
+     * handle_disconnected} only logs, and {@code clear_slot} finds nobody, because by the time the
+     * replies arrive faf-server has removed the leaver.
      *
      * <p>Dropping the peer means {@link #present} forgets it and {@link GameTrafficSession} stops
      * sending to it. {@link #peers} and {@link #slots} keep it, so army numbering and the results
