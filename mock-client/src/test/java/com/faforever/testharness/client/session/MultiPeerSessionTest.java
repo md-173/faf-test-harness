@@ -609,13 +609,16 @@ final class MultiPeerSessionTest {
 
         assertDoesNotThrow(
                 () ->
-                        evidence.verifySession(
+                        MultiPeerSession.checkPaths(
+                                evidence,
                                 List.of(host, joiner),
                                 Map.of("B", List.of(ClientState.TERMINATED))));
         CheckpointFailure e =
                 assertThrows(
                         CheckpointFailure.class,
-                        () -> evidence.verifySession(List.of(host, joiner), Map.of()));
+                        () ->
+                                MultiPeerSession.checkPaths(
+                                        evidence, List.of(host, joiner), Map.of()));
         assertTrue(
                 e.getMessage().startsWith("B(joiner): transitions: B(joiner) logged state entries"),
                 e.getMessage());

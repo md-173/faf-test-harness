@@ -630,9 +630,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         Optional<Map<String, List<ClientState>>> after = finalPaths();
         if (after.isPresent()) {
-            transitions.verifySession(peers, after.get());
-            // The stage's only trace when it passes, so a log and a live test can see it ran.
-            LOG.info("session: transitions: every peer logged the path its role takes");
+            checkPaths(transitions, peers, after.get());
         } else {
             LOG.info(
                     "session: the host launches on a timer, so the caller checks each peer's path");
@@ -679,6 +677,25 @@ public final class MultiPeerSession implements AutoCloseable {
                             List.of(ClientState.TERMINATED)));
         }
         return hostLaunchDelaySeconds == LAUNCH_DISABLED ? Optional.of(Map.of()) : Optional.empty();
+    }
+
+    /**
+     * The {@code transitions} stage (WBS-4.2.6): each peer's logged path against its role's, then
+     * the stage's only trace when it passes. Logged here, after the check, so the line cannot
+     * outlive it: {@code MultiPeerSessionLiveTest} asserts the line, and {@code
+     * MultiPeerSessionTest} that a deviating peer fails this method.
+     *
+     * @param evidence the paths the peers logged
+     * @param peers every peer, host first and joiners in join order
+     * @param after the states each peer's path adds after its role, by label
+     * @throws CheckpointFailure at stage {@code transitions} if any peer deviated
+     */
+    static void checkPaths(
+            final TransitionEvidence evidence,
+            final List<SessionPeer> peers,
+            final Map<String, List<ClientState>> after) {
+        evidence.verifySession(peers, after);
+        LOG.info("session: transitions: every peer logged the path its role takes");
     }
 
     /**
