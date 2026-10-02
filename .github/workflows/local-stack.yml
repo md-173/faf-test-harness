@@ -1,0 +1,559 @@
+# A session against a FAF stack the job owns (WBS-2.3.3.2, #413).
+#
+# live-integration.yml runs the session against FAF's shared test environment. That is the realistic
+# run, and the only one that answers the policy question, but every dispatch spends two access tokens
+# a person mints by hand, and a second run on the same accounts signs the first out. This workflow
+# brings FAForever/gitops-stack up in a kind cluster on the runner instead, as FAF's own checks.yml
+# does, seeds its accounts, mints their tokens from its Hydra, and runs the same session command,
+# scripts/ci/run-session.sh. No FAF account, secret or credential is involved, so it runs on every
+# pull request, forks included, on every push to main, and weekly. The recipe is the 2.2.14 spike's
+# (#414).
+#
+# What it does not cover, and live-integration.yml does: the lobby's policy check (off here, so the
+# session sends a fixed unique_id and faf-uid never runs), faf-user-service's login rules, wss://
+# and Cloudflare, and whatever .xyz runs beyond the tags gitops-stack declares. The adapters still
+# report telemetry to FAF's test service, as every harness launch does (IceAdapterLauncher).
+#
+# Everything the stack is built from is pinned, and a pin decays: .xyz follows gitops-stack's
+# develop branch and this job does not. The summary shows the pin's date, its age and whether
+# develop has moved, and on main and the schedule it warns once the pin is 30 days old and develop
+# has moved. Bump it then, before each release (CONTRIBUTING.md section 8), and whenever
+# live-integration.yml fails something this job passed. A bump is one pull request: the commit
+# below, the FAForever/db commit tagged for the faf-db-migrations image that commit deploys, and a
+# green run.
+
+name: Local-stack session
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+  # Weekly, for the weeks nothing merges: the runner image and the images the pin leaves floating
+  # change underneath it. Off the hour, since GitHub delays or drops scheduled runs when Actions is
+  # busy, most at the start of an hour. Schedules run only on the default branch, GitHub disables
+  # them in a public repository after 60 days without activity, and a failure mails whoever last
+  # edited this cron line.
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the run it replaces, as in ci.yml. Every other run is keyed
+# on its own id, so no run waits behind another, or behind live-integration.yml: each run owns its
+# cluster, its lobby and its accounts, so there is nothing to serialise.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # No name:, so the check is named after this id. Required checks are matched by name, so renaming
+  # the job would leave a required check waiting forever, and the name must stay unique across
+  # workflows (release.yml's gate says why).
+  local-stack:
+    # Not ubuntu-latest, which moves to Ubuntu 26.04 between 2026-10-19 and 2026-11-19
+    # (actions/runner-images#14748): the runs this job was measured on used 24.04, so moving on is a
+    # bump like the pins below, measured again.
+    runs-on: ubuntu-24.04
+    # Above tilt's 13-minute step and the session's 12 together, with room for the build and the
+    # rest. A job cap cancels the run rather than failing a step, which the report step says.
+    timeout-minutes: 40
+
+    env:
+      # FAForever/gitops-stack's develop at the pin, committed 2026-09-20. The summary reads the date
+      # from the checkout; it is here for anyone reading the file.
+      GITOPS_STACK_COMMIT: 808a05fadf21989f00b444c43e649846c7d80957
+      # FAForever/db's tag v146, which matches the faf-db-migrations:v146 image the pin deploys; its
+      # test-data.sql seeds the accounts. By commit, since a tag can move.
+      FAF_DB_COMMIT: 921e29aa5b31738dd57332dcdc2bd66ea36348fa
+      # The tools that bring the stack up, at the versions the spike ran, each checked against the
+      # digest its release publishes. The runner image ships its own kind, kubectl and Helm, which
+      # move with the image, so these go first on PATH.
+      KIND_VERSION: v0.31.0
+      KIND_SHA256: eb244cbafcc157dff60cf68693c14c9a75c4e6e6fedaf9cd71c58117cb93e3fa
+      TILT_VERSION: 0.37.7
+      TILT_SHA256: b695193fab68def8310cb971fa60bbe47ba0a782e24f54ebad287c13316a61b0
+      KUBECTL_VERSION: v1.34.1
+      KUBECTL_SHA256: 7721f265e18709862655affba5343e85e1980639395d5754473dafaadcaa69e3
+      HELM_VERSION: v4.3.0
+      HELM_SHA256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+      # kind v0.31.0's own default node image, named so that its digest is visible here.
+      KIND_NODE_IMAGE: kindest/node:v1.35.0@sha256:452d707d4862f52530247495d180205e029056831160e22870e37e3f6c1ac31f
+      # Never kind's default name, so the teardown cannot delete a cluster it did not create.
+      CLUSTER: faf-local-stack
+      # login.id values from the pinned test data: test and steambie. Id 3, Rhiza, is banned; the
+      # other five log in, which is where more peers would come from (#494).
+      LOCAL_ACCOUNT_IDS: "1 7"
+      PEERS: "2"
+      WORK: ${{ github.workspace }}/session-run
+      STACK_LOGS: ${{ github.workspace }}/stack-logs
+
+    steps:
+      - name: Record the start time
+        timeout-minutes: 1
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          # This job runs third-party binaries (the adapter jar, the stack's tools and its images) and
+          # needs no git credentials.
+          persist-credentials: false
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v6
+        timeout-minutes: 5
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # Held at v5 rather than v6 for the licensing reason ci.yml gives; keep every workflow on the
+      # same pinned commit.
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        timeout-minutes: 5
+
+      # First among the steps that can fail on this pull request's own code, and cheaper than the
+      # stack, which is not started if the harness does not build.
+      - name: Build the harness jars and fetch the pinned adapter
+        id: build
+        timeout-minutes: 10
+        run: ./gradlew downloadIceAdapter :mock-client:shadowJar :mock-game:shadowJar
+
+      - name: Install the pinned stack tools
+        id: tools
+        timeout-minutes: 3
+        run: |
+          bin="$RUNNER_TEMP/stack-bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          fetch() { curl -fsSL --retry 3 --retry-all-errors -o "$1" "$2"; }
+          fetch kind "https://github.com/kubernetes-sigs/kind/releases/download/$KIND_VERSION/kind-linux-amd64"
+          fetch tilt.tar.gz "https://github.com/tilt-dev/tilt/releases/download/v$TILT_VERSION/tilt.$TILT_VERSION.linux.x86_64.tar.gz"
+          fetch kubectl "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/amd64/kubectl"
+          fetch helm.tar.gz "https://get.helm.sh/helm-$HELM_VERSION-linux-amd64.tar.gz"
+          sha256sum -c - <<EOF
+          $KIND_SHA256  kind
+          $TILT_SHA256  tilt.tar.gz
+          $KUBECTL_SHA256  kubectl
+          $HELM_SHA256  helm.tar.gz
+          EOF
+          install -m 755 kind kubectl "$bin"
+          tar -xzf tilt.tar.gz -C "$bin" tilt
+          tar -xzf helm.tar.gz -C "$bin" --strip-components=1 linux-amd64/helm
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/kind" version
+          "$bin/tilt" version
+          "$bin/kubectl" version --client
+          "$bin/helm" version --short
+
+      - name: Check out gitops-stack at the pin
+        id: gitops
+        uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          repository: FAForever/gitops-stack
+          ref: ${{ env.GITOPS_STACK_COMMIT }}
+          path: gitops-stack
+          persist-credentials: false
+
+      - name: Create the kind cluster
+        id: cluster
+        timeout-minutes: 5
+        run: |
+          # The inotify limits kind's known-issues page asks for. Hosted runners already set more, so
+          # a limit is only ever raised, which a self-hosted runner may need.
+          raise() {
+            if [ "$(sysctl -n "$1")" -lt "$2" ]; then
+              sudo sysctl -w "$1=$2"
+            fi
+          }
+          raise fs.inotify.max_user_instances 512
+          raise fs.inotify.max_user_watches 524288
+          kind create cluster --name "$CLUSTER" --image "$KIND_NODE_IMAGE" --wait 2m
+          # --wait only logs a warning when it runs out, so a node that never became ready would
+          # otherwise surface as tilt's timeout ten minutes later.
+          kubectl wait --for=condition=Ready node --all --timeout=2m
+
+      # The Tiltfile fetches this chart itself as it loads, with no retry, and a failed fetch surfaces
+      # only as "No objects found for chart cluster/traefik". Fetched here, it is found present, and
+      # the Tiltfile's own fetch is skipped.
+      - name: Fetch the traefik chart gitops-stack depends on
+        id: chart
+        timeout-minutes: 3
+        working-directory: gitops-stack
+        run: |
+          for attempt in 1 2 3; do
+            if helm dependency update cluster/traefik; then
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+          echo "::error::could not fetch cluster/traefik's chart dependency in three attempts"
+          exit 1
+
+      # What a session needs and no more: the lobby, Hydra on Postgres, MariaDB, RabbitMQ and traefik,
+      # with their setup jobs. The Tiltfile turns the lobby's policy check off, deploys no policy
+      # server, and reads CI (set on every runner) to render its charts as it loads.
+      - name: Bring the stack up with tilt ci
+        id: tilt
+        # Above tilt's own 10 minutes, so that tilt says what it was waiting for before the step is
+        # killed.
+        timeout-minutes: 13
+        working-directory: gitops-stack
+        run: |
+          # The step shell has no pipefail, and without it the tee below would hide tilt's status.
+          set -o pipefail
+          mkdir -p "$STACK_LOGS"
+          # Without a grace period tilt ci ends at the first pod in an error state, and one transient
+          # image pull failure, or a setup job that loses its first race with its database, is
+          # enough: FAF's own run 35442824945 ended on a single ErrImagePull. This is the only change
+          # made to the checkout, on a line of its own, since the Tiltfile has not always ended with a
+          # newline.
+          printf '\n%s\n' "ci_settings(k8s_grace_period='3m')" | tee -a Tiltfile
+          tilt ci --timeout 10m -- --run faf-lobby-server --run ory-hydra-create-client-2 2>&1 |
+            tee "$STACK_LOGS/tilt-ci.log"
+
+      - name: Load the pinned test data and restart the lobby
+        id: data
+        timeout-minutes: 8
+        run: |
+          # populate-database.sh's own load (tilt trigger populate-db fails on Linux, because the
+          # script is committed without its execute bit), downloaded first: piped, a failed fetch
+          # would load nothing and still succeed. The password is the chart's public local one.
+          curl -fsS --retry 3 --retry-all-errors -o "$RUNNER_TEMP/test-data.sql" \
+            "https://raw.githubusercontent.com/FAForever/db/$FAF_DB_COMMIT/test-data.sql"
+          kubectl exec -i -n faf-infra statefulset/mariadb -- \
+            mariadb --host=mariadb --user=root --password=banana faf_lobby < "$RUNNER_TEMP/test-data.sql"
+          # The lobby reads its next game id from game_stats once, at startup, so it restarts after
+          # the load. rollout status returns while the old pod is still shutting down, and its grace
+          # period is 3600 s, so it is named first and waited out; with no game open it drains at once.
+          mapfile -t old < <(kubectl get pods -n faf-apps -l app=faf-lobby-server -o name)
+          if [ "${#old[@]}" -eq 0 ]; then
+            echo "::error::found no lobby pod to restart"
+            exit 1
+          fi
+          kubectl rollout restart deployment/faf-lobby-server -n faf-apps
+          kubectl rollout status deployment/faf-lobby-server -n faf-apps --timeout=5m
+          kubectl wait --for=delete -n faf-apps "${old[@]}" --timeout=3m
+
+      - name: Forward traefik and Hydra, and wait for both
+        id: forward
+        timeout-minutes: 3
+        run: |
+          # tilt ci takes its port-forwards with it when it exits, so the job holds its own: traefik for
+          # the session, and Hydra's public and admin ports for minting. Each outlives this step until
+          # the teardown kills it by its PID. Its output goes to a file and it reads nothing, since a
+          # background process holding this step's pipes would keep the step from ending.
+          kubectl port-forward -n traefik deploy/release-name-traefik 8080:8000 \
+            < /dev/null > "$STACK_LOGS/forward-traefik.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/forward-traefik.pid"
+          kubectl port-forward -n faf-apps svc/ory-hydra 4444 4445 \
+            < /dev/null > "$STACK_LOGS/forward-hydra.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/forward-hydra.pid"
+          # The JVM does not resolve *.localhost itself, and traefik routes on Host().
+          echo '127.0.0.1 ws.faforever.localhost' | sudo tee -a /etc/hosts
+          # A forward takes a moment to bind. Wait for what the next steps use, and stop at once,
+          # naming it, if its kubectl has already exited.
+          wait_for() { # what, forward, expected status, curl arguments...
+            local what=$1 forward=$2 want=$3 pid code=none
+            pid=$(cat "$RUNNER_TEMP/forward-$forward.pid")
+            shift 3
+            local deadline=$((SECONDS + 60))
+            while [ "$SECONDS" -lt "$deadline" ]; do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                echo "::error::$what: its port-forward exited; stack-logs/forward-$forward.log says why"
+                return 1
+              fi
+              # curl holds a 101 until --max-time and then exits 28, having printed the status.
+              code=$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' "$@" || true)
+              [ "$code" = "$want" ] && return 0
+              sleep 1
+            done
+            echo "::error::$what: no $want within 60 s (last status: $code)"
+            return 1
+          }
+          wait_for "Hydra's public port" hydra 200 http://127.0.0.1:4444/health/ready
+          wait_for "Hydra's admin port" hydra 200 http://127.0.0.1:4445/health/ready
+          wait_for "the lobby through traefik" traefik 101 \
+            -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+            -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://ws.faforever.localhost:8080/
+          echo "STACK_READY_AT=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Mint one token per peer from the local Hydra
+        id: mint
+        timeout-minutes: 2
+        run: |
+          umask 077
+          # Outside the workspace, so no upload path can reach them. Each is good for an hour, against
+          # a Hydra that exists only for this run.
+          TOKENS="$RUNNER_TEMP/faf-tokens"
+          echo "TOKENS=$TOKENS" >> "$GITHUB_ENV"
+          mkdir -p "$TOKENS"
+          read -ra ids <<< "$LOCAL_ACCOUNT_IDS"
+          if [ "${#ids[@]}" -lt "$PEERS" ]; then
+            echo "::error::PEERS is $PEERS, but LOCAL_ACCOUNT_IDS names ${#ids[@]} accounts"
+            exit 1
+          fi
+          # Named by peer, since run-session.sh reads them in name order and the first one hosts.
+          for ((i = 0; i < PEERS; i++)); do
+            scripts/ci/mint-local-token.sh "${ids[i]}" "$TOKENS/$((i + 1)).txt"
+            echo "peer $((i + 1)): a token for account ${ids[i]}"
+          done
+
+      # The same command as live-integration.yml's sessions. The session's own deadline is 420 s, plus
+      # at most 140 s of teardown, so this step's timeout is a backstop, as it is there. Raise its 12
+      # minutes, and the job's 40, if PEERS grows (#494) or that deadline moves (#429).
+      - name: Run a session against the local lobby
+        id: session
+        timeout-minutes: 12
+        env:
+          LOBBY_URL: ws://ws.faforever.localhost:8080
+          # The local lobby's policy check is off and returns before it reads unique_id, so faf-uid
+          # would do no work here. The client still refuses to start without a value.
+          UNIQUE_ID: placeholder
+        run: scripts/ci/run-session.sh "$WORK"
+
+      # Before the teardown, since it reads the cluster. The first step that did not succeed says
+      # which side failed: the harness (its build or its session) or the stack. A failed session is
+      # the harness's unless the stack was found broken after it.
+      - name: Report the verdict and the evidence
+        if: always()
+        timeout-minutes: 3
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+          JOB_STATUS: ${{ job.status }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          now=$(date +%s)
+          log="$WORK/logs/mockclient.jsonl"
+          since() { echo "$(( ($1 - JOB_START) / 60 )) min $(( ($1 - JOB_START) % 60 )) s"; }
+          phase() {
+            case "$1" in
+              build) echo "building the harness jars" ;;
+              tools) echo "installing the pinned stack tools" ;;
+              gitops) echo "checking out gitops-stack" ;;
+              cluster) echo "creating the kind cluster" ;;
+              chart) echo "fetching the traefik chart" ;;
+              tilt) echo "bringing the stack up with tilt ci" ;;
+              data) echo "loading the test data and restarting the lobby" ;;
+              forward) echo "forwarding traefik and Hydra" ;;
+              mint) echo "minting the tokens" ;;
+              session) echo "the session" ;;
+            esac
+          }
+          first=""
+          how=""
+          for id in build tools gitops cluster chart tilt data forward mint session; do
+            how=$(jq -r --arg id "$id" '.[$id].outcome // "not run"' <<< "$STEPS_JSON")
+            if [ "$how" = failure ] || [ "$how" = cancelled ]; then
+              first=$id
+              break
+            fi
+          done
+          verdict=$(grep -oE 'session: (PASS|FAIL)[^"]*' "$log" 2>/dev/null | head -1 || true)
+          # After a failed session only: was the stack still sound on the session's path? The
+          # traefik forward exiting, the lobby no longer answering, or a pod that is not running or
+          # (re)started after the stack was ready would each fail a session with no fault in the
+          # harness. Hydra, its Postgres and its forward are left out: the tokens are minted by then,
+          # and the lobby already holds Hydra's keys. Finished pods are skipped too: a setup job whose
+          # first pod failed during the bring-up, inside tilt's grace period, leaves that pod Failed.
+          broken=""
+          if [ "$first" = session ] && [ -n "${STACK_READY_AT:-}" ]; then
+            if ! kill -0 "$(cat "$RUNNER_TEMP/forward-traefik.pid")" 2>/dev/null; then
+              broken="$broken the traefik port-forward exited;"
+            fi
+            code=$(curl -s -o /dev/null --max-time 2 -w '%{http_code}' \
+              -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+              -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://ws.faforever.localhost:8080/ || true)
+            if [ "$code" != 101 ]; then
+              broken="$broken the lobby answered $code, not 101;"
+            fi
+            for ns in faf-apps faf-infra traefik; do
+              while read -r container; do
+                broken="$broken $container is not running or restarted during the session;"
+              done < <(kubectl get pods -n "$ns" -o json --request-timeout=20s | jq -r --argjson ready "$STACK_READY_AT" '
+                .items[] | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+                | select(.metadata.name | test("^(ory-hydra-|postgres-)") | not)
+                | .metadata.name as $pod
+                | .status.containerStatuses[]?
+                | select(.state.running == null
+                         or (.state.running.startedAt | fromdateiso8601) > $ready)
+                | "\($pod)/\(.name)"')
+            done
+          fi
+          if [ -z "$first" ] && [ "$JOB_STATUS" = success ]; then
+            result="Passed"
+          elif [ -z "$first" ]; then
+            what=failed
+            if [ "$JOB_STATUS" = cancelled ]; then
+              what="was cancelled"
+            fi
+            result="The job $what before it reached the build"
+            echo "::error title=Local-stack job::the job $what before it reached the build"
+          elif [ "$how" = cancelled ]; then
+            result="Cancelled during $(phase "$first"), by the job's time cap or a newer run"
+            echo "::error title=Local-stack job::cancelled during $(phase "$first")"
+          elif [ "$first" = session ] && [ -n "$broken" ]; then
+            result="The stack failed during the session:$broken"
+            echo "::error title=Local stack failed during the session::$broken"
+          elif [ "$first" = build ]; then
+            result="The harness failed: its jars did not build"
+            echo "::error title=Harness failed::its jars did not build"
+          elif [ "$first" = session ]; then
+            result="The harness failed: ${verdict:-the session ended without a verdict line}"
+            echo "::error title=Harness failed::${verdict:-the session ended without a verdict line}"
+          else
+            detail=""
+            if [ "$first" = tilt ]; then
+              # tilt's last error names the pod or the timeout. A timeout goes on to list every
+              # resource still waiting, which the uploaded tilt-ci.log keeps, so it is cut there.
+              detail=$(grep -E '^(Error: |Timeout after|Readiness timeout)' "$STACK_LOGS/tilt-ci.log" 2>/dev/null | tail -1 || true)
+              detail=${detail%% (*}
+            fi
+            result="The stack did not come up: $(phase "$first")${detail:+: $detail}"
+            echo "::error title=Local stack did not come up::$(phase "$first")${detail:+: $detail}"
+          fi
+          ready_s=""
+          if [ -n "${STACK_READY_AT:-}" ]; then
+            ready_s=$((STACK_READY_AT - JOB_START))
+          fi
+          # One line per run in the log, for the measurements CONTRIBUTING.md cites.
+          echo "timing: stack_ready_s=${ready_s:-none} verdict_s=$((now - JOB_START)) first_failed=${first:-none}"
+          # The pin's age, and whether upstream has moved on. The check of develop never fails the run.
+          pin_date=$(git -C gitops-stack show -s --format=%cs HEAD 2>/dev/null || true)
+          age=""
+          if [ -n "$pin_date" ]; then
+            age=$(( ($(date -u +%s) - $(date -u -d "$pin_date" +%s)) / 86400 ))
+          fi
+          head=$(timeout 20 git ls-remote https://github.com/FAForever/gitops-stack.git refs/heads/develop 2>/dev/null | cut -f1 || true)
+          if [ -z "$head" ]; then
+            upstream="develop's head unknown"
+          elif [ "$head" = "$GITOPS_STACK_COMMIT" ]; then
+            upstream="still develop's head"
+          else
+            upstream="develop has moved to ${head:0:8}"
+            if [ "${age:-0}" -ge 30 ] && { [ "$EVENT" = push ] || [ "$EVENT" = schedule ]; }; then
+              echo "::warning title=Local-stack pin::gitops-stack's pin is $age days old and develop has moved; bump it (CONTRIBUTING.md section 3)"
+            fi
+          fi
+          {
+            echo "### Session against a local FAF stack"
+            echo
+            echo "**$result**"
+            echo
+            if [ -f "$log" ]; then
+              echo '```text'
+              echo "${verdict:-(no session verdict line)}"
+              grep -o 'lobby authenticated as login=[A-Za-z0-9_.-]*' "$log" | sort -u || true
+              # The lobby's own reason when it refused a login: after a pin bump, the likeliest way
+              # for the stack to fail a session while every check above still passes.
+              grep -oE 'lobby authentication_failed: [^"]*' "$log" | sort -u | sed -n '1,4p'
+              echo '```'
+            fi
+            if [ -n "$ready_s" ]; then
+              echo "- Stack ready $(since "$STACK_READY_AT") after the job started"
+            fi
+            echo "- Finished $(since "$now") after the job started"
+            echo "- gitops-stack \`${GITOPS_STACK_COMMIT:0:8}\` from ${pin_date:-an unknown date}, ${age:-?} days old; $upstream"
+            echo "- Test data from FAForever/db \`${FAF_DB_COMMIT:0:8}\`"
+            echo
+            echo "The local lobby's policy check is off, so this run says nothing about faf-uid or the policy path. live-integration.yml's session answers those (harness-runbook.md section 11)."
+            echo
+            echo "<details><summary>Images the stack ran</summary>"
+            echo
+            echo '```text'
+            echo "$KIND_NODE_IMAGE"
+            for ns in faf-apps faf-infra traefik; do
+              kubectl get pods -n "$ns" --request-timeout=20s -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}' 2>/dev/null || true
+            done | sort -u
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect the stack's logs
+        if: failure() || cancelled()
+        timeout-minutes: 5
+        run: |
+          mkdir -p "$STACK_LOGS"
+          kubectl get pods -A -o wide > "$STACK_LOGS/pods.txt" 2>&1 || true
+          kubectl get events -A --sort-by=.lastTimestamp > "$STACK_LOGS/events.txt" 2>&1 || true
+          for ns in faf-apps faf-infra traefik; do
+            for pod in $(kubectl get pods -n "$ns" -o name 2>/dev/null); do
+              kubectl logs -n "$ns" "$pod" --all-containers --prefix --timestamps \
+                > "$STACK_LOGS/$ns-${pod#pod/}.log" 2>&1 || true
+              # A container that restarted left its crash in the run before this one.
+              previous="$STACK_LOGS/$ns-${pod#pod/}.previous.log"
+              kubectl logs -n "$ns" "$pod" --all-containers --prefix --timestamps --previous \
+                > "$previous" 2>/dev/null || true
+              if [ ! -s "$previous" ]; then
+                rm -f "$previous"
+              fi
+            done
+          done
+
+      # The tokens are signed by a Hydra that dies with the cluster, but nothing is left to chance.
+      - name: Remove the token files
+        if: always()
+        timeout-minutes: 1
+        run: rm -rf "${TOKENS:-$RUNNER_TEMP/faf-tokens}"
+
+      # On every path. A hosted runner is destroyed after the job anyway; a self-hosted one is not,
+      # and this is what makes the job safe to copy there. Anything still running afterwards fails the
+      # job, named.
+      - name: Tear the stack down
+        if: always()
+        timeout-minutes: 5
+        run: |
+          stopped() { # pid file: waits up to 5 s for that process to exit
+            local pid
+            pid=$(cat "$1")
+            kill "$pid" 2>/dev/null || return 0
+            for _ in $(seq 10); do
+              kill -0 "$pid" 2>/dev/null || return 0
+              sleep 0.5
+            done
+            return 1
+          }
+          left=""
+          for file in "$RUNNER_TEMP"/forward-*.pid; do
+            if [ -f "$file" ] && ! stopped "$file"; then
+              left="$left the $(basename "$file" .pid) port-forward;"
+            fi
+          done
+          # A failed delete is recorded rather than ending the step, so the checks below still name
+          # whatever it left.
+          if command -v kind > /dev/null; then
+            kind delete cluster --name "$CLUSTER" || left="$left kind could not delete the $CLUSTER cluster;"
+          fi
+          if [ -n "$(docker ps -aq --filter "label=io.x-k8s.kind.cluster=$CLUSTER")" ]; then
+            left="$left the $CLUSTER cluster's containers;"
+          fi
+          # live-integration.yml's pattern: a JVM by the jar it runs.
+          if pgrep -af -- '-jar [^ ]*(faf-ice-adapter\.jar|mock-(game|client)-[^ ]*-all\.jar)'; then
+            left="$left an adapter, game or client JVM;"
+          fi
+          if [ -n "$left" ]; then
+            echo "::error title=Teardown::these outlived the teardown:$left"
+            echo "**Teardown failed, left running:$left**" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "nothing is left running"
+
+      # The session's JSONL logs (the client's lines with every adapter's and game's output, and each
+      # game's own file) and the stack's. The token files are under RUNNER_TEMP and already deleted.
+      # Cancellation counts, since a run that hits the job's time cap ends cancelled.
+      - name: Upload the session and stack logs
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: local-stack-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            session-run/logs/*.jsonl*
+            stack-logs/
+          retention-days: 14
+          if-no-files-found: warn
