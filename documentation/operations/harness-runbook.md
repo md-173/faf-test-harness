@@ -2237,6 +2237,11 @@ so a local run reports its local game and the seeded test accounts there.
 - A machine to itself. The job binds ports 8080, 4444 and 4445 and names its
   cluster `faf-local-stack`, so two runs on one machine collide. Every job on a
   GitHub-hosted runner gets a fresh machine.
+- About 8 GB of memory and four minutes. On GitHub's standard runner for
+  public repositories (4 CPUs, 16 GB), 30 runs of `local-stack.yml` took
+  2 min 50 s to 3 min 46 s each and used at most 7957 MiB of memory, 5972 MiB
+  of it in the kind node. A private repository's standard runner (2 CPUs,
+  8 GB) has not been tried, and that peak would leave it little or no room.
 
 **Adapting the job above.** Keep its checkout, JDK, jar download and check,
 adapter build, session, token-removal and upload steps, and set `runs-on` to
