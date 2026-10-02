@@ -198,8 +198,9 @@ Keep it advisory rather than a required check: the shared test lobby's availabil
 outside anyone's control, so a red run is a finding, not a reason to block a merge.
 
 A job that can block a merge needs a lobby of its own. This repository also runs the session
-on every pull request in [`.github/workflows/local-stack.yml`](.github/workflows/local-stack.yml),
-against a FAF stack the job brings up on its runner, with no account and no secret. Runbook
+as a required check on every pull request, in
+[`.github/workflows/local-stack.yml`](.github/workflows/local-stack.yml), against a FAF stack
+the job brings up on its runner, with no account and no secret. Runbook
 [§11, The isolated option](documentation/operations/harness-runbook.md#the-isolated-option-a-local-faf-stack)
 says what that covers, what it does not, and how to adapt §11's job to it.
 
