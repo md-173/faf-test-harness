@@ -6,10 +6,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** Shared helpers for SubprocessManager tests. */
 final class TestSupport {
+
+    /**
+     * The environment variables a JVM announces on stderr before {@code main} runs ({@code Picked
+     * up JAVA_TOOL_OPTIONS: …} and its two siblings). Removed from every child {@link #forMain}
+     * builds (#516): the tests read their children's stderr line by line, and a machine that sets
+     * one of these (behind a proxy, in some CI images and IDEs) would otherwise hand every child an
+     * extra line the test never wrote. No child here opens a network connection, so nothing they
+     * carry is needed.
+     */
+    static final List<String> JVM_OPTION_VARIABLES =
+            List.of("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS");
 
     private TestSupport() {}
 
@@ -80,7 +92,10 @@ final class TestSupport {
         return Optional.empty();
     }
 
-    /** Builds a ProcessBuilder that re-invokes the current JVM running {@code mainClass}. */
+    /**
+     * Builds a ProcessBuilder that re-invokes the current JVM running {@code mainClass}, with
+     * {@link #JVM_OPTION_VARIABLES} removed from its environment.
+     */
     static ProcessBuilder forMain(Class<?> mainClass, String... mainArgs) {
         // Mirror spec §2.2: command() can be empty on locked-down platforms; fall back to
         // ${java.home}/bin/java so the spec's canonical pattern is the one example everywhere.
@@ -96,6 +111,18 @@ final class TestSupport {
         cmd.add(classpath);
         cmd.add(mainClass.getName());
         Collections.addAll(cmd, mainArgs);
-        return new ProcessBuilder(cmd);
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        withoutJvmOptionVariables(pb.environment());
+        return pb;
+    }
+
+    /**
+     * Removes {@link #JVM_OPTION_VARIABLES} from a child's environment.
+     *
+     * @param environment the environment to edit in place, typically {@link
+     *     ProcessBuilder#environment()}
+     */
+    static void withoutJvmOptionVariables(final Map<String, String> environment) {
+        JVM_OPTION_VARIABLES.forEach(environment::remove);
     }
 }
