@@ -19,7 +19,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
  *
  * <pre>{@code
  * <conversionRule conversionWord="instance"
- *     converterClass="com.faforever.testharness.shared.logging.InstanceConverter"/>
+ *     class="com.faforever.testharness.shared.logging.InstanceConverter"/>
  * }</pre>
  */
 public final class InstanceConverter extends ClassicConverter {

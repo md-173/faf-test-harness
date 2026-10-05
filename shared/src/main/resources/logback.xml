@@ -8,7 +8,7 @@
       so async threads that don't inherit the thread-local MDC still tag correctly.
     -->
     <conversionRule conversionWord="component"
-                    converterClass="com.faforever.testharness.shared.logging.ComponentConverter" />
+                    class="com.faforever.testharness.shared.logging.ComponentConverter" />
 
     <!--
       Custom pattern word %instance — resolves MDC, then LoggerContext, then renders nothing.
@@ -17,7 +17,7 @@
       The converter emits its own " [label]" brackets so nothing is left behind when unset.
     -->
     <conversionRule conversionWord="instance"
-                    converterClass="com.faforever.testharness.shared.logging.InstanceConverter" />
+                    class="com.faforever.testharness.shared.logging.InstanceConverter" />
 
     <!--
       Log level: set LOG_LEVEL (DEBUG, INFO, WARN, ERROR). Default: INFO.
