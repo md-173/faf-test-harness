@@ -116,11 +116,15 @@ final class SignalExitCodeEndToEndTest {
     /**
      * Starts the child with this JVM's classpath, both streams redirected to {@code console}.
      *
-     * <p>A file rather than a pipe. The JDK's process reaper closes the pipe as soon as it observes
-     * the child exit, so a read issued around that moment races the close and loses whatever was
-     * still buffered — and the lines this test is about are printed in the last milliseconds of the
-     * child's life, which is exactly the window that loses. A redirect has no such race: the child
-     * writes, the file keeps it.
+     * <p>A file rather than a pipe, because both tests stop the child with {@code child.destroy()}.
+     * On Linux and macOS that sends SIGTERM and then at once closes this side's ends of the child's
+     * pipes, so nothing the child prints after the signal could be read from them. The lines {@link
+     * #mainReachesSystemExitAndNeverComesBack} reads are all printed after it: {@link
+     * SignalExitChild#HOOK_FINISHED} by the shutdown hook the signal starts, {@link
+     * SignalExitChild#MAIN_EXITING} by the main thread the hook releases. A redirect loses nothing:
+     * the child writes, the file keeps it. This is the mechanism #361 fixed in {@code
+     * SubprocessManager}. The JDK's process reaper is not a cause: when it sees the child exit it
+     * drains what is left in a pipe before closing it.
      *
      * @param console the file to collect the child's output in
      * @return the started process
