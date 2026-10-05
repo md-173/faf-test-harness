@@ -3,6 +3,7 @@ package com.faforever.testharness.client.lobby;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -16,10 +17,14 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.util.List;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Unit tests for {@link LobbyAuthenticator} running against an in-process {@link HttpServer} bound
@@ -168,6 +173,51 @@ final class LobbyAuthenticatorTest {
 
         AccessToken token = authenticator.obtain().get();
         assertEquals("a", token.token());
+    }
+
+    @Test
+    void aRotationLeavesTheTokenFileOwnerOnly(@TempDir final Path dir) throws Exception {
+        assumeTrue(
+                dir.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX file permissions are not supported here");
+        Path file = Files.writeString(dir.resolve("refresh_token.txt"), "0123");
+        Files.setPosixFilePermissions(file, PosixFilePermissions.fromString("rw-r--r--"));
+        // A world-readable <file>.tmp left by a killed run: a fixed temp name would be truncated
+        // and renamed with this mode intact, whatever the umask, so the rotation must not use it.
+        Path stale = Files.writeString(dir.resolve("refresh_token.txt.tmp"), "stale");
+        Files.setPosixFilePermissions(stale, PosixFilePermissions.fromString("rw-r--r--"));
+        LobbyAuthenticator authenticator = new LobbyAuthenticator(file, tokenEndpoint, CLIENT_ID);
+
+        setHandler(successResponse("7777", "4567"));
+        authenticator.obtain().get();
+
+        assertEquals("4567", Files.readString(file));
+        assertEquals(
+                PosixFilePermissions.fromString("rw-------"), Files.getPosixFilePermissions(file));
+        assertEquals(List.of(file, stale), listing(dir));
+    }
+
+    @Test
+    void aFailedMoveLeavesNoTempFileBehind(@TempDir final Path dir) throws Exception {
+        Path file = Files.writeString(dir.resolve("refresh_token.txt"), "0123");
+        LobbyAuthenticator authenticator = new LobbyAuthenticator(file, tokenEndpoint, CLIENT_ID);
+        // Swap the token file for a non-empty directory so the move onto it fails.
+        Files.delete(file);
+        Files.createDirectory(file);
+        Files.writeString(file.resolve("occupant"), "");
+
+        setHandler(successResponse("7777", "4567"));
+        ExecutionException e =
+                assertThrows(ExecutionException.class, () -> authenticator.obtain().get());
+
+        assertEquals(AuthenticationException.class, e.getCause().getClass());
+        assertEquals(List.of(file), listing(dir));
+    }
+
+    private static List<Path> listing(final Path dir) throws IOException {
+        try (Stream<Path> entries = Files.list(dir)) {
+            return entries.sorted().toList();
+        }
     }
 
     private HttpHandler successResponse(final String accessToken, final String refreshToken) {
