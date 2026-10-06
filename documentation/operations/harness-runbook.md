@@ -2329,8 +2329,8 @@ so a local run reports its local game and the seeded test accounts there.
   GitHub-hosted runner gets a fresh machine.
 - About 8 GB of memory and four minutes. On GitHub's standard runner for
   public repositories (4 CPUs, 16 GB), 30 runs of `local-stack.yml` took
-  2 min 50 s to 3 min 46 s each and used at most 7957 MiB of memory, 5972 MiB
-  of it in the kind node. A private repository's standard runner (2 CPUs,
+  2 min 50 s to 3 min 46 s each. They used at most 7957 MiB of memory, and the
+  kind node at most 5972 MiB. A private repository's standard runner (2 CPUs,
   8 GB) has not been tried, and that peak would leave it little or no room.
 
 **Adapting the job above.** Keep its checkout, JDK, jar download and check,
