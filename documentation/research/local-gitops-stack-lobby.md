@@ -26,9 +26,11 @@ of it.**
 - One thing still reaches FAF: the adapters' telemetry. This run's jars sent it to FAF's
   production service, and since #458 the harness sends it to FAF's test service instead
   ([question 3 for FAF](#questions-for-faf)).
-- Runbook §11 does not change until #413 gives a consumer a local job to copy. For runs against
-  the local lobby, #411's questions 1 to 4 fall away, since the job owns Hydra and the accounts;
-  runs against `.xyz` keep them.
+- Runbook §11 was not to change until #413 gave a consumer a local job to copy, and since #509
+  (2026-10-06) it has one:
+  [the isolated option](../operations/harness-runbook.md#the-isolated-option-a-local-faf-stack).
+  For runs against the local lobby, #411's questions 1 to 4 fall away, since the job owns Hydra
+  and the accounts; runs against `.xyz` keep them.
 
 ## What was run
 
@@ -269,7 +271,11 @@ kubectl rollout status deployment/faf-lobby-server -n faf-apps
 kubectl port-forward -n traefik deploy/release-name-traefik 8080:8000
 ```
 
-Tokens, one per peer, with this script (the ids are `login.id` values from the test data):
+Tokens, one per peer. For anything beyond repeating this run, use
+[`scripts/ci/mint-local-token.sh`](../../scripts/ci/mint-local-token.sh), the copy
+`local-stack.yml` runs: it adds an argument check and `jq -e`, so it fails on a missing field
+instead of writing `null` as the token. The spike ran this one (the ids are `login.id` values from
+the test data):
 
 ```bash
 #!/usr/bin/env bash
