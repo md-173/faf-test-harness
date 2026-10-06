@@ -245,11 +245,11 @@ public final class MockGameCli {
     /**
      * Parses the launch argv the way the machine caller expects, turning a {@link
      * ParameterException} into a diagnostic and a stable exit code. On a bad argument it writes
-     * picocli's error message and the generated usage text to {@code err}, then returns {@link
-     * ExitCodes#USAGE} with a {@code null} config. On {@code --help} or {@code --version} it writes
-     * that text to {@code out} and returns {@link ExitCodes#OK} with a {@code null} config. On
-     * success it returns {@link ExitCodes#OK} with the config and writes nothing: a valid set
-     * passes through silently.
+     * picocli's error message, on one line ({@link #oneLine}), and the generated usage text to
+     * {@code err}, then returns {@link ExitCodes#USAGE} with a {@code null} config. On {@code
+     * --help} or {@code --version} it writes that text to {@code out} and returns {@link
+     * ExitCodes#OK} with a {@code null} config. On success it returns {@link ExitCodes#OK} with the
+     * config and writes nothing: a valid set passes through silently.
      *
      * <p>It returns the code rather than calling {@link System#exit(int)} so it stays
      * unit-testable; the bootstrap (WBS-3.2.5.1) maps the code to the process exit status. The
@@ -278,11 +278,25 @@ public final class MockGameCli {
             }
             return new ParseOutcome(ExitCodes.OK, toConfig(commandLine));
         } catch (ParameterException e) {
-            err.println(e.getMessage());
+            err.println(oneLine(String.valueOf(e.getMessage())));
             e.getCommandLine().usage(err);
             err.flush();
             return new ParseOutcome(ExitCodes.USAGE, null);
         }
+    }
+
+    /**
+     * Escapes every line terminator in a diagnostic as a literal {@code \n}, so it stays on one
+     * line (#514). Picocli's parse errors quote the offending argument, which is caller-controlled:
+     * raw, an argument holding {@code "\nUsage:"} would put a forged usage line above the real
+     * block, in the stderr the Mock Client captures as this game's evidence. Mirrors mock-client's
+     * {@code ExecutionExceptionHandler.oneLine}, which does the same for its own errors (#307).
+     *
+     * @param text the raw diagnostic
+     * @return the same text with every line terminator replaced by a literal {@code \n}
+     */
+    static String oneLine(final String text) {
+        return text.replaceAll("\\R", "\\\\n");
     }
 
     /**

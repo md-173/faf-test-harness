@@ -9,6 +9,8 @@ import com.faforever.testharness.game.config.MockGameCli.ParseOutcome;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -102,6 +104,46 @@ final class MockGameCliReportTest {
         assertTrue(
                 errorLine().contains("--player-login"), "message must name the missing argument");
         assertTrue(stderr().contains("Usage:"), "usage text must be printed");
+    }
+
+    /**
+     * An argument holding a newline cannot forge the {@code Usage:} line (#514): picocli quotes it
+     * back in the error, so the newline is escaped onto that line. Checked for both routes a
+     * caller-controlled value takes into the message, an unknown option and a value that fails
+     * conversion. One error line alone would not prove it, since an unescaped forgery is itself
+     * where a reader splitting on {@code Usage:} stops, so the escaped text must be on the line and
+     * no line may begin with the forgery.
+     *
+     * @param argument the offending argument, appended to an otherwise valid argv
+     * @param errorPrefix how the error line must begin
+     */
+    @ParameterizedTest
+    @CsvSource(
+            delimiter = '|',
+            value = {
+                "--bogus\\nUsage: FORGED | Unknown option: ",
+                "--gpgnet-port=zz\\nUsage: FORGED | Invalid value for option '--gpgnet-port': "
+            })
+    void aNewlineInAnArgumentCannotForgeTheUsageLine(
+            final String argument, final String errorPrefix) {
+        String[] args = Arrays.copyOf(VALID_ARGS, VALID_ARGS.length + 1);
+        args[VALID_ARGS.length] = argument.replace("\\n", "\n");
+
+        ParseOutcome outcome = MockGameCli.parseOrReport(args, out, err);
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode());
+        assertNull(outcome.config());
+        List<String> lines =
+                stderr().lines().takeWhile(line -> !line.startsWith("Usage:")).toList();
+        assertEquals(1, lines.size(), "the argument's newline split the error: " + lines);
+        assertTrue(lines.get(0).startsWith(errorPrefix), "unexpected error line: " + lines.get(0));
+        assertTrue(
+                lines.get(0).contains("\\nUsage: FORGED"),
+                "the newline was not escaped onto the error line: " + lines.get(0));
+        assertTrue(
+                stderr().lines().noneMatch(line -> line.startsWith("Usage: FORGED")),
+                "a forged Usage: line reached stderr:\n" + stderr());
+        assertTrue(stderr().contains("Usage: mock-game "), "no real usage block");
     }
 
     @Test
