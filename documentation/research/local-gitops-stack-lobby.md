@@ -235,8 +235,8 @@ resource ([Tiltfile:257][gs-tilt-populate]) that `tilt ci` never triggers.
 ## Running it
 
 Needs Docker, kind, ctlptl, Tilt, Helm, kubectl, curl, jq and openssl, plus JDK 21, the adapter
-and `faf-uid` that runbook §11 uses, and harness jars built from `main` at `d916ad8b` or later
-(the 0.3.0 release still requires `--unique-id`, so §11's flags exit 2 on it; see #499). On a
+and `faf-uid` that runbook §11 uses, and the harness jars of the 0.4.0 release or later (0.3.0
+still requires `--unique-id`, so §11's flags exit 2 on it; see #499). On a
 Linux host, raise the inotify limits kind documents (`fs.inotify.max_user_instances=512`,
 `fs.inotify.max_user_watches=524288`) and, unless your resolver answers `*.localhost`, add the
 host names to `/etc/hosts`:
