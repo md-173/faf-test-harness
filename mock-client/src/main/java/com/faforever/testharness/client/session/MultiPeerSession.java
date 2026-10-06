@@ -55,7 +55,7 @@ import org.slf4j.MDC;
  * {@code System.exit} ends every peer, and any peer failing fails the session by design, the one
  * exception being a deliberate crash (below).
  *
- * <p><b>The verdict</b> has two parts, both required.
+ * <p><b>The verdict</b> has three parts, all required.
  *
  * <ul>
  *   <li><b>Full mesh:</b> the adapter's {@code onConnected(localId, remoteId, connected)}
@@ -68,6 +68,10 @@ import org.slf4j.MDC;
  *       claim; this is the games' independent proof that the adapter forwards what they send, so an
  *       adapter that connects but drops game packets fails the session. It needs the games and the
  *       client at INFO or finer, which the constructor enforces.
+ *   <li><b>Each peer's path (WBS-4.2.6):</b> once every other stage has passed, each peer's own
+ *       {@code state entry:} and {@code peer connect:} lines must be the path its role takes
+ *       ({@link TransitionEvidence}), or the session fails at stage {@code transitions}. The checks
+ *       above are outcomes, which a peer can reach the wrong way.
  * </ul>
  *
  * <p><b>One known cause of a slow traffic pass.</b> If an adapter re-announces a peer at a
@@ -97,11 +101,13 @@ import org.slf4j.MDC;
  * be classified as a crash, then for every survivor that made the ICE offer on its link to that
  * joiner to report it lost, and last for every survivor-to-survivor direction of traffic to keep
  * advancing. Only the offering side is asked: in adapter 3.3.14 only it runs the connectivity
- * checker, and the answering side never notices. The timing: the joiner's crash timer starts when
- * it joins, after the host started hosting, so a crash delay of the host's launch delay plus {@link
- * #CRASH_AFTER_LAUNCH} lands after launch; and since every joiner is in before launch, it lands
- * well before the host's match ends, at twice the launch delay after launch. A crash in the lobby
- * phase is not this: faf-server then tells every survivor, whose game ends (WBS-4.3.6, #435).
+ * checker, and the answering side notices only if an ICE send or receive fails. The timing: the
+ * joiner's crash timer starts when it joins, after the host started hosting, so a crash delay of
+ * the host's launch delay plus {@link #CRASH_AFTER_LAUNCH} lands after launch; and since every
+ * joiner is in before launch, it lands well before the host's match ends, at twice the launch delay
+ * after launch. A crash in the lobby phase is not this: faf-server then tells every survivor, whose
+ * game drops the crashed peer and plays on (WBS-4.3.6), and the session still fails, on the crash
+ * itself.
  *
  * <p><b>The host uses {@code friends} visibility</b> (WBS-4.3.3). faf-server's {@code
  * command_game_join} checks foes, lobby state, init mode and password but never visibility, which
@@ -157,10 +163,11 @@ public final class MultiPeerSession implements AutoCloseable {
     static final Duration CRASH_AFTER_LAUNCH = Duration.ofSeconds(30);
 
     /**
-     * Budget for the survivors once the crash has landed: every offering survivor's adapter
-     * declares the loss (upstream declares it after 10 s of silence), and then the survivors'
-     * traffic advances. Shared by both, and sized with the host's match length in mind; see {@code
-     * MultiPeerSessionTest}'s timing check.
+     * Budget for the survivors once a peer has gone, by the crash here or by a departure in {@code
+     * PeerDepartureLiveTest}: every offering survivor's adapter declares the loss (upstream
+     * declares it after 10 s of silence), and then the survivors' traffic advances. Shared by both,
+     * and sized with the host's match length in mind; see {@code MultiPeerSessionTest}'s timing
+     * check.
      */
     static final Duration SURVIVOR_TIMEOUT = Duration.ofSeconds(45);
 
@@ -269,6 +276,9 @@ public final class MultiPeerSession implements AutoCloseable {
     /** What each game has received from each other game, captured while the session runs. */
     private final TrafficEvidence traffic = new TrafficEvidence();
 
+    /** Each peer's own state and peer connect lines, captured while the session runs. */
+    private final TransitionEvidence transitions = new TransitionEvidence();
+
     /** Title the host advertises. */
     private final String hostTitle;
 
@@ -333,6 +343,9 @@ public final class MultiPeerSession implements AutoCloseable {
      * invariant it relaxes is load-bearing: the host must stay joinable until every joiner is in,
      * and a host that launches first makes itself unjoinable, which surfaces as a joiner's {@code
      * game_join} being refused with {@code game_not_ready}.
+     *
+     * <p>{@link #run()} leaves the check on each peer's path to the caller when a delay is given,
+     * because the host may launch at any point after bring-up; see {@link #transitions()}.
      *
      * @param peerBases one validated config per peer, as above
      * @param hostTitle the title the host advertises
@@ -460,6 +473,11 @@ public final class MultiPeerSession implements AutoCloseable {
                     "this JVM does not log subprocess output at INFO, so game traffic cannot be"
                             + " seen; set LOG_LEVEL to INFO or finer");
         }
+        if (!TransitionEvidence.capturable()) {
+            throw new IllegalArgumentException(
+                    "this JVM does not log the clients' own INFO lines, so no peer's path can be"
+                            + " checked; set LOG_LEVEL to INFO or finer");
+        }
         // Checked here rather than at launch: the host would otherwise log in, rotating its
         // refresh token, before a wrong path surfaced.
         for (MockClientConfig base : bases) {
@@ -542,7 +560,8 @@ public final class MultiPeerSession implements AutoCloseable {
      * traffic, and for a deliberate crash the launch, the crash and the survivors playing on.
      * Returns normally only when every peer's adapter reports every other peer connected and every
      * game has received every other game's datagrams, and, for a deliberate crash, when its stages
-     * have passed too.
+     * have passed too. Last, each peer's logged path is checked ({@link #finalPaths()}), and a pass
+     * is logged as {@code session: transitions: every peer logged the path its role takes}.
      *
      * @throws CheckpointFailure naming the peer and the stage, if any checkpoint does not pass
      * @throws InterruptedException if any bounded wait is interrupted
@@ -558,6 +577,7 @@ public final class MultiPeerSession implements AutoCloseable {
             // concurrent close() either detaches it or runs first and leaves it unattached.
             if (!closed) {
                 traffic.attach();
+                transitions.attach();
             }
         }
         deadline = System.nanoTime() + SESSION_DEADLINE.toNanos();
@@ -608,6 +628,13 @@ public final class MultiPeerSession implements AutoCloseable {
         if (crashingPeer != NO_CRASH) {
             awaitDeliberateCrash();
         }
+        Optional<Map<String, List<ClientState>>> after = finalPaths();
+        if (after.isPresent()) {
+            checkPaths(transitions, peers, after.get());
+        } else {
+            LOG.info(
+                    "session: the host launches on a timer, so the caller checks each peer's path");
+        }
     }
 
     /**
@@ -629,6 +656,59 @@ public final class MultiPeerSession implements AutoCloseable {
     }
 
     /**
+     * The states each peer's path adds after its role by the end of {@link #run()} (WBS-4.2.6), by
+     * label, or empty when only the caller can know them.
+     *
+     * <p>With auto-launch off, nobody moves after bring-up. A deliberate crash ends with the host
+     * PLAYING and the crashed joiner TERMINATED: {@code awaitDeliberateCrash} has waited for both.
+     * A host on a timer without a planned crash may launch at any point after bring-up, even during
+     * the traffic check, so no path can be fixed in advance and the caller checks once it knows
+     * where the host is, through {@link #transitions()}.
+     *
+     * @return the added states by label, or empty to leave the check to the caller
+     */
+    Optional<Map<String, List<ClientState>>> finalPaths() {
+        if (crashingPeer != NO_CRASH) {
+            return Optional.of(
+                    Map.of(
+                            labelFor(0),
+                            List.of(ClientState.PLAYING),
+                            labelFor(crashingPeer),
+                            List.of(ClientState.TERMINATED)));
+        }
+        return hostLaunchDelaySeconds == LAUNCH_DISABLED ? Optional.of(Map.of()) : Optional.empty();
+    }
+
+    /**
+     * The {@code transitions} stage (WBS-4.2.6): each peer's logged path against its role's, then
+     * the stage's only trace when it passes. Logged here, after the check, so the line cannot
+     * outlive it: {@code MultiPeerSessionLiveTest} asserts the line, and {@code
+     * MultiPeerSessionTest} that a deviating peer fails this method.
+     *
+     * @param evidence the paths the peers logged
+     * @param peers every peer, host first and joiners in join order
+     * @param after the states each peer's path adds after its role, by label
+     * @throws CheckpointFailure at stage {@code transitions} if any peer deviated
+     */
+    static void checkPaths(
+            final TransitionEvidence evidence,
+            final List<SessionPeer> peers,
+            final Map<String, List<ClientState>> after) {
+        evidence.verifySession(peers, after);
+        LOG.info("session: transitions: every peer logged the path its role takes");
+    }
+
+    /**
+     * Each peer's logged path, for a caller whose scenario goes on after {@link #run()} returns
+     * (WBS-4.2.6). It keeps recording until {@link #close()}.
+     *
+     * @return the evidence the session's last stage reads
+     */
+    TransitionEvidence transitions() {
+        return transitions;
+    }
+
+    /**
      * Shuts every peer down, joiners first in reverse join order and the host last, and waits for
      * each teardown. One throwing shutdown never stops the others, so every adapter and game gets
      * its teardown. Idempotent; a {@link #run()} still in progress on another thread starts no
@@ -644,6 +724,7 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         closed = true;
         traffic.detach();
+        transitions.detach();
         for (int i = peers.size() - 1; i >= 0; i--) {
             SessionPeer peer = peers.get(i);
             try (MDC.MDCCloseable ignored = peer.labelled()) {
@@ -1032,12 +1113,7 @@ public final class MultiPeerSession implements AutoCloseable {
         SessionPeer crashed = peers.get(crashingPeer);
         List<SessionPeer> survivors = new ArrayList<>(peers);
         survivors.remove(crashed);
-        Supplier<List<String>> survivorsEnded =
-                () ->
-                        survivors.stream()
-                                .filter(p -> p.lifecycle().getState() == ClientState.TERMINATED)
-                                .map(SessionPeer::name)
-                                .toList();
+        Supplier<List<String>> survivorsEnded = ended(survivors);
 
         awaitLaunch(host, crashed, survivorsEnded);
         LOG.info(
@@ -1046,44 +1122,107 @@ public final class MultiPeerSession implements AutoCloseable {
                 crashAfterSeconds(peers.size()));
 
         // Marked before the crash, so a bring-up verdict cannot pass for the loss.
-        Map<SessionPeer, Integer> marks = new HashMap<>();
-        for (SessionPeer survivor : survivors) {
-            survivor.drainVerdicts("crash");
-            marks.put(survivor, survivor.observed().size());
-        }
+        Map<SessionPeer, Integer> marks = verdictMarks(survivors, "crash");
         awaitCrash(crashed, survivorsEnded);
         LOG.info(
                 "session: {} crashed as planned (exit {}); waiting for the survivors",
                 crashed.name(),
                 INJECTED_CRASH_EXIT);
 
-        List<SessionPeer> offerers = requiredReporters(survivors, crashed);
         long waitUntil = System.nanoTime() + SURVIVOR_TIMEOUT.toNanos();
+        awaitLoss(survivors, crashed, marks, waitUntil);
+        awaitPlayOn(survivors, waitUntil);
+    }
+
+    /**
+     * The survivors whose session has ended, which fails a survivor stage at once (WBS-5.2.1).
+     *
+     * @param survivors the peers expected to play on
+     * @return the names of those whose lifecycle has reached TERMINATED, read on each call
+     */
+    static Supplier<List<String>> ended(final List<SessionPeer> survivors) {
+        return () ->
+                survivors.stream()
+                        .filter(p -> p.lifecycle().getState() == ClientState.TERMINATED)
+                        .map(SessionPeer::name)
+                        .toList();
+    }
+
+    /**
+     * Drains each survivor's verdicts and marks how many it has seen, before a peer goes, so that
+     * {@link #awaitLoss} counts only the verdicts reported after it (WBS-5.2.1).
+     *
+     * @param survivors the peers expected to play on
+     * @param stage the checkpoint draining them, named in a failure
+     * @return each survivor's count of drained verdicts
+     * @throws CheckpointFailure if an adapter reports another player as itself
+     */
+    static Map<SessionPeer, Integer> verdictMarks(
+            final List<SessionPeer> survivors, final String stage) {
+        Map<SessionPeer, Integer> marks = new HashMap<>();
+        for (SessionPeer survivor : survivors) {
+            survivor.drainVerdicts(stage);
+            marks.put(survivor, survivor.observed().size());
+        }
+        return marks;
+    }
+
+    /**
+     * The {@code loss} stage (WBS-5.2.1): every survivor that offered to the peer that went reports
+     * it lost since its mark, and still lost. The others are not asked; see {@link
+     * #requiredReporters}.
+     *
+     * @param survivors the peers expected to play on, host first
+     * @param gone the peer that went
+     * @param marks each survivor's mark, from {@link #verdictMarks}
+     * @param waitUntil the {@link System#nanoTime()} deadline, shared with {@link #awaitPlayOn}
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure at stage {@code loss}
+     */
+    static void awaitLoss(
+            final List<SessionPeer> survivors,
+            final SessionPeer gone,
+            final Map<SessionPeer, Integer> marks,
+            final long waitUntil)
+            throws InterruptedException {
+        List<SessionPeer> offerers = requiredReporters(survivors, gone);
         awaitAll(
                 "loss",
                 () -> {
                     Map<String, String> missing = new LinkedHashMap<>();
                     for (SessionPeer offerer : offerers) {
                         offerer.drainVerdicts("loss");
-                        // The latest verdict too, so a flap before the crash cannot pass.
-                        if (!offerer.reportedLostSince(marks.get(offerer), crashed)
-                                || offerer.reportsConnected(crashed)) {
+                        // The latest verdict too, so a flap before the peer went cannot pass.
+                        if (!offerer.reportedLostSince(marks.get(offerer), gone)
+                                || offerer.reportsConnected(gone)) {
                             missing.put(
                                     offerer.name(),
                                     "no onConnected(..., false) about "
-                                            + crashed.name()
+                                            + gone.name()
                                             + " standing since the match went live, verdicts seen "
                                             + offerer.observed());
                         }
                     }
                     return missing;
                 },
-                survivorsEnded,
+                ended(survivors),
                 waitUntil,
                 SURVIVOR_TIMEOUT.toString());
+    }
 
-        // Snapshotted only now, so the traffic is proven to flow after the adapters declared the
-        // loss and began re-offering to the departed peer.
+    /**
+     * The {@code play on} stage (WBS-5.2.1): the survivors' traffic to each other advances from now
+     * on. At two peers there is no pair, so only a survivor's session ending can fail it.
+     *
+     * @param survivors the peers expected to play on
+     * @param waitUntil the {@link System#nanoTime()} deadline, shared with {@link #awaitLoss}
+     * @throws InterruptedException if the wait is interrupted
+     * @throws CheckpointFailure at stage {@code play on}
+     */
+    void awaitPlayOn(final List<SessionPeer> survivors, final long waitUntil)
+            throws InterruptedException {
+        // Snapshotted only now, so the traffic is proven to flow after whatever the caller waited
+        // for: after a crash, the adapters declaring the loss and re-offering to the departed peer.
         Map<TrafficEvidence.Direction, TrafficEvidence.Progress> before = traffic.snapshot();
         awaitAll(
                 "play on",
@@ -1110,7 +1249,7 @@ public final class MultiPeerSession implements AutoCloseable {
                     }
                     return missing;
                 },
-                survivorsEnded,
+                ended(survivors),
                 waitUntil,
                 SURVIVOR_TIMEOUT.toString());
     }
@@ -1234,10 +1373,10 @@ public final class MultiPeerSession implements AutoCloseable {
     /**
      * The survivors that must report a crashed joiner lost (WBS-5.2.1): those that made the ICE
      * offer on their link to it. Only the offering side runs the adapter's connectivity checker in
-     * adapter 3.3.14, and the answering side never notices a lost peer. The lobby's {@code
-     * ConnectToPeer} frames say which side offered, and faf-server gives the host the offer on
-     * every host link, so a host without one means the offers were not recorded, and asking nobody
-     * would pass the check vacuously.
+     * adapter 3.3.14; the answering side notices a lost peer only if an ICE send or receive fails,
+     * so it cannot be required to. The lobby's {@code ConnectToPeer} frames say which side offered,
+     * and faf-server gives the host the offer on every host link, so a host without one means the
+     * offers were not recorded, and asking nobody would pass the check vacuously.
      *
      * @param survivors the survivors, host first
      * @param crashed the crashed joiner

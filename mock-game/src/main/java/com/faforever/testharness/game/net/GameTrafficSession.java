@@ -14,7 +14,7 @@ import org.slf4j.LoggerFactory;
  * sender (WBS-3.2.2.5) and the receiver (WBS-3.2.2.6) that share it, and the progress line the
  * two-peer exchange test asserts on.
  *
- * <p>Three calls, made by {@code MockGameLifecycle} from the frames it already parses:
+ * <p>Four calls, made by {@code MockGameLifecycle} from the frames it already parses:
  *
  * <ul>
  *   <li>{@link #bind(int)} on {@code CreateLobby}, before the game answers {@code GameState Lobby}
@@ -23,6 +23,8 @@ import org.slf4j.LoggerFactory;
  *   <li>{@link #registerPeer(String, int)} on {@code JoinGame} and {@code ConnectToPeer}, with the
  *       {@code net_address} and {@code remote_player_id} from the frame. The first one starts the
  *       cadence.
+ *   <li>{@link #unregisterPeer(int)} on a {@code DisconnectFromPeer} that names a peer the game had
+ *       (WBS-4.3.6), which stops the traffic to that peer and leaves the rest running.
  *   <li>{@link #close()} from the shutdown sequence (WBS-3.2.5.2), which stops the cadence and
  *       closes the socket, ending the receive loop per 3.2.2.6's contract.
  * </ul>
@@ -46,10 +48,11 @@ import org.slf4j.LoggerFactory;
  * code. The one throw is the constructor's, which rejects a drop percentage outside 0 to 100 before
  * anything is bound; the CLI rejects the same value first, so a real run never reaches it.
  *
- * <p>Threading: {@link #registerPeer} arrives on the GPGNet reader thread, {@link #close()} on the
- * FSM thread, that same reader thread (a remote close drives the FSM to ENDED) or the JVM shutdown
- * hook, and the progress tick on its own timer thread. Every method is synchronized on this
- * session; nothing here calls back into the state machine, so no lock order is introduced.
+ * <p>Threading: {@link #registerPeer} and {@link #unregisterPeer} arrive on the GPGNet reader
+ * thread, {@link #close()} on the FSM thread, that same reader thread (a remote close drives the
+ * FSM to ENDED) or the JVM shutdown hook, and the progress tick on its own timer thread. Every
+ * method is synchronized on this session; nothing here calls back into the state machine, so no
+ * lock order is introduced.
  *
  * <p>One edge is load-bearing rather than incidental: {@link #close()} holds this monitor while it
  * stops the tickers, taking each ticker's monitor, and a ticker thread delivering a progress tick
@@ -263,6 +266,24 @@ public final class GameTrafficSession implements AutoCloseable {
                     cadence.toMillis(), dropPercent);
         }
         LOG.info("sending peer traffic to player {} at {}", peerId, netAddress);
+    }
+
+    /**
+     * Stops the traffic to a peer that left the game (WBS-4.3.6); the other peers' traffic runs on.
+     * What the receiver already counted from that peer is kept, so the final progress line still
+     * reports it.
+     *
+     * <p>The peer is forgotten, not only silenced: a later {@link #registerPeer} for it registers
+     * afresh even at the same address, where an unchanged endpoint would otherwise be skipped.
+     *
+     * @param peerId the id of the player who left; one never registered here is ignored
+     */
+    public synchronized void unregisterPeer(final int peerId) {
+        if (closed || registered.remove(peerId) == null) {
+            return;
+        }
+        sender.unregisterPeer(peerId);
+        LOG.info("stopped sending peer traffic to player {}", peerId);
     }
 
     /**

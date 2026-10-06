@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Logger;
@@ -14,7 +15,11 @@ import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
+import com.faforever.testharness.client.session.CheckpointFailure;
+import com.faforever.testharness.client.session.TransitionEvidence;
 import com.faforever.testharness.shared.logging.JsonLineEncoder;
+import com.faforever.testharness.shared.logging.LoggingSetup;
+import com.faforever.testharness.shared.statemachine.Event;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -23,8 +28,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -33,14 +40,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * Pins the harness log contract the multi-peer cards build on (WBS-3.1.6.2). Captured events are
  * run through the real {@link JsonLineEncoder} and parsed as JSON, so these assertions read the
  * same records a harness reads from the JSONL file rather than matching console text.
  *
- * <p>Changing any format asserted here is a breaking change for WBS 4.2.2 and the Phase 5 fault
- * injection cards. See {@code mock-client/README.md} § "Harness log contract".
+ * <p>Changing any format asserted here is a breaking change for WBS 4.2.2, the Phase 5 fault
+ * injection cards and the session's own {@code transitions} stage (WBS-4.2.6), which reads the
+ * state and peer connect lines. See {@code mock-client/README.md} § "Harness log contract".
  */
 final class HarnessLogContractTest {
 
@@ -102,11 +111,18 @@ final class HarnessLogContractTest {
     /** A {@code HostGame} command carrying the textual map argument the FSM action requires. */
     private static final JsonNode HOST_GAME_MESSAGE;
 
+    /** A {@code JoinGame} command naming the host's login and id, as the FSM action requires. */
+    private static final JsonNode JOIN_GAME_MESSAGE;
+
     static {
         ObjectNode node =
                 MAPPER.createObjectNode().put("command", "HostGame").put("target", "game");
         node.set("args", MAPPER.createArrayNode().add("scmp_007"));
         HOST_GAME_MESSAGE = node;
+
+        node = MAPPER.createObjectNode().put("command", "JoinGame").put("target", "game");
+        node.set("args", MAPPER.createArrayNode().add("host").add(1));
+        JOIN_GAME_MESSAGE = node;
     }
 
     private ScriptedWebSocketServer server;
@@ -342,6 +358,97 @@ final class HarnessLogContractTest {
 
         // The launch started a game process, and this session never reaches TERMINATED on its own.
         lifecycle.shutdown();
+    }
+
+    /**
+     * The session's path check (WBS-4.2.6) reads the state and peer connect lines pinned here, so a
+     * client that takes a transition its role does not take fails it by name. Forced through a real
+     * lifecycle under an instance label, as a session runs each peer: the host is sent {@code
+     * JoinGame}.
+     */
+    @Test
+    void aHostThatJoinsFailsTheSessionsPathCheckByName() {
+        String label = "forced-" + UUID.randomUUID();
+        TransitionEvidence evidence = new TransitionEvidence();
+        evidence.attach();
+        MockClientLifecycle lifecycle = null;
+        try {
+            lifecycle = driveToRole(label, new JoinGame(JOIN_GAME_MESSAGE));
+            assertEquals(
+                    ClientState.JOINING, lifecycle.getState(), "sanity: the forced transition");
+
+            CheckpointFailure failure =
+                    assertThrows(
+                            CheckpointFailure.class,
+                            () ->
+                                    evidence.verify(
+                                            List.of(
+                                                    new TransitionEvidence.Peer(
+                                                            "A(host)", label, 1)),
+                                            Map.of()));
+
+            // Contained rather than equal: a lifecycle an earlier test left running can log an
+            // unlabelled line into the capture, which the failure then reports as well.
+            assertTrue(
+                    failure.getMessage()
+                            .contains(
+                                    "transitions: A(host) logged state entries [CONNECTING, IDLE,"
+                                            + " STARTING_GAME, JOINING], expected [CONNECTING,"
+                                            + " IDLE, STARTING_GAME, HOSTING]"),
+                    failure.getMessage());
+        } finally {
+            evidence.detach();
+            if (lifecycle != null) {
+                lifecycle.shutdown();
+            }
+        }
+    }
+
+    /**
+     * The control for {@link #aHostThatJoinsFailsTheSessionsPathCheckByName}: sent {@code HostGame}
+     * instead, the same lifecycle passes, so that failure is the forced transition's.
+     */
+    @Test
+    void aHostThatHostsPassesTheSessionsPathCheck() {
+        String label = "control-" + UUID.randomUUID();
+        TransitionEvidence evidence = new TransitionEvidence();
+        evidence.attach();
+        MockClientLifecycle lifecycle = null;
+        try {
+            lifecycle = driveToRole(label, new HostGame(HOST_GAME_MESSAGE));
+
+            try {
+                evidence.verify(
+                        List.of(new TransitionEvidence.Peer("A(host)", label, 1)), Map.of());
+            } catch (CheckpointFailure f) {
+                // Only an unlabelled line may fail it, from a lifecycle an earlier test left
+                // running; the host itself must pass.
+                assertTrue(f.getMessage().startsWith("(no label): "), f.getMessage());
+            }
+        } finally {
+            evidence.detach();
+            if (lifecycle != null) {
+                lifecycle.shutdown();
+            }
+        }
+    }
+
+    /**
+     * Builds a lifecycle and drives it to its role under an instance label, as a session runs each
+     * peer. The launch starts a game process, so the caller shuts it down.
+     *
+     * @param label the instance label
+     * @param role the role frame, {@link HostGame} or {@link JoinGame}
+     * @return the lifecycle
+     */
+    private MockClientLifecycle driveToRole(final String label, final Event role) {
+        try (MDC.MDCCloseable ignored = MDC.putCloseable(LoggingSetup.INSTANCE_MDC_KEY, label)) {
+            MockClientLifecycle lifecycle = newLifecycle();
+            lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
+            lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
+            lifecycle.post(role);
+            return lifecycle;
+        }
     }
 
     @Test

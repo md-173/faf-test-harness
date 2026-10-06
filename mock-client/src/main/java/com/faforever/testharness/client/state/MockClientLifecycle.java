@@ -633,7 +633,7 @@ public final class MockClientLifecycle {
     /**
      * Wires peer departure end to end (WBS-4.3.4): the lobby handler for faf-server's {@code
      * DisconnectFromPeer}, and the edges that accept it in every state this client can occupy while
-     * the server's game is still in its LOBBY phase.
+     * the server's game is still in its LOBBY phase, TERMINATED included, as a no-op (#512).
      *
      * <p>Both halves live here rather than beside the other lobby handlers in {@link
      * #setupStateMachine()} because that method is at its checkstyle length limit, and because a
@@ -641,8 +641,8 @@ public final class MockClientLifecycle {
      * adjacent to them.
      *
      * <p>Stay-in-state on all four, for the same reason {@link #registerConnectToPeerTransitions()}
-     * self-loops: the frame changes what the adapter is doing, not what phase this client is in. A
-     * two-peer session ends anyway, but through the game's own exit rather than through this edge.
+     * self-loops: the frame changes what the adapter is doing, not what phase this client is in.
+     * The game plays on as well: it drops that peer and keeps its lobby (WBS-4.3.6).
      *
      * <p><b>Why four states and not the two {@code ConnectToPeer} uses.</b> The server's guard is
      * on <em>its</em> {@code Game.state}, which is not this FSM's state, and its LOBBY phase spans
@@ -685,6 +685,8 @@ public final class MockClientLifecycle {
                             this::disconnectFromPeer,
                             null);
         }
+        State terminated = states.get(ClientState.TERMINATED);
+        terminated.registerTransition(DisconnectFromPeer.class, terminated);
     }
 
     /**
@@ -1621,11 +1623,11 @@ public final class MockClientLifecycle {
      * #registerPostLaunchMatchCancelledTransitions()} and makes a lobby disconnect there a
      * self-loop: once the peer links are established the match is peer-to-peer and ends
      * deterministically through the game's own exit, so no lobby frame may cut it short. Issuing
-     * the RPC here would do exactly that, because the adapter forwards the frame with no state
-     * guard and this side's game ends on it from LIVE as readily as from the lobby. Worse, it would
-     * end without the closing frames, leaving the survivor to report a delivery failure that never
-     * happened. Nothing is lost by dropping it: the adapter's connectivity checker reaps the
-     * departed peer's relay about ten seconds later either way, which is precisely how a
+     * the RPC here would do exactly that, because the adapter closes the peer's relay and forwards
+     * the frame with no state guard of its own. This side's game would ignore the frame once LIVE,
+     * as FA's does with its lobby gone (WBS-4.3.6), but the link would already be cut. Nothing is
+     * lost by dropping it: on the side that made the ICE offer, the adapter's connectivity checker
+     * declares the departed peer lost about ten seconds later either way, which is how a
      * post-launch departure is meant to be noticed.
      *
      * <p>The registration is kept for PLAYING all the same, so this is a deliberate, logged no-op
@@ -1642,9 +1644,8 @@ public final class MockClientLifecycle {
      * is deliberate.</b> That method ends the session on failure because without its relay the peer
      * is permanently unreachable and a session carrying on would look healthy while silently unable
      * to connect. This one is the mirror image: the peer is leaving regardless, and the worst a
-     * failure leaves behind is a relay for someone who has gone, which the adapter's own
-     * connectivity checker tears down about ten seconds later anyway. Ending a live session over
-     * that would turn a self-correcting condition into a lost run.
+     * failure leaves behind is a relay for someone who has gone, which teardown removes. Ending a
+     * live session over that would turn a harmless leftover into a lost run.
      *
      * <p>{@code whenComplete} rather than {@code whenCompleteAsync} follows from the same decision:
      * with no {@code ShutdownRequested} to post, this continuation only logs and never touches the
@@ -1701,8 +1702,8 @@ public final class MockClientLifecycle {
                                 return;
                             }
                             LOG.warn(
-                                    "peer relay teardown failed for id={} ({}); the adapter's"
-                                            + " connectivity checker will drop it",
+                                    "peer relay teardown failed for id={} ({}); the session"
+                                            + " carries on",
                                     peerId,
                                     error.getMessage());
                         });

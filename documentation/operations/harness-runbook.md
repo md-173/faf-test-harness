@@ -1000,8 +1000,12 @@ session: PASS - 2 peers, full mesh and two-way game traffic, nothing left runnin
 ```
 
 A failed checkpoint exits non-zero and logs `session: FAIL <peer>: <stage>:
-<detail>` instead — the peer and stage name what did not happen (`welcome`,
-`HOSTING`/`JOINING`, `full mesh`, `traffic`). A bad invocation (a missing
+<detail>` instead. The peer and stage name what did not happen (`welcome`,
+`HOSTING`/`JOINING`, `full mesh`, `traffic`), and last, once all of those have
+passed, `transitions`: a peer whose own `state entry:` and `peer connect:`
+lines are not the path its role takes, such as a survivor that ended. That
+stage logs `session: transitions: every peer logged the path its role takes`
+when it passes, before teardown and the verdict. A bad invocation (a missing
 binary, fewer credential files than peers, two peers sharing one credential
 file, or a `--log-level` above INFO, since INFO or finer is required, see
 [§9.4](#94-per-instance-logs-and-attribution)) is refused before any peer
@@ -1145,7 +1149,7 @@ exit `0` in 22 s, logging exactly
 `session: PASS - 2 peers, full mesh and two-way game traffic, nothing left
 running`, plus two evidenced failure shapes for a bad invocation.*
 
-### 9.6 Peer departure: what you will see, and when (WBS 4.3.4)
+### 9.6 Peer departure: what you will see, and when (WBS 4.3.4, 4.3.6)
 
 When a peer leaves a live session, the survivors find out one of two ways, and
 which one depends entirely on whether the **host** has launched the match yet.
@@ -1154,27 +1158,51 @@ The difference is not ours; it is a guard in faf-server.
 **Before launch**, the server tells everyone. `GameConnection.abort()` calls
 `disconnect_all_peers()` under an `if self.game.state is GameState.LOBBY`
 guard, which sends every remaining connection a `DisconnectFromPeer` naming
-the departing player. The Mock Client relays that to its adapter as
+the departing player. Each Mock Client relays that to its adapter as
 `disconnectFromPeer(id)`; the adapter destroys the peer relay and forwards a
-GPGNet `DisconnectFromPeer` to the local Mock Game, which ends. In the logs:
+GPGNet `DisconnectFromPeer` to the local Mock Game, which drops that peer and
+plays on. In every survivor's logs (`ClearSlot` in the host's only):
 
 ```text
 [MockClient] peer disconnect: id=<departing id>
 [ICEAdapter] onDisconnectFromPeer <departing id>
-[MockGame]   Peer (ID: <departing id>) disconnected, ending game
-[MockGame]   mock game finished: status=OK, exit code 0
+[MockGame]   Peer (ID: <departing id>) disconnected, playing on; <n> peers remain
+[MockGame]   stopped sending peer traffic to player <departing id>
+[ICEAdapter] Received GPGNet message: Disconnected <departing id>
+[ICEAdapter] Received GPGNet message: ClearSlot <slot>
 ```
 
-That exit code is deliberate. A departure is a modelled end rather than a
-fault, so the surviving game exits `0` and the client reports it as a clean
-exit rather than a crash.
+`<n>` is how many peers that game still has. The last two lines are the game
+answering the frame the way FA's custom lobby does: every survivor sends
+`Disconnected <id>`, and the host also sends `ClearSlot <slot>` for the slot
+it gave the leaver; each client forwards them to the lobby. faf-server reads
+both and changes nothing: by the time they arrive it has removed the leaver.
+The game's and the adapter's lines can interleave in either order. The
+survivors' traffic to each other carries on, and a host whose last joiner
+leaves keeps its lobby open, as FA's does.
+
+The rest of the rule, from `MockGameLifecycle`'s departure transitions:
+
+- **No notice ends a game, not even one about the host.** When the host
+  leaves the lobby normally, faf-server ends the game itself
+  (`check_game_finish`) before `abort()` reaches its fan-out, so the joiners
+  are not told at all. FA's joiner then shows "Connection to host timed out"
+  and waits in its lobby, and so does the Mock Game, until its session is torn
+  down.
+- **A notice about a peer the game never had**, such as a joiner that left
+  before it finished joining, is answered with `Disconnected` and changes
+  nothing: `Peer (ID: <id>) disconnected but never joined this game; ignoring`.
+- **A malformed `DisconnectFromPeer` still ends the game as a failure.**
+- **FA's matchmaker lobby answers with `DisconnectedPeer <id>` instead**, and
+  sends no `ClearSlot`. The Mock Game speaks only the custom lobby's frames.
 
 **After launch**, that guard closes and **no targeted notification is sent at
 all**. The server broadcasts a `game_info` with the reduced player list and
 nothing else; the Mock Client does not consume `game_info`, so nothing in the
-harness reacts to it. The survivor learns from its own adapter instead, if it
-made the ICE offer on that link, which the host always does (§10 has the rule
-at three peers and more):
+harness reacts to it. A survivor learns from its own adapter instead, if it
+made the ICE offer on that link. faf-server gives the host the offer on every
+host link and the later joiner the offer between two joiners, so when the last
+joiner leaves, only the host is sure to notice (§10 has the rule):
 
 ```text
 [MockClient] peer connected: local=<own id> remote=<departing id> connected=false
@@ -1187,29 +1215,61 @@ lost after 10000 ms without a reply, which calls
 `PeerIceModule.onConnectionLost()` and pushes the `connected=false` verdict.
 A harness waiting on this needs a window comfortably wider than ten seconds.
 
-Three consequences worth knowing before you read a post-launch log:
+The earlier joiners answered on their links to the last one, so in adapter
+3.3.14 they run no connectivity checker for it. They can still drop the link
+when an ICE send or receive fails, so their silence is expected rather than
+guaranteed, and `PeerDepartureLiveTest` logs what they reported without
+asserting it: `departure: <peer> answered on its link to <leaver>, so need not
+notice it leave; its adapter reported ...`. In the nine post-launch departures
+of the 2026-10-01 live runs, at two to four peers, the host reported the loss
+about ten seconds after the leaver's client ended (7 to 10 s as logged), and
+the earlier joiners reported nothing about it.
+
+Four consequences worth knowing before you read a post-launch log:
 
 - **The harness adds no peer silence detection of its own**, by design. Upstream's
   connectivity checker is the one that exists and we consume its verdict
   rather than building a second, differently-timed one that could disagree
   with it.
 - **The surviving game keeps running.** No GPGNet frame reaches it, so it
-  plays out its configured match duration and ends on its own timer. Only a
-  lobby-phase departure ends it early.
+  plays out its configured match duration and ends on its own timer. Should
+  one arrive, a live game only logs `ignoring DisconnectFromPeer during a live
+  match`, since FA's game reads no GPGNet input once it has launched.
 - **The log will not go quiet after the verdict.** `onConnectionLost()` also
   schedules an ICE re-offer for the lost peer when this side holds the offer,
   immediately if the peer had connected and after 5 s otherwise, so the
-  adapter will keep trying to reach a player who has gone. Reconnection and
-  rejoin are out of scope for 4.3.4; this noise is upstream doing what it
-  always does.
+  adapter will keep trying to reach a player who has gone. Each re-offer's
+  `IceMsg` goes through the client to the lobby, and faf-server's
+  `handle_ice_message` drops it for a player who is offline or has no game
+  connection, as the departed peer is by then. Reconnection and rejoin are
+  out of scope for 4.3.4; this noise is upstream doing what it always does.
+- **The verdict brings a junk datagram or a dead listener thread.** Within a
+  few milliseconds of a survivor's `connected=false`, either its game logs
+  `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>: GameDatagram
+  is exactly 20 bytes, got 1499`, `<port>` being the lost peer's relay port, or
+  its adapter logs `Exception in thread "Thread-<n>"
+  java.lang.RuntimeException: java.lang.InterruptedException`.
+  Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's
+  ICE listener while it waits (`PeerIceModule.java:404`, adapter 3.3.14), and
+  ice4j answers by handing it a pooled 1500-byte buffer this read never filled
+  (ice4j `1c60acc`: `MergingDatagramSocket.java:553-558`,
+  `MultiplexingXXXSocketSupport.java:631-666`). The listener dispatches that
+  buffer before it checks the interrupt (`PeerIceModule.java:518-537`), so an
+  earlier packet from the lost peer comes out again. Game data goes to the
+  game, minus its `d` prefix. An echo goes to the connectivity checker, whose
+  report to the telemetry queue throws on the interrupt and ends the thread
+  (`TelemetryDebugger.java:86-88`). In the 2026-10-01 live runs every
+  checker-declared loss showed one or the other: ten junk datagrams,
+  including every post-launch departure, and two dead listeners.
 
-One current limitation, recorded here because it is invisible from the logs:
-**any single peer loss ends the game**, regardless of how many peers remain.
-The Mock Game's `PeerDisconnected` transitions run from every non-ended state
-straight to ENDED. That is correct at two players and wrong above them.
-WBS 4.3.3 owns deciding whether the game should instead play on until the last
-peer leaves; the departing player id is already carried on the event so that
-change needs no rework of the wiring.
+**`PeerDepartureLiveTest` runs both paths at two, three and four peers**, the
+last joiner leaving each time, on local accounts A to D. Before launch it
+requires every survivor's relay line and its game's line above, with the right
+count; after launch, the loss reported by every survivor that offered to the
+leaver, and no `peer disconnect` line from any survivor. Both then require the
+survivors' traffic to each other to keep advancing, and every peer's logged
+path to be its role's (§9.2's `transitions` stage): each survivor still in the
+role it took, the host `PLAYING` after launch, and the leaver `TERMINATED`.
 
 ### 9.7 Known limitations
 
@@ -1241,7 +1301,8 @@ peers. What is still missing is this document's write-up of that shape — the
 deterministic N-peer scheme, and what a healthy run looks like beyond two —
 which depends on the N-client spawner (WBS-4.2.2, `mock-client/README.md`)
 and is deferred to a later section appended here, not a restructure of what
-exists above.
+exists above. Peer departure is the exception: §9.6 covers it at three and
+four peers (WBS 4.3.6).
 
 ## 10. Fault injection (WBS 5.1, 5.2)
 
@@ -1661,11 +1722,13 @@ it, as it always has, but only if the crash lands before the session has proven
 its traffic. That takes a few seconds after the last join, and the session
 tears down once it has, so a later crash never fires and the run exits `0`.
 Use `0`, which halts the game as soon as it first has a peer: that is the tool
-for a run meant to go red, and anything between races the traffic check. In the
-lobby phase that is also all a crash can do today: faf-server's `abort()` runs
-`disconnect_all_peers()` only while the game is in `GameState.LOBBY`, and the
-mock game ends on any single `DisconnectFromPeer`, so every survivor's game
-ends too. Whether a survivor should instead free the slot is #435's question.
+for a run meant to go red, and anything between races the traffic check. The
+survivors' games no longer end with it (§9.6, WBS 4.3.6). When a joiner
+crashes, faf-server's `abort()` tells every survivor while the game is in
+`GameState.LOBBY`, and each game drops the crashed peer and plays on. When the
+host crashes, faf-server ends the game itself and tells nobody, so the
+joiners' games wait in their lobby. Either way the session still fails,
+naming the crashed peer.
 
 **`--crash-peer=<joiner>` is the one crash a session expects**, and it lands
 after launch, where real FAF plays on: faf-server sends no disconnect notice
@@ -1683,7 +1746,10 @@ once the game is live, and a non-host leaving a live game does not end it.
 4. waits for every survivor that made the ICE offer on its link to the crashed
    joiner to report it lost (stage `loss`);
 5. and only then snapshots the traffic evidence and waits for every
-   survivor-to-survivor direction to advance again (stage `play on`).
+   survivor-to-survivor direction to advance again (stage `play on`);
+6. last, checks every peer's logged path (stage `transitions`): the host
+   `PLAYING`, the crashed joiner `TERMINATED`, and every other peer still in
+   the role it took.
 
 Stages 4 and 5 share one 45 s budget, counted from the crashed joiner's
 session ending. A survivor whose session ends at any point in stages 2 to 5
@@ -1704,7 +1770,8 @@ connection runs `IceAdapter.onFAShutdown()`, which logs `FA SHUTDOWN, closing
 everything` and closes the game session and every peer's ICE agent with it
 (`GPGNetServer.onGpgnetConnectionLost`, adapter 3.3.14). So the survivors'
 adapters stop getting echoes from it at the crash itself, and the offering ones
-declare the loss about ten seconds later. The crashed peer's client stops its
+declare the loss about ten seconds later, each with the junk datagram or dead
+listener thread §9.6 describes. The crashed peer's client stops its
 adapter too, as the real client does (downlords-faf-client's `GameRunner` calls
 `iceAdapter.stop()` after handling any game exit, `develop` at `8be1a118`), but
 the loss does not depend on that.
@@ -2054,7 +2121,7 @@ mistakes as somebody else's.
 
 | Exit | What it means | What the job should do |
 |---|---|---|
-| `0` | A full mesh, two-way game traffic between every pair, and no adapter or game left running; with `--crash-peer`, also that joiner's crash after launch, the loss reported by every survivor that offered on its link to it, and at three peers or more the survivors' traffic still advancing. | Pass. |
+| `0` | A full mesh, two-way game traffic between every pair, every peer's own log showing the path its role takes, and no adapter or game left running; with `--crash-peer`, also that joiner's crash after launch, the loss reported by every survivor that offered on its link to it, and at three peers or more the survivors' traffic still advancing. | Pass. |
 | `70` | A checkpoint failed, logged as `session: FAIL <peer>: <stage>: <detail>`, or a subprocess survived teardown and was killed, or an exception escaped the command. | Read the stage before filing anything. See below. |
 | `2` | A bad invocation: no credential list, fewer credential files than peers, two peers on one file or one account, an unreadable or empty file, a missing binary, `INSTANCE_NAME` set, `--log-level` above INFO, or a fault option that does not say one thing clearly (§10). | Fix the job. Nothing started, so there is nothing to clean up. |
 
@@ -2064,21 +2131,27 @@ misconfiguration as a harness failure, and blames an adapter that never ran.
 That list is the job-facing subset;
 [`mock-client/README.md`](../../mock-client/README.md) carries every cause.
 
-The stage in a `70` says whose fault it is, and three of the eight are never
+The stage in a `70` says whose fault it is, and three of the nine are never
 the adapter's: `ports` is the runner, `shutdown` is a run cancelled before a
-peer started, and `welcome` is a credential or the lobby. The other five,
+peer started, and `welcome` is a credential or the lobby. The next five,
 `game_launch`, `HOSTING`, `JOINING`, `full mesh` and `traffic`, are the ones
-that belong to the adapter under test. The peer and the stage are named in the
-log line, not in the exit status, so a job cannot branch on them. Keep the log.
+that belong to the adapter under test. The last, `transitions` (WBS 4.2.6),
+runs once every other stage has passed, so it is usually the harness or the
+lobby: a peer whose own log shows a path its role does not take, such as a
+host that logged `JOINING`. An adapter that dies after `traffic` can land
+there too, as a `TERMINATED` its peer's path should not have. The peer and the
+stage are named in the log line, not in the exit status, so a job cannot
+branch on them. Keep the log.
 
-A run with `--crash-peer` (§10) adds four stages after those. `launch` is the
-host and the lobby; `crash` is the harness's own injected fault not landing as
-planned; `loss` and `play on` are the adapter under test: a surviving adapter
-that never declared the crashed peer lost, or stopped forwarding the survivors'
-traffic once it had. A `launch` or `crash` failure whose detail says a
-survivor's session ended is about that survivor instead, and its own log lines
-say why; a `crash` failure in which a survivor's adapter reported another
-player's id is the adapter under test, as it would be at `full mesh`.
+A run with `--crash-peer` (§10) adds four stages between `traffic` and
+`transitions`. `launch` is the host and the lobby; `crash` is the harness's
+own injected fault not landing as planned; `loss` and `play on` are the
+adapter under test: a surviving adapter that never declared the crashed peer
+lost, or stopped forwarding the survivors' traffic once it had. A `launch` or
+`crash` failure whose detail says a survivor's session ended is about that
+survivor instead, and its own log lines say why; a `crash` failure in which a
+survivor's adapter reported another player's id is the adapter under test, as
+it would be at `full mesh`.
 
 Two codes below the harness are not session verdicts at all: a cancelled or
 killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.

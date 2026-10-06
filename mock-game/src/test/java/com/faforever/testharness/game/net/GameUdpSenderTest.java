@@ -111,6 +111,23 @@ final class GameUdpSenderTest {
     }
 
     @Test
+    void anUnregisteredPeerGetsNothingMoreWhileTheOthersRunOn() throws Exception {
+        sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50));
+        sender.registerPeer(local(peerA), 7);
+        sender.registerPeer(local(peerB), 8);
+        sender.sendRound();
+        assertNotNull(receive(peerA, 1000));
+        assertNotNull(receive(peerB, 1000));
+
+        sender.unregisterPeer(7);
+        sender.sendRound();
+
+        assertEquals(
+                1L, receive(peerB, 1000).sequence(), "the peer that stayed keeps its sequence");
+        assertNull(receive(peerA, 200), "the peer that left gets nothing more");
+    }
+
+    @Test
     void noTrafficBeforeStart() throws Exception {
         sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(20));
         sender.registerPeer(local(peerA), 7);

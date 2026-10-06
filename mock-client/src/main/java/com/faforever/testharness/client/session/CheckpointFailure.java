@@ -7,7 +7,8 @@ package com.faforever.testharness.client.session;
  *
  * <p>Stages: {@code ports}, {@code shutdown}, {@code welcome}, {@code game_launch}, {@code
  * HOSTING}, {@code JOINING}, {@code full mesh} and {@code traffic}, and for a deliberate crash
- * (WBS-5.2.1) {@code launch}, {@code crash}, {@code loss} and {@code play on}.
+ * (WBS-5.2.1) {@code launch}, {@code crash}, {@code loss} and {@code play on}; last, once all those
+ * have passed, {@code transitions} (WBS-4.2.6), each peer's logged path.
  */
 public final class CheckpointFailure extends RuntimeException {
 

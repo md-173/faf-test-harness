@@ -157,9 +157,9 @@ wait with `--lobby-timeout-seconds`, which gives up and exits `75`.
 ### With FAF accounts: a full session
 
 `session` runs one host and `--peers - 1` joiners, each with its own account, adapter and
-game. It exits `0` only when every adapter reports every other peer connected and every
-game has received every other game's traffic, and non-zero otherwise with a line naming
-the peer and the stage that failed.
+game. It exits `0` only when every adapter reports every other peer connected, every
+game has received every other game's traffic and every peer's own log shows the path its
+role takes, and non-zero otherwise with a line naming the peer and the stage that failed.
 
 ```bash
 java -jar mock-client-<version>-all.jar \
