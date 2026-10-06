@@ -393,9 +393,10 @@ final class SessionCommandTest {
 
     @Test
     void theAccessTokenCommandLineCiUsesNeedsNoRefreshSettings() throws IOException {
-        // The live workflow's session step, as it runs: no lobby URL and no OAuth option, since
-        // the lobby URL defaults to the test lobby (#421), so nothing but identity and binaries.
+        // The live workflow's session step, as it runs: no --oauth-token-url, no
+        // --oauth-client-id, nothing but the lobby, identity and binaries.
         String[] argv = {
+            "--lobby-websocket-url=wss://ws.faforever.xyz",
             "--unique-id=00000000-0000-0000-0000-000000000000",
             "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar"),
             "--mock-game-binary-path=" + dir.resolve("no-such-game.jar"),
@@ -412,9 +413,9 @@ final class SessionCommandTest {
 
     @Test
     void theRefreshTokenCommandLineNeedsNoOAuthSettings() throws IOException {
-        // The refresh-channel twin of the case above (#421): the token URL and client id default
-        // to the test environment's, so each peer's file is all the credential it needs. The
-        // missing adapter stops the run before any login.
+        // A refresh-channel session with no lobby or OAuth option (#421): the lobby URL, token
+        // URL and client id default to the test environment's, so each peer's file is all the
+        // credential it needs. The missing adapter stops the run before any login.
         String[] argv = {
             "--unique-id=00000000-0000-0000-0000-000000000000",
             "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar"),
