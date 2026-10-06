@@ -496,7 +496,11 @@ entirely if you only need §2.
 1. **A FAF test account.** Test users on the `*.faforever.xyz` environment
    share the password `foo` (`documentation/research/lobby-protocol-spec.md`
    §2). No signup step — log in with any known test username against Hydra
-   in the bootstrap below.
+   in the bootstrap below. For your own live runs, pick one other than CI's
+   two accounts, which
+   [`CONTRIBUTING.md` §3](../../CONTRIBUTING.md#the-live-integration-workflow-manual-advisory)
+   names: a local run on either during a dispatch signs out whichever logged in
+   first.
 2. **Bootstrap a refresh token** (manual, one-time, valid ~30 days). Skip this
    step if someone has handed you a pre-signed access token instead; that
    channel is [below](#the-other-credential-channel-a-pre-signed-access-token).

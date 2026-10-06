@@ -11,8 +11,12 @@
 # Usage:
 #   scripts/ci/mint-access-token.sh <refresh-token-file> <secret-name> [--dry-run]
 #
-#   scripts/ci/mint-access-token.sh .secrets/refresh_token_c.txt FAF_CI_ACCESS_TOKEN_C
-#   scripts/ci/mint-access-token.sh .secrets/refresh_token_c.txt FAF_CI_ACCESS_TOKEN_C --dry-run
+#   scripts/ci/mint-access-token.sh .secrets/ci/refresh_token_c.txt FAF_CI_ACCESS_TOKEN_C
+#   scripts/ci/mint-access-token.sh .secrets/ci/refresh_token_d.txt FAF_CI_ACCESS_TOKEN_D
+#   scripts/ci/mint-access-token.sh .secrets/ci/refresh_token_c.txt FAF_CI_ACCESS_TOKEN_C --dry-run
+#
+# CI's refresh tokens live in .secrets/ci/, apart from the files the live tests read: a local run
+# on a CI account during a dispatch signs out whichever logged in first (CONTRIBUTING.md §3).
 #
 # --dry-run does everything except set the secret, so the token's subject, scopes and expiry can be
 # checked before a dispatch depends on them. It still spends one rotation, because Hydra rotates on
@@ -80,7 +84,7 @@ if [ "$http_code" != "200" ]; then
     echo "$0: token endpoint returned HTTP $http_code" >&2
     printf '%s' "$body" | jq -r '"  " + (.error // "unknown") + ": " + (.error_description // "")' >&2 \
         || echo "  (unparseable response body)" >&2
-    echo "  a spent or expired refresh token needs a fresh bootstrap: see harness-runbook.md section 3" >&2
+    echo "  a spent or expired refresh token needs a fresh bootstrap into $token_file: see harness-runbook.md section 3" >&2
     exit 1
 fi
 
