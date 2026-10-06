@@ -2307,6 +2307,8 @@ runs that the pinned gitops-stack commit does not declare. It still sends
 telemetry to FAF: the harness points every adapter it launches at FAF's test
 telemetry service, `wss://ice-telemetry.faforever.xyz` (`IceAdapterLauncher`),
 so a local run reports its local game and the seeded test accounts there.
+[The 2.2.14 spike's note](../research/local-gitops-stack-lobby.md#6-fidelity)
+compares the local stack with `.xyz` component by component.
 
 **What it needs.**
 
