@@ -92,10 +92,13 @@ public final class ExitCodes {
      * process that exited before its match as well as one that died mid-match, because from the
      * harness's side those are the same finding: the game is gone and nothing accounted for it. A
      * binary that could not be started at all never becomes a process to classify; that is a launch
-     * that never came up, {@link #RUNTIME}. Crash is this codebase's existing word for that
-     * condition ({@code CrashRecoveryTest}, R41 "client game crash recovery"), and the real
-     * client's {@code GameRunner.handleTermination} routes any non-zero exit to {@code
-     * alertOnBadExit} in the same way.
+     * that never came up, {@link #RUNTIME}. The exception is a launch through {@code setpriv},
+     * which the harness uses on Linux when it can (spec §7.3): an executable file that still cannot
+     * run, such as a script whose interpreter is missing, starts setpriv, which exits 126 or 127,
+     * so it lands here. Crash is this codebase's existing word for that condition ({@code
+     * CrashRecoveryTest}, R41 "client game crash recovery"), and the real client's {@code
+     * GameRunner.handleTermination} routes any non-zero exit to {@code alertOnBadExit} in the same
+     * way.
      *
      * <p>One exit is carved out of that width: mock-game's own {@code ADAPTER_LOST} ({@code 69}).
      * The game told us why it ended, and an adapter dying underneath a healthy game is not the

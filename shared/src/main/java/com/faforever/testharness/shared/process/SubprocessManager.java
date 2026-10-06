@@ -6,7 +6,10 @@ import java.time.Duration;
 import java.util.Objects;
 import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.slf4j.Logger;
@@ -44,6 +47,22 @@ public final class SubprocessManager {
      * keeps them open.
      */
     private static final Duration OUTPUT_DRAIN_TIMEOUT = Duration.ofSeconds(1);
+
+    /**
+     * The one thread every child is started from (WBS 3.1.2.1-fix, #378). The kernel sends a child
+     * its parent-death signal ({@link ParentDeathSignal}) when the thread that started it exits,
+     * and callers start children from threads that come and go, such as the lobby's HttpClient
+     * worker that delivers {@code game_launch}. So this is one platform thread that never ends: a
+     * pooled thread, a common-pool thread or a virtual thread's carrier can retire at any time and
+     * take every child it started with it. Daemon, so it never holds the JVM open.
+     */
+    private static final ExecutorService SPAWNER =
+            Executors.newSingleThreadExecutor(
+                    task -> {
+                        Thread thread = new Thread(task, "subprocess-spawner");
+                        thread.setDaemon(true);
+                        return thread;
+                    });
 
     /** The wrapped child process. */
     private final Process process;
@@ -91,7 +110,9 @@ public final class SubprocessManager {
      * <p><b>Side effects.</b> The first successful call across the JVM installs a shutdown hook
      * that terminates all currently-active managers when the JVM exits. Every successful call also
      * enrols the returned manager in a JVM-wide registry; the manager deregisters itself
-     * automatically when its process exits.
+     * automatically when its process exits. The process itself is started on one JVM-wide thread,
+     * not the caller's, so a {@link ParentDeathSignal} prefix in {@code pb} ties the child to that
+     * thread rather than to one that may end first.
      *
      * @param pb fully-configured ProcessBuilder for the child
      * @param componentTag MDC component label applied to every captured log line; must be non-blank
@@ -141,7 +162,7 @@ public final class SubprocessManager {
         if (terminateGrace.isNegative() || terminateGrace.isZero()) {
             throw new IllegalArgumentException("terminateGrace must be positive");
         }
-        Process process = pb.start();
+        Process process = startOnSpawner(pb);
         ExecutorService readers =
                 ProcessOutputLogger.captureAsync(process, componentTag, lineObserver);
         SubprocessManager manager =
@@ -161,6 +182,45 @@ public final class SubprocessManager {
             SubprocessRegistry.deregister(manager);
         }
         return manager;
+    }
+
+    /**
+     * Runs {@code pb.start()} on {@link #SPAWNER} and waits for it. The wait does not give up on an
+     * interrupt: the start takes milliseconds, {@link ProcessBuilder#start()} never gave up on one
+     * either, and abandoning it would leave a started child that nothing manages. The caller keeps
+     * its interrupt flag and gets whatever the start threw, unwrapped. The start is submitted
+     * rather than executed, so a failed start cannot end the spawner thread.
+     *
+     * @param pb the configured builder, handed over with the submit
+     * @return the started process
+     * @throws IOException if {@link ProcessBuilder#start()} fails
+     */
+    private static Process startOnSpawner(final ProcessBuilder pb) throws IOException {
+        Future<Process> started = SPAWNER.submit(pb::start);
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    return started.get();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof IOException io) {
+                        throw io;
+                    }
+                    if (cause instanceof RuntimeException runtime) {
+                        throw runtime;
+                    }
+                    // ProcessBuilder.start() throws nothing else that is checked.
+                    throw (Error) cause;
+                }
+            }
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**

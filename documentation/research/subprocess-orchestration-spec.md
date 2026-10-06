@@ -33,9 +33,9 @@ spawns subprocesses. The Mock Client is the sole supervisor of both.
 ### 1.1 Target environment
 
 This spec **targets Linux**, the platform CI runs on (`ubuntu-latest`). The
-Java code itself is OS-portable. The unbuilt orphan-prevention layers in §7.3
-are designed around `util-linux`: `prctl(PR_SET_PDEATHSIG)` via `setpriv`, and
-`setsid` for process-group cleanup.
+Java code itself is OS-portable. The orphan-prevention layers in §7.3 beyond
+the JVM's own shutdown hook rely on `util-linux`: `prctl(PR_SET_PDEATHSIG)` via
+`setpriv` (built), and `setsid` for process-group cleanup (not built).
 
 The harness needs **no container**. Both mocks ship as runnable jars on the
 releases page (WBS-7.6) and run as plain processes on a Java 21 or newer
@@ -48,8 +48,9 @@ workspace no longer hold:
    `netem` or `iptables`. harness-runbook §10 explains why network-level tools
    cannot express those faults.
 2. **Orphan prevention does not rely on an init process.** The harness JVM is
-   not PID 1, and `SubprocessRegistry`'s shutdown hook is the safety net. §7.3
-   records what that hook does not cover.
+   not PID 1. `SubprocessRegistry`'s shutdown hook is the safety net, and on
+   Linux the parent-death signal covers a JVM that is killed. §7.3 records
+   what neither covers.
 3. **Multi-peer runs on one host.** `mock-client session` runs every peer's
    client in one JVM and allocates each peer's ports itself; clients started as
    separate `run` processes each need their own `--ice-adapter-*-port` values.
@@ -212,7 +213,7 @@ The example below mirrors json-rpc-spec §9 phases A–B.
        lobbyUdpPort ← free UDP port
    (See §3 — bind-and-release pattern.)
 
-2. ProcessBuilder argv =
+2. ProcessBuilder argv =  // on Linux, after the §7.3 setpriv prefix
    [ javaBin,
      "-Dlogback.configurationFile=<console-only config>",  // headless: bypass JavaFX appender
      "-jar", iceAdapterJar,
@@ -288,10 +289,11 @@ The example below mirrors json-rpc-spec §9 phases A–B.
 > the connect window takes effect immediately rather than waiting the budget
 > out. Separately, `SubprocessRegistry` installs its own JVM shutdown hook, so
 > on any exit that runs shutdown hooks both children die with the parent
-> whatever the FSM is doing. A `SIGKILL` skips the hook and leaves them running
-> (§7.3). What remains of the connect-window cost is that a broken adapter is
-> noticed late and `AdapterExited` sits queued for that window. Moving the
-> bring-up off the transition action is tracked as a 3.1.3.3 fix.
+> whatever the FSM is doing. A `SIGKILL` skips the hook; on Linux the kernel
+> still ends both (§7.3). What remains of the connect-window cost is that a
+> broken adapter is noticed late and `AdapterExited` sits queued for that
+> window. Moving the bring-up off the transition action is tracked as a
+> 3.1.3.3 fix.
 
 Steps 6–7 are JSON-RPC and out of scope here; they are listed only to
 clarify that the adapter must be observably-reachable before `mock-game` is
@@ -300,7 +302,7 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
 ### 2.8 `mock-game` argv
 
 ```text
-[ mockGameBin,
+[ mockGameBin,                    // on Linux, after the §7.3 setpriv prefix
   "--gpgnet-port", gpgnetPort,    // TCP, must match adapter
   "--lobby-port",  lobbyUdpPort,  // UDP, fallback only; CreateLobby's port wins
   "--player-id",   welcome.me.id,
@@ -506,6 +508,7 @@ copy does not affect internal cleanup or other listeners.
 | §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
 | §7.2 forceful teardown | `terminate([grace])`: SIGTERM, wait, SIGKILL, through the process handle so the pipes stay open, then up to 1 s for the output to reach the log (#361) |
 | §7.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
+| §7.3 layer 2 parent-death signal | `start()` runs `ProcessBuilder.start()` on `subprocess-spawner`, one thread that lives as long as the JVM, so a `ParentDeathSignal` prefix signals a child only when the JVM itself ends |
 
 ### 5.3 Launcher pattern (ICE adapter and mock-game)
 
@@ -624,39 +627,81 @@ this — when the JVM is killed by `SIGKILL`, the OOM-killer, or
 `Runtime.halt()`, **shutdown hooks do not run** and child processes survive
 as orphans (they are reparented to PID 1).
 
-The design has four layers, and **only layer 1 is built**. Layers 2 and 4 are
-primitives that were designed but never added to the launch argv. Layer 3
+The design has four layers. Layers 1 and 2 are built, layer 2 on Linux only
+(#378). Layer 4 was designed but never added to the launch argv. Layer 3
 applies only when the JVM is PID 1, as in a container; the harness runs as
 plain processes, so it does not apply.
 
 | Layer | Mechanism | Covers | Provided by | Status |
 |---|---|---|---|---|
 | 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` and `session` each add their own hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
-| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)` set in a tiny native shim that `execve`s the actual child | Parent dies via `SIGKILL` while children are running | Linux kernel + `util-linux` (`setpriv`) | Designed, not built |
+| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)`, set by `setpriv --pdeathsig TERM --` in front of each launcher's argv, which then `execve`s the actual child | Parent dies via `SIGKILL` or the OOM killer while children are running | Linux kernel + `util-linux` 2.33 or later (`setpriv`) | **Built** on Linux (`ParentDeathSignal`, and `SubprocessManager`'s spawner thread). `SubprocessManagerShutdownTest` covers `SIGKILL`, `ParentDeathSignalTest` the thread rule below |
 | 3. Init / PID 1 | An init (e.g. tini) at PID 1 that reaps zombies and forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | A container runtime | Not applicable: the harness runs as plain processes, so its JVM is not PID 1 |
-| 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built |
+| 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built: neither child has descendants of its own, and mock-game's start script `exec`s its JVM |
 
-For layer 2, the JDK does not expose `prctl`. Acceptable
-implementations (in order of preference):
+For layer 2, the JDK does not expose `prctl`, so `BinaryLaunchCommand` puts
+`setpriv --pdeathsig TERM --` in front of both launchers' argv, as in
+`["setpriv", "--pdeathsig", "TERM", "--", javaBin, "-jar", ...]`. `setpriv` is
+part of `util-linux`: zero JNI, zero native code in our codebase. It sets the
+signal and `exec`s the child, so the PID the harness tracks is still the
+child's. SIGTERM is also the first signal `terminate()` sends (§7.2): the
+adapter's JVM exits on it, and mock-game runs its own teardown.
+`ParentDeathSignal` decides once per JVM whether the prefix works, by running
+it. On anything but Linux the prefix is empty. On a Linux host without a
+`setpriv` that can set the signal (none on `PATH`, BusyBox's, or one from
+util-linux before 2.33, which added `--pdeathsig`) it is empty too, and the
+harness logs one INFO line saying so.
 
-- **`setsid`/`setpriv` shim**: launch the child via
-  `["setpriv", "--pdeathsig", "TERM", "--", javaBin, "-jar", ...]`. `setpriv`
-  is part of `util-linux`. Zero JNI, zero native code in our codebase.
-- **Fallback (no `setpriv` available)**: a small Bash launcher script that
-  writes its PID to a file and `exec`s the child; a parent-side watchdog
-  thread polls `/proc/<parent>/stat` and signals the group on parent death.
-  This is a fallback only — the `setpriv` path is preferred.
-- **JNA prctl**: explicitly rejected for this PoC. Adds a native dependency
-  for one syscall.
+The kernel sends the signal when the **thread** that started the child exits,
+not the process (`prctl(2)`). `run` and `session` start both children on the
+JDK HttpClient worker that delivered `game_launch`, and an idle worker exits
+after 60 s, so a bare prefix can end both mid-session. Seen live on a build
+without the fix below: the game got SIGTERM, and the run ended `71`, about a
+minute into a quiet `HOSTING`, as that worker retired. So
+`SubprocessManager.start` runs `ProcessBuilder.start()` on `subprocess-spawner`,
+one daemon thread that lives as long as the JVM. Only the spawn moves there;
+the launch log lines keep the caller's thread.
+
+Rejected:
+
+- **A watchdog** (the former fallback: a Bash launcher that `exec`s the child,
+  plus a watchdog polling `/proc/<parent>/stat`). As specified, the watchdog
+  was a thread in the parent, which dies with it. One outside the parent adds
+  a process per child, polling latency and PID-reuse hazards.
+- **JNA prctl**: adds a native dependency for one syscall.
 
 For layer 4, prefix the argv with `setsid -w` (also `util-linux`). The
 resulting child is the leader of a new session, so `kill -- -<pgid>` delivers
 SIGTERM to every descendant in one syscall.
 
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
-`System.exit`) terminates its children through layer 1. A `SIGKILL` or OOM
-kill of that JVM runs no hook, and nothing else in the harness terminates the
-children, so they are left running. The adapter normally never notices:
+`System.exit`) terminates its children through layer 1. On Linux a `SIGKILL`
+or OOM kill of that JVM ends them through layer 2. Measured live against the
+pinned 3.3.14 adapter (raw monotonic clock), after a `kill -9` of the client in
+`HOSTING` and in `PLAYING` the adapter was gone within 0.33 s and the game
+within 0.04 s. Not covered:
+
+- other operating systems, and a Linux host without a usable `setpriv`, where
+  a killed JVM leaves both children running;
+- a kill between a child's spawn and `setpriv` setting the signal, a window of
+  about a millisecond: the kernel sends nothing if the parent thread is
+  already gone when the signal is set;
+- a child that ignores SIGTERM (neither does), or whose signal the kernel
+  clears, which it does when the child execs a setuid, setgid or
+  file-capability binary, or on a security module's secure exec;
+- an executable file that still cannot run, such as a script whose
+  interpreter is missing. Behind `setpriv` it starts, then exits `126` or
+  `127`, so it reads as a child that died rather than one that never
+  started: a game makes `run` exit `71`, not `70`, and an adapter makes
+  `ice-smoke` report `ADAPTER_EXITED`, not `LAUNCH_FAILED`. A native binary
+  without an exec bit is refused before the start, so it still counts as
+  never started;
+- a JVM that outlives its CI step: a cancelled or timed-out GitHub Actions
+  step signals only the step's shell, so the JVM and its children run on
+  until the runner's own cleanup.
+
+Without layer 2, neither child ends by itself.
+The adapter normally never notices:
 faf-ice-adapter 3.3.14's JSON-RPC library runs the connection-loss handler only
 when a read throws (JJsonRpc `JJsonPeer.run`), and a killed client's socket
 closes in an orderly way unless it had unread data, so the adapter carries on
@@ -698,14 +743,14 @@ twice, plus up to 1 s for the output) rather than their sum.
 
 | Symptom | Source | Detection | Response |
 |---|---|---|---|
-| Adapter binary missing | wrong path | the launcher's regular-file check, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
+| Adapter binary missing, or a native one not executable | wrong path, or a lost exec bit | the launcher's regular-file and exec checks, before any process starts | Abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter exits immediately, with `0` either way | bad CLI args (§2.6), GPGNet port in use (`BindException`, then its own shutdown NPEs on the unstarted RPC server) | `onExit()` before the RPC connect completes (§2.7) | Log args, abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter's RPC port already held by another process | a stale process, or a port collision | the adapter logs `Could not start RPC server.`, its listener thread dies and it stays up serving GPGNet only, so the connect succeeds against whatever holds the port and the first setup call times out after 5 s | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None: a killed JVM runs no hook | Children are left running (§7.3) |
+| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None in the JVM: a killed JVM runs no hook | On Linux the kernel sends both children SIGTERM (§7.3 layer 2); elsewhere they are left running |
 
 ## 9. Open questions
 
@@ -750,6 +795,8 @@ twice, plus up to 1 s for the output) rather than their sum.
 - `util-linux` `setpriv(1)`, `setsid(1)` — orphan prevention primitives
 - [java-ice-adapter 3.3.14 `RPCService.java`](https://github.com/FAForever/java-ice-adapter/blob/3.3.14/ice-adapter/src/main/java/com/faforever/iceadapter/rpc/RPCService.java): adapter behaviour on losing its JSON-RPC client
 - [JJsonRpc `JJsonPeer.java` at `37669e0`](https://github.com/FAForever/JJsonRpc/blob/37669e0fed05937b733bbb64155bcb874ed07c35/src/main/java/com/nbarraille/jjsonrpc/JJsonPeer.java): the read loop that decides whether faf-ice-adapter 3.3.14 notices a lost JSON-RPC client
+- [`PR_SET_PDEATHSIG(2const)`](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html): the parent-death signal follows the thread that created the child, and is cleared by a setuid, setgid or file-capability exec
+- [util-linux 2.33 release notes](https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.33/v2.33-ReleaseNotes): the release that gave `setpriv` its `--pdeathsig` option
 
 ## 11. Sequence diagram — one-session lifecycle
 
@@ -798,5 +845,5 @@ sequenceDiagram
     MC->>MG: terminate(), in parallel
     IA-->>MC: exit
     MG-->>MC: exit
-    Note over MC,MG: SIGKILL or OOM kill runs no hook, so IA and MG are left running (§7.3)
+    Note over MC,MG: SIGKILL or OOM kill runs no hook, but on Linux the kernel sends IA and MG SIGTERM (§7.3)
 ```
