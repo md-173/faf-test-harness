@@ -397,6 +397,11 @@ assets.
 6. **Bump the version in the docs** if the release is referenced by number. `README.md` no longer
    names jar files by version: it writes `<version>` and pulls from `releases/latest`, so it needs
    no bump. Check anything that does name a number.
+7. **Start the next version.** After publishing, set `version` in `gradle.properties` to the next
+   release's number with `-SNAPSHOT` (after `0.4.0`, `0.5.0-SNAPSHOT`). A release takes its version
+   from `-Pversion`, so nothing else moves this one, and until it moves every local build reports a
+   snapshot of a version that has already shipped. Do it after publishing: a bump merged between
+   step 1 and step 2 would move `main` past the commit step 1 proved.
 
 ### The asset names are a contract
 
