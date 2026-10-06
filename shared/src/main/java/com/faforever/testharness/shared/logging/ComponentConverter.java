@@ -23,7 +23,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
  *
  * <pre>{@code
  * <conversionRule conversionWord="component"
- *     converterClass="com.faforever.testharness.shared.logging.ComponentConverter"/>
+ *     class="com.faforever.testharness.shared.logging.ComponentConverter"/>
  * }</pre>
  */
 public final class ComponentConverter extends ClassicConverter {
