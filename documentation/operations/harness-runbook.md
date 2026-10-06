@@ -1824,6 +1824,7 @@ clone, no Gradle:
 
 ```bash
 java -jar mock-client-<version>-all.jar \
+  --lobby-websocket-url=wss://ws.faforever.xyz \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./your-adapter-build.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -2035,18 +2036,11 @@ jobs:
       # releases/latest can be older than you expect, so ask the jar rather than trust the tag,
       # and ask before the build: the session step would otherwise fail after it, with picocli's
       # usage dump rather than a named cause.
-      - name: Check the release is new enough for this job
+      - name: Check the release carries per-peer access tokens
         timeout-minutes: 2
         run: |
           java -jar "$CLIENT_JAR" session --help | grep -q -- '--peer-access-token-file' || {
             echo "::error::$(basename "$CLIENT_JAR") predates --peer-access-token-file"
-            exit 1
-          }
-          # The session step names no lobby or OAuth endpoint, so the release must default them.
-          # env -u, because --help shows an override in place of the built-in value.
-          env -u FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL java -jar "$CLIENT_JAR" session --help \
-            | grep -q 'Default: wss://ws.faforever.xyz' || {
-            echo "::error::$(basename "$CLIENT_JAR") predates the built-in lobby and OAuth defaults"
             exit 1
           }
 
@@ -2090,6 +2084,7 @@ jobs:
           mkdir -p "$WORK"
           cd "$WORK"
           java -jar "$CLIENT_JAR" \
+            --lobby-websocket-url=wss://ws.faforever.xyz \
             --uid-binary-path="$FAF_UID_BINARY" \
             --ice-adapter-binary-path="$ADAPTER_JAR" \
             --mock-game-binary-path="$GAME_JAR" \
@@ -2190,7 +2185,7 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   any ref, so a group keyed on the branch would let two runs overlap on one
   account anyway. `CONTRIBUTING.md` §3 records the same two rules for this
   repository's own CI accounts.
-- **Both jars from one release, and a release new enough for the job.** The
+- **Both jars from one release, and a release that carries the flag.** The
   traffic checkpoint parses mock-game's own progress line, so a mock-game from
   a different release leaves a full mesh the checkpoint cannot confirm, and the
   session fails at `traffic` for a reason that has nothing to do with your
@@ -2198,10 +2193,7 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   than the commit you are reading. Ask the jar rather than trust the tag, as
   the check step does. Without that step, a jar lacking the subcommand answers
   the session invocation with `Unmatched arguments`, naming `session` and
-  everything after it, and exits `2` after the adapter build. The step also
-  asks for the built-in lobby default, since the session step names no lobby or
-  OAuth endpoint: a release older than the defaults would exit `2` there with
-  `missing required configuration`, again after the build.
+  everything after it, and exits `2` after the adapter build.
 - **A real `faf-uid`** is needed, for the reason §3 gives.
   On a runner the failure is easy to misread: without the
   binary the lobby's policy request fails and the login ends in
@@ -2267,13 +2259,6 @@ collects and no adapter or game process left behind. The expiry check was
 exercised separately across seventeen token shapes, from a valid token to an
 expired one, a `null`, a string, an `Infinity` and a 401-digit integer. The
 file passes `actionlint` with `shellcheck`.*
-
-*Two changes came later, with the built-in defaults (#421): the session step
-lost `--lobby-websocket-url`, and the check step gained its second test. That
-test was run on 2026-09-28 under `bash -eo pipefail`, and `shellcheck` finds
-nothing in it: it refused the published 0.3.0 jar, passed a build with the
-defaults, and still passed with `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` set. The
-session step has not been run again since it lost the flag.*
 
 *Two substitutions stood in for what cannot run here. `ADAPTER_JAR` was set
 directly, since the adapter build is the consumer's own step; and the jar paths

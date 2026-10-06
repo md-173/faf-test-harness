@@ -163,6 +163,7 @@ role takes, and non-zero otherwise with a line naming the peer and the stage tha
 
 ```bash
 java -jar mock-client-<version>-all.jar \
+  --lobby-websocket-url=wss://ws.faforever.xyz \
   --uid-binary-path=./faf-uid \
   --ice-adapter-binary-path=./faf-ice-adapter-3.3.14-nojfx.jar \
   --mock-game-binary-path=./mock-game-<version>-all.jar \
@@ -172,10 +173,9 @@ java -jar mock-client-<version>-all.jar \
 ```
 
 One FAF test account per peer and one credential file each: a pre-signed access token as
-above, or a refresh token with `--peer-refresh-token-file`. The lobby URL, token URL and
-client id default to the FAF test environment, so the command sets none of them. Obtaining
-either credential, and the `faf-uid` binary, is
-[runbook §3](documentation/operations/harness-runbook.md#3-credentials). The complete
+above, or a refresh token with `--peer-refresh-token-file`, which also needs
+`--oauth-token-url` and `--oauth-client-id`. Obtaining either, and the `faf-uid` binary,
+is [runbook §3](documentation/operations/harness-runbook.md#3-credentials). The complete
 flag list is [`mock-client/README.md`](mock-client/README.md#field-reference), and the
 exit codes are [its own table](mock-client/README.md#exit-codes);
 [`mock-game`](mock-game/README.md#exit-codes) has a separate one.
