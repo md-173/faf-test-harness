@@ -411,6 +411,26 @@ final class SessionCommandTest {
         assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
     }
 
+    @Test
+    void theRefreshTokenCommandLineNeedsNoOAuthSettings() throws IOException {
+        // A refresh-channel session with no lobby or OAuth option (#421): the lobby URL, token
+        // URL and client id default to the test environment's, so each peer's file is all the
+        // credential it needs. The missing adapter stops the run before any login.
+        String[] argv = {
+            "--unique-id=00000000-0000-0000-0000-000000000000",
+            "--ice-adapter-binary-path=" + dir.resolve("no-such-adapter.jar"),
+            "--mock-game-binary-path=" + dir.resolve("no-such-game.jar"),
+            "session",
+            "--peers=2",
+            "--peer-refresh-token-file=" + token("a") + "," + token("b")
+        };
+
+        Outcome outcome = run(argv, Map.of());
+
+        assertEquals(ExitCodes.USAGE, outcome.exitCode(), outcome.err());
+        assertTrue(outcome.err().contains(PASSED_CREDENTIALS), outcome.err());
+    }
+
     /**
      * An exit code and what picocli wrote to its error stream.
      *
