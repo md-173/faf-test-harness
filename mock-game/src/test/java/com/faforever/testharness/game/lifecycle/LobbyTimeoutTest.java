@@ -30,7 +30,9 @@ import org.junit.jupiter.api.Timeout;
  * <p>Both halves matter and both are here: the timer fires when nothing arrives, and it never fires
  * once something drives the game into a role.
  */
-@Timeout(30)
+// 45, not 30: the bounded waits in aHostedGameNeverTripsTheTimer add up to 35s, and a slow failure
+// should name the wait that failed rather than trip this class timeout.
+@Timeout(45)
 final class LobbyTimeoutTest {
 
     /** Short enough to keep the suite quick, long enough that arrival always wins the race. */
@@ -41,7 +43,9 @@ final class LobbyTimeoutTest {
     private static final int LOBBY_TIMEOUT_SECONDS = 3;
 
     /** Comfortably longer than the timer, so a failure to fire fails rather than flakes. */
-    private static final int AWAIT_SECONDS = 5;
+    // Derived from the timer, not a literal: as a literal it stayed at 5 when the timer went from
+    // 1s to 3s, and the margin fell from 4s to 2s (#385).
+    private static final int AWAIT_SECONDS = LOBBY_TIMEOUT_SECONDS + 5;
 
     /** Long enough that it cannot fire during the "must not trip" case. */
     private static final int GENEROUS_TIMEOUT_SECONDS = 20;
