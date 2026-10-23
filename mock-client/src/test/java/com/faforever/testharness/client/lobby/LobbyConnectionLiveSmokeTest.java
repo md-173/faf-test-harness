@@ -39,13 +39,15 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * <ul>
  *   <li>{@link #connectSucceeds()} — connect and verify the WS upgrade. Self-skips when {@code
  *       ws.faforever.xyz:443} is unreachable (TCP timeout).
- *   <li>{@link #authHandshakeYieldsTerminalReply()} — the full production path: refresh-token →
+ *   <li>{@link #authHandshakeYieldsTerminalReply()}: the full production path, refresh-token →
  *       Hydra → JWT → {@code ask_session} → {@code session} → {@code auth} → {@code welcome},
- *       {@code authentication_failed} or {@code invalid}. Additionally gated on a local {@code
- *       .secrets/refresh_token.txt}. Any of the three is a pass — each proves the transport works
- *       bidirectionally; only silence/timeout once connected is a failure. {@code invalid} is what
- *       the live lobby actually sends: this test authenticates with a placeholder {@code
- *       unique_id}, which the lobby's policy server rejects before closing the socket (#390).
+ *       {@code authentication_failed}, {@code invalid} or the lobby's own Close frame. Additionally
+ *       gated on a local {@code .secrets/refresh_token.txt}. Any of the four is a pass, since each
+ *       proves the transport works bidirectionally; silence once connected, or a drop without a
+ *       Close frame, is a failure. This test authenticates with a placeholder {@code unique_id},
+ *       which the lobby's policy server rejects. faf-server before v1.19.0 answered that with
+ *       {@code invalid} and a close (#390). Since 2026-10-21 the test lobby is faf-message-broker
+ *       in front of faf-server, and it closes the socket with code 1011 and sends no frame (#530).
  * </ul>
  *
  * <p>This test mutates {@code .secrets/refresh_token.txt} — Hydra rotates the refresh token on
@@ -68,16 +70,17 @@ import org.junit.jupiter.api.condition.EnabledIf;
 final class LobbyConnectionLiveSmokeTest {
 
     /**
-     * Canonical FAF test-env lobby endpoint, served natively at the host root ({@code /}) by the
-     * lobby server (the {@code .com}→{@code .xyz} swap of production {@code
-     * wss://ws.faforever.com}; there is no {@code /ws} path — a {@code GET /ws} 404s, that was the
-     * retired {@code ws_bridge_rs} path). Cloudflare-fronted and publicly reachable — no FAF
-     * allowlist or VPN needed. {@code wss://lobby.faforever.xyz}, read from downlords-faf-client's
-     * {@code application-test.yml}, times out from every network tried (WSL, native Windows, curl,
-     * an independent cloud egress, and a FAF maintainer) and is wrong in practice — it resolves to
-     * a direct, non-Cloudflare origin, consistent with a destination-side gate on that host
-     * specifically, not this one. See {@code documentation/research/lobby-protocol-spec.md} §1's
-     * 2026-06-18 correction. Confirmed empirically by a full live login through this test.
+     * Canonical FAF test-env lobby endpoint, served at the host root ({@code /}), since 2026-10-21
+     * by faf-message-broker in front of the lobby server (the {@code .com}→{@code .xyz} swap of
+     * production {@code wss://ws.faforever.com}; there is no {@code /ws} path: an upgrade at {@code
+     * /ws} 404s, that was the retired {@code ws_bridge_rs} path). Cloudflare-fronted and publicly
+     * reachable: no FAF allowlist or VPN needed. {@code wss://lobby.faforever.xyz}, read from
+     * downlords-faf-client's {@code application-test.yml}, times out from every network tried (WSL,
+     * native Windows, curl, an independent cloud egress, and a FAF maintainer) and is wrong in
+     * practice: it resolves to a direct, non-Cloudflare origin, consistent with a destination-side
+     * gate on that host specifically, not this one. See {@code
+     * documentation/research/lobby-protocol-spec.md} §1's 2026-06-18 correction. Confirmed
+     * empirically by a full live login through this test.
      */
     private static final URI FAF_TEST_LOBBY = URI.create("wss://ws.faforever.xyz");
 
@@ -155,13 +158,23 @@ final class LobbyConnectionLiveSmokeTest {
         LobbyConnection lobby = new LobbyConnection(FAF_TEST_LOBBY);
 
         AtomicReference<JsonNode> sessionMsg = new AtomicReference<>();
-        AtomicReference<JsonNode> welcomeMsg = new AtomicReference<>();
-        AtomicReference<JsonNode> failureMsg = new AtomicReference<>();
+        // Whichever reply ends the login first: a frame, or the lobby's own close.
+        AtomicReference<Object> terminal = new AtomicReference<>();
         CountDownLatch sessionLatch = new CountDownLatch(1);
         CountDownLatch terminalLatch = new CountDownLatch(1);
         List<LobbyConnection.DisconnectEvent> disconnects = new CopyOnWriteArrayList<>();
 
-        lobby.onDisconnect(disconnects::add);
+        lobby.onDisconnect(
+                event -> {
+                    disconnects.add(event);
+                    // The test lobby's broker answers the placeholder unique_id below with a Close
+                    // frame, code 1011, and nothing before it (#530). A drop without a Close frame
+                    // is no reply.
+                    if (event.reason() == LobbyConnection.DisconnectReason.CLEAN_CLOSE) {
+                        terminal.compareAndSet(null, event);
+                        terminalLatch.countDown();
+                    }
+                });
         lobby.registerHandler(
                 "session",
                 node -> {
@@ -171,20 +184,21 @@ final class LobbyConnectionLiveSmokeTest {
         lobby.registerHandler(
                 "welcome",
                 node -> {
-                    welcomeMsg.set(node);
+                    terminal.compareAndSet(null, node);
                     terminalLatch.countDown();
                 });
         lobby.registerHandler(
                 "authentication_failed",
                 node -> {
-                    failureMsg.set(node);
+                    terminal.compareAndSet(null, node);
                     terminalLatch.countDown();
                 });
-        // The reply the live lobby gives the placeholder unique_id below, followed by a close.
+        // faf-server before v1.19.0 answered the placeholder unique_id below with this, then a
+        // close (#390). Handled so the printed line names it rather than the close behind it.
         lobby.registerHandler(
                 "invalid",
                 node -> {
-                    failureMsg.set(node);
+                    terminal.compareAndSet(null, node);
                     terminalLatch.countDown();
                 });
 
@@ -211,17 +225,16 @@ final class LobbyConnectionLiveSmokeTest {
 
             assertTrue(
                     terminalLatch.await(15, TimeUnit.SECONDS),
-                    "no `welcome`, `authentication_failed` or `invalid` within 15s of auth."
-                            + " session="
+                    "no `welcome`, `authentication_failed`, `invalid` or Close frame within 15s of"
+                            + " auth. session="
                             + sessionMsg.get()
                             + ", disconnects="
                             + disconnects);
 
-            JsonNode terminal = welcomeMsg.get() != null ? welcomeMsg.get() : failureMsg.get();
-            assertNotNull(terminal);
+            assertNotNull(terminal.get());
             // Any terminal is a pass — each proves the transport works end-to-end.
             // Log the outcome so the test runner shows which path was exercised.
-            System.out.println("[live smoke] auth handshake terminal: " + terminal);
+            System.out.println("[live smoke] auth handshake terminal: " + terminal.get());
         } finally {
             lobby.close().get(5, TimeUnit.SECONDS);
         }
