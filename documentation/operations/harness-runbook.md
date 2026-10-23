@@ -1181,6 +1181,15 @@ The game's and the adapter's lines can interleave in either order. The
 survivors' traffic to each other carries on, and a host whose last joiner
 leaves keeps its lobby open, as FA's does.
 
+Those are not the only `Disconnected` lines a custom game's adapter logs. FA's
+custom lobby also sends one before it connects to each peer it is told about
+with `ConnectToPeer`, and so does the game (WBS-3.2.4.1-fix, #506): the
+host's adapter logs `Received GPGNet message: Disconnected <id>` as each
+joiner is announced, and each joiner's as every other joiner is. A joiner
+learns of the host through `JoinGame`, which gets no reply. Only the
+`Disconnected` next to the game's `Peer (ID: <id>) disconnected` line is a
+departure.
+
 The rest of the rule, from `MockGameLifecycle`'s departure transitions:
 
 - **No notice ends a game, not even one about the host.** When the host
@@ -1193,8 +1202,14 @@ The rest of the rule, from `MockGameLifecycle`'s departure transitions:
   before it finished joining, is answered with `Disconnected` and changes
   nothing: `Peer (ID: <id>) disconnected but never joined this game; ignoring`.
 - **A malformed `DisconnectFromPeer` still ends the game as a failure.**
-- **FA's matchmaker lobby answers with `DisconnectedPeer <id>` instead**, and
-  sends no `ClearSlot`. The Mock Game speaks only the custom lobby's frames.
+- **A matchmaker game answers as FA's matchmaker lobby does**
+  (WBS-3.2.4.1-fix, #506):
+  `Received GPGNet message: DisconnectedPeer <departing id>` in place of the
+  last two lines, only for a peer the game had, and no `ClearSlot`. It sends
+  no `Disconnected` on connect either. Instead each survivor's adapter logged
+  `Received GPGNet message: EstablishedPeer <id>` when that peer's first
+  datagram arrived. faf-server has a handler for neither and logs each as an
+  unrecognized command.
 
 **After launch**, that guard closes and **no targeted notification is sent at
 all**. The server broadcasts a `game_info` with the reduced player list and

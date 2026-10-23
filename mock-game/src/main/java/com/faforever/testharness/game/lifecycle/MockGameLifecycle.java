@@ -105,7 +105,11 @@ public final class MockGameLifecycle {
     /** A copy of the configuration settings given to the mock game. */
     private final MockGameConfig config;
 
-    /** A scheduler used to make certain transitions occur after a configurable delay. */
+    /**
+     * A scheduler used to make certain transitions occur after a configurable delay, and to hand a
+     * peer's first datagram to the state machine off the receive thread ({@link
+     * #firstDatagramFrom}).
+     */
     private final ScheduledThreadPoolExecutor scheduler;
 
     /** The delay before initiating a match after all configuration is done. */
@@ -169,6 +173,15 @@ public final class MockGameLifecycle {
      * {@code PlayerOption}. Touched only by FSM actions, under its monitor.
      */
     private final Map<Integer, Integer> slots = new HashMap<>();
+
+    /**
+     * Whether {@code CreateLobby} named init mode 1, for which FA loads its matchmaker lobby,
+     * {@code autolobby.lua}, rather than the custom {@code lobby.lua} (WBS-3.2.4.1-fix, #506). The
+     * two answer peer frames differently. Set once, by the {@code CreateLobby} action before it
+     * binds the lobby socket, and read by later FSM actions and by {@link #firstDatagramFrom} on
+     * the receive thread, hence volatile.
+     */
+    private volatile boolean matchmakerLobby;
 
     /**
      * Status of the lifecycle, to be mapped to a process exit code by the bootstrap (WBS-3.2.5.1).
@@ -335,7 +348,9 @@ public final class MockGameLifecycle {
         // Assigned here rather than at the field, which would read a still-null config. Registered
         // with the shutdown sequence immediately: that sequence is the only thing that stops the
         // cadence and closes the socket, on every exit path including a SIGTERM before CreateLobby.
-        this.traffic = new GameTrafficSession(config.playerId(), config.udpDropPercent());
+        this.traffic =
+                new GameTrafficSession(
+                        config.playerId(), config.udpDropPercent(), this::firstDatagramFrom);
         this.shutdown.registerTrafficSession(traffic);
 
         setupStateMachine();
@@ -458,11 +473,11 @@ public final class MockGameLifecycle {
 
     /**
      * How many tasks the lifecycle's scheduler holds that have not started yet: a pending launch,
-     * match end or injected crash. Package-private for {@code GameShutdownTest}, which checks that
-     * a launch was pending before teardown and that teardown discarded it, rather than sleeping
-     * past the launch delay. The queue is what tells the two apart: shutting down discards a task
-     * still waiting for its delay, so it never runs, while without the discard policy set in the
-     * constructor it would stay queued to run when its delay expires. A task already due stays
+     * match end, injected crash or peer link. Package-private for {@code GameShutdownTest}, which
+     * checks that a launch was pending before teardown and that teardown discarded it, rather than
+     * sleeping past the launch delay. The queue is what tells the two apart: shutting down discards
+     * a task still waiting for its delay, so it never runs, while without the discard policy set in
+     * the constructor it would stay queued to run when its delay expires. A task already due stays
      * queued either way, and does nothing once started; see {@code schedule(Runnable, Duration)}.
      *
      * @return the number of tasks still queued on the lifecycle's scheduler.
@@ -546,6 +561,7 @@ public final class MockGameLifecycle {
             GameState.LIVE
         };
         registerPeerDepartureTransitions();
+        registerPeerEstablishedTransitions();
         for (var s : fromStates) {
             // Go to ENDED state when the server disconnects and it wasn't due to our shutdown
             // sequence.
@@ -620,9 +636,10 @@ public final class MockGameLifecycle {
      * the frame unhandled.
      *
      * <ul>
-     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way FA's
-     *       lobby does and plays on without that peer. From {@code CreateLobby} until launch FA has
-     *       a lobby, and a player leaving it frees a slot rather than ending anyone's game.
+     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way the FA
+     *       lobby {@code CreateLobby} picked does and plays on without that peer. From {@code
+     *       CreateLobby} until launch FA has a lobby, and a player leaving it frees a slot rather
+     *       than ending anyone's game.
      *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreDepartureDuringMatch}): FA destroys
      *       its lobby when the match launches, and a running game processes no GPGNet input.
      *   <li><b>INITIALIZING and IDLE</b> end the game as a success ({@link #peerDisconnected}), as
@@ -653,6 +670,51 @@ public final class MockGameLifecycle {
                         states.get(GameState.LIVE),
                         this::ignoreDepartureDuringMatch,
                         null);
+    }
+
+    /**
+     * Registers what a {@link PeerEstablished} does in each state (WBS-3.2.4.1-fix, #506). FA's
+     * matchmaker lobby reports each peer whose link comes up with {@code EstablishedPeer}, and the
+     * first datagram from a peer is the mock's nearest equivalent of that link.
+     *
+     * <ul>
+     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put, and {@link #peerEstablished} sends the
+     *       report for a peer this game has.
+     *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreLinkAfterLaunch}): FA destroys its
+     *       lobby when the match launches, so a link that first carries traffic later is never
+     *       reported.
+     *   <li><b>ENDED</b> stays put silently: a report queued just before teardown can still land
+     *       there, and with no edge the IGNORE policy would log it at WARN.
+     * </ul>
+     *
+     * <p>INITIALIZING and IDLE get none: the lobby socket binds inside the {@code CreateLobby}
+     * action, so nothing is read before LOBBY.
+     *
+     * <p>The event reaches the machine through {@link #firstDatagramFrom}, which queues it on the
+     * lifecycle's scheduler instead of posting it from the receive thread. ENDED's entry hook runs
+     * the shutdown sequence holding the machine's monitor, and that sequence waits for the receive
+     * thread to stop, so a receive thread waiting on the monitor would hold teardown up.
+     *
+     * <p>The receiver reports a sender once for the life of its socket. So a departed peer that is
+     * announced again is not reported again, and a peer whose first datagram arrived before this
+     * game was told about it is never reported. Through the adapter the second does not happen in
+     * practice: it sends the frame naming a peer as it creates that peer's relay, and ICE needs a
+     * round trip through the lobby before anything crosses it.
+     */
+    private void registerPeerEstablishedTransitions() {
+        for (var s : List.of(GameState.LOBBY, GameState.HOSTING, GameState.JOINING)) {
+            states.get(s)
+                    .registerTransition(
+                            PeerEstablished.class, states.get(s), this::peerEstablished, null);
+        }
+        states.get(GameState.LIVE)
+                .registerTransition(
+                        PeerEstablished.class,
+                        states.get(GameState.LIVE),
+                        this::ignoreLinkAfterLaunch,
+                        null);
+        states.get(GameState.ENDED)
+                .registerTransition(PeerEstablished.class, states.get(GameState.ENDED));
     }
 
     /**
@@ -801,6 +863,19 @@ public final class MockGameLifecycle {
         }
         GpgNetFrame frame = ((CreateLobby) event).frame();
 
+        // FA's engine picks its lobby by this frame's first argument, the init mode
+        // (onlineprovider.lua): 1, which the adapter sends for a matchmaker game, loads
+        // autolobby.lua, and 0 the custom lobby.lua. Any other value is answered as the custom
+        // lobby.
+        try {
+            matchmakerLobby = frame.intArg(0) == 1;
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.warn(
+                    "CreateLobby frame did not have a usable init mode; "
+                            + "answering peers as FA's custom lobby");
+        }
+        LOG.info("answering peers as FA's {} lobby", matchmakerLobby ? "matchmaker" : "custom");
+
         // The frame's port decides where the socket binds, and the launch argument is only the
         // fallback (WBS-4.3.2). Source-verified in java-ice-adapter 3.3.14: GPGNetServer fills this
         // frame from GPGNetServer.getLobbyPort(), and Peer.onIceDataReceived relays every inbound
@@ -930,9 +1005,10 @@ public final class MockGameLifecycle {
                             + "should be impossible");
         }
         GpgNetFrame frame = ((ConnectToPeer) event).frame();
+        String address;
         Peer peer;
         try {
-            String address = frame.stringArg(0);
+            address = frame.stringArg(0);
             String login = frame.stringArg(1);
             int playerId = frame.intArg(2);
             LOG.info(
@@ -941,21 +1017,28 @@ public final class MockGameLifecycle {
                     playerId,
                     address);
             peer = new Peer(address, login, playerId);
-            peers.add(peer);
-            present.add(playerId);
-            // As in joinGame: this peer's relay socket is where its share of our traffic goes.
-            traffic.registerPeer(address, playerId);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        if (getState() == GameState.HOSTING) {
-            try {
-                sendPlayerOptions(peer.playerId());
-            } catch (IOException e) {
-                throw recordSendFailure(e);
+        try {
+            if (!matchmakerLobby) {
+                // FA's custom lobby answers before it connects: its ConnectToPeer calls its own
+                // DisconnectFromPeer for a 127.0.0.1 address, which is every address the adapter
+                // names, and that sends Disconnected (lobby.lua). The matchmaker lobby only
+                // connects.
+                gpgnetSender.disconnected(peer.playerId());
             }
+            peers.add(peer);
+            present.add(peer.playerId());
+            // As in joinGame: this peer's relay socket is where its share of our traffic goes.
+            traffic.registerPeer(address, peer.playerId());
+            if (getState() == GameState.HOSTING) {
+                sendPlayerOptions(peer.playerId());
+            }
+        } catch (IOException e) {
+            throw recordSendFailure(e);
         }
 
         // As in joinGame: the first peer to arrive starts the crash timer (WBS-5.2). Later peers
@@ -1004,10 +1087,10 @@ public final class MockGameLifecycle {
 
     /**
      * Stay-in-state action for a departure notice from {@code CreateLobby} until launch, in LOBBY,
-     * HOSTING or JOINING (WBS-4.3.6): answers it the way FA's lobby does and plays on without that
-     * peer. No departure ends the game here, whoever left.
+     * HOSTING or JOINING (WBS-4.3.6): answers it the way the FA lobby {@code CreateLobby} picked
+     * does and plays on without that peer. No departure ends the game here, whoever left.
      *
-     * <p>What FA's {@code lobby.lua} does, in the same order: its {@code DisconnectFromPeer}
+     * <p>What FA's custom {@code lobby.lua} does, in the same order: its {@code DisconnectFromPeer}
      * replies {@code Disconnected} with the id for any id at all, then drops the peer, and its
      * {@code PeerDisconnected} callback has the host clear that player's slot, which sends {@code
      * ClearSlot}. Nothing ends: the lobby carries on with a free slot, and a host whose last joiner
@@ -1018,10 +1101,16 @@ public final class MockGameLifecycle {
      * handle_disconnected} only logs, and {@code clear_slot} finds nobody, because by the time the
      * replies arrive faf-server has removed the leaver.
      *
+     * <p>FA's matchmaker lobby, {@code autolobby.lua}, sends no reply of its own and clears no
+     * slot: the engine drops the peer, and its {@code PeerDisconnected} callback sends {@code
+     * DisconnectedPeer} with the id, so only for a peer it had (WBS-3.2.4.1-fix, #506). faf-server
+     * has no handler for that frame and logs it as an unrecognized command.
+     *
      * <p>Dropping the peer means {@link #present} forgets it and {@link GameTrafficSession} stops
      * sending to it. {@link #peers} and {@link #slots} keep it, so army numbering and the results
      * {@link #gameEnds} reports do not move. A notice about a peer this game never had, such as a
-     * joiner that aborted before it finished joining, gets the reply and changes nothing else.
+     * joiner that aborted before it finished joining, gets the custom lobby's reply, or nothing
+     * from the matchmaker lobby, and changes nothing else.
      *
      * <p>A self-loop, so no entry or exit hook runs and every pending FSM timeout stays armed: a
      * departure cannot cancel a launch that is already scheduled.
@@ -1042,14 +1131,19 @@ public final class MockGameLifecycle {
             LOG.info("Peer (ID: {}) disconnected but never joined this game; ignoring", playerId);
         }
         try {
-            gpgnetSender.disconnected(playerId);
+            if (!matchmakerLobby) {
+                gpgnetSender.disconnected(playerId);
+            } else if (known) {
+                gpgnetSender.disconnectedPeer(playerId);
+            }
             if (!known) {
                 return;
             }
             traffic.unregisterPeer(playerId);
-            // Only a host has slots to clear: a joiner sends no PlayerOption, so it records none.
+            // Only a custom lobby's host has slots to clear: a joiner sends no PlayerOption, so it
+            // records none, and the matchmaker lobby sends no ClearSlot.
             Integer slot = slots.get(playerId);
-            if (slot != null) {
+            if (slot != null && !matchmakerLobby) {
                 gpgnetSender.clearSlot(slot);
             }
         } catch (IOException e) {
@@ -1095,6 +1189,58 @@ public final class MockGameLifecycle {
             LOG.error("DisconnectFromPeer frame did not have a player id argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
+    }
+
+    /**
+     * The traffic session's first-datagram listener (WBS-3.2.4.1-fix, #506). Runs on the receive
+     * thread, once per sender, holding no lock. Only a matchmaker lobby reports links; there the
+     * report is queued on the scheduler rather than posted from this thread, for the reason {@link
+     * #registerPeerEstablishedTransitions()} gives. Once teardown has shut the scheduler down, the
+     * report is dropped.
+     *
+     * @param playerId the sender id the datagram carried
+     */
+    private void firstDatagramFrom(int playerId) {
+        if (matchmakerLobby) {
+            schedule(() -> machine.receiveEvent(new PeerEstablished(playerId)), Duration.ZERO);
+        }
+    }
+
+    /**
+     * Stay-in-state action for a peer's first datagram before launch, in LOBBY, HOSTING or JOINING
+     * (WBS-3.2.4.1-fix, #506): sends {@code EstablishedPeer} with the id, as FA's matchmaker lobby
+     * does from the engine's {@code EstablishedPeers} callback, for a peer this game has. A sender
+     * it never had, or one that has left since, gets no report.
+     *
+     * @param event the {@link PeerEstablished} event; guaranteed by registration.
+     * @throws FailedTransitionException into ENDED if the report cannot be sent.
+     */
+    private void peerEstablished(Event event) throws FailedTransitionException {
+        int playerId = ((PeerEstablished) event).playerId();
+        if (!present.contains(playerId)) {
+            return;
+        }
+        LOG.info("Peer (ID: {}) link established", playerId);
+        try {
+            gpgnetSender.establishedPeer(playerId);
+        } catch (IOException e) {
+            throw recordSendFailure(e);
+        }
+    }
+
+    /**
+     * Stay-in-state action for a peer's first datagram once the match is live (WBS-3.2.4.1-fix,
+     * #506): logged and not reported. FA's matchmaker lobby is destroyed when the match launches
+     * ({@code GameLaunched}), so it reports no link that first carries traffic later. Reachable
+     * when the launch timer fires before ICE has connected that peer.
+     *
+     * @param event the {@link PeerEstablished} event; guaranteed by registration.
+     */
+    private void ignoreLinkAfterLaunch(Event event) {
+        LOG.info(
+                "first traffic from peer {} arrived after launch; not reporting EstablishedPeer,"
+                        + " as FA's lobby is gone by then",
+                ((PeerEstablished) event).playerId());
     }
 
     /* Transition action for LIVE -> ENDED. */

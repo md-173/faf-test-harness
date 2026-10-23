@@ -265,6 +265,8 @@ public final class LifecycleSetupTest {
         for (int playerId = 2; playerId <= 4; playerId++) {
             gpgnet.sendFrame(
                     new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", playerId)));
+            // FA's custom lobby answers before it connects (init mode 0 above).
+            assertMessage("Disconnected", Integer.toString(playerId));
             assertPlayerOptions(playerId, playerId, playerId % 2 == 0 ? 3 : 2);
         }
         lifecycle.launchMatch();
