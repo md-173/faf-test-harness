@@ -12,12 +12,20 @@ import java.util.Optional;
 
 final class TestFixtures {
 
-    static final String LOBBY_URL = "wss://ws.faforever.xyz";
-    static final String OAUTH_TOKEN_URL = "https://hydra.faforever.xyz/oauth2/token";
+    // Not the built-in defaults below. A test that sets these at one layer then proves that layer
+    // delivered them, which a value equal to the default would hide.
+    static final String LOBBY_URL = "wss://lobby.example.test";
+    static final String OAUTH_TOKEN_URL = "https://hydra.example.test/oauth2/token";
     static final String OAUTH_AUTH_ENDPOINT = "https://hydra.faforever.xyz/oauth2/auth";
     static final String OAUTH_REDIRECT_URI = "http://127.0.0.1";
     static final String OAUTH_SCOPES = "openid offline lobby";
-    static final String OAUTH_CLIENT_ID = "95ecec08-29c1-4c48-ae0a-b000ff349cb8";
+    static final String OAUTH_CLIENT_ID = "test-client-id";
+
+    // MockClientCli's FAF test-environment defaults (#421), written out rather than read from it,
+    // so a typo there fails a test instead of passing one.
+    static final String DEFAULT_LOBBY_URL = "wss://ws.faforever.xyz";
+    static final String DEFAULT_OAUTH_TOKEN_URL = "https://hydra.faforever.xyz/oauth2/token";
+    static final String DEFAULT_OAUTH_CLIENT_ID = "95ecec08-29c1-4c48-ae0a-b000ff349cb8";
 
     /** Placeholder path, never read by parse-level tests (mirrors the binary-path placeholders). */
     static final String OAUTH_REFRESH_TOKEN_FILE = "/nonexistent/test-refresh-token";

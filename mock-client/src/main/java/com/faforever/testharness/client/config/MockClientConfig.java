@@ -5,8 +5,10 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.Set;
 
 /**
  * Immutable, validated configuration for the Mock Client. Every other component reads from an
@@ -18,8 +20,11 @@ import java.util.OptionalInt;
  * client_credentials are not enabled on any seeded client with {@code lobby} scope and are
  * explicitly rejected by the loader.
  *
- * @param lobbyWebSocketUrl WebSocket endpoint of the FAF lobby server
- * @param oauthTokenUrl OAuth2 token endpoint (Hydra {@code /oauth2/token})
+ * @param lobbyWebSocketUrl WebSocket endpoint of the FAF lobby server: a {@code ws} or {@code wss}
+ *     URL with a host, a port no higher than 65535 and no fragment (#522)
+ * @param oauthTokenUrl OAuth2 token endpoint (Hydra {@code /oauth2/token}): an {@code http} or
+ *     {@code https} URL with a host and a port no higher than 65535, checked on the refresh-token
+ *     channel only, the one that reads it (#522)
  * @param oauthAuthEndpoint OAuth2 authorization endpoint (Hydra {@code /oauth2/auth}) used by the
  *     one-time bootstrap that mints the refresh token
  * @param oauthRedirectUri Redirect URI registered on the OAuth client
@@ -127,6 +132,20 @@ public record MockClientConfig(
     /** Upper bound for {@code mockGameUdpDropPercent}; mirrors mock-game's own range check. */
     private static final int MAX_PERCENT = 100;
 
+    /** Highest TCP port. The JDK's clients refuse a URL with a higher one when they connect. */
+    private static final int MAX_PORT = 65535;
+
+    /** Schemes the JDK's WebSocket client accepts, in any case, for {@code lobbyWebSocketUrl}. */
+    private static final Set<String> WEBSOCKET_SCHEMES = Set.of("ws", "wss");
+
+    /** Schemes the JDK's HTTP client accepts, in any case, for {@code oauthTokenUrl}. */
+    private static final Set<String> HTTP_SCHEMES = Set.of("http", "https");
+
+    /** Ends the message that refuses a URL: the record no longer knows which layer set it. */
+    private static final String CORRECT_IT_WHERE_SET =
+            " Correct it where it is set: the CLI flag, the matching FAF_MOCK_CLIENT_* environment"
+                    + " variable, or the --config file.";
+
     /**
      * Validates that exactly one OAuth credential channel is present. There are two: a
      * refresh-token file ({@code oauthRefreshTokenFile}) — the steady-state, headless path,
@@ -153,10 +172,11 @@ public record MockClientConfig(
      * earlier by {@link LayeredDefaultProvider} so the user sees a deprecation error pointing at
      * the spec rather than a generic missing-creds error.
      *
-     * @throws IllegalArgumentException if any mandatory endpoint/identity field is missing, if
-     *     neither credential channel is satisfied, if both are satisfied at the same layer, if
-     *     {@code clientVersion} or {@code userAgent} is {@code null} or blank, or if {@code
-     *     playerLogin} is {@code null} or blank
+     * @throws IllegalArgumentException if any mandatory endpoint/identity field is missing or, for
+     *     the two URLs, empty, if neither credential channel is satisfied, if both are satisfied at
+     *     the same layer, if the lobby URL, or on the refresh-token channel the token URL, is one
+     *     the JDK's clients would refuse (#522), if {@code clientVersion} or {@code userAgent} is
+     *     {@code null} or blank, or if {@code playerLogin} is {@code null} or blank
      */
     public MockClientConfig {
         // Mandatory endpoint/identity fields. These are intentionally NOT marked required = true on
@@ -166,8 +186,13 @@ public record MockClientConfig(
         // config-file values unreachable for every subcommand. Validating here lets those layers
         // populate the fields first, while a genuinely missing value still surfaces as a clean
         // usage error (toValidatedConfig wraps this as a picocli ParameterException).
+        // MockClientCli defaults the lobby URL, token URL and client id to the FAF test
+        // environment (#421), so from the command line only a blank flag reaches these checks. An
+        // empty URL flag, such as --lobby-websocket-url=, parses to an empty URI rather than null,
+        // so it counts as missing too, as a blank client id does (#522). The null checks stay for
+        // callers that build this record directly.
         List<String> missing = new ArrayList<>();
-        if (lobbyWebSocketUrl == null) {
+        if (isAbsent(lobbyWebSocketUrl)) {
             missing.add("--lobby-websocket-url");
         }
 
@@ -191,7 +216,7 @@ public record MockClientConfig(
         // wall the placeholder OAuth flags used to be for the no-lobby diagnostics: values invented
         // to get past validation, never used.
         if (!hasAccessTokenFile) {
-            if (oauthTokenUrl == null) {
+            if (isAbsent(oauthTokenUrl)) {
                 missing.add("--oauth-token-url");
             }
             if (oauthClientId == null || oauthClientId.isBlank()) {
@@ -223,6 +248,10 @@ public record MockClientConfig(
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
         }
+        // Present is not enough: a URL the JDK's clients would refuse is a usage error here too,
+        // rather than a runtime failure, exit 70, when the run first uses it (#522). The token URL
+        // is checked only where it is read.
+        requireUsableUrls(lobbyWebSocketUrl, oauthTokenUrl, !hasAccessTokenFile);
         // clientVersion and userAgent are required arguments of the lobby ask_session command; a
         // blank value (reachable via a JSON config file even though the CLI flags have defaults)
         // would otherwise be sent verbatim and rejected by the lobby mid-handshake.
@@ -302,5 +331,96 @@ public record MockClientConfig(
      */
     public Duration iceRelayDelay() {
         return Duration.ofMillis(iceRelayDelayMs);
+    }
+
+    /**
+     * Refuses a lobby URL, or a token URL that is read, which the JDK's clients would refuse. They
+     * apply their rules only on first use, after validation, so such a URL used to exit 70 rather
+     * than 2 (#522). {@code OpeningHandshake.checkURI} wants a ws or wss scheme, a host and no
+     * fragment, {@code HttpRequestBuilderImpl.checkURI} an http or https scheme and a host, and
+     * either client refuses a port above 65535 when it opens the socket. The scheme is checked
+     * against a list rather than for {@code null} because a host and port with no scheme, {@code
+     * ws.faforever.xyz:443}, parses with the host as its scheme. Each URL is quoted by {@link
+     * #quoted(URI)}, so an invisible character pasted into one shows.
+     *
+     * @param lobbyWebSocketUrl the lobby URL, not blank
+     * @param oauthTokenUrl the token URL, not blank when {@code tokenUrlRead}
+     * @param tokenUrlRead whether this run reads the token URL: only the refresh-token channel does
+     * @throws IllegalArgumentException naming the flag and the rule its URL breaks
+     */
+    private static void requireUsableUrls(
+            final URI lobbyWebSocketUrl, final URI oauthTokenUrl, final boolean tokenUrlRead) {
+        if (!isUsable(lobbyWebSocketUrl, WEBSOCKET_SCHEMES)
+                || lobbyWebSocketUrl.getFragment() != null) {
+            throw new IllegalArgumentException(
+                    "--lobby-websocket-url must be a ws:// or wss:// URL with a host, a port no"
+                            + " higher than "
+                            + MAX_PORT
+                            + " and no fragment, got '"
+                            + quoted(lobbyWebSocketUrl)
+                            + "'."
+                            + CORRECT_IT_WHERE_SET);
+        }
+        if (tokenUrlRead && !isUsable(oauthTokenUrl, HTTP_SCHEMES)) {
+            throw new IllegalArgumentException(
+                    "--oauth-token-url must be an http:// or https:// URL with a host and a port no"
+                            + " higher than "
+                            + MAX_PORT
+                            + ", got '"
+                            + quoted(oauthTokenUrl)
+                            + "'."
+                            + CORRECT_IT_WHERE_SET);
+        }
+    }
+
+    /**
+     * Quotes a URL as configured, with each character beyond printable ASCII shown as its code
+     * point in angle brackets, U+200B for a zero-width space, so an invisible one pasted into the
+     * URL shows. {@link URI#toASCIIString()} would show it too, but it throws a {@link
+     * NullPointerException} on a lone surrogate, which a JSON config file can carry as an escape,
+     * and the refusal would then exit 70 rather than 2.
+     *
+     * @param url the URL to quote
+     * @return the URL as configured, beyond printable ASCII shown by code point
+     */
+    private static String quoted(final URI url) {
+        StringBuilder out = new StringBuilder();
+        url.toString()
+                .codePoints()
+                .forEach(
+                        c ->
+                                out.append(
+                                        c <= '~'
+                                                ? Character.toString(c)
+                                                : String.format(Locale.ROOT, "<U+%04X>", c)));
+        return out.toString();
+    }
+
+    /**
+     * Whether a URL is absent. An empty flag parses to an empty URI rather than {@code null}, so it
+     * is absent too (#522).
+     *
+     * @param url the URL as configured, possibly {@code null}
+     * @return {@code true} if {@code url} is {@code null} or empty
+     */
+    private static boolean isAbsent(final URI url) {
+        return url == null || url.toString().isEmpty();
+    }
+
+    /**
+     * Whether the JDK's clients would take {@code url} for its scheme, host and port: a scheme from
+     * {@code schemes} in any case, a host, and a port no higher than {@link #MAX_PORT}, where
+     * {@code -1}, no port given, passes.
+     *
+     * @param url a URL that is not blank
+     * @param schemes the schemes allowed, in lower case
+     * @return {@code true} if the JDK would not refuse {@code url} for its scheme, host or port
+     */
+    private static boolean isUsable(final URI url, final Set<String> schemes) {
+        String scheme = url.getScheme();
+        return scheme != null
+                && schemes.contains(scheme.toLowerCase(Locale.ROOT))
+                && url.getHost() != null
+                && url.getPort() <= MAX_PORT;
     }
 }

@@ -104,18 +104,42 @@ public final class MockClientCli implements Callable<Integer> {
                             + "environment variables and CLI flags.")
     private Path configFile;
 
-    /** WebSocket endpoint of the FAF lobby server. */
+    /**
+     * WebSocket endpoint of the FAF lobby server. Defaults to the FAF test lobby, the lobby host
+     * FAForever/client's test config names ({@code ws.faforever.xyz}, port 443), with the token URL
+     * and client id below defaulting to the same environment (#421). Pointing the harness at
+     * another environment therefore means overriding the lobby and token URLs together.
+     *
+     * <p>Each of the three ends its description with its default on a line of its own ({@code %n})
+     * and nothing after it. Inline, picocli wrapped the token URL after a dot, so a reader copying
+     * it from {@code --help} got half a URL. And picocli fills {@code ${DEFAULT-VALUE}} from an
+     * environment variable or config file that sets the option, so a label after the value could
+     * name the test environment for a value that came from somewhere else.
+     */
     @Option(
             names = "--lobby-websocket-url",
             scope = ScopeType.INHERIT,
-            description = "WebSocket endpoint of the FAF lobby server.")
+            defaultValue = "wss://ws.faforever.xyz",
+            description =
+                    "WebSocket endpoint of the FAF lobby server. The built-in default is the FAF "
+                            + "test lobby.%n"
+                            + "Default: ${DEFAULT-VALUE}")
     private URI lobbyWebSocketUrl;
 
-    /** OAuth2 token endpoint used to acquire lobby access tokens. */
+    /**
+     * OAuth2 token endpoint used to acquire lobby access tokens. Defaults to the {@code
+     * token_endpoint} the test environment's Hydra publishes in its discovery document. Read on the
+     * refresh-token channel only.
+     */
     @Option(
             names = "--oauth-token-url",
             scope = ScopeType.INHERIT,
-            description = "OAuth2 token endpoint used to acquire lobby access tokens.")
+            defaultValue = "https://hydra.faforever.xyz/oauth2/token",
+            description =
+                    "OAuth2 token endpoint used to acquire lobby access tokens. Read on the "
+                            + "refresh-token channel only. The built-in default is the FAF test "
+                            + "environment's Hydra.%n"
+                            + "Default: ${DEFAULT-VALUE}")
     private URI oauthTokenUrl;
 
     /** OAuth2 authorization endpoint used by the one-time refresh-token bootstrap. */
@@ -140,11 +164,19 @@ public final class MockClientCli implements Callable<Integer> {
             description = "Space-separated OAuth2 scopes (e.g. \"openid offline lobby\").")
     private String oauthScopes;
 
-    /** OAuth2 public client identifier. */
+    /**
+     * OAuth2 public client identifier. Defaults to the {@code FAF Classic Client (Python)}, the
+     * public client FAForever/client's test config uses and FAForever/gitops-stack's Hydra values
+     * register with the refresh-token grant. Read on the refresh-token channel only.
+     */
     @Option(
             names = "--oauth-client-id",
             scope = ScopeType.INHERIT,
-            description = "OAuth2 public client identifier.")
+            defaultValue = "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+            description =
+                    "OAuth2 public client identifier. Read on the refresh-token channel only. "
+                            + "The built-in default is the FAF Classic Client (Python).%n"
+                            + "Default: ${DEFAULT-VALUE}")
     private String oauthClientId;
 
     /** Path to a file holding the refresh token; rewritten atomically on each rotation. */

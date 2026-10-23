@@ -157,10 +157,10 @@ final class ConfigLoaderAuthChoiceTest {
     void theAccessTokenChannelNeedsNothingFromTheRefreshBootstrap(@TempDir Path dir)
             throws Exception {
         // The shape an operator can actually use, and the one the release needs: nothing here
-        // supplies any of the five refresh-bootstrap settings. Before this card the same argv
-        // exited 2 demanding --oauth-auth-endpoint, --oauth-redirect-uri and --oauth-scopes.
-        // The live run against the test lobby carried placeholders for those three, so it
-        // showed they are not read, not that this exact argv has been run end to end.
+        // supplies --oauth-auth-endpoint, --oauth-redirect-uri or --oauth-scopes, and before this
+        // card the same argv exited 2 demanding all three. The live run against the test lobby
+        // carried placeholders for those three, so it showed they are not read, not that this
+        // exact argv has been run end to end.
         Path access = credentialFile(dir, "access.jwt");
         String[] args =
                 new String[] {

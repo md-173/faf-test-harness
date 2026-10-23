@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
@@ -133,5 +134,29 @@ final class ConfigLoaderHelpTest {
                 "Help output should NOT contain a missing-required-options error. "
                         + "If it does, --help isn't short-circuiting. Got: "
                         + output);
+    }
+
+    @Test
+    void helpOutputShowsEachTestEnvironmentDefaultUnbroken() {
+        // --help is where the field reference sends a reader for defaults (#421), and a reader
+        // copies them from it. Matched on the raw text, so a value picocli wrapped across two lines
+        // fails here rather than in someone's shell.
+        ConfigLoader.load(new String[] {"--help"}, Map.of());
+
+        String output = captured.toString(StandardCharsets.UTF_8);
+
+        List<String> defaults =
+                List.of(
+                        TestFixtures.DEFAULT_LOBBY_URL,
+                        TestFixtures.DEFAULT_OAUTH_TOKEN_URL,
+                        TestFixtures.DEFAULT_OAUTH_CLIENT_ID);
+        for (String value : defaults) {
+            assertTrue(
+                    output.contains("Default: " + value),
+                    "Help output should show the default "
+                            + value
+                            + " on one line. Got: "
+                            + output);
+        }
     }
 }
