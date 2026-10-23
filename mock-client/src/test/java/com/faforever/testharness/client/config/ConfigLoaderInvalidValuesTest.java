@@ -250,9 +250,10 @@ final class ConfigLoaderInvalidValuesTest {
 
     /**
      * A lobby URL the JDK's WebSocket client refuses used to parse, pass validation and fail only
-     * at connect, with exit 70 (#522). Each breaks one rule: no scheme; a host and port with no
-     * scheme, where the host parses as the scheme; a scheme other than ws or wss; no host; a name
-     * with an underscore, from which the JDK reads no host; a port above 65535; a fragment.
+     * at connect, with exit 70 (#522). In order: no scheme, and so no host; a host and port with no
+     * scheme, where the host parses as the scheme and no host is left; a scheme other than ws or
+     * wss; no host; a name with an underscore, from which the JDK reads no host; a port above
+     * 65535; a fragment.
      */
     @ParameterizedTest
     @ValueSource(
@@ -281,8 +282,9 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     /**
-     * The same for the token URL on the refresh channel, which reads it (#522): no scheme, a scheme
-     * other than http or https, no host, a port above 65535.
+     * A token URL the JDK's HTTP client refuses, on the refresh channel that reads it, passed
+     * validation too and failed at the token exchange, after the lobby connected, also with exit 70
+     * (#522). In order: no scheme, a scheme other than http or https, no host, a port above 65535.
      */
     @ParameterizedTest
     @ValueSource(
@@ -356,6 +358,28 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     @Test
+    void aLobbyUrlTheJdkWouldRefuseThrowsOnTheAccessTokenChannelToo() {
+        // Every channel reads the lobby URL, and the access-token one is what CI's live session
+        // and a consumer's job run on, so the check must not sit behind the token URL's (#522).
+        String[] args =
+                replaceArg(
+                        replaceArg(
+                                TestFixtures.minimalRequiredCli(),
+                                "--oauth-refresh-token-file="
+                                        + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+                                "--oauth-access-token-file=/nonexistent/test-access-token"),
+                        "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                        "--lobby-websocket-url=ws.faforever.xyz:443");
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(ex.getMessage().contains(LOBBY_URL_RULE), ex.getMessage());
+    }
+
+    @Test
     void aTokenUrlIsNotCheckedOnTheAccessTokenChannel() {
         // That channel reads no token URL (#340), so not even one the JDK would refuse stops it
         // (#522).
@@ -390,9 +414,9 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     @Test
-    void aRefusedUrlIsQuotedInAsciiSoAnInvisibleCharacterShows() {
+    void aRefusedUrlShowsAnInvisibleCharacterAsItsCodePoint() {
         // A zero-width space, U+200B, pasted after the host leaves no host the JDK can read, and
-        // quoted as typed the URL would look valid. Quoted in ASCII, its escape shows where it is
+        // quoted as typed the URL would look valid. Quoted by code point, it shows where it is
         // (#522).
         String[] args =
                 replaceArg(
@@ -407,7 +431,33 @@ final class ConfigLoaderInvalidValuesTest {
                         () -> ConfigLoader.load(args, Map.of()));
 
         assertTrue(
-                ex.getMessage().contains("got 'wss://ws.faforever.xyz%E2%80%8B'"), ex.getMessage());
+                ex.getMessage().contains("got 'wss://ws.faforever.xyz<U+200B>'"), ex.getMessage());
+    }
+
+    @Test
+    void aLoneSurrogateFromTheConfigFileIsStillAUsageError(@TempDir final Path tempDir)
+            throws Exception {
+        // A JSON escape can carry a lone surrogate, and the URI then parses with no host. Quoting
+        // it must not fail: URI.toASCIIString threw a NullPointerException on one, which exited 70
+        // rather than 2 (#522).
+        Path cfg =
+                Files.writeString(
+                        tempDir.resolve("cfg.json"),
+                        "{\"lobbyWebSocketUrl\": \"wss://ws.faforever.xyz\\uD800\"}");
+        String[] args =
+                concat(
+                        Arrays.stream(TestFixtures.minimalRequiredCli())
+                                .filter(arg -> !arg.startsWith("--lobby-websocket-url="))
+                                .toArray(String[]::new),
+                        new String[] {"--config=" + cfg});
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(ex.getMessage().contains(LOBBY_URL_RULE), ex.getMessage());
+        assertTrue(ex.getMessage().contains("<U+D800>"), ex.getMessage());
     }
 
     /**

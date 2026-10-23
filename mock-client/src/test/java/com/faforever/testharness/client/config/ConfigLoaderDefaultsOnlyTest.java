@@ -116,7 +116,7 @@ final class ConfigLoaderDefaultsOnlyTest {
 
     @Test
     void aBlankLobbyUrlIsMissingOnEitherChannel() {
-        // A blank flag parses to an empty URI, not null, so it used to pass the presence check and
+        // An empty flag parses to an empty URI, not null, so it used to pass the presence check and
         // fail at connect with exit 70 (#522). It is missing now, as a blank client id is, and the
         // message says so rather than calling it an unusable URL.
         List<String> credentials =

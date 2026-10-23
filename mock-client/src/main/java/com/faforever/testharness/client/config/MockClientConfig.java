@@ -187,12 +187,12 @@ public record MockClientConfig(
         // populate the fields first, while a genuinely missing value still surfaces as a clean
         // usage error (toValidatedConfig wraps this as a picocli ParameterException).
         // MockClientCli defaults the lobby URL, token URL and client id to the FAF test
-        // environment (#421), so from the command line only a blank flag reaches these checks. A
-        // blank URL flag parses to an empty URI rather than null, so it counts as missing too, as
-        // a blank client id does (#522). The null checks stay for callers that build this record
-        // directly.
+        // environment (#421), so from the command line only a blank flag reaches these checks. An
+        // empty URL flag, such as --lobby-websocket-url=, parses to an empty URI rather than null,
+        // so it counts as missing too, as a blank client id does (#522). The null checks stay for
+        // callers that build this record directly.
         List<String> missing = new ArrayList<>();
-        if (isBlank(lobbyWebSocketUrl)) {
+        if (isAbsent(lobbyWebSocketUrl)) {
             missing.add("--lobby-websocket-url");
         }
 
@@ -216,7 +216,7 @@ public record MockClientConfig(
         // wall the placeholder OAuth flags used to be for the no-lobby diagnostics: values invented
         // to get past validation, never used.
         if (!hasAccessTokenFile) {
-            if (isBlank(oauthTokenUrl)) {
+            if (isAbsent(oauthTokenUrl)) {
                 missing.add("--oauth-token-url");
             }
             if (oauthClientId == null || oauthClientId.isBlank()) {
@@ -248,8 +248,9 @@ public record MockClientConfig(
                             + "documentation/research/lobby-protocol-spec.md §2 / WBS-2.2.10 "
                             + "for the one-time bootstrap procedure.");
         }
-        // Present is not enough: a URL the JDK's clients would refuse on first use is a usage error
-        // here too, not a lobby failure at connect (#522). The token URL only where it is read.
+        // Present is not enough: a URL the JDK's clients would refuse is a usage error here too,
+        // rather than a runtime failure, exit 70, when the run first uses it (#522). The token URL
+        // is checked only where it is read.
         requireUsableUrls(lobbyWebSocketUrl, oauthTokenUrl, !hasAccessTokenFile);
         // clientVersion and userAgent are required arguments of the lobby ask_session command; a
         // blank value (reachable via a JSON config file even though the CLI flags have defaults)
@@ -339,8 +340,8 @@ public record MockClientConfig(
      * fragment, {@code HttpRequestBuilderImpl.checkURI} an http or https scheme and a host, and
      * either client refuses a port above 65535 when it opens the socket. The scheme is checked
      * against a list rather than for {@code null} because a host and port with no scheme, {@code
-     * ws.faforever.xyz:443}, parses with the host as its scheme. Each URL is quoted in ASCII, so an
-     * invisible character pasted into one shows as its escape.
+     * ws.faforever.xyz:443}, parses with the host as its scheme. Each URL is quoted by {@link
+     * #quoted(URI)}, so an invisible character pasted into one shows.
      *
      * @param lobbyWebSocketUrl the lobby URL, not blank
      * @param oauthTokenUrl the token URL, not blank when {@code tokenUrlRead}
@@ -356,7 +357,7 @@ public record MockClientConfig(
                             + " higher than "
                             + MAX_PORT
                             + " and no fragment, got '"
-                            + lobbyWebSocketUrl.toASCIIString()
+                            + quoted(lobbyWebSocketUrl)
                             + "'."
                             + CORRECT_IT_WHERE_SET);
         }
@@ -366,20 +367,43 @@ public record MockClientConfig(
                             + " higher than "
                             + MAX_PORT
                             + ", got '"
-                            + oauthTokenUrl.toASCIIString()
+                            + quoted(oauthTokenUrl)
                             + "'."
                             + CORRECT_IT_WHERE_SET);
         }
     }
 
     /**
-     * Whether a URL is absent. A blank flag parses to an empty URI rather than {@code null}, so it
+     * Quotes a URL as configured, with each character beyond printable ASCII shown as its code
+     * point in angle brackets, U+200B for a zero-width space, so an invisible one pasted into the
+     * URL shows. {@link URI#toASCIIString()} would show it too, but it throws a {@link
+     * NullPointerException} on a lone surrogate, which a JSON config file can carry as an escape,
+     * and the refusal would then exit 70 rather than 2.
+     *
+     * @param url the URL to quote
+     * @return the URL as configured, beyond printable ASCII shown by code point
+     */
+    private static String quoted(final URI url) {
+        StringBuilder out = new StringBuilder();
+        url.toString()
+                .codePoints()
+                .forEach(
+                        c ->
+                                out.append(
+                                        c <= '~'
+                                                ? Character.toString(c)
+                                                : String.format(Locale.ROOT, "<U+%04X>", c)));
+        return out.toString();
+    }
+
+    /**
+     * Whether a URL is absent. An empty flag parses to an empty URI rather than {@code null}, so it
      * is absent too (#522).
      *
      * @param url the URL as configured, possibly {@code null}
      * @return {@code true} if {@code url} is {@code null} or empty
      */
-    private static boolean isBlank(final URI url) {
+    private static boolean isAbsent(final URI url) {
         return url == null || url.toString().isEmpty();
     }
 
