@@ -25,6 +25,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -153,6 +154,20 @@ final class MatchmakingQueueTest {
             Thread.sleep(20);
         }
         return messages().stream().anyMatch(predicate);
+    }
+
+    /**
+     * Sends a sentinel frame and waits until the client has handled it. The connection handles
+     * frames in order on one thread, and the lifecycle's handlers run on it, so every frame sent
+     * before the sentinel has been handled too, along with any transition it drove.
+     */
+    private void awaitEarlierFramesHandled() throws InterruptedException {
+        CountDownLatch handled = new CountDownLatch(1);
+        lobby.registerHandler("sentinel", frame -> handled.countDown());
+        server.broadcastText("{\"command\":\"sentinel\"}");
+        assertTrue(
+                handled.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the sentinel frame was never handled");
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameQueueConfig> queueConfig)
@@ -300,7 +315,7 @@ final class MatchmakingQueueTest {
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
         // No accept/decline step and no FSM edge for match_found: the client stays SEARCHING.
-        Thread.sleep(200);
+        awaitEarlierFramesHandled();
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
         assertTrue(messages().stream().anyMatch(m -> m.startsWith("match found: queue_name=")));
 
@@ -418,9 +433,9 @@ final class MatchmakingQueueTest {
         server.broadcastText(
                 "{\"command\":\"notice\",\"style\":\"info\","
                         + "\"text\":\"Player Rhiza is timed out for 10 minutes\"}");
-        // No FSM event follows a search_timeout; give the handlers a moment to run and assert
-        // the state never moved off IDLE.
-        Thread.sleep(200);
+        // No FSM event follows a search_timeout, so once all three frames have been handled the
+        // state must still be IDLE.
+        awaitEarlierFramesHandled();
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertTrue(
                 messages().stream()

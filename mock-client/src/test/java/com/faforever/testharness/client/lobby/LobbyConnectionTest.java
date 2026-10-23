@@ -264,14 +264,19 @@ final class LobbyConnectionTest {
     @Test
     void unknownCommandLoggedOncePerCommand() throws Exception {
         lobby = new LobbyConnection(server.uri());
+        CountDownLatch caughtUp = new CountDownLatch(1);
+        lobby.registerHandler("sentinel", node -> caughtUp.countDown());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         server.broadcastText("{\"command\":\"never_seen\"}");
         server.broadcastText("{\"command\":\"never_seen\",\"v\":2}");
         server.broadcastText("{\"command\":\"never_seen\",\"v\":3}");
-        // Give the dispatcher time to process all three.
-        Thread.sleep(300);
+        // Frames are handled in order on one thread, so once the sentinel is, all three have been.
+        server.broadcastText("{\"command\":\"sentinel\"}");
+        assertTrue(
+                caughtUp.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the frame sent after the three was never handled");
 
         long warnCount =
                 logAppender.list.stream()
