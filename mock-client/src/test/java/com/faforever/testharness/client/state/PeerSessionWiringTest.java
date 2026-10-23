@@ -540,6 +540,51 @@ final class PeerSessionWiringTest {
     }
 
     @Test
+    void aFrameThatLandsAfterTeardownStartsIsDropped() throws Exception {
+        // A local crash session (#513): the host was being torn down when the lobby sent it the
+        // ConnectToPeer for a joiner whose game had just crashed, and the frame reached TERMINATED
+        // with the state machine's no-transition WARN. Sent here once the lobby has read the
+        // client's close and before it answers, so teardown has certainly started.
+        Logger lobbyLogger =
+                ((LoggerContext) LoggerFactory.getILoggerFactory())
+                        .getLogger(LobbyConnection.class);
+        Level lobbyLevel = lobbyLogger.getLevel();
+        lobbyLogger.setLevel(Level.DEBUG);
+        try {
+            MockClientLifecycle lifecycle = hostingLifecycle();
+            server.holdCloseReplies();
+            // A thread of its own, and no lifecycle call until it is done: teardown holds the
+            // state machine's lock, which every one of them would wait for.
+            Thread shutdown = new Thread(lifecycle::shutdown, "teardown-under-test");
+            shutdown.start();
+            server.awaitHeldClose(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+
+            server.broadcastText(connectToPeer(PEER_LOGIN, PEER_ID, true) + "\n");
+            awaitLogged("dropping lobby frame 'ConnectToPeer'");
+            server.releaseCloseReplies();
+            shutdown.join(FRAME_TIMEOUT.toMillis());
+            assertFalse(shutdown.isAlive(), "teardown never finished once the lobby answered");
+
+            // The close handshake is not a frame: its disconnect still reaches TERMINATED's no-op.
+            awaitLogged("Disconnected from lobby after session teardown");
+            assertEquals(ClientState.TERMINATED, lifecycle.getState());
+            List<String> warnings =
+                    captured.list.stream()
+                            .filter(e -> e.getLevel() == Level.WARN)
+                            .map(ILoggingEvent::getFormattedMessage)
+                            .filter(
+                                    m ->
+                                            m.startsWith("No matching transitions")
+                                                    || m.startsWith("lobby close did not complete"))
+                            .toList();
+            assertEquals(List.of(), warnings, "a late frame must not reach the state machine");
+        } finally {
+            server.releaseCloseReplies();
+            lobbyLogger.setLevel(lobbyLevel);
+        }
+    }
+
+    @Test
     void launchedSessionRelaysIceCandidatesBothWays() throws Exception {
         launchedLifecycle();
 

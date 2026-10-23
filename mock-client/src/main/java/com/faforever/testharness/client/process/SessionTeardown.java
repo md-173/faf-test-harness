@@ -31,6 +31,13 @@ import org.slf4j.LoggerFactory;
  * report comes before the adapter step, and either way it reaches the lobby before the close. Each
  * step is exception-isolated: a failing step is logged and the sequence continues.
  *
+ * <p>Before the first step, the lobby stops handing frames to their handlers (#513). Teardown runs
+ * under the state machine's lock when TERMINATED's entry hook starts it, so a frame that lands
+ * meanwhile, such as a late {@code ConnectToPeer}, would wait for teardown and then reach
+ * TERMINATED, which has no edge for it and logs the machine's no-transition WARN. The lobby's own
+ * {@code invalid} and {@code notice} still reach theirs; see {@link
+ * LobbyConnection#stopDispatching()}.
+ *
  * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
  * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
  * iceAdapterProxy.quit()}) this teardown previously lacked. That always falls through to the
@@ -222,16 +229,17 @@ public final class SessionTeardown {
     }
 
     /**
-     * Runs the teardown sequence once: terminate game, run the owner's step, terminate adapter,
-     * close the adapter RPC connection, close the lobby connection. Unregistered handles are
-     * skipped; a failing step is logged and does not stop the rest. Subsequent (or concurrent)
-     * calls are no-ops.
+     * Runs the teardown sequence once: stop the lobby's frame dispatch, terminate game, run the
+     * owner's step, terminate adapter, close the adapter RPC connection, close the lobby
+     * connection. Unregistered handles are skipped; a failing step is logged and does not stop the
+     * rest. Subsequent (or concurrent) calls are no-ops.
      */
     public synchronized void run() {
         if (done) {
             return;
         }
         done = true;
+        lobby.stopDispatching();
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
         runAfterGameStep();

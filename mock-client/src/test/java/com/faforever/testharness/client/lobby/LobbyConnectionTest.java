@@ -280,6 +280,47 @@ final class LobbyConnectionTest {
                 "expected exactly one WARN log for 'never_seen' across 3 occurrences");
     }
 
+    /**
+     * Once teardown has stopped dispatch (#513), a late frame reaches no handler, while the lobby's
+     * own reports still do: an {@code invalid} can answer teardown's own {@code GameState Ended},
+     * which {@code run} reports in its exit code (#486). Frames are handled in the order they
+     * arrive, so once the last one's handler has run, the dropped one has been seen.
+     */
+    @Test
+    void stoppedDispatchDropsLateFramesButNotTheLobbysOwnReports() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        List<String> handled = new CopyOnWriteArrayList<>();
+        CountDownLatch invalidHandled = new CountDownLatch(1);
+        lobby.registerHandler("ConnectToPeer", frame -> handled.add("ConnectToPeer"));
+        lobby.registerHandler("notice", frame -> handled.add("notice"));
+        lobby.registerHandler(
+                "invalid",
+                frame -> {
+                    handled.add("invalid");
+                    invalidHandled.countDown();
+                });
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+
+        lobby.stopDispatching();
+        server.broadcastText("{\"command\":\"ConnectToPeer\",\"args\":[\"peer\",4242,true]}");
+        server.broadcastText("{\"command\":\"notice\",\"style\":\"error\",\"text\":\"bye\"}");
+        server.broadcastText("{\"command\":\"invalid\"}");
+
+        assertTrue(invalidHandled.await(5, TimeUnit.SECONDS), "invalid never reached its handler");
+        assertEquals(List.of("notice", "invalid"), handled);
+        assertTrue(
+                logAppender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.DEBUG
+                                                && e.getFormattedMessage()
+                                                        .startsWith(
+                                                                "dropping lobby frame"
+                                                                        + " 'ConnectToPeer'")),
+                "the dropped frame must be logged by its command");
+    }
+
     @Test
     void cleanCloseSurfacesAsCleanCloseDisconnect() throws Exception {
         lobby = new LobbyConnection(server.uri());

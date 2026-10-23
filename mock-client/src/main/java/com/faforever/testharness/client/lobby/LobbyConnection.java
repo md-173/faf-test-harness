@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
  * {@code lobby-protocol-spec.md} §1), decodes incoming text frames as JSON tolerating trailing
  * whitespace, replies to {@code {"command":"ping"}} with {@code {"command":"pong"}} automatically,
  * and routes every other message to a handler registered against its {@code command} field.
+ * Teardown ends both with {@link #stopDispatching()}, which keeps only the lobby's own reports.
  *
  * <p>This class is intentionally protocol-mechanism only: no auth handshake, no welcome state sync,
  * no reconnect-with-backoff. Higher layers register handlers for {@code session}, {@code welcome},
@@ -75,6 +76,14 @@ public final class LobbyConnection {
      */
     private static final Set<String> SENSITIVE_FIELDS =
             Set.of("token", "jwt", "access_token", "refresh_token", "password", "secret");
+
+    /**
+     * The frames still handed to their handlers once {@link #stopDispatching()} has stopped the
+     * rest (#513): the lobby's own reports, whose handlers only log and record. An {@code invalid}
+     * can answer teardown's own {@code GameState Ended}, which {@code run} reports in its exit code
+     * (#486), and a {@code notice} says why the lobby is ending the connection (#473).
+     */
+    private static final Set<String> DISPATCHED_AFTER_STOP = Set.of("invalid", "notice");
 
     /**
      * The close code RFC 6455 reserves for a connection that ended without a Close frame. A peer
@@ -194,6 +203,12 @@ public final class LobbyConnection {
      */
     private volatile boolean handling;
 
+    /**
+     * Raised by {@link #stopDispatching()}: from then on, only the {@link #DISPATCHED_AFTER_STOP}
+     * frames reach a handler (#513).
+     */
+    private volatile boolean dispatchStopped;
+
     /** The next silence check, cancelled once the connection has disconnected. */
     private volatile ScheduledFuture<?> silenceCheck;
 
@@ -290,6 +305,19 @@ public final class LobbyConnection {
         if (listener != null) {
             disconnectListeners.add(listener);
         }
+    }
+
+    /**
+     * Stops handing inbound frames to their handlers, for good (#513). Each later frame is dropped
+     * with a DEBUG line naming its command, except {@code invalid} and {@code notice}, the lobby's
+     * own reports, whose handlers only log and record.
+     *
+     * <p>Teardown calls it before its first step, so a frame the lobby sends while the session
+     * ends, such as a late {@code ConnectToPeer}, reaches neither the state machine nor the
+     * adapter. The close handshake is not a frame, so the disconnect still fires.
+     */
+    public void stopDispatching() {
+        dispatchStopped = true;
     }
 
     /**
@@ -581,6 +609,11 @@ public final class LobbyConnection {
             return;
         }
         String command = commandNode.asText();
+
+        if (dispatchStopped && !DISPATCHED_AFTER_STOP.contains(command)) {
+            LOG.debug("dropping lobby frame '{}': the session is being torn down", command);
+            return;
+        }
 
         if ("ping".equals(command)) {
             replyPong();
