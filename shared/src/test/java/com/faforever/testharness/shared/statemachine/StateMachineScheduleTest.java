@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -84,10 +85,10 @@ final class StateMachineScheduleTest {
     }
 
     /**
-     * A scheduled task never waits for the machine's monitor, so it runs while a transition holds
-     * it; mock-game's injected crash relies on that to halt the game wherever it stands. This
-     * thread holds the monitor throughout, so a task that took it would still be waiting when the
-     * wait below gives up.
+     * A scheduled task takes no monitor of the machine, so it runs while a transition driven by an
+     * event holds that monitor on another thread, as an injected crash must to halt a game stuck in
+     * one. This thread holds the monitor throughout, so a task that took it would still be waiting
+     * when the wait below gives up.
      */
     @Test
     void aScheduledTaskRunsWhileTheMonitorIsHeld() throws Exception {
@@ -100,6 +101,32 @@ final class StateMachineScheduleTest {
                         ran.await(AWAIT_SECONDS, TimeUnit.SECONDS),
                         "a scheduled task must not wait for the machine's monitor");
             }
+        } finally {
+            machine.cancel();
+        }
+    }
+
+    /**
+     * A scheduled task runs on the very thread the timeouts run on, which is what keeps the two in
+     * one due order: the executor runs tasks due at the same instant first in, first out
+     * (WBS-3.2.4.1-fix, #498). Run anywhere else, a second thread of the same name included, a task
+     * would race the timeouts again, as mock-game's crash raced its match end (#487).
+     */
+    @Test
+    void aScheduledTaskRunsOnTheTimeoutsThread() throws Exception {
+        State a = new State("A");
+        State b = new State("B");
+        StateMachine machine = new StateMachine(a);
+        CompletableFuture<Thread> timeoutRanOn = new CompletableFuture<>();
+        CompletableFuture<Thread> taskRanOn = new CompletableFuture<>();
+        try {
+            machine.setTimeout(0, b, ignored -> timeoutRanOn.complete(Thread.currentThread()));
+            machine.schedule(0, () -> taskRanOn.complete(Thread.currentThread()));
+
+            assertSame(
+                    timeoutRanOn.get(AWAIT_SECONDS, TimeUnit.SECONDS),
+                    taskRanOn.get(AWAIT_SECONDS, TimeUnit.SECONDS),
+                    "a scheduled task must run on the thread the timeouts run on");
         } finally {
             machine.cancel();
         }
