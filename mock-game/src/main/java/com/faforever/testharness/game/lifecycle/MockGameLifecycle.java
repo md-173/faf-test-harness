@@ -171,6 +171,14 @@ public final class MockGameLifecycle {
     private final Map<Integer, Integer> slots = new HashMap<>();
 
     /**
+     * Whether {@code CreateLobby} named init mode 1, for which FA loads its matchmaker lobby,
+     * {@code autolobby.lua}, rather than the custom {@code lobby.lua} (WBS-3.2.4.1-fix, #506). The
+     * two answer peer frames differently. Set by the {@code CreateLobby} action and read by later
+     * FSM actions, all under its monitor.
+     */
+    private boolean matchmakerLobby;
+
+    /**
      * Status of the lifecycle, to be mapped to a process exit code by the bootstrap (WBS-3.2.5.1).
      * That mapping does not exist yet — {@link com.faforever.testharness.game.config.ExitCodes}
      * currently defines no code for SERVER_CONNECTION_LOST. See {@link #getExitStatus()} for what
@@ -801,6 +809,19 @@ public final class MockGameLifecycle {
         }
         GpgNetFrame frame = ((CreateLobby) event).frame();
 
+        // FA's engine picks its lobby by this frame's first argument, the init mode
+        // (onlineprovider.lua): 1, which the adapter sends for a matchmaker game, loads
+        // autolobby.lua, and 0 the custom lobby.lua. Any other value is answered as the custom
+        // lobby.
+        try {
+            matchmakerLobby = frame.intArg(0) == 1;
+        } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
+            LOG.warn(
+                    "CreateLobby frame did not have a usable init mode; "
+                            + "answering peers as FA's custom lobby");
+        }
+        LOG.info("answering peers as FA's {} lobby", matchmakerLobby ? "matchmaker" : "custom");
+
         // The frame's port decides where the socket binds, and the launch argument is only the
         // fallback (WBS-4.3.2). Source-verified in java-ice-adapter 3.3.14: GPGNetServer fills this
         // frame from GPGNetServer.getLobbyPort(), and Peer.onIceDataReceived relays every inbound
@@ -930,9 +951,10 @@ public final class MockGameLifecycle {
                             + "should be impossible");
         }
         GpgNetFrame frame = ((ConnectToPeer) event).frame();
+        String address;
         Peer peer;
         try {
-            String address = frame.stringArg(0);
+            address = frame.stringArg(0);
             String login = frame.stringArg(1);
             int playerId = frame.intArg(2);
             LOG.info(
@@ -941,21 +963,28 @@ public final class MockGameLifecycle {
                     playerId,
                     address);
             peer = new Peer(address, login, playerId);
-            peers.add(peer);
-            present.add(playerId);
-            // As in joinGame: this peer's relay socket is where its share of our traffic goes.
-            traffic.registerPeer(address, playerId);
         } catch (IndexOutOfBoundsException | IllegalArgumentException e) {
             LOG.error("ConnectToPeer frame did not have an IP address argument");
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        if (getState() == GameState.HOSTING) {
-            try {
-                sendPlayerOptions(peer.playerId());
-            } catch (IOException e) {
-                throw recordSendFailure(e);
+        try {
+            if (!matchmakerLobby) {
+                // FA's custom lobby answers before it connects: its ConnectToPeer calls its own
+                // DisconnectFromPeer for a 127.0.0.1 address, which is every address the adapter
+                // names, and that sends Disconnected (lobby.lua). The matchmaker lobby only
+                // connects.
+                gpgnetSender.disconnected(peer.playerId());
             }
+            peers.add(peer);
+            present.add(peer.playerId());
+            // As in joinGame: this peer's relay socket is where its share of our traffic goes.
+            traffic.registerPeer(address, peer.playerId());
+            if (getState() == GameState.HOSTING) {
+                sendPlayerOptions(peer.playerId());
+            }
+        } catch (IOException e) {
+            throw recordSendFailure(e);
         }
 
         // As in joinGame: the first peer to arrive starts the crash timer (WBS-5.2). Later peers

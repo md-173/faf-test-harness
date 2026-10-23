@@ -342,8 +342,8 @@ final class CrashInjectionTest {
     }
 
     /**
-     * Waits until the host has configured the peer with {@code playerId}, by reading the {@code
-     * PlayerOption} frames it emits for that peer.
+     * Waits until the host has configured the peer with {@code playerId}, by reading the frames it
+     * emits for that peer.
      *
      * <p>Needed so each {@code ConnectToPeer} is known to have been taken up by the FSM before the
      * next frame is sent. Without it the test would race its own setup and could reach fewer arming
@@ -355,11 +355,23 @@ final class CrashInjectionTest {
      */
     private void awaitPeerConfigured(final MockGameLifecycle lifecycle, final int playerId)
             throws Exception {
-        awaitPlayerOptionsFor(playerId);
+        awaitPeerFrames(playerId);
         assertEquals(
                 GameState.HOSTING,
                 lifecycle.getState(),
                 "the host must still be in HOSTING after configuring player " + playerId);
+    }
+
+    /**
+     * Reads every frame a host sends for a peer it is told about: the {@code Disconnected} FA's
+     * custom lobby answers {@code ConnectToPeer} with ({@link #driveToLobby} names init mode 0),
+     * then that peer's {@code PlayerOption} set.
+     */
+    private void awaitPeerFrames(final int playerId) throws Exception {
+        assertEquals(
+                GpgNetFrame.of("Disconnected", Integer.toString(playerId)),
+                gpgnet.pollReceived(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        awaitPlayerOptionsFor(playerId);
     }
 
     /**
@@ -403,7 +415,7 @@ final class CrashInjectionTest {
                 "a peer connecting must arm and fire the crash");
         // Every frame the peer is owed arrived, and arrived before the halt: the poll budget is
         // spent on frames already queued, and the halt has provably happened by now.
-        awaitPlayerOptionsFor(2);
+        awaitPeerFrames(2);
     }
 
     /**

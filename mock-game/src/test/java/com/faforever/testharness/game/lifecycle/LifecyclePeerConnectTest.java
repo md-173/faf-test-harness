@@ -109,6 +109,8 @@ public final class LifecyclePeerConnectTest {
         lifecycle.stateReached(GameState.HOSTING).get(1, TimeUnit.SECONDS);
 
         gpgnet.sendFrame(new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", 2)));
+        // FA's custom lobby (init mode 0 above) answers before it connects, the id as a string.
+        assertMessage("Disconnected", "2");
         assertMessage("PlayerOption", 2, "Army", 2);
         assertMessage("PlayerOption", 2, "Team", 3);
         assertMessage("PlayerOption", 2, "StartSpot", 2);
@@ -122,9 +124,8 @@ public final class LifecyclePeerConnectTest {
         lifecycle.stateReached(GameState.ENDED).get(1, TimeUnit.SECONDS);
     }
 
-    // Tests ConnectToPeer messages are received correctly from the joiner side. Currently, these
-    // produce no actual
-    // side-effect, so we must capture the log.
+    // Tests ConnectToPeer messages are received correctly from the joiner side. A joiner answers
+    // with Disconnected only, so the peer it registered is read from the log.
     @Test
     void joinerConnectToPeer() throws Exception {
         // No delay and match duration so that those don't interfere.
@@ -157,6 +158,10 @@ public final class LifecyclePeerConnectTest {
 
         gpgnet.sendFrame(
                 new GpgNetFrame("ConnectToPeer", List.of(secondPeerAddress(), "ProGamer", 3)));
+
+        // The custom lobby's answer to ConnectToPeer. Had JoinGame been answered too, its frame
+        // would be the one read here.
+        assertMessage("Disconnected", "3");
 
         // We should not receive any PlayerOption messages here (ScriptedGpgNetServer throws an
         // AssertionError when it times out).
