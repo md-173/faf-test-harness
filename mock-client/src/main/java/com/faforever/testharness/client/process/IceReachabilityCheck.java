@@ -42,8 +42,8 @@ import org.slf4j.LoggerFactory;
  *   <li><b>RPC connect</b> — a TCP connect with retry while the adapter JVM is still binding.
  *   <li><b>RPC round-trip</b> — {@code setLobbyInitMode("normal")}, boot step 3 of {@code
  *       json-rpc-spec.md} §9, so the verdict covers a request the adapter parses, dispatches, and
- *       answers, not merely an open socket. Deliberately <em>not</em> the {@code status} method
- *       used elsewhere for readiness: upstream marks it {@code @Deprecated(forRemoval = true)}.
+ *       answers, not merely an open socket. Deliberately <em>not</em> the {@code status} method:
+ *       upstream marks it {@code @Deprecated(forRemoval = true)}.
  *   <li><b>GPGNet probe</b> — open a plain TCP connection to the GPGNet port and wait for the
  *       adapter to announce it on the RPC channel as {@code onConnectionStateChanged("Connected")}.
  *       That single notification is what makes this a reachability check rather than a port scan:
