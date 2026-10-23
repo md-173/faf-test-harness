@@ -19,7 +19,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -310,18 +309,7 @@ final class LobbyConnectionLiveSmokeTest {
         // Persist the rotated refresh token atomically *before* returning the access token, so a
         // crash between here and the WS auth message doesn't lose the new token. See spec §2:
         // "Hydra rotates the refresh_token on each use — persist the new one atomically".
-        Path tmp = refreshFile.resolveSibling(refreshFile.getFileName() + ".tmp");
-        Files.writeString(tmp, newRefreshToken);
-        try {
-            Files.move(
-                    tmp,
-                    refreshFile,
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
-            // Fallback for filesystems without atomic-move (e.g. some Windows configs).
-            Files.move(tmp, refreshFile, StandardCopyOption.REPLACE_EXISTING);
-        }
+        LobbyAuthenticator.persist(refreshFile, newRefreshToken);
 
         return accessToken;
     }

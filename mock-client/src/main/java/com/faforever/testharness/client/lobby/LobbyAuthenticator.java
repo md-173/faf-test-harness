@@ -21,7 +21,7 @@ import java.util.concurrent.CompletableFuture;
  * against the configured OAuth2 token endpoint (Hydra in production; see {@code
  * documentation/research/lobby-protocol-spec.md} §2). Hydra rotates the refresh token on every
  * successful exchange, and the rotated value is persisted atomically (temp-file write + rename) to
- * the configured backup file before the new access token is returned.
+ * the configured backup file, owner-only on POSIX, before the new access token is returned.
  *
  * <p>No part of this class logs the refresh token, the access token, or any HTTP response body that
  * could carry them — error messages surface a status code or the OAuth {@code error_description}
@@ -74,21 +74,53 @@ public final class LobbyAuthenticator implements TokenSource {
         return Files.readString(backupFile).strip();
     }
 
-    /**
-     * Write the new refresh token to the backup file atomically (temp file + rename). Falls back to
-     * a non-atomic move on filesystems that don't support atomic moves.
-     */
+    /** Write the new refresh token to the backup file; see {@link #persist(Path, String)}. */
     private void writeToken() throws IOException {
-        Path tempFile = backupFile.resolveSibling(backupFile.getFileName() + ".tmp");
-        Files.writeString(tempFile, refreshToken);
+        persist(backupFile, refreshToken);
+    }
+
+    /**
+     * Write {@code token} to {@code file} atomically (temp file + rename), leaving the file
+     * owner-only on a POSIX file system. Falls back to a non-atomic move on filesystems that don't
+     * support atomic moves.
+     *
+     * <p>The temp file comes from {@link Files#createTempFile(Path, String, String)}, which with no
+     * attribute given creates it {@code rw-------} on POSIX, so the rename hands that mode to
+     * {@code file} whatever the umask (#501). Windows keeps its default ACL as before. A fixed
+     * {@code <file>.tmp} name could not give that guarantee: a permission set at creation does
+     * nothing for a {@code .tmp} a killed run left behind. The temp file is created next to {@code
+     * file}, in the parent of its absolute path because a bare file name has no parent, so the
+     * rename stays on one file system. It is deleted if the write or the move fails.
+     *
+     * <p>Package-private so {@code LobbyConnectionLiveSmokeTest}, which rotates the same {@code
+     * .secrets} token outside this class, persists it the same way.
+     *
+     * @param file the token file to replace
+     * @param token the token to write
+     * @throws IOException if the temp file cannot be created or written, or the move fails
+     */
+    static void persist(final Path file, final String token) throws IOException {
+        Path tempFile =
+                Files.createTempFile(
+                        file.toAbsolutePath().getParent(), file.getFileName() + ".", ".tmp");
         try {
-            Files.move(
-                    tempFile,
-                    backupFile,
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException e) {
-            Files.move(tempFile, backupFile, StandardCopyOption.REPLACE_EXISTING);
+            Files.writeString(tempFile, token);
+            try {
+                Files.move(
+                        tempFile,
+                        file,
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tempFile, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(tempFile);
+            } catch (IOException cleanup) {
+                e.addSuppressed(cleanup);
+            }
+            throw e;
         }
     }
 
