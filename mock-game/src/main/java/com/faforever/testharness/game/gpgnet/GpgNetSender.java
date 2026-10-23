@@ -14,10 +14,11 @@ import java.util.Set;
  * §7.1), not the full emit catalogue: the lifecycle frames {@code GameState} and {@code GameEnded};
  * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; the
  * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} from FA's custom
- * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix); that
- * lobby's {@code EstablishedPeer}; and the result frames {@code GameResult} and {@code JsonStats}.
- * The long tail ({@code AIOption}, {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added
- * on demand, not here. There are deliberately no per-message-type classes, just frame-builders.
+ * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix, #506);
+ * that lobby's {@code EstablishedPeer}; and the result frames {@code GameResult} and {@code
+ * JsonStats}. The long tail ({@code AIOption}, {@code Chat}, …) and {@code BEAT} (Lockstep Tick,
+ * #80) are added on demand, not here. There are deliberately no per-message-type classes, just
+ * frame-builders.
  */
 public final class GpgNetSender {
 
@@ -149,7 +150,7 @@ public final class GpgNetSender {
     /**
      * Emit {@code Disconnected(uid)}, FA's custom lobby's answer to a {@code DisconnectFromPeer}
      * from the adapter (WBS-4.3.6), which it also sends before it connects to each peer {@code
-     * ConnectToPeer} names (WBS-3.2.4.1-fix). That lobby formats the id with {@code
+     * ConnectToPeer} names (WBS-3.2.4.1-fix, #506). That lobby formats the id with {@code
      * string.format("%d", uid)} ({@code lobby.lua}'s {@code DisconnectFromPeer}), so it goes on the
      * wire as a string chunk, not an int (§7.1).
      *

@@ -64,9 +64,10 @@ stateDiagram-v2
 
 ### Peers
 
-`CreateLobby`'s init mode tells the game which of FA's two lobbies it stands in for, and it answers its peers as that lobby does (WBS-3.2.4.1-fix).
+`CreateLobby`'s init mode tells the game which of FA's two lobbies it stands in for, and it answers its peers as that lobby does (WBS-3.2.4.1-fix, #506).
 In a custom lobby (init mode 0), HOSTING and JOINING answer each `ConnectToPeer` with `Disconnected` and the peer's id before connecting, as FA's `lobby.lua` does for every peer the adapter relays; a `JoinGame` gets no reply.
-In a matchmaker lobby (init mode 1), nothing answers a `ConnectToPeer`. Instead, LOBBY, HOSTING and JOINING send `EstablishedPeer` with a peer's id when the first datagram from that peer arrives, once per peer, as FA's `autolobby.lua` does when its link to a peer is up.
+In a matchmaker lobby (init mode 1), a `ConnectToPeer` gets no `Disconnected` first, so a host sends only that peer's `PlayerOption` set.
+HOSTING and JOINING send `EstablishedPeer` with a peer's id when the first datagram from that peer arrives, once per peer, as FA's `autolobby.lua` does when its link to a peer is up.
 LIVE sends nothing for a link first heard after launch, because FA's lobby is gone by then.
 
 ### Operational Failure

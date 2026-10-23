@@ -154,13 +154,14 @@ harness sets it per child when it spawns one; see
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
 FA's engine loads one of two lobbies on `CreateLobby`, by its init mode, and the game answers
-its peers as that lobby does (WBS-3.2.4.1-fix). Init mode 0, a custom game, gets FA's
+its peers as that lobby does (WBS-3.2.4.1-fix, #506). Init mode 0, a custom game, gets FA's
 `lobby.lua`, which answers each `ConnectToPeer` with `Disconnected` and the peer's id before it
 connects, and a `JoinGame` with nothing. Init mode 1, a matchmaker game, gets FA's
-`autolobby.lua`, which sends nothing on connect and sends `EstablishedPeer` with a peer's id
-once its link to that peer is up. The game takes a peer's first datagram as that moment, so it
-reports each peer once, and not at all for one whose first datagram arrives after launch, since
-FA's lobby is gone by then. Every id goes on the wire as a string.
+`autolobby.lua`, which sends no peer frame on connect and sends `EstablishedPeer` with a peer's
+id once its link to that peer is up. In either lobby a host still follows a `ConnectToPeer` with
+that peer's `PlayerOption` set. The game takes a peer's first datagram as the link coming up, so
+it reports each peer once, and not at all for one whose first datagram arrives after launch,
+since FA's lobby is gone by then. Every id goes on the wire as a string.
 
 A player leaving does not end the game (WBS-4.3.6). From `CreateLobby` until launch, a
 `DisconnectFromPeer` is answered the way the game's FA lobby answers it: in a custom game
