@@ -475,7 +475,7 @@ Source:
 ### 5.1 API
 
 ```java
-// Launch — replaces §2.7 steps 3–4
+// Launch: replaces §2.7 step 3
 SubprocessManager ice = SubprocessManager.start(
         pb,                        // fully-configured ProcessBuilder (§2.7 steps 1–2)
         "ICEAdapter",              // MDC component tag — appears in every log line
@@ -519,11 +519,12 @@ follows this sequence:
 // 1. Configure ProcessBuilder per §2.6 / §2.8
 ProcessBuilder pb = new ProcessBuilder(argv);
 pb.environment().put("LOG_DIR", "logs/ice-adapter/");
-pb.directory(sessionScratchDir);
+// No pb.directory(...): §2.4's per-session scratch directory is not
+// built, so the child inherits the harness's working directory.
 // Note: do NOT call redirectErrorStream — SubprocessManager keeps streams
 //       separate so stderr can be routed to WARN (§4 routing diagram).
 
-// 2. Start — one call replaces §2.7 steps 3–4
+// 2. Start: one call replaces §2.7 step 3
 iceAdapter = SubprocessManager.start(pb, "ICEAdapter", Duration.ofSeconds(5));
 LOG.info("ICE adapter started pid={}", iceAdapter.pid());
 
@@ -535,7 +536,7 @@ iceAdapter.onExit().thenAccept(code -> {
     }
 });
 
-// 4. Connect-retry loop (§2.7 steps 5–6) — JSON-RPC, out of scope here
+// 4. Connect-retry loop (§2.7 step 4): JSON-RPC, out of scope here
 
 // 5. Graceful teardown (§7.1)
 shuttingDown.set(true);   // set BEFORE terminate so the callback sees it
@@ -600,23 +601,33 @@ built either: nothing times the game's frames.
 
 The teardown sequence has three layers, each a fallback for the previous.
 
-### 7.1 Graceful (preferred path, json-rpc-spec §9 phase K)
+### 7.1 Graceful (`SessionTeardown`)
 
 ```text
-1. MC → adapter: disconnectFromPeer(id) per peer  (best-effort)
-2. MC → adapter: quit
-3. Wait up to 5 s for process.onExit().
-4. MC → mock-game: shutdown signal (TBD — likely close GPGNet socket;
-                   mock-game treats EOF as its own teardown trigger).
-5. Wait up to 5 s for mock-game onExit().
+1. MC → mock-game: terminate() (§7.2), which sends no signal if the game
+   already exited. mock-game runs its own teardown on SIGTERM.
+2. MC → lobby: GameState Ended, unless the game already reported its end.
+3. MC → adapter: quit, answer awaited ≤ 2 s; unless refused, wait ≤ 2 s
+   for the exit.
+4. MC → adapter: terminate() (§7.2), which sends no signal if quit ended it.
+5. Close the adapter's JSON-RPC socket, then the lobby WebSocket (≤ 5 s).
 ```
+
+`SessionTeardown` runs these once, whether the state machine's TERMINATED
+entry or a signal hook starts it. On a headless host step 3 never ends the
+adapter: its `quit` handler calls `TrayIcon.close()` without checking that a
+tray exists, which throws before the adapter can exit, so `quit` is refused
+(`-32099`) or goes unanswered and step 4's SIGTERM ends it. No
+`disconnectFromPeer` is sent here, unlike json-rpc-spec §9 step 17; the
+client sends one only for a peer the lobby reports gone before the match
+starts.
 
 ### 7.2 Forceful (any graceful step fails or times out)
 
 ```text
-6. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
-7. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to the grace again.
-8. Log ERROR if still alive after 10 s total; abandon and continue.
+1. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
+2. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to the grace again.
+3. If still alive after that, give up and continue; nothing logs it above DEBUG.
 ```
 
 Both strikes go through the process handle. `Process.destroy()` and
@@ -763,10 +774,10 @@ twice, plus up to 1 s for the output) rather than their sum.
 
 ## 9. Open questions
 
-- **`mock-game` graceful shutdown signal.** §7.1 step 4 assumes EOF on the
-  GPGNet socket is the trigger. The mock-game CLI/lifecycle must confirm
-   this; otherwise an explicit `--shutdown` admin port or
-  a SIGTERM-on-stdin convention is needed.
+- ~~**`mock-game` graceful shutdown signal.**~~ **Resolved: SIGTERM.**
+  `SessionTeardown` ends the game with `terminate()` (§7.1 step 1), and
+  mock-game runs its own teardown on the signal. It also ends at once if the
+  adapter closes its GPGNet connection (§7.3).
 - ~~**Per-host sessions vs per-container.**~~ **Resolved — Java orchestrator is
   the target, not Docker-compose.** The client spec (`project-spec.md`) lists
   "Create test harness that spawns N clients automatically" as an explicit goal,
@@ -835,14 +846,19 @@ sequenceDiagram
 
     Note over MC,IA: live session — JSON-RPC traffic per json-rpc-spec §9
 
-    Note over MC: end-of-game path
-    MC->>IA: disconnectFromPeer(...)
-    MC->>IA: quit
-    IA-->>MC: result null
-    deactivate IA
-    MC->>MG: close GPGNet socket
+    Note over MC: teardown while the game is still running (SessionTeardown, §7.1)
+    MC->>MG: SIGTERM (terminate)
     MG-->>MC: process exit
     deactivate MG
+    MC->>LS: GameState Ended
+    MC->>IA: quit (2 s bound)
+    IA-->>MC: refused (-32099) or no answer, on a headless host
+    MC->>IA: SIGTERM (terminate)
+    IA-->>MC: process exit
+    deactivate IA
+    Note over MC: close the JSON-RPC socket
+    MC->>LS: close WebSocket
+    Note over MC,MG: a game that ends its own match exits first, so teardown sends it no SIGTERM and no GameState Ended
 
     Note over MC,MG: signal path (SIGTERM or SIGINT to the parent)
     MC->>IA: terminate() from the SubprocessRegistry shutdown hook
