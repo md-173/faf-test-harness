@@ -11,14 +11,14 @@ The FAF Lobby Server uses a **WebSocket-based bidirectional messaging protocol**
 | Test | `wss://ws.faforever.xyz` | WSS (TLS) |
 | Local | `ws://localhost` | WS |
 
-> All environments serve the lobby WebSocket at the **host root (`/`)** — see the aiohttp route `add_get("/")` in [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). The earlier `/ws` suffix was the retired `ws_bridge_rs` path and no longer applies (`GET /ws` now 404s).
+> All environments serve the lobby WebSocket at the **host root (`/`)**: on `ws.faforever.xyz` since 2026-10-21, faf-message-broker's `@WebSocket(path = "/")` in [`LobbyWebSocket.java`](https://github.com/FAForever/faf-message-broker/blob/1.1.0/src/main/java/com/faforever/messagebroker/endpoint/websocket/LobbyWebSocket.java); before that, and on local-stack CI's pinned stack still, faf-server v1.18.x's aiohttp route `add_get("/")` in [`server/servercontext.py`](https://github.com/FAForever/server/blob/v1.18.3/server/servercontext.py). The earlier `/ws` suffix was the retired `ws_bridge_rs` path and no longer applies (an upgrade at `/ws` now 404s).
 >
 > **Correction (2026-06-18, empirical — supersedes earlier sourcing):** the working **test** lobby endpoint is **`wss://ws.faforever.xyz`** — the straightforward `.com→.xyz` swap of the production host — confirmed by a full live login from the mock client (`connect → ask_session → session → auth → welcome`, authenticated as the seeded `test` account). **`lobby.faforever.xyz:443` times out** from every network tried (WSL, native Windows, `curl`, an independent cloud egress) **and for a FAF maintainer too**, while Hydra on the same domain is reachable — so the cause is destination/network-side, not our config (unconfirmed; `ws.faforever.xyz` is Cloudflare-fronted, `lobby.faforever.xyz` is not). This contradicts the earlier reading of downlords-faf-client `application-test.yml` (`server.url: wss://lobby.faforever.xyz`), which is **wrong in practice**. Always source the endpoint from config per environment.
 
 ### Wire Format
 Each message is a single JSON object terminated by a newline character (`\n`). There is no additional framing beyond WebSocket frames themselves.
 
-> **Implementation note:** Over WebSocket, framing is handled natively — each send/receive is a discrete frame — so clients using java.net.http.WebSocket can rely on onText(CharSequence data, boolean last) to deliver complete messages without raw newline-delimitation logic. The server nonetheless appends a trailing `\n` to every frame on purpose: its `encode_message` (see [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py)) keeps the delimiter for the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n` regardless of frame boundaries. Incoming messages should therefore be parsed by WebSocket frame boundary with the trailing `\n` tolerated (stripped); appending `\n` on outgoing frames matches the server's own behaviour and is safe.
+> **Implementation note:** Over WebSocket, framing is handled natively, each send/receive being a discrete frame, so clients using java.net.http.WebSocket can rely on onText(CharSequence data, boolean last) to deliver complete messages without raw newline-delimitation logic. The server nonetheless appends a trailing `\n` to every frame on purpose: faf-message-broker's `JsonNewlineTerminatedTextMessageCodec` does, as faf-server v1.18.x's `encode_message` (see [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/v1.18.3/server/protocol/websocket.py)) did, to keep the delimiter for the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n` regardless of frame boundaries. Incoming messages should therefore be parsed by WebSocket frame boundary with the trailing `\n` tolerated (stripped); appending `\n` on outgoing frames matches the server's own behaviour and is safe.
 
 ```json
 {"command": "ping"}\n
@@ -27,7 +27,7 @@ Each message is a single JSON object terminated by a newline character (`\n`). T
 Every message contains a `command` field that identifies the message type. Direction is implicit: some commands are only sent by the client, some only by the server, and some (like `ping`/`pong`) are sent by both.
 
 ### Architecture Note
-The lobby server serves WebSocket **natively** (aiohttp) — see `WebSocketProtocol` in [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py), mounted at path `/` by [`server/servercontext.py`](https://github.com/FAForever/server/blob/develop/server/servercontext.py). One JSON object per text frame; the server appends a trailing `\n` to each frame for compatibility with the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n`.
+Since 2026-10-21 (FAForever/gitops-stack@542f8b1), faf-message-broker serves the WebSocket on `ws.faforever.xyz` and relays each session to faf-server v1.19.0 over RabbitMQ ([FAForever/server#1108](https://github.com/FAForever/server/pull/1108)), which no longer serves WebSocket itself. The broker answers `ask_session` and checks `auth` on its own (§3). Before that, as on local-stack CI's pinned stack still, faf-server v1.18.x served WebSocket **natively** (aiohttp): `WebSocketProtocol` in [`server/protocol/websocket.py`](https://github.com/FAForever/server/blob/v1.18.3/server/protocol/websocket.py), mounted at path `/` by [`server/servercontext.py`](https://github.com/FAForever/server/blob/v1.18.3/server/servercontext.py). One JSON object per text frame; both append a trailing `\n` to each frame for compatibility with the Kotlin `faf-commons-lobby` client, which splits incoming bytes on `\n`.
 
 Historically (the raw-TCP era) a separate Rust bridge, [ws_bridge_rs](https://github.com/FAForever/ws_bridge_rs), translated WebSocket ↔ the internal [SimpleJsonProtocol](https://faforever.github.io/server/protocol/simple_json.html) TCP stream. That bridge is now **unmaintained/retired** — native WS support landed in [FAForever/server#1093](https://github.com/FAForever/server/pull/1093). The Mock Client connects via **WebSocket only**, so it needs no raw-TCP handling regardless.
 
@@ -40,8 +40,9 @@ Historically (the raw-TCP era) a separate Rust bridge, [ws_bridge_rs](https://gi
 
 ### Sources
 - [FAForever Lobby Server AsyncAPI Spec](https://faforever.github.io/faf-api-specs)
-- [`server/protocol/websocket.py` — native WebSocket protocol (`encode_message` keeps trailing `\n`)](https://github.com/FAForever/server/blob/develop/server/protocol/websocket.py)
-- [`server/servercontext.py` — aiohttp WS route mounted at `/` (`add_get("/")`)](https://github.com/FAForever/server/blob/develop/server/servercontext.py)
+- [`LobbyWebSocket.java`: faf-message-broker's WebSocket endpoint at `/`, on `ws.faforever.xyz` since 2026-10-21](https://github.com/FAForever/faf-message-broker/blob/1.1.0/src/main/java/com/faforever/messagebroker/endpoint/websocket/LobbyWebSocket.java)
+- [`server/protocol/websocket.py`: faf-server v1.18.x's native WebSocket protocol (`encode_message` keeps trailing `\n`)](https://github.com/FAForever/server/blob/v1.18.3/server/protocol/websocket.py)
+- [`server/servercontext.py`: faf-server v1.18.x's aiohttp WS route mounted at `/` (`add_get("/")`)](https://github.com/FAForever/server/blob/v1.18.3/server/servercontext.py)
 - [FAForever/server#1093 — native WS support (retires ws_bridge_rs)](https://github.com/FAForever/server/pull/1093)
 - [SimpleJsonProtocol (internal server TCP protocol — historical bridge target)](https://faforever.github.io/server/protocol/simple_json.html)
 - [ws_bridge_rs (WebSocket bridge — unmaintained/retired)](https://github.com/FAForever/ws_bridge_rs)
@@ -226,7 +227,7 @@ Once a WebSocket connection is established and the client holds a valid OAuth JW
 | 1 | Client → Server | `ask_session` | Request a session ID |
 | 2 | Server → Client | `session` | Assign session ID |
 | 3 | Client → Server | `auth` | Authenticate with JWT |
-| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close | Success or failure |
+| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close, or a close alone | Success or failure |
 
 After a successful welcome, the client should be prepared to receive additional state-sync messages such as player_info, game_info, and social. The server also supports matchmaker_info, which is sent in response to requests and periodic updates.
 
@@ -300,14 +301,22 @@ After a successful welcome, the client should be prepared to receive additional 
 }
 ```
 
-faf-server's generic handler sends it when handling the `auth` raised, for example when its
-policy server refuses the `unique_id` or checking the token raises, as when it cannot fetch its
-signing keys, then closes the connection. A token that fails the check is answered with
-`authentication_failed` instead.
+faf-server before v1.19.0 sends it from its generic handler when handling the `auth` raised, for
+example when its policy server refuses the `unique_id` or checking the token raises, as when it
+cannot fetch its signing keys, then closes the connection. A token that fails the check is
+answered with `authentication_failed` instead.
 Since faf-server v1.18.0 (FAForever/server#1093) that close is a Close frame, code 1000, with no
 reason. A banned account and a database outage end the login with an error `notice` and the same
 close instead, `{"command":"notice","style":"error","text":"…"}`, whose text says why. The Mock
 Client ends the login at once on either, naming it, and logs every `notice` with its text (#473).
+
+**4d. Failure: the lobby closes the connection with no frame**
+
+Since 2026-10-21 (FAForever/gitops-stack@542f8b1) `ws.faforever.xyz` is faf-message-broker in
+front of faf-server v1.19.0, and the broker handles `auth` itself. It posts the `unique_id` to the
+policy server, and a refusal, such as a placeholder's, throws out of its message handler, so
+Quarkus closes the socket with code 1011 and no reason, with no frame before it (#530). The Mock
+Client ends the login at once on that close too, naming its code (#473).
 
 ### `unique_id` Handling
 

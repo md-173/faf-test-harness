@@ -337,7 +337,7 @@ timeout 5 bash -c 'cat < /dev/null > /dev/tcp/ws.faforever.xyz/443' \
    rotated and re-persisted on each use, which is why no literal token option
    exists. See `lobby-protocol-spec.md` §2 for the one-time bootstrap.
 2. **The `faf-uid` binary.** The lobby's policy/anti-cheat server rejects a
-   placeholder `unique_id` (the login ends in `{"command":"invalid"}`), so a real
+   placeholder `unique_id`, so a real
    RSA-encrypted UID is required. Download the official binary for your platform
    from [FAForever/uid releases](https://github.com/FAForever/uid/releases) (it
    embeds the public key the server expects) and make it executable:

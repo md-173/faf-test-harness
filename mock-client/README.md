@@ -426,8 +426,8 @@ missing or unreadable, `run` exits `70` (`RUNTIME`) before connecting.
 
 Against the live lobby you also need `--uid-binary-path` pointing at the FAF
 `faf-uid` binary: the lobby's policy server rejects a placeholder `unique_id`
-(the login ends in `{"command":"invalid"}`, and `run` exits `70` at once, naming
-it), so the handshake runs `faf-uid` with
+(the lobby closes the connection with code 1011, and `run` exits `70` at once,
+naming it), so the handshake runs `faf-uid` with
 the session to produce a real RSA-encrypted UID. See
 [`documentation/operations/harness-runbook.md`](../documentation/operations/harness-runbook.md)
 for the ordered setup path (prerequisites, credentials, config, and this
