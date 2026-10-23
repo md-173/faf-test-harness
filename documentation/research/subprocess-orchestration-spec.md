@@ -322,8 +322,7 @@ states a *session fact* required and never defaulted.
 The behavioural knobs are the defaulted arguments: `--launch-delay-seconds`
 (WBS-4.3.1), `--udp-drop-percent` (WBS-5.1), `--lobby-timeout-seconds`
 (WBS-3.2.1.3) and `--crash-after-seconds` (WBS-5.2). Every session fact stays
-required. Taking the first as the
-worked example: it is defaulted because it
+required. Take the first as the worked example. It is defaulted because it
 is a behavioural knob rather than a session fact: how long the game sits in the
 lobby before starting the match on its own, with a negative value meaning it
 never does. Its default (5 s, the value `Main` used to hardcode) applies only to
