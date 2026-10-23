@@ -742,9 +742,23 @@ final class MockClientCliExitCodeTest {
     }
 
     @Test
+    void unknownConfigKeyExitsUsage() throws IOException {
+        // The flag in camel case, as the README's old rule had it: --peer-refresh-token-file reads
+        // peerRefreshTokenFiles. Read by nothing, the key used to be dropped without a word; for a
+        // misspelt fault option that meant a session that passed without its fault (#490).
+        Path typo =
+                Files.writeString(
+                        tempDir.resolve("typo.json"), "{\"peerRefreshTokenFile\": \"a\"}");
+        MainOutcome outcome = runMain(new String[] {"run", "--config", typo.toString()});
+
+        assertSingleLineUsageError(
+                outcome, "unknown config key \"peerRefreshTokenFile\" in " + typo);
+    }
+
+    @Test
     void everyConfigDiagnosticEscapesANewlineInThePath() throws IOException {
         // configPathContainingNewlineStaysOnOneLine covers the "not readable" site. oneLine has
-        // four others, every one of them interpolating a path the caller chose, and a path
+        // five others, every one of them interpolating a path the caller chose, and a path
         // containing "\nUsage:" forges the boundary between the error and picocli's usage block
         // for anything reading stderr. One site left raw reopens the hole for all of them, so each
         // is pinned here rather than trusted to review.
@@ -780,6 +794,15 @@ final class MockClientCliExitCodeTest {
         assertTrue(
                 line.contains(invalid.replace("\n", "\\n")),
                 "the rejected --config value was not escaped onto one line: " + line);
+
+        // 5. The unknown-key branch (#490). The key is plain here; LayeredDefaultProviderTest
+        //    covers a key with a line break of its own.
+        Path unknown =
+                Files.writeString(tempDir.resolve(forgery + "unknown.json"), "{\"bogus\": 1}");
+        assertEscapedPath(
+                runMain(new String[] {"run", "--config", unknown.toString()}),
+                "unknown config key \"bogus\" in ",
+                unknown);
     }
 
     @Test

@@ -72,10 +72,11 @@ final class ConfigLoaderInvalidValuesTest {
     }
 
     /**
-     * The env var and the JSON key move with the flag. Both are derived from the option's long name
-     * rather than declared anywhere, so a rename changes them silently and nothing else would catch
-     * a mismatch. The env var is what CI sets and the JSON key is what a config file carries, so
-     * neither is covered by the CLI cases above.
+     * The env var and the JSON key move with the flag. The env var is derived from the option's
+     * long name and the JSON key is its field's name, and neither is spelled out anywhere else, so
+     * a rename changes them silently and nothing else would catch a mismatch. The env var is what
+     * CI sets and the JSON key is what a config file carries, so neither is covered by the CLI
+     * cases above.
      */
     @Test
     void theEnvVarAndJsonKeyFollowTheRenamedFlag(@TempDir final Path tempDir) throws Exception {

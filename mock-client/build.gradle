@@ -25,6 +25,13 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+// LayeredDefaultProviderTest checks the shipped example config holds only keys the client reads
+// (#490). Copied onto the test classpath rather than read from the working directory, so the test
+// finds it wherever it runs and Gradle reruns it when the file changes.
+processTestResources {
+    from('mock-client.example.json')
+}
+
 test {
     useJUnitPlatform {
         excludeTags 'integration'

@@ -11,15 +11,20 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import picocli.CommandLine;
 import picocli.CommandLine.IDefaultValueProvider;
 import picocli.CommandLine.Model.ArgSpec;
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Model.OptionSpec;
 
 /**
@@ -32,14 +37,15 @@ import picocli.CommandLine.Model.OptionSpec;
  * <ol>
  *   <li>CLI flag (handled by picocli before this provider runs)
  *   <li>Environment variable {@code FAF_MOCK_CLIENT_<UPPER_SNAKE>}
- *   <li>JSON config file (camelCase key)
+ *   <li>JSON config file (keyed by the option's field name)
  *   <li>{@code @Option(defaultValue = ...)} (handled by picocli after this provider returns null)
  * </ol>
  *
  * <p>Stale password-grant fields ({@code oauthUsername}, {@code oauthPassword}, {@code
  * oauthClientSecret}) are rejected at construction time with a deprecation error pointing at the
  * lobby spec — the de-risking in WBS-2.2.10 confirmed neither ROPC nor client_credentials are
- * viable against FAF Hydra (see {@code documentation/research/lobby-protocol-spec.md} §2).
+ * viable against FAF Hydra (see {@code documentation/research/lobby-protocol-spec.md} §2). Every
+ * other key in the file must be one some command reads, or construction fails naming it.
  */
 final class LayeredDefaultProvider implements IDefaultValueProvider {
 
@@ -96,7 +102,10 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
     /** Environment variables supplied by the caller. */
     private final Map<String, String> env;
 
-    /** Values loaded from the optional JSON config file. */
+    /**
+     * Values loaded from the optional JSON config file, in file order. A JSON {@code null} is kept
+     * as a {@code null} value, which reads as unset.
+     */
     private final Map<String, String> fileValues;
 
     /**
@@ -119,11 +128,22 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
         CLI
     }
 
-    LayeredDefaultProvider(final Map<String, String> environment, final Path configFile) {
+    /**
+     * Loads the config file, if there is one, and rejects what no command can use: the stale
+     * password-grant variables and keys first, then any other key no command reads.
+     *
+     * @param environment the environment the {@code FAF_MOCK_CLIENT_*} variables are read from
+     * @param configFile the JSON config file, or {@code null} for none
+     * @param root the root command with its subcommands registered, whose options decide which keys
+     *     the file may hold
+     */
+    LayeredDefaultProvider(
+            final Map<String, String> environment, final Path configFile, final CommandSpec root) {
         this.env = environment == null ? Map.of() : environment;
         this.fileValues = configFile == null ? Map.of() : readJsonFile(configFile);
         rejectStaleEnv(this.env);
         rejectStaleFileKeys(this.fileValues);
+        rejectUnknownFileKeys(this.fileValues, root, configFile);
     }
 
     @Override
@@ -142,11 +162,9 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             resolvedFrom.put(cliFlag, Layer.ENV);
             return fromEnv;
         }
-        String jsonKey =
-                (opt.userObject() instanceof Field field)
-                        ? field.getName()
-                        : camelCaseFromKebab(stem);
-        String fromFile = fileValues.get(jsonKey);
+        String jsonKey = fileKey(opt);
+        // Map.of(), the map when there is no config file, throws on a null lookup.
+        String fromFile = jsonKey == null ? null : fileValues.get(jsonKey);
         if (fromFile != null && !fromFile.isBlank()) {
             resolvedFrom.put(cliFlag, Layer.FILE);
             return fromFile;
@@ -185,7 +203,11 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             while (fields.hasNext()) {
                 Map.Entry<String, JsonNode> field = fields.next();
                 JsonNode v = field.getValue();
-                if (!v.isNull()) {
+                if (v.isNull()) {
+                    // Kept rather than dropped, so the key checks still see the key (#490).
+                    // defaultValue reads a null value as unset, as it did a missing key.
+                    out.put(field.getKey(), null);
+                } else {
                     out.put(field.getKey(), v.isTextual() ? v.asText() : v.toString());
                 }
             }
@@ -307,6 +329,87 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
                                 + DEPRECATION_POINTER);
             }
         }
+    }
+
+    /**
+     * Rejects every config-file key that no command in the tree reads, naming each one, in file
+     * order, and the file (WBS-3.1.5.1-fix, #490).
+     *
+     * <p>Such a key used to be dropped without a word. A misspelt fault option then ran the session
+     * without its fault, and the session passed; a key spelt as the flag in camel case where the
+     * field is named otherwise, such as {@code lobbyWebsocketUrl}, was dropped the same way. The
+     * valid keys come from the whole tree rather than the command being run, because one file
+     * serves every subcommand: a key only {@code session} reads is still valid under {@code run}.
+     * Every key is checked whatever its value, {@code null} included, so a misspelt placeholder is
+     * caught before anyone fills it in.
+     *
+     * <p>Runs after {@link #rejectStaleFileKeys}, so a stale key keeps its deprecation message.
+     *
+     * @param fileMap key/value pairs loaded from the JSON config file, in file order
+     * @param root the root command, with its subcommands registered
+     * @param configFile the file the pairs came from
+     */
+    private static void rejectUnknownFileKeys(
+            final Map<String, String> fileMap, final CommandSpec root, final Path configFile) {
+        Set<String> known = new HashSet<>();
+        collectFileKeys(root, known);
+        List<String> unknown = new ArrayList<>();
+        for (String key : fileMap.keySet()) {
+            if (!known.contains(key)) {
+                unknown.add("\"" + oneLine(key) + "\"");
+            }
+        }
+        if (!unknown.isEmpty()) {
+            throw new IllegalArgumentException(
+                    (unknown.size() == 1 ? "unknown config key " : "unknown config keys ")
+                            + String.join(", ", unknown)
+                            + " in "
+                            + oneLine(configFile));
+        }
+    }
+
+    /**
+     * Adds the config-file key of every option of {@code spec} and of its subcommands, at any
+     * depth. A command's {@code options()} hold its own options, its mixins' and its inherited
+     * copies of the root's.
+     *
+     * @param spec the command to start from
+     * @param keys the set the keys are added to
+     */
+    private static void collectFileKeys(final CommandSpec spec, final Set<String> keys) {
+        for (OptionSpec opt : spec.options()) {
+            String key = fileKey(opt);
+            if (key != null) {
+                keys.add(key);
+            }
+        }
+        for (CommandLine subcommand : spec.subcommands().values()) {
+            collectFileKeys(subcommand.getCommandSpec(), keys);
+        }
+    }
+
+    /**
+     * The config-file key an option is read from: its field's name, whatever the flag says. For
+     * most options that is the flag in camel case, but not for all: {@code --lobby-websocket-url}
+     * reads {@code lobbyWebSocketUrl}. The lookup in {@link #defaultValue(ArgSpec)} and the key
+     * check both use this, so they cannot disagree about which keys exist.
+     *
+     * @param opt the option
+     * @return the key, the flag in camel case for an option with no field behind it, or {@code
+     *     null} for an option nothing in a file can set: one with no long name, the help and
+     *     version flags, and {@code --config}, which names the file itself
+     */
+    private static String fileKey(final OptionSpec opt) {
+        String cliFlag = opt.longestName();
+        if (!cliFlag.startsWith("--")
+                || opt.usageHelp()
+                || opt.versionHelp()
+                || cliFlag.equals(ConfigLoader.CONFIG_FLAG)) {
+            return null;
+        }
+        return opt.userObject() instanceof Field field
+                ? field.getName()
+                : camelCaseFromKebab(cliFlag.substring(2));
     }
 
     private static String camelCaseFromKebab(final String kebab) {

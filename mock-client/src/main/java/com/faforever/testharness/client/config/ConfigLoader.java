@@ -92,7 +92,7 @@ public final class ConfigLoader {
      * @param env environment map consulted by the default-value provider
      * @return a configured {@link CommandLine} ready for {@code parseArgs} or {@code execute}
      * @throws CommandLine.ParameterException if the {@code --config} file is supplied but cannot be
-     *     read or parsed
+     *     read or parsed, or holds a key no command reads
      */
     public static CommandLine newCommandLine(final String[] args, final Map<String, String> env) {
         MockClientCli cli = new MockClientCli();
@@ -115,7 +115,9 @@ public final class ConfigLoader {
 
         try {
             Path configFile = preParseConfigFlag(args);
-            commandLine.setDefaultValueProvider(new LayeredDefaultProvider(env, configFile));
+            // The whole tree, not just the root: a key is valid if any subcommand reads it.
+            commandLine.setDefaultValueProvider(
+                    new LayeredDefaultProvider(env, configFile, commandLine.getCommandSpec()));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(commandLine, e.getMessage(), e);
         }

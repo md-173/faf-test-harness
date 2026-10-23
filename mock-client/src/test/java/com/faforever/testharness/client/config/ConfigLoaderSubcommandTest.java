@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -31,6 +32,24 @@ final class ConfigLoaderSubcommandTest {
                         .orElseThrow();
 
         TestFixtures.assertMatchesMinimalRequired(config);
+    }
+
+    @Test
+    void aKeyOnlyAnotherSubcommandReadsIsAcceptedUnderRun(@TempDir final Path dir)
+            throws Exception {
+        // One file serves every subcommand, so run must accept what session, its fault mixin,
+        // launch-ice and launch-game, and ice-smoke read (#490). newCommandLine runs the key check
+        // without the validation, which would stop first at the missing required options.
+        Path file =
+                TestFixtures.writeJson(
+                        dir,
+                        "{\"peers\": 3, \"peerRefreshTokenFiles\": \"a,b,c\", \"faultPeer\": \"B\","
+                                + " \"durationSeconds\": 5, \"timeoutSeconds\": 2}");
+
+        assertDoesNotThrow(
+                () ->
+                        ConfigLoader.newCommandLine(
+                                new String[] {"run", "--config", file.toString()}, Map.of()));
     }
 
     @Test
