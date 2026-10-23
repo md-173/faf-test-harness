@@ -584,8 +584,10 @@ since nothing is exchanged. `--oauth-auth-endpoint`, `--oauth-redirect-uri` and
 `--oauth-scopes` are required by neither channel: they describe the one-time
 browser bootstrap earlier in this section, which no run performs.
 
-**What the lobby checks.** `oauth_service.get_player_id_from_token` accepts a
-token only if all four of these hold. There is no fifth check hiding anywhere.
+**What the lobby checks.** On `ws.faforever.xyz` the token is checked by
+faf-message-broker, which has stood in front of faf-server there since
+2026-10-21 and handles `auth` itself (its `SessionHandler`, with SmallRye JWT).
+It accepts a token only if all of these hold.
 The harness itself reads one claim: `session` decodes each peer's access
 token for its numeric `sub`, to refuse two peers on one account before any
 process starts. It verifies no signature and reads nothing else, so every
@@ -597,45 +599,56 @@ verdict on the token is still the lobby's. `run` inspects nothing.
   come from Hydra's own OAuth flow, but the key that signed it has to be one that
   endpoint publishes, and only Hydra holds those private keys. Signing your own
   therefore means pointing the harness at a lobby whose JWKS you control.
-- **`exp` in the future, if present.** PyJWT checks `exp`, `nbf` and `iat` by
-  default when the claims are there, and none of them is required to be there. A
-  token with no `exp` is accepted.
+- **`exp` and `iat` both present, and `exp` in the future.** A token with no
+  `exp` is refused.
+- **`iss` exactly `https://hydra.faforever.xyz`**, which is what Hydra sets.
 - **`lobby` in `scp`.**
 - **A numeric `sub` naming an account on that environment.** That claim is the
   player id the session runs as.
 
-Audience and issuer are **not** checked. The lobby decodes with
-`verify_aud: False` and passes no issuer, so `aud` and `iss` are ignored even
-though Hydra sets both. Do not spend time matching them.
+The audience is **not** checked, so `aud` can be anything.
+
+faf-server v1.18.x, which local-stack CI's pinned stack still runs, checks the
+token itself instead (`oauth_service.get_player_id_from_token`, PyJWT). It
+checks `exp`, `nbf` and `iat` only when they are there, so it accepts a token
+with no `exp`, and checks neither `aud` nor `iss`.
 
 `faf-uid` is still required on this channel. The `auth` frame carries
-`unique_id` whichever channel produced the token, and the lobby posts it to its
-policy server for token logins exactly as for password logins. The verdict is
-currently ignored, but the request is not: a placeholder the policy server
-refuses makes that request fail, and the login then ends in
-`{"command":"invalid"}` rather than an auth error. `run` names it in its one
-ERROR, `the lobby answered the login with invalid`, and exits `70` at once.
-Keep `--uid-binary-path` pointed at a real `faf-uid`.
+`unique_id` whichever channel produced the token, and the broker posts it to the
+policy server once the token passes. The verdict is currently ignored, but the
+request is not: a placeholder the policy server refuses makes that request fail,
+and the lobby then closes the connection with code 1011 and no frame rather than
+an auth error. `run` names it in its one ERROR, `the lobby closed the connection
+before welcome (code 1011)`, and exits `70` at once. Keep `--uid-binary-path`
+pointed at a real `faf-uid`.
 
 **What a rejection looks like.** Most faults collapse into one message, because
-the lobby catches `InvalidTokenError`, `KeyError` and `ValueError` together. The
-harness logs the lobby's text verbatim:
+the broker answers every failed token check alike, then closes the connection.
+The harness logs the lobby's text verbatim:
 
 | `lobby authentication_failed:` | What to look at |
 |---|---|
-| `Token signature was invalid` | `kid` missing or absent from the JWKS; a signature that key does not verify; an expired `exp`; `scp` missing entirely; `sub` missing or not a number |
-| `Token does not have permission to login to the lobby server` | `scp` is present but does not contain `lobby` |
-| `Cannot find user id` | `sub` is a number but names no account on this environment |
+| `Invalid access token provided` | a signing key absent from the JWKS, or a JWKS the broker could not fetch; a signature that key does not verify; `exp` or `iat` missing, or an expired `exp`; `iss` other than `https://hydra.faforever.xyz` |
+| `Token does not have permission to login to the lobby server` | `scp` missing, or without `lobby` |
 
-A bad token can also produce no `authentication_failed` line at all, just
-`{"command":"invalid"}` and a closed connection, which `run` reports as `the
-lobby answered the login with invalid`. That means either the lobby
-could not fetch its own JWKS, or a claim had an unexpected JSON type, such as
-`scp` as a number rather than a list. Both escape the catch above. It is also
-what a placeholder `unique_id` produces, so rule the UID out before suspecting
-the token.
+Two kinds of bad token produce no `authentication_failed` line at all. A `sub` that is
+not a number ends the login with a Close frame, code 1011, and nothing before
+it, which `run` reports as `the lobby closed the connection before welcome
+(code 1011)`. That is also what a placeholder `unique_id` produces, so rule the
+UID out before suspecting the token. A numeric `sub` naming no account passes
+the broker, faf-server then fails to find it without telling the client, and
+`run` gives up after 45 s with `lobby session with <url> timed out before
+welcome`.
 
-**Reading a token without printing it.** This prints the five claims that decide
+faf-server v1.18.x answers with its own texts: `Token signature was invalid`
+for a bad `kid` or signature, an expired `exp`, a missing `scp` or a `sub` that
+is missing or not a number; `Token does not have permission to login to the
+lobby server` for an `scp` without `lobby`; `Cannot find user id` for a `sub`
+naming no account. A JWKS it could not fetch, or a claim of an unexpected JSON
+type, such as `scp` as a number, gets `{"command":"invalid"}` and a close
+instead.
+
+**Reading a token without printing it.** This prints the seven claims that decide
 the outcome and nothing else. It never prints the token, and never touches the
 signature:
 
@@ -643,7 +656,7 @@ signature:
 python3 - .secrets/access_token.jwt <<'EOF'
 import base64, json, string, sys, time
 
-WANTED = ("alg", "kid", "sub", "scp", "exp")
+WANTED = ("alg", "kid", "iss", "sub", "scp", "iat", "exp")
 B64URL = set(string.ascii_letters + string.digits + "-_")
 try:
     try:
@@ -682,10 +695,10 @@ elif exp is not None:
 EOF
 ```
 
-Output is five lines plus an expiry verdict, with `(absent)` naming any claim
-that is not there, which is what tells a `Token signature was invalid` apart from
-the several other things that produce it. The base64url padding the JWT strips is
-restored before decoding, so no segment length fails.
+Output is seven lines plus an expiry verdict, with `(absent)` naming any claim
+that is not there, which is what tells an `Invalid access token provided` apart
+from the several other things that produce it. The base64url padding the JWT
+strips is restored before decoding, so no segment length fails.
 
 Two things not to tidy. The `<<'EOF'` quotes are load-bearing: unquoted, the
 shell expands `$` inside the script. And keep the token path quoted if it can
@@ -693,7 +706,8 @@ contain spaces.
 
 This does not tell you whether the signature is good, only what the token claims.
 A token that reads correctly here and is still rejected has a signature the
-lobby's JWKS does not verify, or a `sub` that names no account there.
+lobby's JWKS does not verify. One whose `sub` names no account there is not
+rejected on `ws.faforever.xyz`: its login goes unanswered, as above.
 
 **A run with no other OAuth options.** Nothing below configures OAuth except the
 token file:
@@ -862,7 +876,7 @@ and is not repeated here.**
 |---|---|---|
 | `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1011)`, with no `lobby notice (…)` line before it | The lobby's policy server rejected a placeholder `unique_id`: `uidBinaryPath` is unset, so the static `uniqueId` was sent. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. Less often, the lobby failed while handling `auth`. |
 | `run` exits `70` at once, before the `auth` frame is sent | `lobby session with <url> failed: AuthenticationException: faf-uid (<path>) …` | The `faf-uid` binary timed out, exited non-zero, or could not be run at all; the message names the binary, its exit code and its stderr. Check the path, that the file is executable, and that it runs on this machine (§1, §3). |
-| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1000)`, usually after a `lobby notice (…)` line | The lobby ended the login, and its notice says why: an error notice for a ban or a lobby database outage, an info one for maintenance. With no notice at all, it could not parse the `auth` frame. `the lobby connection dropped before welcome` means the connection was lost rather than closed. |
+| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1000)`, usually after a `lobby notice (…)` line | A faf-server v1.18.x lobby, such as local-stack CI's, ended the login, and its notice says why: an error notice for a ban or a lobby database outage, an info one for maintenance. With no notice at all, it could not parse the `auth` frame; the broker on `ws.faforever.xyz` ignores a frame it cannot parse, so `run` waits for `timed out before welcome` instead. `the lobby connection dropped before welcome` means the connection was lost rather than closed. |
 | `run` exits `70` after the session was up, and the lobby closed the connection | `the lobby answered one of this run's commands with invalid; reporting it in this run's exit code`, after a WARN `the lobby answered a command with invalid, …` | faf-server failed while handling one of `run`'s own commands (`game_host`, `game_join`, `game_matchmaking`, or a GPGNet frame relayed for the game) and closed the connection (#486). The lobby's logs hold the exception; at DEBUG, `run`'s log shows the frames it sent just before. |
 | `run` exits `70` after the session was up, though the lobby never closed the connection | `lobby connection dropped unexpectedly`, after a WARN `lobby sent nothing for 100 s; treating the connection as dropped` | The connection went quiet (#485). faf-server pings every connection every 45 s, so 100 s without a frame means it is gone: a drop on the network path, a proxy, or a lobby that crashed, which the JDK did not report. A run in a match plays on until its game exits, and exits then. Check the network path to the lobby. |
 | `run` fails immediately after the token exchange | `invalid_grant` or `invalid_client` from Hydra | The refresh token was rotated by a previous run and this file is now stale, or it was minted against a retired client ID. Full re-bootstrap: repeat §3 step 2 from a browser: a rotated-but-unpersisted token, or a crash between rotation and persistence, both look like this. There is no partial recovery — get a fresh `code=` and refresh token. |

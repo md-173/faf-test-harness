@@ -234,9 +234,9 @@ jobs:
           WARN_BELOW = 15 * 60
 
 
-          # An exp that is present but not a number is not a verdict in doubt: the lobby's PyJWT
-          # raises on it rather than weighing it, so such a token is always rejected. Kept apart
-          # from "cannot read one", where the lobby may well accept.
+          # An exp that is present but not a number is not a verdict in doubt: the lobby's JWT
+          # check raises on it rather than weighing it, so such a token is always rejected. Kept
+          # apart from "cannot read one", where the lobby may well accept.
           MALFORMED = object()
 
 
@@ -257,7 +257,8 @@ jobs:
               if not isinstance(claims, dict):
                   return None
               if "exp" not in claims:
-                  # The lobby accepts a token carrying no exp at all, so this is not a fault.
+                  # The lobby decides: the test lobby's broker refuses a token carrying no exp,
+                  # though faf-server v1.18.x accepted one.
                   return None
               exp = claims["exp"]
               # bool is an int subclass and json turns `true` into one; it is not an expiry.
@@ -370,9 +371,9 @@ jobs:
       # faf-uid reads DMI, BIOS and CPU details, which a cloud VM may withhold. When the
       # binary fails, the client exits with a non-zero error since a login would fail when the
       # lobby's policy POST is not 2xx, which is what a placeholder or broken uid causes (the policy
-      # verdict itself is ignored at login, `ignore_result=True`). This probe makes sure the faf-uid
-      # works before running the entire session. Its output is the machine's identity blob and is
-      # never printed; only its length is.
+      # verdict itself is ignored at login; only a failed request ends it). This probe makes sure
+      # the faf-uid works before running the entire session. Its output is the machine's identity
+      # blob and is never printed; only its length is.
       - name: Check faf-uid runs on this runner
         timeout-minutes: 2
         run: |
@@ -427,8 +428,8 @@ jobs:
             verdicts=$(grep -cE 'session: (PASS|FAIL)' "$log" || true)
             # The lobby's own rejection, which no other pattern here matches. It is the shape a
             # token that expired mid-run takes, and the pre-flight deliberately does not refuse
-            # that case, so this is where it has to be readable. The text is the lobby's ("Token
-            # signature was invalid", "Cannot find user id"); it never carries the token.
+            # that case, so this is where it has to be readable. The text is the lobby's ("Invalid
+            # access token provided" from the test lobby's broker); it never carries the token.
             auths=$(grep -c 'lobby authentication_failed' "$log" || true)
           fi
           {
