@@ -24,6 +24,16 @@ import picocli.CommandLine;
  */
 final class ConfigLoaderInvalidValuesTest {
 
+    /** How the message refusing a lobby URL the JDK's WebSocket client would refuse begins. */
+    private static final String LOBBY_URL_RULE =
+            "--lobby-websocket-url must be a ws:// or wss:// URL with a host, a port no higher than"
+                    + " 65535 and no fragment";
+
+    /** How the message refusing a token URL the JDK's HTTP client would refuse begins. */
+    private static final String TOKEN_URL_RULE =
+            "--oauth-token-url must be an http:// or https:// URL with a host and a port no higher"
+                    + " than 65535";
+
     @Test
     void nonNumericPortThrowsParameterException() {
         String[] args =
@@ -236,6 +246,168 @@ final class ConfigLoaderInvalidValuesTest {
                         "--lobby-websocket-url=not a uri");
 
         assertThrows(CommandLine.ParameterException.class, () -> ConfigLoader.load(args, Map.of()));
+    }
+
+    /**
+     * A lobby URL the JDK's WebSocket client refuses used to parse, pass validation and fail only
+     * at connect, with exit 70 (#522). Each breaks one rule: no scheme; a host and port with no
+     * scheme, where the host parses as the scheme; a scheme other than ws or wss; no host; a name
+     * with an underscore, from which the JDK reads no host; a port above 65535; a fragment.
+     */
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "ws.faforever.xyz",
+                "ws.faforever.xyz:443",
+                "https://ws.faforever.xyz",
+                "wss:///lobby",
+                "ws://faf_lobby:8080",
+                "wss://ws.faforever.xyz:65536",
+                "wss://ws.faforever.xyz#lobby"
+            })
+    void aLobbyUrlTheJdkWouldRefuseThrowsParameterException(final String url) {
+        String[] args =
+                replaceArg(
+                        TestFixtures.minimalRequiredCli(),
+                        "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                        "--lobby-websocket-url=" + url);
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(ex.getMessage().contains(LOBBY_URL_RULE), ex.getMessage());
+    }
+
+    /**
+     * The same for the token URL on the refresh channel, which reads it (#522): no scheme, a scheme
+     * other than http or https, no host, a port above 65535.
+     */
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "hydra.faforever.xyz/oauth2/token",
+                "ftp://hydra.faforever.xyz/oauth2/token",
+                "https:///oauth2/token",
+                "https://hydra.faforever.xyz:65536/oauth2/token"
+            })
+    void aTokenUrlTheJdkWouldRefuseThrowsParameterException(final String url) {
+        String[] args =
+                replaceArg(
+                        TestFixtures.minimalRequiredCli(),
+                        "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
+                        "--oauth-token-url=" + url);
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(ex.getMessage().contains(TOKEN_URL_RULE), ex.getMessage());
+    }
+
+    /**
+     * Nothing the JDK's WebSocket client takes is refused (#522): a scheme in capitals, plain ws as
+     * a local stack serves the lobby, the highest port, and the {@code /?verify=} query
+     * FAForever/client opens its lobby access URL with. Each loads unchanged.
+     */
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "WSS://ws.faforever.xyz",
+                "ws://127.0.0.1:8080",
+                "wss://ws.faforever.xyz:65535",
+                "wss://ws.faforever.xyz/?verify=abc"
+            })
+    void aLobbyUrlTheJdkWouldTakeLoadsUnchanged(final String url) {
+        String[] args =
+                replaceArg(
+                        TestFixtures.minimalRequiredCli(),
+                        "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                        "--lobby-websocket-url=" + url);
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(url, config.lobbyWebSocketUrl().toString());
+    }
+
+    /**
+     * Likewise for the token URL (#522): a scheme in capitals, plain http as a local Hydra serves
+     * it, and a fragment, which the JDK's HTTP client does not check.
+     */
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "HTTPS://hydra.faforever.xyz/oauth2/token",
+                "http://localhost:4444/oauth2/token",
+                "https://hydra.faforever.xyz/oauth2/token#x"
+            })
+    void aTokenUrlTheJdkWouldTakeLoadsUnchanged(final String url) {
+        String[] args =
+                replaceArg(
+                        TestFixtures.minimalRequiredCli(),
+                        "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
+                        "--oauth-token-url=" + url);
+
+        MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
+
+        assertEquals(url, config.oauthTokenUrl().toString());
+    }
+
+    @Test
+    void aTokenUrlIsNotCheckedOnTheAccessTokenChannel() {
+        // That channel reads no token URL (#340), so not even one the JDK would refuse stops it
+        // (#522).
+        String[] args =
+                replaceArg(
+                        replaceArg(
+                                TestFixtures.minimalRequiredCli(),
+                                "--oauth-refresh-token-file="
+                                        + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+                                "--oauth-access-token-file=/nonexistent/test-access-token"),
+                        "--oauth-token-url=" + TestFixtures.OAUTH_TOKEN_URL,
+                        "--oauth-token-url=ftp://hydra.faforever.xyz/oauth2/token");
+
+        assertTrue(ConfigLoader.load(args, Map.of()).isPresent());
+    }
+
+    @Test
+    void aLobbyUrlTheJdkWouldRefuseFromTheEnvironmentThrowsParameterException() {
+        // The record sees the value whichever layer set it, so the environment cannot slip an
+        // unusable URL past the check (#522). A blank variable would count as unset instead.
+        String[] args =
+                Arrays.stream(TestFixtures.minimalRequiredCli())
+                        .filter(arg -> !arg.startsWith("--lobby-websocket-url="))
+                        .toArray(String[]::new);
+        Map<String, String> env = Map.of("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", "ws.faforever.xyz");
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class, () -> ConfigLoader.load(args, env));
+
+        assertTrue(ex.getMessage().contains(LOBBY_URL_RULE), ex.getMessage());
+    }
+
+    @Test
+    void aRefusedUrlIsQuotedInAsciiSoAnInvisibleCharacterShows() {
+        // A zero-width space, U+200B, pasted after the host leaves no host the JDK can read, and
+        // quoted as typed the URL would look valid. Quoted in ASCII, its escape shows where it is
+        // (#522).
+        String[] args =
+                replaceArg(
+                        TestFixtures.minimalRequiredCli(),
+                        "--lobby-websocket-url=" + TestFixtures.LOBBY_URL,
+                        "--lobby-websocket-url=wss://ws.faforever.xyz"
+                                + Character.toString(0x200B));
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(
+                ex.getMessage().contains("got 'wss://ws.faforever.xyz%E2%80%8B'"), ex.getMessage());
     }
 
     /**

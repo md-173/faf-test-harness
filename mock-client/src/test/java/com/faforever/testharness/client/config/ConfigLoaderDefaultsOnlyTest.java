@@ -115,6 +115,62 @@ final class ConfigLoaderDefaultsOnlyTest {
     }
 
     @Test
+    void aBlankLobbyUrlIsMissingOnEitherChannel() {
+        // A blank flag parses to an empty URI, not null, so it used to pass the presence check and
+        // fail at connect with exit 70 (#522). It is missing now, as a blank client id is, and the
+        // message says so rather than calling it an unusable URL.
+        List<String> credentials =
+                List.of(
+                        "--oauth-refresh-token-file=" + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+                        "--oauth-access-token-file=/nonexistent/test-access-token");
+        for (String credential : credentials) {
+            String[] args = {credential, "--uid-binary-path=./faf-uid", "--lobby-websocket-url="};
+
+            CommandLine.ParameterException ex =
+                    assertThrows(
+                            CommandLine.ParameterException.class,
+                            () -> ConfigLoader.load(args, Map.of()));
+
+            assertTrue(
+                    ex.getMessage()
+                            .contains("missing required configuration: --lobby-websocket-url"),
+                    credential + ": " + ex.getMessage());
+        }
+    }
+
+    @Test
+    void aBlankTokenUrlIsMissingOnTheRefreshChannel() {
+        // The refresh channel reads the token URL, so a blank one is missing there (#522).
+        String[] args = {
+            "--oauth-refresh-token-file=" + TestFixtures.OAUTH_REFRESH_TOKEN_FILE,
+            "--uid-binary-path=./faf-uid",
+            "--oauth-token-url=",
+        };
+
+        CommandLine.ParameterException ex =
+                assertThrows(
+                        CommandLine.ParameterException.class,
+                        () -> ConfigLoader.load(args, Map.of()));
+
+        assertTrue(
+                ex.getMessage().contains("missing required configuration: --oauth-token-url"),
+                ex.getMessage());
+    }
+
+    @Test
+    void aBlankTokenUrlIsNotReadOnTheAccessTokenChannel() {
+        // The same argv on the access-token channel validates: that channel reads no token URL
+        // (#340), so a blank one is neither missing nor checked there (#522).
+        String[] args = {
+            "--oauth-access-token-file=/nonexistent/test-access-token",
+            "--uid-binary-path=./faf-uid",
+            "--oauth-token-url=",
+        };
+
+        assertTrue(ConfigLoader.load(args, Map.of()).isPresent());
+    }
+
+    @Test
     void iceAdapterBinaryPathDefaultsToFafIceAdapterJarWhenUnset() {
         // --ice-adapter-binary-path is optional (subprocess-orchestration-spec §2.2): when unset
         // it resolves to faf-ice-adapter.jar in the working directory.
