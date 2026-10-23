@@ -713,6 +713,21 @@ final class IceAdapterConnectionTest {
         assertEquals(0, request.get("params").size());
     }
 
+    /**
+     * Each argument is one param, so a method taking one array gets {@code [[]]}: adapter 3.3.14
+     * answers {@code setIceServers} with -32601 when the array is spread to {@code []} (#201).
+     * {@code LifecycleSetupTest} sees this argument only through a fake that never serialises it.
+     */
+    @Test
+    void arrayArgCallEmitsOneNestedArrayParam() throws Exception {
+        conn = connect();
+
+        conn.call("setIceServers", new Object[] {new Object[0]});
+
+        JsonNode request = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        assertEquals(MAPPER.readTree("[[]]"), request.get("params"));
+    }
+
     private static String jsonResult(final long id, final String resultJson) {
         return "{\"jsonrpc\":\"2.0\",\"result\":" + resultJson + ",\"id\":" + id + "}";
     }
