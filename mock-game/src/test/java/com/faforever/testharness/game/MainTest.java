@@ -187,6 +187,25 @@ final class MainTest {
     }
 
     @Test
+    void lobbyTimeoutExitsWithTheLobbyTimeoutCode() throws Exception {
+        adapter.start();
+        // One second is enough: LobbyTimeoutTest needs three only because a HostGame races its
+        // timer there, and this test sends nothing after CreateLobby.
+        CompletableFuture<Integer> exit =
+                boot(argv(adapter.port(), "--lobby-timeout-seconds", "1"));
+
+        adapter.awaitClient();
+        assertEquals("Idle", nextGameState(), "connected before the lobby opens");
+        adapter.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 42, 1)));
+        assertEquals("Lobby", nextGameState(), "the lobby timer is armed on entering LOBBY");
+
+        assertEquals(
+                ExitCodes.LOBBY_TIMEOUT,
+                exit.get(15, TimeUnit.SECONDS),
+                "giving up in the lobby is its own outcome, not a played match or a failure");
+    }
+
+    @Test
     void shutdownHookTearsDownBeforeStoppingLogging() throws Exception {
         // Built directly rather than taken from a lifecycle: the ordering is the subject here, and
         // this way the connection whose close is recorded is the one the sequence actually owns.
@@ -455,6 +474,15 @@ final class MainTest {
             "--launch-delay-seconds",
             TEST_LAUNCH_DELAY_SECONDS,
         };
+    }
+
+    /** As {@link #argv(int)}, with {@code extra} appended. */
+    private String[] argv(final int gpgNetPort, final String... extra) {
+        String[] base = argv(gpgNetPort);
+        String[] args = new String[base.length + extra.length];
+        System.arraycopy(base, 0, args, 0, base.length);
+        System.arraycopy(extra, 0, args, base.length, extra.length);
+        return args;
     }
 
     /** Runs the bootstrap on a daemon thread, completing with the exit code it returns. */
