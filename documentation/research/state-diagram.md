@@ -31,9 +31,9 @@ stateDiagram-v2
         IDLE --> LOBBY : CreateLobby message from server / Send GameState(Lobby) message
         LOBBY --> HOSTING : HostGame message from server
         LOBBY --> JOINING : JoinGame message from server
-        LOBBY --> LOBBY : DisconnectFromPeer (a peer left) / Send Disconnected
-        HOSTING --> HOSTING : DisconnectFromPeer (a peer left) / Send Disconnected, then ClearSlot
-        JOINING --> JOINING : DisconnectFromPeer (a peer left) / Send Disconnected
+        LOBBY --> LOBBY : DisconnectFromPeer (a peer left) / Send Disconnected (custom lobby)
+        HOSTING --> HOSTING : DisconnectFromPeer (a peer left) / Send Disconnected, then ClearSlot (custom lobby), or DisconnectedPeer (matchmaker lobby)
+        JOINING --> JOINING : DisconnectFromPeer (a peer left) / Send Disconnected (custom lobby) or DisconnectedPeer (matchmaker lobby)
 
         state "HOSTING" as HOSTING
         HOSTING : Configure game with commands
@@ -62,6 +62,13 @@ stateDiagram-v2
 ```
 *State diagram of the mock game*
 
+### Peers
+
+`CreateLobby`'s init mode tells the game which of FA's two lobbies it stands in for, and it answers its peers as that lobby does (WBS-3.2.4.1-fix).
+In a custom lobby (init mode 0), HOSTING and JOINING answer each `ConnectToPeer` with `Disconnected` and the peer's id before connecting, as FA's `lobby.lua` does for every peer the adapter relays; a `JoinGame` gets no reply.
+In a matchmaker lobby (init mode 1), nothing answers a `ConnectToPeer`. Instead, LOBBY, HOSTING and JOINING send `EstablishedPeer` with a peer's id when the first datagram from that peer arrives, once per peer, as FA's `autolobby.lua` does when its link to a peer is up.
+LIVE sends nothing for a link first heard after launch, because FA's lobby is gone by then.
+
 ### Operational Failure
 
 Losing the connection to the GPGNet server (the ICE adapter) causes the game to enter an unrecoverable failure state (shown in the diagram as a transition directly to the end state).
@@ -70,10 +77,10 @@ That local connection is the only one whose loss the game acts on. An ICE adapte
 
 A peer leaving is not a failure (WBS-4.3.4), and it does not end the game (WBS-4.3.6).
 While the game is still in the lobby, the lobby server tells the remaining players, the client relays that to its adapter, and the adapter forwards `DisconnectFromPeer` to the game.
-The game answers the way FA's lobby does, with `Disconnected` naming the player and, on the host, `ClearSlot` for that player's slot, stops sending to that peer and plays on, whoever left.
+The game answers the way FA's custom lobby does, with `Disconnected` naming the player and, on the host, `ClearSlot` for that player's slot, stops sending to that peer and plays on, whoever left.
 A host whose last joiner left keeps its lobby open, as it did before anyone joined.
 The lobby server tells nobody when the host itself leaves normally, because it ends its own game before it would pass the notice on, so the joiners' games wait in their lobby until they are torn down.
-FA's matchmaker lobby answers with `DisconnectedPeer` instead, which the mock game does not send.
+In a matchmaker lobby it answers as FA's does instead, with `DisconnectedPeer` naming the player, and only for a player it had.
 Once the game is LIVE the frame is ignored, since a running FA game processes no GPGNet input.
 It can still arrive there in one narrow window: the game enters LIVE when it sends `GameState(Launching)`, and its client only reaches `PLAYING` once the adapter relays that frame back, so a notice arriving inside that round trip is still relayed.
 Outside that window an orchestrated session does not produce one: once the client is `PLAYING` it stops relaying the notice, and once the host has launched the lobby server stops sending it.

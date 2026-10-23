@@ -147,12 +147,13 @@ public final class GpgNetSender {
     }
 
     /**
-     * Emit {@code Disconnected(uid)}, FA's answer to a {@code DisconnectFromPeer} from the adapter
-     * (WBS-4.3.6). FA's lobby formats the id with {@code string.format("%d", uid)} ({@code
-     * lobby.lua}'s {@code DisconnectFromPeer}), so it goes on the wire as a string chunk, not an
-     * int (§7.1).
+     * Emit {@code Disconnected(uid)}, FA's custom lobby's answer to a {@code DisconnectFromPeer}
+     * from the adapter (WBS-4.3.6), which it also sends before it connects to each peer {@code
+     * ConnectToPeer} names (WBS-3.2.4.1-fix). That lobby formats the id with {@code
+     * string.format("%d", uid)} ({@code lobby.lua}'s {@code DisconnectFromPeer}), so it goes on the
+     * wire as a string chunk, not an int (§7.1).
      *
-     * @param playerId the id of the player who left
+     * @param playerId the id of the player who left, or of the peer about to be connected
      * @throws IOException if the frame cannot be sent
      */
     public void disconnected(final int playerId) throws IOException {
@@ -161,8 +162,8 @@ public final class GpgNetSender {
 
     /**
      * Emit {@code ClearSlot(slot)}, a host freeing the slot of a player who left (WBS-4.3.6), as
-     * FA's lobby does from its {@code PeerDisconnected} callback. faf-server takes it from the host
-     * only.
+     * FA's custom lobby does from its {@code PeerDisconnected} callback. faf-server takes it from
+     * the host only.
      *
      * @param slot the slot, which is the {@code StartSpot} the host gave that player
      * @throws IOException if the frame cannot be sent

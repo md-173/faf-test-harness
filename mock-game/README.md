@@ -137,7 +137,8 @@ harness sets it per child when it spawns one; see
 2. Connects to the adapter's GPGNet port, with bounded retries. Failure to reach it
    inside the window ends the run at `70`.
 3. Announces itself (`GameState Idle`), then answers the adapter's `CreateLobby` with
-   `GameState Lobby`.
+   `GameState Lobby`, and takes that frame's init mode to pick which FA lobby it answers
+   its peers as (below).
 4. Waits for a role. `HostGame` makes it a host and it sends its `PlayerOption` set;
    `JoinGame` makes it a joiner.
 5. Launches the match — on the launch-delay timer, or when told to. If nothing ever
@@ -152,13 +153,22 @@ harness sets it per child when it spawns one; see
 7. Plays out the match for its duration, then reports one `GameResult` per army,
    `JsonStats`, `GameEnded` and `GameState Ended`, and exits `0`.
 
+FA's engine loads one of two lobbies on `CreateLobby`, by its init mode, and the game answers
+its peers as that lobby does (WBS-3.2.4.1-fix). Init mode 0, a custom game, gets FA's
+`lobby.lua`, which answers each `ConnectToPeer` with `Disconnected` and the peer's id before it
+connects, and a `JoinGame` with nothing. Init mode 1, a matchmaker game, gets FA's
+`autolobby.lua`, which sends nothing on connect and sends `EstablishedPeer` with a peer's id
+once its link to that peer is up. The game takes a peer's first datagram as that moment, so it
+reports each peer once, and not at all for one whose first datagram arrives after launch, since
+FA's lobby is gone by then. Every id goes on the wire as a string.
+
 A player leaving does not end the game (WBS-4.3.6). From `CreateLobby` until launch, a
-`DisconnectFromPeer` is answered the way FA's lobby answers it: `Disconnected` with the
-player's id, and on the host `ClearSlot` with that player's slot. The game then stops sending
-to that peer and plays on, whoever left, and a host whose last joiner left keeps its lobby
-open. Once the match is live the frame is only logged, because a running FA game processes no
-GPGNet input. FA's matchmaker lobby answers with `DisconnectedPeer` instead, which this game
-does not send.
+`DisconnectFromPeer` is answered the way the game's FA lobby answers it: in a custom game
+`Disconnected` with the player's id, and on the host `ClearSlot` with that player's slot; in a
+matchmaker game `DisconnectedPeer` with the id, and only for a player the game had. The game
+then stops sending to that peer and plays on, whoever left, and a host whose last joiner left
+keeps its lobby open. Once the match is live the frame is only logged, because a running FA game
+processes no GPGNet input.
 
 Players are split into two teams in arrival order: armies 1, 3, ... on team 2 and
 armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it marks a
