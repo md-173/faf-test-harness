@@ -12,7 +12,8 @@ import org.slf4j.LoggerFactory;
  *
  * <p>This is layer 1 of spec §7.3. It handles polite JVM exits ({@code System.exit}, SIGTERM,
  * SIGINT, last non-daemon thread). SIGKILL, an OOM kill and {@code Runtime.halt} run no shutdown
- * hook; on Linux, a child launched behind {@link ParentDeathSignal}'s prefix (layer 2) still ends.
+ * hook; layer 2 still ends the child, through {@link ParentDeathSignal}'s prefix on Linux and
+ * through {@link OrphanReaper} where that prefix is empty.
  */
 final class SubprocessRegistry {
 

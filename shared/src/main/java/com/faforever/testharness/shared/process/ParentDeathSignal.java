@@ -20,8 +20,8 @@ import org.slf4j.LoggerFactory;
  * the adapter's JVM exits on it, and mock-game runs its own teardown.
  *
  * <p>The prefix is empty on anything but Linux, and on a Linux host without a setpriv that can set
- * the signal (util-linux 2.33 and later can). A child then outlives a killed JVM, as it always did.
- * Which applies is decided once per JVM, by running the prefix itself.
+ * the signal (util-linux 2.33 and later can). {@link OrphanReaper} then ends the children of a
+ * killed JVM instead. Which applies is decided once per JVM, by running the prefix itself.
  *
  * <p>The kernel sends the signal when the <em>thread</em> that started the child exits, not the
  * process ({@code prctl(2)}). A child launched with this prefix must therefore be started by {@link
@@ -131,8 +131,8 @@ public final class ParentDeathSignal {
                 return SETPRIV;
             }
             LOG.info(
-                    "setpriv --pdeathsig (util-linux 2.33 or later) is not usable here, so the"
-                            + " adapter and game keep running if this JVM is killed");
+                    "setpriv --pdeathsig (util-linux 2.33 or later) is not usable here, so a"
+                            + " reaper process ends the adapter and game if this JVM is killed");
             return List.of();
         }
     }

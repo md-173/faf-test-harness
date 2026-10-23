@@ -9,7 +9,8 @@ import java.util.List;
  * through {@link SubprocessManager} (so the JVM shutdown hook is installed), prints the
  * grandchild's PID once the grandchild is running, and parks until killed. Given {@code pdeathsig},
  * it launches the grandchild behind {@link ParentDeathSignal#prefix()}, as the launchers launch
- * theirs.
+ * theirs. Given {@code reaper}, it requires that prefix to be empty, so the grandchild is left to
+ * {@link OrphanReaper}.
  */
 public final class HarnessChild {
 
@@ -24,12 +25,17 @@ public final class HarnessChild {
             }
             command.addAll(ParentDeathSignal.prefix());
         }
+        if (args.length > 0 && args[0].equals("reaper") && !ParentDeathSignal.prefix().isEmpty()) {
+            throw new IllegalStateException(
+                    "setpriv --pdeathsig is usable in this JVM, so no reaper");
+        }
         command.addAll(TestSupport.testChild("hook", "ready", "bye").command());
         LineWaiter ready = new LineWaiter();
         SubprocessManager m =
                 SubprocessManager.start(
                         new ProcessBuilder(command), "Grandchild", Duration.ofSeconds(2), ready);
-        // Reported only once it runs, so setpriv has set the signal before any kill can land.
+        // Reported only once it runs, so setpriv has set the signal before any kill can land. The
+        // reaper has been sent the grandchild by then, since start() sends it before returning.
         ready.awaitLine("ready"::equals, Duration.ofSeconds(30));
         System.out.println("GRANDCHILD_PID=" + m.pid());
         System.out.flush();

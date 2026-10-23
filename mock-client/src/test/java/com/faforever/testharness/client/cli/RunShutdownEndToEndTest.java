@@ -123,9 +123,9 @@ final class RunShutdownEndToEndTest {
     @AfterEach
     void tearDown() throws Exception {
         if (child != null) {
-            // A SIGKILL runs no shutdown hook, and off Linux nothing else ends the child's adapter
-            // and game, so a test that failed before its signal could leave them running. Kill
-            // them first, while they are its descendants.
+            // A SIGKILL runs no shutdown hook, which leaves the child's adapter and game to setpriv
+            // or the reaper (spec §7.3), so a test that failed before its signal would not see
+            // them go. Kill them first, while they are its descendants.
             child.descendants().forEach(ProcessHandle::destroyForcibly);
             child.destroyForcibly();
             child.waitFor(STEP_BUDGET_SECONDS, TimeUnit.SECONDS);
