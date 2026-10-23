@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -68,7 +69,8 @@ final class LobbyHandshakeTest {
         CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
         // 1. Client sends ask_session.
-        JsonNode ask = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        JsonNode ask =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("ask_session", ask.get("command").asText());
         assertEquals("1.0.0", ask.get("version").asText());
         assertEquals("mock-client-test", ask.get("user_agent").asText());
@@ -77,7 +79,8 @@ final class LobbyHandshakeTest {
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
         // 3. Client sends auth carrying the JWT + unique_id + session.
-        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        JsonNode auth =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("auth", auth.get("command").asText());
         assertEquals("jwt-token-abc", auth.get("token").asText());
         assertEquals("uid-fixture", auth.get("unique_id").asText());
@@ -86,7 +89,7 @@ final class LobbyHandshakeTest {
         // 4. Server sends welcome.
         server.broadcastText("{\"command\":\"welcome\",\"id\":3,\"login\":\"Rhiza\"}");
 
-        JsonNode result = welcome.get(2, TimeUnit.SECONDS);
+        JsonNode result = welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals("welcome", result.get("command").asText());
         assertEquals("Rhiza", result.get("login").asText());
     }
@@ -102,16 +105,18 @@ final class LobbyHandshakeTest {
         CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
         // Drain ask_session, reply with session.
-        server.pollReceived(2, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
         // Drain auth, reply with authentication_failed.
-        server.pollReceived(2, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(
                 "{\"command\":\"authentication_failed\",\"text\":\"Login not found\"}");
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         assertEquals("Login not found", e.getCause().getMessage());
     }
@@ -132,14 +137,16 @@ final class LobbyHandshakeTest {
                 new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
         CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
-        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
-        server.pollReceived(2, TimeUnit.SECONDS); // auth
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // auth
         server.broadcastText("{\"command\":\"invalid\"}");
         server.closeAllClean(1000, "");
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         assertEquals(
                 "the lobby answered the login with invalid, a server-side error such as a refused"
@@ -174,11 +181,11 @@ final class LobbyHandshakeTest {
             LobbyHandshake handshake =
                     new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
             CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
-            server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
             server.broadcastText("{\"command\":\"session\",\"session\":42}");
-            server.pollReceived(2, TimeUnit.SECONDS); // auth
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // auth
             server.broadcastText("{\"command\":\"welcome\",\"id\":3,\"login\":\"Rhiza\"}");
-            welcome.get(2, TimeUnit.SECONDS);
+            welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             server.broadcastText("{\"command\":\"invalid\"}");
             server.closeAllClean(1000, "");
@@ -213,7 +220,9 @@ final class LobbyHandshakeTest {
         CompletableFuture<JsonNode> welcome = handshake.perform(failing);
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         assertEquals("bad creds", e.getCause().getMessage());
     }
@@ -242,11 +251,13 @@ final class LobbyHandshakeTest {
 
         // Drain ask_session, then reply with a session frame missing the 'session' field — the
         // handshake must fail cleanly rather than NPE on the listener thread and hang.
-        server.pollReceived(2, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText("{\"command\":\"session\"}");
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
     }
 
@@ -269,10 +280,11 @@ final class LobbyHandshakeTest {
         LobbyHandshake handshake = new LobbyHandshake(lobby, "1.0.0", "ua", fakeUid);
         handshake.perform(fixedToken("jwt-token-abc"));
 
-        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
         server.broadcastText("{\"command\":\"session\",\"session\":99}");
 
-        JsonNode auth = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        JsonNode auth =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("auth", auth.get("command").asText());
         assertEquals("UID-FOR-99", auth.get("unique_id").asText());
     }
@@ -297,11 +309,13 @@ final class LobbyHandshakeTest {
         CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
         // uid only obtained after receiving the session command
-        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
         server.broadcastText("{\"command\":\"session\",\"session\":99}");
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         String message = e.getCause().getMessage();
         String[] containsAll = {"faf-uid", fakeUid.toString(), "code 3", "boom: no hardware id"};
@@ -326,11 +340,13 @@ final class LobbyHandshakeTest {
         CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
 
         // uid only obtained after receiving the session command
-        server.pollReceived(2, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
         server.broadcastText("{\"command\":\"session\",\"session\":99}");
 
         ExecutionException e =
-                assertThrows(ExecutionException.class, () -> welcome.get(2, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> welcome.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals(AuthenticationException.class, e.getCause().getClass());
         String message = e.getCause().getMessage();
         String[] containsAll = {"faf-uid", absent.toString()};

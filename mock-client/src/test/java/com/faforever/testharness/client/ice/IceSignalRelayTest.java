@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.ice;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -91,7 +92,9 @@ final class IceSignalRelayTest {
                         + stringifiedPayload
                         + "]}\n");
 
-        JsonNode sent = MAPPER.readTree(lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        lobbyServer.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         JsonNode argsMsg = sent.get("args").get(1);
         assertTrue(argsMsg.isTextual(), "msg must cross the lobby as a JSON string");
         assertEquals(
@@ -111,7 +114,9 @@ final class IceSignalRelayTest {
                         + ICE_MSG_JSON
                         + "]}\n");
 
-        JsonNode sent = MAPPER.readTree(lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        lobbyServer.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("IceMsg", sent.get("command").asText());
         assertEquals("game", sent.get("target").asText());
         assertEquals(2, sent.get("args").get(0).asInt(), "args[0] must be remoteId (params[1])");
@@ -195,7 +200,9 @@ final class IceSignalRelayTest {
                 "{\"jsonrpc\":\"2.0\",\"method\":\"onIceMsg\",\"params\":[1,9,"
                         + ICE_MSG_JSON
                         + "]}\n");
-        JsonNode sent = MAPPER.readTree(lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        lobbyServer.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("IceMsg", sent.get("command").asText());
         assertEquals(9, sent.get("args").get(0).asInt());
     }

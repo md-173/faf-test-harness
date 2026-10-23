@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -189,14 +190,16 @@ final class MatchmakingQueueTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", sent.get("command").asText());
         assertEquals("ladder1v1", sent.get("queue_name").asText());
         assertEquals("start", sent.get("state").asText());
         assertEquals(2, sent.get("faction").asInt());
 
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
         assertTrue(messages().contains("state entry: SEARCHING"));
     }
@@ -208,13 +211,16 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the initial game_matchmaking start
+        // The initial game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         var idleAgain = lifecycle.stateReached(ClientState.IDLE);
         lifecycle.stopSearch();
-        JsonNode stopSent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode stopSent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", stopSent.get("command").asText());
         assertEquals("stop", stopSent.get("state").asText());
         assertTrue(
@@ -222,7 +228,7 @@ final class MatchmakingQueueTest {
                 "faction must not be sent on a stop request");
 
         server.broadcastText(searchInfo("ladder1v1", "stop"));
-        idleAgain.get(3, TimeUnit.SECONDS);
+        idleAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // The stop must actually stick. Re-entering IDLE re-fires its entry hooks (Transition
         // runs to.entry() on every non-self-loop), so an ungated hook would re-send
@@ -235,11 +241,13 @@ final class MatchmakingQueueTest {
 
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.startSearch();
-        JsonNode restart = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode restart =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", restart.get("command").asText());
         assertEquals("start", restart.get("state").asText());
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searchingAgain.get(3, TimeUnit.SECONDS);
+        searchingAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
     }
 
@@ -250,13 +258,13 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         var idleAgain = lifecycle.stateReached(ClientState.IDLE);
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":null}");
-        idleAgain.get(3, TimeUnit.SECONDS);
+        idleAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertFalse(
                 lifecycle.verdicts().sessionFailed(),
@@ -273,9 +281,9 @@ final class MatchmakingQueueTest {
 
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.startSearch();
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searchingAgain.get(3, TimeUnit.SECONDS);
+        searchingAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
     }
 
@@ -286,9 +294,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
         // No accept/decline step and no FSM edge for match_found: the client stays SEARCHING.
@@ -314,9 +322,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
         // Sampled the moment TERMINATED commits (#344): the run reads the verdict once that
@@ -331,7 +339,7 @@ final class MatchmakingQueueTest {
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":12345}");
 
         assertTrue(
-                failedAtCommit.get(3, TimeUnit.SECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "a match cancelled after game_launch is a finding the exit code must carry");
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
         assertTrue(
@@ -359,9 +367,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // DEBUG so the self-loop's own line is captured: waiting for it proves the second frame was
         // actually processed. A bare sleep would let this pass vacuously if the frame never
@@ -373,7 +381,7 @@ final class MatchmakingQueueTest {
             assertTrue(
                     awaitMessage(
                             m -> m.contains("search_info start received while already SEARCHING"),
-                            3000),
+                            TimeUnit.SECONDS.toMillis(FRAME_TIMEOUT_SECONDS)),
                     "the repeated start confirmation must be handled: " + messages());
         } finally {
             lifecycleLogger.setLevel(previous);
@@ -396,7 +404,8 @@ final class MatchmakingQueueTest {
                 newLifecycle(Optional.of(new GameQueueConfig("ladder1v1", Optional.empty())));
 
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the outbound game_matchmaking start
+        // The outbound game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // The real refusal, as faf-server's ladder_service.start_search sends it: three frames,
         // not one. "player" is a numeric player id ({"player": p.id}), never a login, and the
@@ -435,9 +444,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"matchmaker_info\",\"queues\":[]}");
         Thread.sleep(200);
@@ -456,7 +465,8 @@ final class MatchmakingQueueTest {
                 newLifecycle(Optional.of(new GameQueueConfig("ladder1v1", Optional.empty())));
 
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the initial game_matchmaking start
+        // The initial game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // Closing the lobby also drives the FSM to TERMINATED, which runs teardown, and a send
         // failing after teardown is deliberately demoted to DEBUG as an expected shutdown artefact.

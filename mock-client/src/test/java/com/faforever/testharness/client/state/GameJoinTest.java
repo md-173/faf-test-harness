@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -73,7 +74,9 @@ final class GameJoinTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_join", sent.get("command").asText());
         assertEquals(42, sent.get("uid").asInt());
         assertEquals("s3cret", sent.get("password").asText());
@@ -87,7 +90,9 @@ final class GameJoinTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_join", sent.get("command").asText());
         assertEquals(7, sent.get("uid").asInt());
         assertFalse(sent.has("password"), "password should be omitted, not sent as null");

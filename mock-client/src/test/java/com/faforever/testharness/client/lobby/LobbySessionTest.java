@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -92,18 +93,20 @@ final class LobbySessionTest {
                             }
                         });
 
-        JsonNode ask = MAPPER.readTree(server.pollReceived(5, TimeUnit.SECONDS));
+        JsonNode ask =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("ask_session", ask.get("command").asText());
         assertEquals("1.2.3", ask.get("version").asText());
         assertEquals("mock-agent", ask.get("user_agent").asText());
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
-        JsonNode auth = MAPPER.readTree(server.pollReceived(5, TimeUnit.SECONDS));
+        JsonNode auth =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("auth", auth.get("command").asText());
         assertEquals("jwt-abc", auth.get("token").asText());
         server.broadcastText(WELCOME);
 
-        return result.get(5, TimeUnit.SECONDS);
+        return result.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
     @Test
@@ -122,7 +125,8 @@ final class LobbySessionTest {
 
         // While idle, a server ping must draw an automatic pong from the transport.
         server.broadcastText("{\"command\":\"ping\"}");
-        JsonNode pong = MAPPER.readTree(server.pollReceived(5, TimeUnit.SECONDS));
+        JsonNode pong =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("pong", pong.get("command").asText());
     }
 
@@ -162,14 +166,16 @@ final class LobbySessionTest {
                             }
                         });
 
-        server.pollReceived(5, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
-        server.pollReceived(5, TimeUnit.SECONDS); // auth
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // auth
         server.broadcastText(
                 "{\"command\":\"authentication_failed\",\"text\":\"Login not found\"}");
 
         ExecutionException outer =
-                assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
+                assertThrows(
+                        ExecutionException.class,
+                        () -> result.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         // supplyAsync wraps connectAndAuthenticate's ExecutionException in a CompletionException.
         Throwable handshakeFailure = outer.getCause().getCause();
         assertInstanceOf(AuthenticationException.class, handshakeFailure);
@@ -203,7 +209,7 @@ final class LobbySessionTest {
         lobby = new LobbyConnection(server.uri());
         session = new LobbySession(lobby, "uid-fixture", "1.2.3", "mock-agent");
         CompletableFuture<SessionState> start = session.start(fixedToken("jwt-abc"));
-        server.pollReceived(5, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
 
         if (dropped) {
             server.abruptlyTerminate();
@@ -267,7 +273,7 @@ final class LobbySessionTest {
         lobby = new LobbyConnection(server.uri());
         session = new LobbySession(lobby, "uid-fixture", "1.2.3", "mock-agent");
         CompletableFuture<SessionState> start = session.start(fixedToken("jwt-abc"));
-        server.pollReceived(5, TimeUnit.SECONDS); // ask_session
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
 
         session.close();
 
@@ -294,7 +300,7 @@ final class LobbySessionTest {
             lobby = new LobbyConnection(server.uri());
             session = new LobbySession(lobby, "uid-fixture", "1.2.3", "mock-agent");
             session.start(fixedToken("jwt-abc"));
-            server.pollReceived(5, TimeUnit.SECONDS); // ask_session
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS); // ask_session
 
             server.broadcastText(
                     "{\"command\":\"notice\",\"style\":\"info\","

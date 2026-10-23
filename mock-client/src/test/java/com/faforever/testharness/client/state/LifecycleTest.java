@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -220,7 +221,7 @@ final class LifecycleTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode parsed = MAPPER.readTree(received);
         assertEquals("game_host", parsed.get("command").asText());
         assertEquals("Test game", parsed.get("title").asText());

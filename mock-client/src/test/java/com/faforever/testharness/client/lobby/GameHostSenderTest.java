@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -60,9 +61,9 @@ final class GameHostSenderTest {
                         false,
                         Map.of());
 
-        new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
+        new GameHostSender(lobby).sendGameHost(config).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode parsed = MAPPER.readTree(received);
         assertEquals("game_host", parsed.get("command").asText());
         assertEquals("Custom Title", parsed.get("title").asText());
@@ -92,9 +93,9 @@ final class GameHostSenderTest {
                         true,
                         Map.of());
 
-        new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
+        new GameHostSender(lobby).sendGameHost(config).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode parsed = MAPPER.readTree(received);
         assertEquals(800.0, parsed.get("rating_min").asDouble());
         assertEquals(1500.0, parsed.get("rating_max").asDouble());
@@ -118,9 +119,9 @@ final class GameHostSenderTest {
                         false,
                         Map.of());
 
-        new GameHostSender(lobby).sendGameHost(config).get(2, TimeUnit.SECONDS);
+        new GameHostSender(lobby).sendGameHost(config).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode parsed = MAPPER.readTree(received);
         assertTrue(received.endsWith("\n"), "expected newline-terminated frame, got: " + received);
         assertEquals("Another Game", parsed.get("title").asText());

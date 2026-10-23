@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -261,7 +262,7 @@ final class CrashRecoveryTest {
 
         lifecycle.stateReached(ClientState.TERMINATED).get(15, TimeUnit.SECONDS);
 
-        String message = server.pollReceived(5, TimeUnit.SECONDS);
+        String message = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode envelope = MAPPER.readTree(message);
         assertEquals("GameState", envelope.get("command").asText());
         assertEquals("game", envelope.get("target").asText());
@@ -296,7 +297,7 @@ final class CrashRecoveryTest {
         assertTrue(
                 log.indexOf(start) < log.indexOf(sent) && log.indexOf(sent) < log.indexOf(end),
                 "the frame must go out inside teardown, before its lobby close");
-        assertTrue(isGameStateEnded(server.pollReceived(5, TimeUnit.SECONDS)));
+        assertTrue(isGameStateEnded(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS)));
         assertNoWarning("GameState Ended");
     }
 
@@ -318,7 +319,7 @@ final class CrashRecoveryTest {
                 Thread.currentThread().getName(),
                 onlyEvent(CrashRecoveryTest::isGameStateEndedSend).getThreadName(),
                 "the teardown this thread ran must send it");
-        assertTrue(isGameStateEnded(server.pollReceived(5, TimeUnit.SECONDS)));
+        assertTrue(isGameStateEnded(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS)));
         assertNoWarning("GameState Ended");
     }
 

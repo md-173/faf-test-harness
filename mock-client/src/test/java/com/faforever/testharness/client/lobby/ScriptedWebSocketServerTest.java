@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -59,7 +60,7 @@ final class ScriptedWebSocketServerTest {
         // only OP_WRITE on the key can write the probe.
         for (int i = 0; i < 2; i++) {
             lobby.send(MAPPER.createObjectNode().put("command", "hello"));
-            server.pollReceived(5, TimeUnit.SECONDS);
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         }
 
         // Queue the probe the way WebSocketImpl.send does, minus the write interest: the state the
@@ -76,7 +77,9 @@ final class ScriptedWebSocketServerTest {
 
         ScriptedWebSocketServer.awaitWritten(conn, "probe");
 
-        assertNotNull(probes.poll(5, TimeUnit.SECONDS), "the stranded probe never arrived");
+        assertNotNull(
+                probes.poll(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the stranded probe never arrived");
     }
 
     @Test
@@ -87,7 +90,9 @@ final class ScriptedWebSocketServerTest {
 
         // Without the wait, the selector has rarely written the frame by the time send() returns.
         assertTrue(onlyConnection().outQueue.isEmpty(), "broadcastText returned before the write");
-        assertNotNull(probes.poll(5, TimeUnit.SECONDS), "the broadcast probe never arrived");
+        assertNotNull(
+                probes.poll(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the broadcast probe never arrived");
     }
 
     @Test

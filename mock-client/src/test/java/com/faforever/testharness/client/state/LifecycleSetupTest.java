@@ -1,6 +1,7 @@
 package com.faforever.testharness.client.state;
 
 import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -598,7 +599,7 @@ final class LifecycleSetupTest {
         server.broadcastText(frame);
 
         assertTrue(
-                failedAtCommit.get(5, TimeUnit.SECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "the rejection must be a failed launch before TERMINATED commits");
         List<String> warnings = warningsOn(committedOn.get());
         assertEquals(1, warnings.size(), "one WARN must name the reason: " + warnings);
