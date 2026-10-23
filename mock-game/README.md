@@ -119,7 +119,7 @@ machine-readable form.
 | Variable | Default | Effect |
 | :--- | :--- | :--- |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`. |
-| `LOG_FILE` | `logs/mockgame.jsonl` | Path of the JSONL log. A path the log rotator cannot use is reported on stderr and replaced by the default rather than taking logging down with it. |
+| `LOG_FILE` | `logs/mockgame.jsonl` | Path of the JSONL log. A path the log rotator cannot use, or one that cannot be opened for writing (an existing directory, or a path whose directory cannot be created or written), is reported on stderr and replaced by the default, so the JSONL is still written. When the default cannot be written either, one line on stderr says so and the game logs to the console only. |
 | `INSTANCE_NAME` | unset | Labels this instance in every record, so several concurrent games stay attributable line by line. A named instance also gets its own default log file, `logs/mockgame-<name>.jsonl`. |
 
 Running the jar creates a `logs/` directory in the working directory, from `LOG_FILE`'s

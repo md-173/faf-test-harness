@@ -6,6 +6,11 @@ import ch.qos.logback.core.rolling.RollingFileAppender;
 import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
 import ch.qos.logback.core.rolling.helper.FileNamePattern;
 import ch.qos.logback.core.util.FileSize;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -103,6 +108,13 @@ public final class LoggingSetup {
     /** Mirrors {@code logback.xml}'s {@code maxFileSize}; see {@link #isUsableLogFile}. */
     private static final String MAX_FILE_SIZE = "10MB";
 
+    /**
+     * Whether {@link #configure} has already checked this process's log file. Logback reads {@value
+     * #LOG_FILE_ENV} once, when the first logger is created, so only the first call's check can
+     * change anything (#524).
+     */
+    private static final AtomicBoolean LOG_FILE_CHECKED = new AtomicBoolean();
+
     private LoggingSetup() {}
 
     /**
@@ -137,8 +149,13 @@ public final class LoggingSetup {
         }
 
         // Before anything touches SLF4J. The next statement initialises Logback, and an unusable
-        // path takes the whole logging subsystem down with it (WBS-2.3.6-fix, #305).
-        replaceUnusableLogFile(defaultLogFile);
+        // path takes the whole logging subsystem down with it (WBS-2.3.6-fix, #305), while one
+        // Logback cannot open leaves it writing no JSONL (#524). Only the first call checks:
+        // Logback reads LOG_FILE once, and mock-client calls this again from each subcommand
+        // after setting --log-file back, which would otherwise repeat the notice.
+        if (LOG_FILE_CHECKED.compareAndSet(false, true)) {
+            replaceUnusableLogFile(defaultLogFile);
+        }
 
         MDC.put(COMPONENT_MDC_KEY, componentName);
 
@@ -193,6 +210,14 @@ public final class LoggingSetup {
      * stays correct if that conversion changes and does not reject paths Logback would have
      * accepted. Legitimate paths pass, including relative, parent-relative and absolute ones.
      *
+     * <p>A path the rotator accepts can still be one Logback cannot open: a directory, or a file
+     * whose directory cannot be created or written (#524). Logback then starts without its file
+     * appender and records why only as a status message, which it prints at startup only when no
+     * status listener is registered, and {@code logback.xml} registers one. So the run wrote no
+     * JSONL and said nothing. {@link #whyUnwritable} catches that here, with the same swap to the
+     * default. When the default cannot be written either, a last line says no JSONL is being
+     * written, and the console is the run's only output.
+     *
      * @param fallback the default path to use when the configured one is unusable.
      */
     private static void replaceUnusableLogFile(final String fallback) {
@@ -200,20 +225,63 @@ public final class LoggingSetup {
         if (configured == null) {
             configured = System.getenv(LOG_FILE_ENV);
         }
-        if (configured == null || isUsableLogFile(configured)) {
+        if (configured == null) {
             return;
         }
-        // The path is caller-controlled: escape line breaks so it cannot forge picocli's Usage:
-        // line (#307), as ExecutionExceptionHandler.oneLine does for mock-client's own errors.
-        System.err.println(
-                "log file path cannot be used by the log rotator and was ignored: "
-                        + configured.replaceAll("\\R", "\\\\n")
-                        + " (it cannot be used as a log-rotation pattern; characters such as '[',"
-                        + " '{', '(' and '%' are not usable here); logging to "
-                        + fallback
-                        + " instead");
+        if (!isUsableLogFile(configured)) {
+            printNotice(
+                    "log file path cannot be used by the log rotator and was ignored: "
+                            + oneLine(configured)
+                            + " (it cannot be used as a log-rotation pattern; characters such"
+                            + " as '[', '{', '(' and '%' are not usable here); logging to "
+                            + fallback
+                            + " instead");
+            System.setProperty(LOG_FILE_ENV, fallback);
+            configured = fallback;
+        }
+        Optional<String> problem = whyUnwritable(configured);
+        if (problem.isPresent() && !configured.equals(fallback)) {
+            printNotice(
+                    "log file path cannot be written and was ignored: "
+                            + oneLine(configured)
+                            + " ("
+                            + problem.get()
+                            + "); logging to "
+                            + fallback
+                            + " instead");
+            System.setProperty(LOG_FILE_ENV, fallback);
+            problem = whyUnwritable(fallback);
+        }
+        if (problem.isPresent()) {
+            printNotice(
+                    "log file path cannot be written: "
+                            + fallback
+                            + " ("
+                            + problem.get()
+                            + "); no JSONL log is being written, only console output");
+        }
+    }
+
+    /**
+     * Prints one notice on stderr. This runs before Logback exists, so stderr is the only channel.
+     *
+     * @param notice the notice, on one line.
+     */
+    private static void printNotice(final String notice) {
+        System.err.println(notice);
         System.err.flush();
-        System.setProperty(LOG_FILE_ENV, fallback);
+    }
+
+    /**
+     * Escapes the line breaks in a caller-controlled path, so it cannot forge picocli's {@code
+     * Usage:} line (#307), as {@code ExecutionExceptionHandler.oneLine} does for mock-client's own
+     * errors.
+     *
+     * @param path the path as configured.
+     * @return the path on one line.
+     */
+    private static String oneLine(final String path) {
+        return path.replaceAll("\\R", "\\\\n");
     }
 
     /**
@@ -262,6 +330,43 @@ public final class LoggingSetup {
             return true;
         } catch (RuntimeException e) {
             return false;
+        }
+    }
+
+    /**
+     * Why Logback could not open {@code path} for writing, or empty when it can (#524).
+     *
+     * <p>Does what {@code FileAppender} does at Logback 1.5.16: trim the name ({@code setFile}),
+     * create any missing parent directories, then open the file for appending ({@code openFile}).
+     * Appending matters: it creates a missing file, as Logback is about to, and leaves an existing
+     * log intact.
+     *
+     * <p>An existing path that is neither a file nor a directory, such as a pipe or a device, is
+     * left to Logback unopened: opening and closing a pipe here would end its reader's stream
+     * before Logback opens it.
+     *
+     * <p>Package-private so {@link WritableLogFileTest} can assert the reasons directly.
+     *
+     * @param path the candidate log file path.
+     * @return why it cannot be written, worded to follow the path in a notice, or empty.
+     */
+    static Optional<String> whyUnwritable(final String path) {
+        File file = new File(path.trim());
+        if (file.isDirectory()) {
+            return Optional.of("it is a directory");
+        }
+        if (file.exists() && !file.isFile()) {
+            return Optional.empty();
+        }
+        File parent = file.getParentFile();
+        if (parent != null && !parent.mkdirs() && !parent.isDirectory()) {
+            return Optional.of("its directory cannot be created");
+        }
+        try {
+            new FileOutputStream(file, true).close();
+            return Optional.empty();
+        } catch (IOException e) {
+            return Optional.of("it cannot be opened for writing");
         }
     }
 
