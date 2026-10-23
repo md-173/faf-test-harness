@@ -28,8 +28,8 @@ public final class ExitCodes {
 
     /**
      * Bad invocation : invalid args, missing required options, unknown subcommand, no subcommand
-     * given, unreadable config file, malformed JSON, bad URI, bad port. Aligned with picocli's
-     * default parameter-exception exit code.
+     * given, unreadable config file, malformed JSON, a config file key no subcommand reads, bad
+     * URI, bad port. Aligned with picocli's default parameter-exception exit code.
      */
     public static final int USAGE = 2;
 

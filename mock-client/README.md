@@ -267,8 +267,10 @@ read `peerRefreshTokenFiles` and `peerAccessTokenFiles`. `--config`,
 `--help` and `--version` have no key.
 
 A key no subcommand reads is refused whatever its value, `null` included:
-the run exits `2` naming every such key and the file. One file serves every
-subcommand, so a key only `session` reads is accepted under `run`.
+the run exits `2` naming every such key and the file, except that a removed
+password-grant key (`oauthUsername`, `oauthPassword`, `oauthClientSecret`) is
+reported first, on its own. One file serves every subcommand, so a key only
+`session` reads is accepted under `run`.
 
 ### Field reference
 

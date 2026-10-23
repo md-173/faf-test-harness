@@ -744,8 +744,8 @@ final class MockClientCliExitCodeTest {
     @Test
     void unknownConfigKeyExitsUsage() throws IOException {
         // The flag in camel case, as the README's old rule had it: --peer-refresh-token-file reads
-        // peerRefreshTokenFiles. Read by nothing, the key used to be dropped without a word, which
-        // for a fault option meant a session that passed without its fault (#490).
+        // peerRefreshTokenFiles. Read by nothing, the key used to be dropped without a word; for a
+        // misspelt fault option that meant a session that passed without its fault (#490).
         Path typo =
                 Files.writeString(
                         tempDir.resolve("typo.json"), "{\"peerRefreshTokenFile\": \"a\"}");
