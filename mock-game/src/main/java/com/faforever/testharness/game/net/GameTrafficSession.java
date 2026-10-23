@@ -30,7 +30,7 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * <p><b>Why the cadence starts on the first peer rather than on LIVE.</b> mock-game has no external
- * launch trigger — {@code LaunchMatch} is posted only in-process or by the launch-delay timer — and
+ * launch trigger: the match launches only on an in-process {@code launchMatch()} or its delay, and
  * the two-peer live session (WBS-4.3.1) disables auto-launch so the host stays joinable, so traffic
  * gated on LIVE would never flow there. It is also the faithful choice, source-verified in FA:
  * {@code CreateLobby(protocol, localPort, …)} builds the one autolobby communications object on

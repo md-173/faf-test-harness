@@ -1613,7 +1613,7 @@ would be if the process were killed.
 the match going live. Not on entry to LIVE alone, which is what it looks like it
 should be. In this harness a multi-peer session runs with auto-launch disabled
 on every joiner, and on the host too unless `--crash-peer` asks for a launch
-(below); nothing else posts `LaunchMatch`, so a joiner's game never enters LIVE
+(below); nothing else launches the match, so a joiner's game never enters LIVE
 at all. Anchored there the
 fault would have been silently inert in the one configuration it is most worth
 injecting into. Peers connect and exchange traffic in the lobby phase, so "a

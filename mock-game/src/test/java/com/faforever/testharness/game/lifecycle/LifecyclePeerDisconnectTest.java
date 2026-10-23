@@ -249,9 +249,8 @@ final class LifecyclePeerDisconnectTest {
 
     @Test
     void aDepartureDoesNotCancelAPendingLaunch() throws Exception {
-        // A departure is a self-loop, which keeps every pending FSM timeout armed, and the launch
-        // timer is on the lifecycle's own scheduler, which no transition touches. Pinned for #498,
-        // which moves that timer onto an FSM timeout.
+        // A departure is a self-loop, which keeps every pending FSM timeout armed, the launch
+        // among them since #498 made it one.
         MockGameLifecycle lifecycle = hostingWithOnePeer(LAUNCH_DELAY);
         CompletableFuture<Void> live = lifecycle.stateReached(GameState.LIVE);
 

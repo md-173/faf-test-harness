@@ -40,9 +40,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 /**
- * Unit tests for {@link GameShutdown}: the idempotent stop-schedules → stop-fsm → close-connection
- * → close-traffic sequence. Stopping the logging context is not part of it — the bootstrap owns
- * that step (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
+ * Unit tests for {@link GameShutdown}: the idempotent stop-fsm → close-connection → close-traffic
+ * sequence. Stopping the logging context is not part of it: the bootstrap owns that step
+ * (WBS-3.2.5.1), so nothing here can silence the rest of the suite.
  *
  * <p>Stopping FSM scheduling before the close is only safe because {@link StateMachine#cancel()}
  * never waits for the StateMachine monitor (WBS-2.3.7-fix, #328). {@link
@@ -172,27 +172,28 @@ final class GameShutdownTest {
     }
 
     /**
-     * Teardown stops the lifecycle's own scheduler, so a launch pending in HOSTING never fires. The
-     * launch delay is far longer than the test, so nothing here races it; what is checked is that
-     * the launch was queued before teardown and that nothing is left queued after it, which is what
-     * keeps the launch from ever running. Watching LIVE never arrive instead would need the delay
-     * to elapse, and the test would then have to reach teardown within that delay of HOSTING
-     * committing, however late its own thread ran.
+     * Teardown discards a launch still pending in HOSTING (#265). The launch is an FSM timeout
+     * (WBS-3.2.4.1-fix, #498), so this pins that teardown's FSM step reaches it. Teardown runs from
+     * a {@code stateReached} callback, which runs inside the commit into HOSTING with the FSM
+     * monitor held, after {@code beginHosting} armed the launch. The launch needs that monitor to
+     * fire, so it cannot fire first however late this thread runs, and waiting out its delay then
+     * shows it never fires: one that did would send {@code GameState Launching} into the closed
+     * socket and end the game in ENDED.
+     *
+     * <p>A launch never armed at all would pass here too. That hosting arms one is pinned
+     * elsewhere, by {@code LifecycleSetupTest.delayedStartAndEnd} among others.
      */
     @Test
-    void stopsLifecycleScheduledDelay() throws Exception {
-        Duration launchDelay = Duration.ofMinutes(1);
-        MockGameConfig defaultConfig =
-                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+    void discardsAPendingLaunch() throws Exception {
+        Duration launchDelay = Duration.ofMillis(200);
+        int lobbyPort = TestPorts.freeUdpPort();
+        MockGameConfig config =
+                new MockGameConfig(50000, lobbyPort, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
         try {
             MockGameLifecycle lifecycle =
                     new MockGameLifecycle(
-                            defaultConfig,
-                            new GpgNetConnection(gpgnet.port()),
-                            launchDelay,
-                            Duration.ofSeconds(1));
-
+                            config, new GpgNetConnection(gpgnet.port()), launchDelay, null);
             gpgnet.start();
             lifecycle.start();
             gpgnet.awaitClient();
@@ -200,31 +201,31 @@ final class GameShutdownTest {
             // Each wait is taken before the frame that causes it. stateReached is edge triggered,
             // so a wait asked for after its state was entered and left would never complete (#250).
             CompletableFuture<Void> lobby = lifecycle.stateReached(GameState.LOBBY);
-            gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, 5000, "Rhiza", 1, 1)));
+            gpgnet.sendFrame(new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 1, 1)));
             lobby.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
+            CompletableFuture<Void> tornDown =
+                    lifecycle.stateReached(GameState.HOSTING).thenRun(lifecycle.shutdown());
             gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
-            hosting.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            // Without a queued launch the check below would pass having tested nothing.
-            assertEquals(1, lifecycle.queuedSchedules(), "hosting should have queued the launch");
+            tornDown.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-            lifecycle.shutdown().run();
-
+            // Five launch delays: a launch teardown missed would have fired well inside this.
+            Thread.sleep(launchDelay.multipliedBy(5).toMillis());
             assertEquals(
-                    0, lifecycle.queuedSchedules(), "shutdown must discard the pending launch");
-            assertEquals(GameState.HOSTING, lifecycle.getState());
+                    GameState.HOSTING,
+                    lifecycle.getState(),
+                    "teardown must discard the pending launch");
         } finally {
-            // Make sure gpgnet server is always stopped.
             gpgnet.stop();
         }
     }
 
     /**
-     * A match that ends on its own tears the game down from the scheduler's match-end task, and
-     * stopping that scheduler must not interrupt the thread it runs on (WBS-3.2.4.1-fix, #487).
-     * {@code shutdownNow()} did, and the traffic step's wait for its receiver then returned at
-     * once. The wait for ENDED is completed by the thread that committed it, right after ENDED's
-     * entry hook ran this sequence there, so that is where the flag is read.
+     * A match that ends on its own tears the game down from its match-end timeout, on the FSM's
+     * timer thread, and stopping the FSM's scheduling must not interrupt that thread
+     * (WBS-3.2.4.1-fix, #487, #498). {@code shutdownNow()} would, and the traffic step's wait for
+     * its receiver would then return at once. The wait for ENDED is completed by the thread that
+     * committed it, right after ENDED's entry hook ran this sequence there, so that is where the
+     * flag is read.
      */
     @Test
     void aMatchThatEndsOnItsOwnIsNotInterruptedByItsOwnTeardown() throws Exception {
@@ -257,17 +258,17 @@ final class GameShutdownTest {
                                         tornDownOn.set(Thread.currentThread());
                                         interrupted.set(Thread.currentThread().isInterrupted());
                                     });
-            // Launches at once, then ends 100 ms into the match from the scheduler's own thread.
+            // Launches at once, then ends 100 ms into the match on the FSM's timer thread.
             gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scm_007")));
 
             ended.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             assertEquals(
-                    "game-scheduler",
+                    "state-machine-timeouts",
                     tornDownOn.get().getName(),
-                    "precondition: the match end must tear the game down on the scheduler");
+                    "precondition: the match end must tear the game down on the FSM's timer");
             assertFalse(
                     interrupted.get(),
-                    "stopping the scheduler must not interrupt the teardown running on it");
+                    "stopping the FSM's scheduling must not interrupt the teardown on its thread");
         } finally {
             gpgnet.stop();
         }

@@ -50,7 +50,7 @@ package com.faforever.testharness.game.config;
  *
  * <p>{@link #INJECTED_CRASH} is the one row that does <em>not</em> come from the {@code ExitStatus}
  * mapping. Every other code above is chosen once the FSM reaches ENDED; an injected crash never
- * reaches ENDED at all, because it halts the JVM from the lifecycle's scheduler.
+ * reaches ENDED at all, because it halts the JVM from the lifecycle FSM's timer thread.
  */
 public final class ExitCodes {
 

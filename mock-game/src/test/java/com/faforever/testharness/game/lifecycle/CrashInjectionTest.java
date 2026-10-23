@@ -226,9 +226,9 @@ final class CrashInjectionTest {
      *
      * <p>A multi-peer session runs with auto-launch disabled, because faf-server refuses a {@code
      * game_join} once the host reports {@code GameState Launching}. With no launch delay nothing
-     * ever posts {@code LaunchMatch}, since {@code launchMatch()} is called from no production
-     * code, so the game never enters LIVE at all. Anchored there, the fault would have been
-     * silently inert in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
+     * ever launches the match, since {@code launchMatch()} is called from no production code, so
+     * the game never enters LIVE at all. Anchored there, the fault would have been silently inert
+     * in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
      *
      * <p>The crash delay is {@link #SETTLED_CRASH_SECONDS} rather than zero so {@link #stateAtHalt}
      * means what it claims (#357 review). {@code armCrash()} runs inside the transition action, and
@@ -253,6 +253,36 @@ final class CrashInjectionTest {
                 GameState.JOINING,
                 stateAtHalt,
                 "the crash must land in the phase where peers actually exchange traffic");
+    }
+
+    /**
+     * A crash armed before the launch keeps counting across it and fires in LIVE (WBS-3.2.4.1-fix,
+     * #498). The commit into LIVE disarms every FSM timeout, so this is what fails if the crash is
+     * ever made one.
+     *
+     * <p>The launch comes a second after {@code JoinGame} and the crash a second after that, so the
+     * crash is checked as armed while the game is still in JOINING, before the launch, and the halt
+     * lands a full second into LIVE, the margin {@link #armsOnEntryToLive} relies on. Both waits
+     * are taken before the frame, since {@code stateReached} is edge triggered (#250).
+     */
+    @Test
+    void aCrashArmedBeforeTheLaunchFiresAfterIt() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(2, Duration.ofSeconds(1), null);
+        driveToLobby(lifecycle);
+        CompletableFuture<Void> joining = lifecycle.stateReached(GameState.JOINING);
+        CompletableFuture<Void> live = lifecycle.stateReached(GameState.LIVE);
+
+        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", 2)));
+        joining.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // Armed on JoinGame, before the launch. With no match end there is nothing to warn about.
+        assertCrashArmed(false);
+        live.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertTrue(
+                halted.await(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "a crash armed before the launch must still fire after it");
+        assertEquals(List.of(ExitCodes.INJECTED_CRASH), haltCodes);
+        assertEquals(GameState.LIVE, stateAtHalt, "the crash must land after the launch");
     }
 
     /**
@@ -407,9 +437,9 @@ final class CrashInjectionTest {
     }
 
     /**
-     * Teardown cancels a crash that has not fired. This is {@code GameShutdown}'s {@code
-     * stopSchedules()} discarding it, pinned: a harness that tore the game down deliberately must
-     * not then be told the game crashed.
+     * Teardown cancels a crash that has not fired. This is {@code GameShutdown}'s FSM step
+     * discarding it, pinned: a harness that tore the game down deliberately must not then be told
+     * the game crashed.
      */
     @Test
     void teardownCancelsAPendingCrash() throws Exception {
@@ -428,9 +458,10 @@ final class CrashInjectionTest {
 
     /**
      * A crash due as the match ends is cancelled with it, as {@code matchBegins} promises for equal
-     * delays (WBS-3.2.4.1-fix, #487). The match end tears the game down on the scheduler's own
-     * thread, by when the crash is due, so shutting the scheduler down does not discard it: it is
-     * still started, and only its shut-down check keeps it from halting a game that ended cleanly.
+     * delays (WBS-3.2.4.1-fix, #487). The match end tears the game down on the FSM's timer thread,
+     * which the crash shares (#498), by when the crash is due, so cancelling the FSM's scheduling
+     * does not discard it: it is still started, and only the cancelled check it runs behind keeps
+     * it from halting a game that ended cleanly.
      */
     @Test
     void aCrashDueAsTheMatchEndsIsCancelledWithIt() throws Exception {
