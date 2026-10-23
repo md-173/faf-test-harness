@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
@@ -16,14 +17,19 @@ import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.ParentDeathSignal;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -259,6 +265,62 @@ final class IceAdapterLauncherTest {
         int code = adapter.onExit().get(AWAIT_SECONDS, TimeUnit.SECONDS);
 
         assertEquals(5, code, "the adapter's own exit code must be observable");
+    }
+
+    /**
+     * #478: an adapter launched from the same directory may be reading the shared config while
+     * another launch writes it, so the write must swap in a new file, never rewrite the one a
+     * reader has open. The fixed-name temp file stands in for a second writer's: the write must
+     * take a name of its own, or two writers would truncate each other's temp file.
+     */
+    @Test
+    void headlessConfigWriteReplacesTheFileInsteadOfRewritingIt() throws Exception {
+        Path config = Files.writeString(tempDir.resolve("logback-headless.xml"), "OLD");
+        Path fixedTemp = Files.writeString(tempDir.resolve("logback-headless.xml.tmp"), "OTHER");
+
+        try (InputStream reader = Files.newInputStream(config)) {
+            IceAdapterLauncher.writeHeadlessLogbackConfig(config);
+
+            assertEquals(
+                    "OLD",
+                    new String(reader.readAllBytes(), StandardCharsets.UTF_8),
+                    "a reader that opened the old file must still read it whole");
+        }
+        assertEquals(IceAdapterLauncher.HEADLESS_LOGBACK_XML, Files.readString(config));
+        assertTrue(Files.exists(fixedTemp), "the write must not take over a fixed temp name");
+        assertEquals("OTHER", Files.readString(fixedTemp), "the fixed-name file must be untouched");
+        assertEquals(
+                Set.of(config, fixedTemp), listing(tempDir), "no temp file may be left behind");
+    }
+
+    /**
+     * An empty directory where the config belongs, which an atomic rename refuses to replace: the
+     * write must fail with a WARN and remove its temp file. A move without {@code ATOMIC_MOVE}
+     * would delete the directory and succeed instead, the same delete that leaves an adapter
+     * starting at that moment with no config at all, so this also pins the atomic move.
+     */
+    @Test
+    void failedHeadlessConfigWriteWarnsAndRemovesItsTempFile() throws Exception {
+        Path config = Files.createDirectory(tempDir.resolve("logback-headless.xml"));
+
+        IceAdapterLauncher.writeHeadlessLogbackConfig(config);
+
+        assertTrue(
+                appender.list.stream()
+                        .anyMatch(
+                                e ->
+                                        e.getLevel() == Level.WARN
+                                                && e.getFormattedMessage()
+                                                        .contains("headless logback config")),
+                "the failed write must be reported at WARN: " + appender.list);
+        assertEquals(Set.of(config), listing(tempDir), "the temp file must be removed");
+    }
+
+    /** The entries of {@code dir}, with the listing's stream closed. */
+    private static Set<Path> listing(final Path dir) throws IOException {
+        try (Stream<Path> entries = Files.list(dir)) {
+            return entries.collect(Collectors.toSet());
+        }
     }
 
     /** Writes {@code body} to an executable file named {@code name} in the temp dir. */
