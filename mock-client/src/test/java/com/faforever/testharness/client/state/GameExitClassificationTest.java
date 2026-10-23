@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,16 +10,11 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
-import java.net.URI;
-import java.nio.file.Path;
 import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -44,38 +40,6 @@ import org.slf4j.LoggerFactory;
  */
 @Timeout(30)
 final class GameExitClassificationTest {
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     /** The signal flag the teardown reads; raised only by the case that needs it. */
     private final AtomicBoolean signal = new AtomicBoolean();

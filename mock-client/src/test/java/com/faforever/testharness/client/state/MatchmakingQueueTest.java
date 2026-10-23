@@ -12,6 +12,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.GameQueueConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockClientConfigFixture;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -20,11 +21,8 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.URI;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
@@ -43,38 +41,6 @@ import org.slf4j.LoggerFactory;
  */
 final class MatchmakingQueueTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
@@ -188,40 +154,6 @@ final class MatchmakingQueueTest {
         return messages().stream().anyMatch(predicate);
     }
 
-    /** Copies {@link #MINIMAL_CONFIG} with {@code queueConfig} overridden. */
-    private static MockClientConfig configWithQueueConfig(Optional<GameQueueConfig> queueConfig) {
-        return new MockClientConfig(
-                MINIMAL_CONFIG.lobbyWebSocketUrl(),
-                MINIMAL_CONFIG.oauthTokenUrl(),
-                MINIMAL_CONFIG.oauthAuthEndpoint(),
-                MINIMAL_CONFIG.oauthRedirectUri(),
-                MINIMAL_CONFIG.oauthScopes(),
-                MINIMAL_CONFIG.oauthClientId(),
-                MINIMAL_CONFIG.oauthRefreshTokenFile(),
-                MINIMAL_CONFIG.oauthAccessTokenFile(),
-                MINIMAL_CONFIG.uniqueId(),
-                MINIMAL_CONFIG.clientVersion(),
-                MINIMAL_CONFIG.userAgent(),
-                MINIMAL_CONFIG.uidBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterBinaryPath(),
-                MINIMAL_CONFIG.mockGameBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterRpcPort(),
-                MINIMAL_CONFIG.iceAdapterGpgNetPort(),
-                MINIMAL_CONFIG.iceAdapterLobbyPort(),
-                MINIMAL_CONFIG.iceAdapterGameId(),
-                MINIMAL_CONFIG.mockGameLaunchDelaySeconds(),
-                MINIMAL_CONFIG.logLevel(),
-                MINIMAL_CONFIG.logFile(),
-                MINIMAL_CONFIG.playerIdOverride(),
-                MINIMAL_CONFIG.playerLogin(),
-                MINIMAL_CONFIG.hostConfig(),
-                MINIMAL_CONFIG.joinConfig(),
-                queueConfig,
-                MINIMAL_CONFIG.iceRelayDelayMs(),
-                0,
-                -1);
-    }
-
     private MockClientLifecycle newLifecycle(Optional<GameQueueConfig> queueConfig)
             throws Exception {
         lobby = new LobbyConnection(server.uri());
@@ -229,7 +161,8 @@ final class MatchmakingQueueTest {
         server.awaitFirstClient();
 
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
-        MockClientConfig config = configWithQueueConfig(queueConfig);
+        MockClientConfig config =
+                MockClientConfigFixture.builder().queueConfig(queueConfig).build();
         return new MockClientLifecycle(
                 config,
                 session,
