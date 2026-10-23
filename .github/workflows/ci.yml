@@ -208,7 +208,15 @@ jobs:
         retention-days: 14
         if-no-files-found: warn
 
+  # A pull request from a fork gets a read-only GITHUB_TOKEN whatever `permissions` asks for, so
+  # the submission below cannot succeed there, and the action fails its step when it cannot submit
+  # (dependency-graph-continue-on-failure defaults to false). As a required check on main that
+  # would block a fork's pull request over nothing in its change, so the job is skipped on those
+  # instead. A check skipped by a job-level `if:` counts as passed, and the push to main after the
+  # merge still submits the graph. dependency-graph-continue-on-failure: true is not the fix: it
+  # would hide a real failure on main as well (#483).
   dependency-submission:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
 
     runs-on: ubuntu-latest
     permissions:
