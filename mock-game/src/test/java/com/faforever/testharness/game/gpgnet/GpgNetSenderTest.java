@@ -93,6 +93,12 @@ final class GpgNetSenderTest {
     }
 
     @Test
+    void establishedPeerCarriesTheIdAsAStringAsFaDoes() throws IOException {
+        sender.establishedPeer(330072);
+        assertEquals(List.of(GpgNetFrame.of("EstablishedPeer", "330072")), sent);
+    }
+
+    @Test
     void clearSlotCarriesTheSlotAsAnInt() throws IOException {
         sender.clearSlot(3);
         assertEquals(List.of(GpgNetFrame.of("ClearSlot", 3)), sent);

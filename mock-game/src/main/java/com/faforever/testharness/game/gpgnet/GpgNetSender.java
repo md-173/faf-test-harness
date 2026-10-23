@@ -14,10 +14,10 @@ import java.util.Set;
  * §7.1), not the full emit catalogue: the lifecycle frames {@code GameState} and {@code GameEnded};
  * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; the
  * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} from FA's custom
- * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix); and
- * the result frames {@code GameResult} and {@code JsonStats}. The long tail ({@code AIOption},
- * {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added on demand, not here. There are
- * deliberately no per-message-type classes, just frame-builders.
+ * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix); that
+ * lobby's {@code EstablishedPeer}; and the result frames {@code GameResult} and {@code JsonStats}.
+ * The long tail ({@code AIOption}, {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added
+ * on demand, not here. There are deliberately no per-message-type classes, just frame-builders.
  */
 public final class GpgNetSender {
 
@@ -183,5 +183,18 @@ public final class GpgNetSender {
      */
     public void disconnectedPeer(final int playerId) throws IOException {
         sink.send(GpgNetFrame.of("DisconnectedPeer", Integer.toString(playerId)));
+    }
+
+    /**
+     * Emit {@code EstablishedPeer(peerId)}, FA's matchmaker lobby reporting that its link to a peer
+     * is up (WBS-3.2.4.1-fix, #506): the engine's {@code EstablishedPeers} callback sends it
+     * ({@code AutolobbyController.lua}). Carries the engine's peer id as a string chunk, as {@link
+     * #disconnectedPeer} does. faf-server has no handler for it.
+     *
+     * @param playerId the id of the peer whose link is up
+     * @throws IOException if the frame cannot be sent
+     */
+    public void establishedPeer(final int playerId) throws IOException {
+        sink.send(GpgNetFrame.of("EstablishedPeer", Integer.toString(playerId)));
     }
 }
