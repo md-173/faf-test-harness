@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -95,9 +96,9 @@ final class LobbyConnectionTest {
         ObjectNode msg = MAPPER.createObjectNode();
         msg.put("command", "ask_session");
         msg.put("version", "1.0");
-        lobby.send(msg).get(2, TimeUnit.SECONDS);
+        lobby.send(msg).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         // Wire format: trailing \n per ws_bridge_rs compatibility (spec §1).
         assertTrue(received.endsWith("\n"), "expected newline-terminated frame, got: " + received);
         JsonNode parsed = MAPPER.readTree(received);
@@ -126,8 +127,8 @@ final class LobbyConnectionTest {
             msg.put("command", "auth");
             msg.put("token", "super-secret-access-token");
             msg.put("unique_id", "uid-1");
-            lobby.send(msg).get(2, TimeUnit.SECONDS);
-            server.pollReceived(2, TimeUnit.SECONDS);
+            lobby.send(msg).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
             List<String> sendLines =
                     logAppender.list.stream()
@@ -170,9 +171,10 @@ final class LobbyConnectionTest {
         ObjectNode msg = MAPPER.createObjectNode();
         msg.put("command", "auth");
         msg.put("token", "super-secret-access-token");
-        lobby.send(msg).get(2, TimeUnit.SECONDS);
+        lobby.send(msg).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        JsonNode onTheWire = MAPPER.readTree(server.pollReceived(2, TimeUnit.SECONDS));
+        JsonNode onTheWire =
+                MAPPER.readTree(server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertEquals("super-secret-access-token", onTheWire.get("token").asText());
     }
 
@@ -192,7 +194,9 @@ final class LobbyConnectionTest {
 
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
-        assertTrue(dispatched.await(2, TimeUnit.SECONDS), "handler was never invoked");
+        assertTrue(
+                dispatched.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "handler was never invoked");
         assertEquals("session", captured.get().get("command").asText());
         assertEquals(42, captured.get().get("session").asInt());
     }
@@ -216,7 +220,7 @@ final class LobbyConnectionTest {
 
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
-        assertEquals("B", seen.get(2, TimeUnit.SECONDS));
+        assertEquals("B", seen.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         ILoggingEvent connected =
                 logAppender.list.stream()
                         .filter(
@@ -240,7 +244,7 @@ final class LobbyConnectionTest {
         server.broadcastText("{\"command\":\"session\",\"session\":1}\n");
 
         assertTrue(
-                dispatched.await(2, TimeUnit.SECONDS),
+                dispatched.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "handler was never invoked for trailing-newline frame");
     }
 
@@ -252,7 +256,7 @@ final class LobbyConnectionTest {
 
         server.broadcastText("{\"command\":\"ping\"}");
 
-        String received = server.pollReceived(2, TimeUnit.SECONDS);
+        String received = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         JsonNode parsed = MAPPER.readTree(received);
         assertEquals("pong", parsed.get("command").asText());
     }
@@ -260,14 +264,19 @@ final class LobbyConnectionTest {
     @Test
     void unknownCommandLoggedOncePerCommand() throws Exception {
         lobby = new LobbyConnection(server.uri());
+        CountDownLatch caughtUp = new CountDownLatch(1);
+        lobby.registerHandler("sentinel", node -> caughtUp.countDown());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         server.broadcastText("{\"command\":\"never_seen\"}");
         server.broadcastText("{\"command\":\"never_seen\",\"v\":2}");
         server.broadcastText("{\"command\":\"never_seen\",\"v\":3}");
-        // Give the dispatcher time to process all three.
-        Thread.sleep(300);
+        // Frames are handled in order on one thread, so once the sentinel is, all three have been.
+        server.broadcastText("{\"command\":\"sentinel\"}");
+        assertTrue(
+                caughtUp.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the frame sent after the three was never handled");
 
         long warnCount =
                 logAppender.list.stream()
@@ -421,7 +430,8 @@ final class LobbyConnectionTest {
         server.awaitFirstClient();
 
         // One and a half limits of traffic, a ping every twentieth of one, so only a stall of
-        // nearly the whole limit could end it: the 2 s this class's other waits allow.
+        // nearly the whole limit could end it. It takes two and a half limits to run, so the limit
+        // stays short.
         for (int i = 0; i < 30; i++) {
             server.broadcastText("{\"command\":\"ping\"}");
             Thread.sleep(100);
@@ -524,7 +534,8 @@ final class LobbyConnectionTest {
 
         server.broadcastText("{\"command\":\"session\",\"session\":42}");
 
-        assertTrue(both.await(2, TimeUnit.SECONDS), "both handlers should fire");
+        assertTrue(
+                both.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS), "both handlers should fire");
         assertEquals(List.of("first", "second"), order, "handlers fire in registration order");
         assertEquals(42, firstSaw.get().get("session").asInt());
     }
@@ -563,7 +574,8 @@ final class LobbyConnectionTest {
                                         msg.put("command", "ask_session");
                                         msg.put("thread", threadId);
                                         msg.put("seq", i);
-                                        lobby.send(msg).get(5, TimeUnit.SECONDS);
+                                        lobby.send(msg)
+                                                .get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                                     }
                                 } catch (Exception e) {
                                     errors.add(e);
@@ -583,7 +595,7 @@ final class LobbyConnectionTest {
         int expected = threadCount * sendsPerThread;
         int seen = 0;
         while (seen < expected) {
-            server.pollReceived(2, TimeUnit.SECONDS);
+            server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             seen++;
         }
         assertEquals(expected, seen);

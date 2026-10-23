@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.ice;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -74,7 +75,7 @@ final class GpgNetForwarderTest {
                         + "\","
                         + chunksJson
                         + "]}\n");
-        return lobbyServer.pollReceived(3, TimeUnit.SECONDS).strip();
+        return lobbyServer.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip();
     }
 
     /** A representative single-chunk frame: the envelope must match exactly. */

@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.lobby;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -69,7 +70,8 @@ final class GameLaunchWiringTest {
                         + "\"args\":[\"/numgames\",1]"
                         + "}\n");
 
-        assertTrue(fired.await(3, TimeUnit.SECONDS), "handler sink never fired");
+        assertTrue(
+                fired.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS), "handler sink never fired");
         assertNull(rejection.get(), "a valid frame must not be rejected");
         GameConfig cfg = sink.get();
         assertEquals(11, cfg.uid());

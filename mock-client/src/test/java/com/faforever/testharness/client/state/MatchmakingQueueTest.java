@@ -1,5 +1,6 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -12,6 +13,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.GameQueueConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockClientConfigFixture;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -20,12 +22,10 @@ import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.statemachine.StateMachine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.URI;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.AfterEach;
@@ -43,38 +43,6 @@ import org.slf4j.LoggerFactory;
  */
 final class MatchmakingQueueTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(
@@ -188,38 +156,19 @@ final class MatchmakingQueueTest {
         return messages().stream().anyMatch(predicate);
     }
 
-    /** Copies {@link #MINIMAL_CONFIG} with {@code queueConfig} overridden. */
-    private static MockClientConfig configWithQueueConfig(Optional<GameQueueConfig> queueConfig) {
-        return new MockClientConfig(
-                MINIMAL_CONFIG.lobbyWebSocketUrl(),
-                MINIMAL_CONFIG.oauthTokenUrl(),
-                MINIMAL_CONFIG.oauthAuthEndpoint(),
-                MINIMAL_CONFIG.oauthRedirectUri(),
-                MINIMAL_CONFIG.oauthScopes(),
-                MINIMAL_CONFIG.oauthClientId(),
-                MINIMAL_CONFIG.oauthRefreshTokenFile(),
-                MINIMAL_CONFIG.oauthAccessTokenFile(),
-                MINIMAL_CONFIG.uniqueId(),
-                MINIMAL_CONFIG.clientVersion(),
-                MINIMAL_CONFIG.userAgent(),
-                MINIMAL_CONFIG.uidBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterBinaryPath(),
-                MINIMAL_CONFIG.mockGameBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterRpcPort(),
-                MINIMAL_CONFIG.iceAdapterGpgNetPort(),
-                MINIMAL_CONFIG.iceAdapterLobbyPort(),
-                MINIMAL_CONFIG.iceAdapterGameId(),
-                MINIMAL_CONFIG.mockGameLaunchDelaySeconds(),
-                MINIMAL_CONFIG.logLevel(),
-                MINIMAL_CONFIG.logFile(),
-                MINIMAL_CONFIG.playerIdOverride(),
-                MINIMAL_CONFIG.playerLogin(),
-                MINIMAL_CONFIG.hostConfig(),
-                MINIMAL_CONFIG.joinConfig(),
-                queueConfig,
-                MINIMAL_CONFIG.iceRelayDelayMs(),
-                0,
-                -1);
+    /**
+     * Sends a sentinel frame and waits until the client has handled it. The connection handles
+     * frames in order on one thread, and the lifecycle's handlers run on it, so every frame sent
+     * before the sentinel has been handled too, along with any transition its handler drove on that
+     * thread.
+     */
+    private void awaitEarlierFramesHandled() throws InterruptedException {
+        CountDownLatch handled = new CountDownLatch(1);
+        lobby.registerHandler("sentinel", frame -> handled.countDown());
+        server.broadcastText("{\"command\":\"sentinel\"}");
+        assertTrue(
+                handled.await(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "the sentinel frame was never handled");
     }
 
     private MockClientLifecycle newLifecycle(Optional<GameQueueConfig> queueConfig)
@@ -229,7 +178,8 @@ final class MatchmakingQueueTest {
         server.awaitFirstClient();
 
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
-        MockClientConfig config = configWithQueueConfig(queueConfig);
+        MockClientConfig config =
+                MockClientConfigFixture.builder().queueConfig(queueConfig).build();
         return new MockClientLifecycle(
                 config,
                 session,
@@ -256,14 +206,16 @@ final class MatchmakingQueueTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", sent.get("command").asText());
         assertEquals("ladder1v1", sent.get("queue_name").asText());
         assertEquals("start", sent.get("state").asText());
         assertEquals(2, sent.get("faction").asInt());
 
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
         assertTrue(messages().contains("state entry: SEARCHING"));
     }
@@ -275,13 +227,16 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the initial game_matchmaking start
+        // The initial game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         var idleAgain = lifecycle.stateReached(ClientState.IDLE);
         lifecycle.stopSearch();
-        JsonNode stopSent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode stopSent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", stopSent.get("command").asText());
         assertEquals("stop", stopSent.get("state").asText());
         assertTrue(
@@ -289,7 +244,7 @@ final class MatchmakingQueueTest {
                 "faction must not be sent on a stop request");
 
         server.broadcastText(searchInfo("ladder1v1", "stop"));
-        idleAgain.get(3, TimeUnit.SECONDS);
+        idleAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // The stop must actually stick. Re-entering IDLE re-fires its entry hooks (Transition
         // runs to.entry() on every non-self-loop), so an ungated hook would re-send
@@ -302,11 +257,13 @@ final class MatchmakingQueueTest {
 
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.startSearch();
-        JsonNode restart = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode restart =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_matchmaking", restart.get("command").asText());
         assertEquals("start", restart.get("state").asText());
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searchingAgain.get(3, TimeUnit.SECONDS);
+        searchingAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
     }
 
@@ -317,13 +274,13 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         var idleAgain = lifecycle.stateReached(ClientState.IDLE);
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":null}");
-        idleAgain.get(3, TimeUnit.SECONDS);
+        idleAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertFalse(
                 lifecycle.verdicts().sessionFailed(),
@@ -340,9 +297,9 @@ final class MatchmakingQueueTest {
 
         var searchingAgain = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.startSearch();
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searchingAgain.get(3, TimeUnit.SECONDS);
+        searchingAgain.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
     }
 
@@ -353,13 +310,13 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
         // No accept/decline step and no FSM edge for match_found: the client stays SEARCHING.
-        Thread.sleep(200);
+        awaitEarlierFramesHandled();
         assertEquals(ClientState.SEARCHING, lifecycle.getState());
         assertTrue(messages().stream().anyMatch(m -> m.startsWith("match found: queue_name=")));
 
@@ -381,9 +338,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"match_found\",\"queue_name\":\"ladder1v1\"}");
         // Sampled the moment TERMINATED commits (#344): the run reads the verdict once that
@@ -398,7 +355,7 @@ final class MatchmakingQueueTest {
         server.broadcastText("{\"command\":\"match_cancelled\",\"game_id\":12345}");
 
         assertTrue(
-                failedAtCommit.get(3, TimeUnit.SECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "a match cancelled after game_launch is a finding the exit code must carry");
         assertEquals(ClientState.TERMINATED, lifecycle.getState());
         assertTrue(
@@ -426,9 +383,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // DEBUG so the self-loop's own line is captured: waiting for it proves the second frame was
         // actually processed. A bare sleep would let this pass vacuously if the frame never
@@ -440,7 +397,7 @@ final class MatchmakingQueueTest {
             assertTrue(
                     awaitMessage(
                             m -> m.contains("search_info start received while already SEARCHING"),
-                            3000),
+                            TimeUnit.SECONDS.toMillis(FRAME_TIMEOUT_SECONDS)),
                     "the repeated start confirmation must be handled: " + messages());
         } finally {
             lifecycleLogger.setLevel(previous);
@@ -463,7 +420,8 @@ final class MatchmakingQueueTest {
                 newLifecycle(Optional.of(new GameQueueConfig("ladder1v1", Optional.empty())));
 
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the outbound game_matchmaking start
+        // The outbound game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // The real refusal, as faf-server's ladder_service.start_search sends it: three frames,
         // not one. "player" is a numeric player id ({"player": p.id}), never a login, and the
@@ -476,9 +434,9 @@ final class MatchmakingQueueTest {
         server.broadcastText(
                 "{\"command\":\"notice\",\"style\":\"info\","
                         + "\"text\":\"Player Rhiza is timed out for 10 minutes\"}");
-        // No FSM event follows a search_timeout; give the handlers a moment to run and assert
-        // the state never moved off IDLE.
-        Thread.sleep(200);
+        // A search_timeout posts no FSM event and the paired stop self-loops in IDLE, so once all
+        // three frames have been handled the state must still be IDLE.
+        awaitEarlierFramesHandled();
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertTrue(
                 messages().stream()
@@ -502,9 +460,9 @@ final class MatchmakingQueueTest {
 
         var searching = lifecycle.stateReached(ClientState.SEARCHING);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS);
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         server.broadcastText(searchInfo("ladder1v1", "start"));
-        searching.get(3, TimeUnit.SECONDS);
+        searching.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         server.broadcastText("{\"command\":\"matchmaker_info\",\"queues\":[]}");
         Thread.sleep(200);
@@ -523,7 +481,8 @@ final class MatchmakingQueueTest {
                 newLifecycle(Optional.of(new GameQueueConfig("ladder1v1", Optional.empty())));
 
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
-        server.pollReceived(3, TimeUnit.SECONDS); // the initial game_matchmaking start
+        // The initial game_matchmaking start.
+        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
         // Closing the lobby also drives the FSM to TERMINATED, which runs teardown, and a send
         // failing after teardown is deliberately demoted to DEBUG as an expected shutdown artefact.

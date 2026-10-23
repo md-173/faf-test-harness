@@ -1,11 +1,11 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
@@ -16,12 +16,8 @@ import com.faforever.testharness.client.process.MockGameLauncher;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
-import java.net.URI;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -40,38 +36,6 @@ import org.junit.jupiter.api.condition.OS;
         value = {OS.LINUX, OS.MAC},
         disabledReason = "POSIX-only: spawns a shell script or POSIX utility (CONTRIBUTING.md § 3)")
 final class GameProcessTest {
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     private static final GameConfig MINIMAL_GAME_CONFIG =
             new GameConfig(

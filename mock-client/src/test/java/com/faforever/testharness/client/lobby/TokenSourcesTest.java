@@ -6,12 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockClientConfigFixture;
 import java.io.IOException;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
-import java.util.OptionalInt;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -25,8 +24,8 @@ import org.junit.jupiter.api.io.TempDir;
 final class TokenSourcesTest {
 
     /**
-     * Build a {@link MockClientConfig} with the credential file overridden. Other fields use
-     * placeholder values that pass record validation.
+     * Build a {@link MockClientConfig} with the credential file overridden. Other fields come from
+     * {@link MockClientConfigFixture}.
      */
     private static MockClientConfig configWith(final Path oauthRefreshTokenFile) {
         return configWith(oauthRefreshTokenFile, Optional.empty());
@@ -35,36 +34,10 @@ final class TokenSourcesTest {
     /** As above, with the pre-signed access-token channel chosen instead or as well. */
     private static MockClientConfig configWith(
             final Path oauthRefreshTokenFile, final Optional<Path> oauthAccessTokenFile) {
-        return new MockClientConfig(
-                URI.create("wss://ws.faforever.xyz"),
-                URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                URI.create("http://127.0.0.1"),
-                "openid offline lobby",
-                "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                oauthRefreshTokenFile,
-                oauthAccessTokenFile,
-                Optional.of("00000000-0000-0000-0000-000000000000"),
-                "0.0.0-mock",
-                "faf-test-harness",
-                Optional.empty(),
-                Path.of("/bin/faf-ice-adapter"),
-                Path.of("/bin/mock-game"),
-                7236,
-                7237,
-                7238,
-                0,
-                5,
-                "INFO",
-                Optional.empty(),
-                OptionalInt.empty(),
-                "mock-client",
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                0,
-                0,
-                -1);
+        return MockClientConfigFixture.builder()
+                .oauthRefreshTokenFile(oauthRefreshTokenFile)
+                .oauthAccessTokenFile(oauthAccessTokenFile)
+                .build();
     }
 
     @Test

@@ -31,21 +31,26 @@ import org.slf4j.LoggerFactory;
  * lobby tests have timed out waiting for a frame after the previous legs had succeeded, each re-run
  * green with nothing captured, and the question none of those runs could answer was whether the
  * frame was late or never sent at all. These lines and {@code LobbyConnection}'s own inbound-frame
- * log — enabled for the test task, see {@code mock-client/build.gradle} — put both ends of every
- * exchange in the Gradle test report a failing run uploads. The budgets are deliberately unchanged:
- * a longer timeout would hide the case worth knowing about.
+ * log, enabled for the test task in {@code mock-client/build.gradle}, put both ends of every
+ * exchange in the Gradle test report a failing run uploads.
  *
  * <p>#415's capture answered it: the frame was queued but not written until the next write on its
  * connection, stranded by a race in Java-WebSocket's selector. So every send here returns only once
- * its frame is on the socket; see {@link #awaitWritten}.
+ * its frame is on the socket; see {@link #awaitWritten}. A test's wait for a frame then covers the
+ * round trip alone, and the tests share one budget for it, {@link #FRAME_TIMEOUT_SECONDS}.
  */
 public final class ScriptedWebSocketServer extends WebSocketServer {
 
+    /**
+     * How long a test waits for an expected frame, in either direction, and how long {@link
+     * #awaitWritten} gives a queued frame to reach the socket (#476). Since a send returns only
+     * once its frame is written, a longer budget no longer hides a lost frame; it only has to
+     * outlast a whole-JVM stall, which reached 2.4 s in a #415 stress run under host overload.
+     */
+    public static final long FRAME_TIMEOUT_SECONDS = 5;
+
     /** Logger instance for this class. */
     private static final Logger LOG = LoggerFactory.getLogger(ScriptedWebSocketServer.class);
-
-    /** How long {@link #awaitWritten} gives a queued frame to reach the socket. */
-    private static final long WRITE_TIMEOUT_SECONDS = 5;
 
     private final CountDownLatch started = new CountDownLatch(1);
     private final CountDownLatch firstClientConnected = new CountDownLatch(1);
@@ -216,7 +221,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
     static void awaitWritten(final WebSocket conn, final String what) {
         WebSocketImpl impl = (WebSocketImpl) conn;
         SelectionKey key = impl.getSelectionKey();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(WRITE_TIMEOUT_SECONDS);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(FRAME_TIMEOUT_SECONDS);
         while (!impl.outQueue.isEmpty() && key.isValid()) {
             // Give up at once, like the fixture's other waits: parkNanos returns straight away
             // while the flag is set, so waiting on would spin.
@@ -245,7 +250,7 @@ public final class ScriptedWebSocketServer extends WebSocketServer {
                         "scripted server could not write to "
                                 + conn.getRemoteSocketAddress()
                                 + " within "
-                                + WRITE_TIMEOUT_SECONDS
+                                + FRAME_TIMEOUT_SECONDS
                                 + "s: "
                                 + what);
             }

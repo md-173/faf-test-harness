@@ -1,21 +1,20 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockClientConfigFixture;
 import com.faforever.testharness.client.lobby.LobbyConnection;
 import com.faforever.testharness.client.lobby.LobbySession;
 import com.faforever.testharness.client.lobby.ScriptedWebSocketServer;
 import com.faforever.testharness.client.process.SessionTeardown;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.net.URI;
-import java.nio.file.Path;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,38 +29,6 @@ import org.junit.jupiter.api.Test;
  */
 final class GameJoinTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     private ScriptedWebSocketServer server;
     private LobbyConnection lobby;
@@ -83,47 +50,13 @@ final class GameJoinTest {
         server.stop(1000);
     }
 
-    /** Copies {@link #MINIMAL_CONFIG} with {@code joinConfig} overridden. */
-    private static MockClientConfig configWithJoinConfig(Optional<GameJoinConfig> joinConfig) {
-        return new MockClientConfig(
-                MINIMAL_CONFIG.lobbyWebSocketUrl(),
-                MINIMAL_CONFIG.oauthTokenUrl(),
-                MINIMAL_CONFIG.oauthAuthEndpoint(),
-                MINIMAL_CONFIG.oauthRedirectUri(),
-                MINIMAL_CONFIG.oauthScopes(),
-                MINIMAL_CONFIG.oauthClientId(),
-                MINIMAL_CONFIG.oauthRefreshTokenFile(),
-                Optional.empty(),
-                MINIMAL_CONFIG.uniqueId(),
-                MINIMAL_CONFIG.clientVersion(),
-                MINIMAL_CONFIG.userAgent(),
-                MINIMAL_CONFIG.uidBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterBinaryPath(),
-                MINIMAL_CONFIG.mockGameBinaryPath(),
-                MINIMAL_CONFIG.iceAdapterRpcPort(),
-                MINIMAL_CONFIG.iceAdapterGpgNetPort(),
-                MINIMAL_CONFIG.iceAdapterLobbyPort(),
-                MINIMAL_CONFIG.iceAdapterGameId(),
-                MINIMAL_CONFIG.mockGameLaunchDelaySeconds(),
-                MINIMAL_CONFIG.logLevel(),
-                MINIMAL_CONFIG.logFile(),
-                MINIMAL_CONFIG.playerIdOverride(),
-                MINIMAL_CONFIG.playerLogin(),
-                MINIMAL_CONFIG.hostConfig(),
-                joinConfig,
-                MINIMAL_CONFIG.queueConfig(),
-                0,
-                0,
-                -1);
-    }
-
     private MockClientLifecycle newLifecycle(Optional<GameJoinConfig> joinConfig) throws Exception {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
 
         LobbySession session = new LobbySession(lobby, "uid-fixture", "1.0.0", "mock-client-test");
-        MockClientConfig config = configWithJoinConfig(joinConfig);
+        MockClientConfig config = MockClientConfigFixture.builder().joinConfig(joinConfig).build();
         return new MockClientLifecycle(
                 config,
                 session,
@@ -141,7 +74,9 @@ final class GameJoinTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_join", sent.get("command").asText());
         assertEquals(42, sent.get("uid").asInt());
         assertEquals("s3cret", sent.get("password").asText());
@@ -155,7 +90,9 @@ final class GameJoinTest {
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         assertEquals(ClientState.IDLE, lifecycle.getState());
 
-        JsonNode sent = MAPPER.readTree(server.pollReceived(3, TimeUnit.SECONDS).strip());
+        JsonNode sent =
+                MAPPER.readTree(
+                        server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS).strip());
         assertEquals("game_join", sent.get("command").asText());
         assertEquals(7, sent.get("uid").asInt());
         assertFalse(sent.has("password"), "password should be omitted, not sent as null");

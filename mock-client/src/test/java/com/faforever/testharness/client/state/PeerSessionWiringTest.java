@@ -1,5 +1,7 @@
 package com.faforever.testharness.client.state;
 
+import static com.faforever.testharness.client.config.MockClientConfigFixture.MINIMAL_CONFIG;
+import static com.faforever.testharness.client.lobby.ScriptedWebSocketServer.FRAME_TIMEOUT_SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -11,7 +13,6 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.ice.IceRpcException;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.LobbyConnection;
@@ -22,13 +23,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
-import java.net.URI;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
@@ -67,11 +64,6 @@ final class PeerSessionWiringTest {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    /**
-     * Budget for a frame to cross the loopback socket and be acted on. Generous for a unit test.
-     */
-    private static final Duration FRAME_TIMEOUT = Duration.ofSeconds(5);
-
     /** Poll slice while waiting for an effect produced on another thread. */
     private static final Duration POLL_SLICE = Duration.ofMillis(25);
 
@@ -88,38 +80,6 @@ final class PeerSessionWiringTest {
      */
     private static final String CANDIDATES_PAYLOAD =
             "{\"srcId\":1,\"destId\":4242,\"candidates\":[{\"type\":\"host\",\"port\":6112}]}";
-
-    private static final MockClientConfig MINIMAL_CONFIG =
-            new MockClientConfig(
-                    URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    Path.of("/nonexistent/test-refresh-token"),
-                    Optional.empty(),
-                    Optional.of("00000000-0000-0000-0000-000000000000"),
-                    "0.0.0-mock",
-                    "faf-test-harness",
-                    Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
-                    OptionalInt.empty(),
-                    "Rhiza",
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    0,
-                    0,
-                    -1);
 
     private static final GameConfig GAME_CONFIG =
             new GameConfig(
@@ -288,7 +248,7 @@ final class PeerSessionWiringTest {
                 adapter.receivedMessage("connectToPeer"),
                 "a frame we could not read must not produce a half-specified RPC");
         assertTrue(
-                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "a frame the client cannot read fails the session before TERMINATED (#445)");
         assertEquals(
                 1,
@@ -318,7 +278,7 @@ final class PeerSessionWiringTest {
 
         awaitState(lifecycle, ClientState.TERMINATED);
         assertTrue(
-                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "the verdict must be recorded before the session ends");
         List<String> relayWarnings = relayWarnings();
         assertEquals(1, relayWarnings.size(), "one WARN, for one failure (#445): " + relayWarnings);
@@ -345,7 +305,7 @@ final class PeerSessionWiringTest {
 
         awaitState(lifecycle, ClientState.TERMINATED);
         assertFalse(
-                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "a closed connection is the adapter's finding, not the call's");
         assertEquals(List.of(), relayWarnings(), "no WARN without a verdict (#445)");
         assertEquals(
@@ -369,7 +329,7 @@ final class PeerSessionWiringTest {
 
         awaitState(lifecycle, ClientState.TERMINATED);
         assertTrue(
-                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "the throw must end the session with a verdict, not leave it in HOSTING");
         assertEquals(
                 1,
@@ -443,7 +403,7 @@ final class PeerSessionWiringTest {
                 adapter.receivedMessage("disconnectFromPeer"),
                 "a frame we could not read must not produce an RPC for a guessed id");
         assertTrue(
-                failedAtCommit.get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS),
+                failedAtCommit.get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 "a frame the client cannot read fails the session before TERMINATED (#445)");
         assertEquals(
                 1,
@@ -602,8 +562,7 @@ final class PeerSessionWiringTest {
     void gameLaunchedCarriesTheUidASecondClientJoinsOn() throws Exception {
         MockClientLifecycle lifecycle = launchedLifecycle();
 
-        GameConfig launched =
-                lifecycle.gameLaunched().get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        GameConfig launched = lifecycle.gameLaunched().get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(GAME_CONFIG.uid(), launched.uid(), "the join target for the second client");
         assertEquals(GAME_CONFIG.name(), launched.name());
     }
@@ -680,7 +639,7 @@ final class PeerSessionWiringTest {
      * line is emitted from the RPC call's continuation, not from the test thread.
      */
     private void awaitLogged(final String prefix) throws InterruptedException {
-        long deadline = System.nanoTime() + FRAME_TIMEOUT.toNanos();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(FRAME_TIMEOUT_SECONDS);
         do {
             for (ILoggingEvent event : captured.list) {
                 if (event.getFormattedMessage().startsWith(prefix)) {
@@ -693,8 +652,8 @@ final class PeerSessionWiringTest {
                 "no log message starting with '"
                         + prefix
                         + "' within "
-                        + FRAME_TIMEOUT
-                        + "; captured: "
+                        + FRAME_TIMEOUT_SECONDS
+                        + " s; captured: "
                         + captured.list.stream().map(ILoggingEvent::getFormattedMessage).toList());
     }
 
@@ -730,7 +689,7 @@ final class PeerSessionWiringTest {
      * Bounded: a missing call fails with the method name rather than hanging the suite.
      */
     private Object[] awaitCall(final String method) throws InterruptedException {
-        long deadline = System.nanoTime() + FRAME_TIMEOUT.toNanos();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(FRAME_TIMEOUT_SECONDS);
         do {
             Object[] params = adapter.receivedMessage(method);
             if (params != null) {
@@ -738,7 +697,12 @@ final class PeerSessionWiringTest {
             }
             Thread.sleep(POLL_SLICE.toMillis());
         } while (System.nanoTime() < deadline);
-        return fail("no '" + method + "' call reached the adapter within " + FRAME_TIMEOUT);
+        return fail(
+                "no '"
+                        + method
+                        + "' call reached the adapter within "
+                        + FRAME_TIMEOUT_SECONDS
+                        + " s");
     }
 
     /**
@@ -747,7 +711,7 @@ final class PeerSessionWiringTest {
      * under test; a different one is a failure worth seeing rather than something to skip past.
      */
     private String awaitLobbyFrame(final String command) throws Exception {
-        String frame = server.pollReceived(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        String frame = server.pollReceived(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         assertEquals(
                 command,
                 MAPPER.readTree(frame).path("command").asText(),
@@ -788,7 +752,7 @@ final class PeerSessionWiringTest {
     /** Bounded wait for the FSM to reach {@code state}. */
     private static void awaitState(final MockClientLifecycle lifecycle, final ClientState state) {
         try {
-            lifecycle.stateReached(state).get(FRAME_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            lifecycle.stateReached(state).get(FRAME_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (TimeoutException e) {
             fail("FSM never reached " + state + "; it is in " + lifecycle.getState());
         } catch (ExecutionException e) {
