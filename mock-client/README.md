@@ -247,7 +247,7 @@ launcher injects on that path alone (`subprocess-orchestration-spec.md` §2.3).
 
 ### Environment variable convention
 
-`FAF_MOCK_CLIENT_<UPPER_SNAKE_CASE>` of the JSON / CLI key. The `_CLIENT_`
+`FAF_MOCK_CLIENT_<UPPER_SNAKE_CASE>` of the CLI flag. The `_CLIENT_`
 segment disambiguates this module from `mock-game`, which uses
 `FAF_MOCK_GAME_*` for its own configuration.
 
@@ -259,8 +259,16 @@ Examples:
 | `oauthClientId` | `FAF_MOCK_CLIENT_OAUTH_CLIENT_ID` | `--oauth-client-id` |
 | `iceAdapterRpcPort` | `FAF_MOCK_CLIENT_ICE_ADAPTER_RPC_PORT` | `--ice-adapter-rpc-port` |
 
-The mapping is mechanical: kebab-case → upper-snake-case for env vars,
-kebab-case → camelCase for the JSON file.
+The env var mapping is mechanical: the flag's kebab-case → upper-snake-case.
+A JSON key is the option's field name, which is the flag in camelCase for
+every option but three: `--lobby-websocket-url` reads `lobbyWebSocketUrl`,
+and `session`'s `--peer-refresh-token-file` and `--peer-access-token-file`
+read `peerRefreshTokenFiles` and `peerAccessTokenFiles`. `--config`,
+`--help` and `--version` have no key.
+
+A key no subcommand reads is refused whatever its value, `null` included:
+the run exits `2` naming every such key and the file. One file serves every
+subcommand, so a key only `session` reads is accepted under `run`.
 
 ### Field reference
 
