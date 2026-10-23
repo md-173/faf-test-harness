@@ -1,5 +1,10 @@
 <configuration>
 
+    <!--
+      Silences Logback's own status messages, errors included: Logback prints its startup status
+      only when no status listener is registered. LoggingSetup reports a log path Logback cannot
+      use or open, and LogbackConfigTest fails the build on any warning or error this file causes.
+    -->
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
 
     <!--
