@@ -24,10 +24,11 @@ public class StateMachine implements EventListener {
     private final InvalidTransitionPolicy transitionPolicy;
 
     /**
-     * Runs the timeouts on one daemon thread, started by the first {@link #setTimeout(long, State)}
-     * and ended only by {@link #cancel()}. It measures each delay on {@link System#nanoTime()}, so
-     * stepping the wall clock does not move a pending timeout (WBS-2.3.7-fix, #465); the {@code
-     * java.util.Timer} it replaces measured on the wall clock.
+     * Runs the timeouts, and the tasks handed to {@link #schedule(long, Runnable)}, on one daemon
+     * thread, started by the first of either and ended only by {@link #cancel()}. It measures each
+     * delay on {@link System#nanoTime()}, so stepping the wall clock does not move a pending
+     * timeout (WBS-2.3.7-fix, #465); the {@code java.util.Timer} it replaces measured on the wall
+     * clock.
      */
     private final ScheduledThreadPoolExecutor timeoutExecutor;
 
@@ -43,18 +44,19 @@ public class StateMachine implements EventListener {
 
     /**
      * Orders {@link #cancel()} against the arming step of {@link #setTimeout(long, State,
-     * TransitionAction)}, so a timeout is never handed to an executor {@code cancel()} has already
-     * shut down. It is held only around that check and a single executor call, never across a
-     * transition or a log call, which is what lets {@code cancel()} return while a transition
-     * action holds this machine's monitor (WBS-2.3.7-fix, #328).
+     * TransitionAction)} and {@link #schedule(long, Runnable)}, so nothing is handed to an executor
+     * {@code cancel()} has already shut down. It is held only around that check and a single
+     * executor call, never across a transition or a log call, which is what lets {@code cancel()}
+     * return while a transition action holds this machine's monitor (WBS-2.3.7-fix, #328).
      */
     private final Object schedulingLock = new Object();
 
     /**
      * Whether {@link #cancel()} has run. Written under {@link #schedulingLock}, where {@link
-     * #setTimeout(long, State, TransitionAction)} reads it to become a no-op rather than throwing.
-     * Volatile because a timeout already running when {@code cancel()} is called, or already due
-     * then, reads it under this machine's monitor instead.
+     * #setTimeout(long, State, TransitionAction)} and {@link #schedule(long, Runnable)} read it to
+     * become a no-op rather than throwing. Volatile because a timeout already running when {@code
+     * cancel()} is called, or already due then, reads it under this machine's monitor instead, and
+     * a scheduled task reads it under no lock at all.
      */
     private volatile boolean cancelled;
 
@@ -290,17 +292,70 @@ public class StateMachine implements EventListener {
     }
 
     /**
+     * Runs {@code task} on the timeout thread once {@code millis} have passed, unless {@link
+     * #cancel()} has run first (WBS-3.2.4.1-fix, #498). It is not a timeout: it moves the machine
+     * nowhere, no commit disarms it, and it never takes this machine's monitor, so it keeps
+     * counting across state changes and runs even while a transition holds the monitor. mock-game's
+     * injected crash is one: it must outlive the launch, and halt the game wherever it stands.
+     *
+     * <p>It shares the timeouts' one thread, so the two run in the order they come due, and at
+     * equal delays in the order they were armed: the executor runs tasks due at the same instant
+     * first in, first out. {@code cancel()} stops it as it stops a timeout: one still waiting is
+     * discarded, and one already due is started but does nothing.
+     *
+     * @param millis the time in milliseconds to wait before running {@code task}, on the monotonic
+     *     clock; zero or less runs it at once.
+     * @param task what to run. Anything it throws is logged and goes no further.
+     * @return {@code false}, having scheduled nothing, if {@code cancel()} has already run.
+     */
+    public boolean schedule(long millis, Runnable task) {
+        // The same check-then-schedule step as setTimeout's, under the same lock, so cancel() can
+        // never shut the executor down between the two.
+        synchronized (schedulingLock) {
+            if (cancelled) {
+                return false;
+            }
+            timeoutExecutor.schedule(() -> runScheduled(task), millis, TimeUnit.MILLISECONDS);
+        }
+        LOG.debug("Scheduled a task in {}ms", millis);
+        return true;
+    }
+
+    /**
+     * Runs a task {@link #schedule(long, Runnable)} accepted, unless {@link #cancel()} has run
+     * since. The executor still starts a task that was already due when {@code cancel()} shut it
+     * down, so this check is what stops that one.
+     *
+     * @param task the task to run.
+     */
+    private void runScheduled(Runnable task) {
+        if (cancelled) {
+            LOG.debug("Scheduled task fell due after scheduling was cancelled, ignoring");
+            return;
+        }
+        try {
+            task.run();
+        } catch (Throwable e) {
+            // As in UpdateStateTask.run: the executor keeps whatever escapes in a future nothing
+            // reads, so this is the one place it can be reported.
+            LOG.error("Scheduled task threw", e);
+        }
+    }
+
+    /**
      * Stops the machine's time-based scheduling: shuts the executor down, which discards every
      * timeout still waiting, so once this returns no timeout goes on to take this machine's monitor
      * and start a transition. That includes one already running and waiting for the monitor, and
-     * one already due, which the executor still runs: both stop on the cancelled flag. A timeout
-     * whose transition has already begun when this is called, holding the monitor and past its
-     * cancelled check, runs to completion as an event-driven transition does, and that includes one
-     * whose own transition calls this: stopping one after its hooks have run but before its commit
-     * would leave the machine half-transitioned (#258). Intended for the shutdown path: it is
-     * terminal, so a later {@link #setTimeout(long, State)} arms nothing and returns rather than
-     * throwing on the shut-down executor. Event-driven transitions via {@link #receiveEvent(Event)}
-     * are unaffected. Idempotent: calling it more than once is safe.
+     * one already due, which the executor still runs: both stop on the cancelled flag. A task
+     * handed to {@link #schedule(long, Runnable)} stops the same way: discarded while it waits, and
+     * doing nothing if already due, unless it has already started. A timeout whose transition has
+     * already begun when this is called, holding the monitor and past its cancelled check, runs to
+     * completion as an event-driven transition does, and that includes one whose own transition
+     * calls this: stopping one after its hooks have run but before its commit would leave the
+     * machine half-transitioned (#258). Intended for the shutdown path: it is terminal, so a later
+     * {@link #setTimeout(long, State)} arms nothing and returns rather than throwing on the
+     * shut-down executor. Event-driven transitions via {@link #receiveEvent(Event)} are unaffected.
+     * Idempotent: calling it more than once is safe.
      *
      * <p><b>Never interrupts a running timeout</b> (WBS-2.3.7-fix, #465). It uses {@code
      * shutdown()}, not {@code shutdownNow()}, because a timeout's own transition may call this and
