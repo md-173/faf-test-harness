@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.IceAdapterSettings;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.shared.logging.Failures;
 import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -63,9 +64,9 @@ import org.slf4j.LoggerFactory;
  * preserved only via the harness {@code ProcessOutputLogger} capture. The config path and {@link
  * #LOG_DIR} are fixed, so harness commands started from one directory share them; per-session
  * isolation is future work (spec §2.4). The shared config is never rewritten in place, only
- * replaced by renaming a complete copy over it, so an adapter that starts while another launch
- * writes it reads either the complete old config or the complete new one (see {@link
- * #writeHeadlessLogbackConfig}).
+ * replaced by renaming a complete copy over it, so on Linux and macOS an adapter that starts while
+ * another launch writes it reads either the complete old config or the complete new one. On Windows
+ * the rename only makes such a clash rarer (see {@link #writeHeadlessLogbackConfig}).
  *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
@@ -326,18 +327,22 @@ public class IceAdapterLauncher {
      *
      * <p>An adapter launched by another harness command in the same directory may be reading the
      * file at this moment. A truncated config fails to parse and leaves that adapter running with
-     * no log output, and a missing one makes it load the {@code logback.xml} bundled in its jar,
-     * whose JavaFX appender kills it on its first log line ({@code NoClassDefFoundError:
-     * javafx/application/Application}). {@code ATOMIC_MOVE} keeps the file from ever going missing:
-     * without it {@link Files#move} deletes {@code target} before renaming. It needs no non-atomic
-     * fallback, since a temp file in the same directory never crosses file systems. The temp name
-     * comes from {@link Files#createTempFile} because two writers sharing a fixed name would
-     * truncate each other's temp file.
+     * no appender, so none of its log lines reach the harness, and a missing one makes it load the
+     * {@code logback.xml} bundled in its jar, whose JavaFX appender kills it on its first log line
+     * ({@code NoClassDefFoundError: javafx/application/Application}). {@code ATOMIC_MOVE} keeps the
+     * file from ever going missing: without it {@link Files#move} deletes {@code target} before
+     * renaming. It needs no non-atomic fallback, since a temp file in the same directory never
+     * crosses file systems. The temp name comes from {@link Files#createTempFile} because two
+     * writers sharing a fixed name would truncate each other's temp file.
      *
      * <p>Best-effort: a failure is logged at WARN, the temp file is removed, and the launch goes
      * on. Its adapter then reads whatever file an earlier launch left at {@code target}, and with
-     * none it dies as above. On Windows the rename is refused while another adapter is reading the
-     * file, which costs that launch only the WARN. Package-private for the unit tests.
+     * none it dies as above. Package-private for the unit tests.
+     *
+     * <p>On Windows the rename makes a clash rarer but cannot rule it out. It is refused while
+     * another adapter is reading the file, which costs that launch only the WARN, and an adapter
+     * that opens the file at the moment of a rename is refused the open and runs with no appender,
+     * as with a truncated file.
      *
      * @param target the config file the adapter is pointed at
      */
@@ -356,12 +361,13 @@ public class IceAdapterLauncher {
                     StandardCopyOption.REPLACE_EXISTING,
                     StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
-            LOG.warn("Could not write headless logback config {}: {}", target, e.getMessage());
+            LOG.warn(
+                    "Could not write headless logback config {}: {}", target, Failures.describe(e));
             if (temp != null) {
                 try {
                     Files.deleteIfExists(temp);
                 } catch (IOException cleanup) {
-                    LOG.debug("Could not delete {}: {}", temp, cleanup.getMessage());
+                    LOG.debug("Could not delete {}: {}", temp, Failures.describe(cleanup));
                 }
             }
         }
