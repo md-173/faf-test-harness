@@ -256,6 +256,36 @@ final class CrashInjectionTest {
     }
 
     /**
+     * A crash armed before the launch keeps counting across it and fires in LIVE (WBS-3.2.4.1-fix,
+     * #498). The commit into LIVE disarms every FSM timeout, so this is what fails if the crash is
+     * ever made one.
+     *
+     * <p>The launch comes a second after {@code JoinGame} and the crash a second after that, so the
+     * crash is checked as armed while the game is still in JOINING, before the launch, and the halt
+     * lands a full second into LIVE, the margin {@link #armsOnEntryToLive} relies on. Both waits
+     * are taken before the frame, since {@code stateReached} is edge triggered (#250).
+     */
+    @Test
+    void aCrashArmedBeforeTheLaunchFiresAfterIt() throws Exception {
+        MockGameLifecycle lifecycle = lifecycleWith(2, Duration.ofSeconds(1), null);
+        driveToLobby(lifecycle);
+        CompletableFuture<Void> joining = lifecycle.stateReached(GameState.JOINING);
+        CompletableFuture<Void> live = lifecycle.stateReached(GameState.LIVE);
+
+        gpgnet.sendFrame(new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", 2)));
+        joining.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // Armed on JoinGame, before the launch. With no match end there is nothing to warn about.
+        assertCrashArmed(false);
+        live.get(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+        assertTrue(
+                halted.await(STATE_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "a crash armed before the launch must still fire after it");
+        assertEquals(List.of(ExitCodes.INJECTED_CRASH), haltCodes);
+        assertEquals(GameState.LIVE, stateAtHalt, "the crash must land after the launch");
+    }
+
+    /**
      * The game is connected and in the lobby, but has nothing to lose yet. A zero-second delay is
      * used deliberately: if the timer were armed any earlier than the rule says, it would have
      * fired well inside the window below.
