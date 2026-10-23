@@ -589,17 +589,21 @@ The poll was retired by #216 (WBS 3.1.2.5): upstream marks `status`
 Nothing in the harness calls `status`. A hung adapter is caught only when
 one of the setup or role calls (`setLobbyInitMode`, `setIceServers`,
 `hostGame`, `joinGame`, `connectToPeer`) times out after 5 s: the session
-fails, and `run` exits `70`. A hang at any other time goes unnoticed until
-something else ends the session.
+fails, and `run` exits `70`. A hang at any other time does not end the
+session: a timed-out `iceMsg` or `disconnectFromPeer` only logs a WARN.
 
 `mock-game` has no equivalent introspection RPC; its health is inferred
 from liveness via `onExit()` (§6.1). The other half of the design, GPGNet
 `GameState` frames arriving via the adapter at an expected cadence, was not
-built either: nothing times the game's frames.
+built either. The one timer on the game is the safety net its `GameEnded`
+frame arms: a game still running 30 s later is torn down
+(`MockClientLifecycle`, #192).
 
 ## 7. Teardown strategy
 
-The teardown sequence has three layers, each a fallback for the previous.
+The teardown has three layers. §7.1 is the session's own sequence, which
+ends each child through §7.2's `terminate()`; §7.3 covers the parent JVM
+exiting or being killed.
 
 ### 7.1 Graceful (`SessionTeardown`)
 
@@ -619,10 +623,10 @@ adapter: its `quit` handler calls `TrayIcon.close()` without checking that a
 tray exists, which throws before the adapter can exit, so `quit` is refused
 (`-32099`) or goes unanswered and step 4's SIGTERM ends it. No
 `disconnectFromPeer` is sent here, unlike json-rpc-spec §9 step 17; the
-client sends one only for a peer the lobby reports gone before the match
-starts.
+Mock Client sends one only for a peer the lobby reports gone before the
+match starts.
 
-### 7.2 Forceful (any graceful step fails or times out)
+### 7.2 Forceful (`SubprocessManager.terminate()`)
 
 ```text
 1. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
