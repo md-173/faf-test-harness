@@ -274,10 +274,12 @@ the output of `--help`:
 
 The table below is a quick reference. If it ever drifts from `--help`,
 `--help` wins. **Required** there means required by the full-session config
-validation, which `run` and `session` apply. The three diagnostics each validate
-a narrower slice: `ice-smoke` and `launch-ice` the `iceAdapter*` / `player*` /
-logging fields, and `launch-game` the `mockGame*` / port / `player*` / logging
-fields. None of the lobby or OAuth rows applies to any of them.
+validation, which `run` applies, and `session` once per peer, with the peer's
+`--peer-*-token-file` standing in for the two `oauth*TokenFile` rows. The three
+diagnostics each validate a narrower slice: `ice-smoke` and `launch-ice` the
+`iceAdapter*` / `player*` / logging fields, and `launch-game` the `mockGame*` /
+port / `player*` / logging fields. None of the lobby or OAuth rows applies to
+any of them.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
@@ -325,8 +327,8 @@ A blank environment variable or config key counts as unset, so it leaves the
 default in place rather than failing. On the refresh-token channel an empty
 `--oauth-token-url=` or `--oauth-client-id=` exits `2` as missing instead,
 since an empty flag still counts as set and hides the variable and the config
-key, and a token URL outside its row's form exits `2` whichever layer set it
-(#522). The three bootstrap settings above
+key. A token URL outside its row's form exits `2` there too, whichever layer
+set it (#522). The three bootstrap settings above
 (`oauthAuthEndpoint`, `oauthRedirectUri`, `oauthScopes`) are required by
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
