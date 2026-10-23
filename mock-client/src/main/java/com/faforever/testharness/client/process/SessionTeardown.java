@@ -48,11 +48,11 @@ import org.slf4j.LoggerFactory;
  * SIGTERM→grace→SIGKILL escalation (bounded internally by twice each manager's start-time grace,
  * plus up to a second for the child's output to reach the log); {@link
  * IceAdapterConnection#close()} is a synchronous socket close; the lobby close, the lobby's reply
- * to it included (#510), is awaited for at most {@link #LOBBY_CLOSE_TIMEOUT}, so a session's last
- * lobby lines are logged before teardown returns rather than in whatever runs next in the JVM. A
- * hung resource cannot block the sequence indefinitely. The owner's step runs under this instance's
- * lock and has to bound itself: the lifecycle's waits at most five seconds for its lobby send and
- * two for a dying adapter.
+ * to it included (#510), is awaited for at most {@link #LOBBY_CLOSE_TIMEOUT}, so the close's own
+ * line is logged before teardown returns rather than in whatever runs next in the JVM, unless a
+ * frame was being handled when teardown closed. A hung resource cannot block the sequence
+ * indefinitely. The owner's step runs under this instance's lock and has to bound itself: the
+ * lifecycle's waits at most five seconds for its lobby send and two for a dying adapter.
  *
  * <p><b>Idempotent and convergent:</b> the first {@link #run()} wins; later calls (and concurrent
  * ones, which block until the first finishes) are no-ops. The signal hook and the FSM's TERMINATED
