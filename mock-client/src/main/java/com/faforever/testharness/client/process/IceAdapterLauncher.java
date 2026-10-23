@@ -8,6 +8,7 @@ import com.faforever.testharness.shared.process.SubprocessManager;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,8 +61,11 @@ import org.slf4j.LoggerFactory;
  * <p>Side effect of the override: under a {@code .jar} launch the adapter no longer writes its own
  * {@code <LOG_DIR>/ice-adapter.log} (the console-only config has no file appender); its output is
  * preserved only via the harness {@code ProcessOutputLogger} capture. The config path and {@link
- * #LOG_DIR} are fixed, so concurrent harness instances share them — the contents are identical, so
- * the shared write is benign; per-session isolation is future work (spec §2.4).
+ * #LOG_DIR} are fixed, so harness commands started from one directory share them; per-session
+ * isolation is future work (spec §2.4). The shared config is never rewritten in place, only
+ * replaced by renaming a complete copy over it, so an adapter that starts while another launch
+ * writes it reads either the complete old config or the complete new one (see {@link
+ * #writeHeadlessLogbackConfig}).
  *
  * <p>Not thread-safe; a launcher is expected to be used by a single caller for a single launch.
  */
@@ -83,20 +87,6 @@ public class IceAdapterLauncher {
     static final String TELEMETRY_SERVER = "wss://ice-telemetry.faforever.xyz";
 
     /**
-     * Diagnostic logger for the launcher itself; adapter output is tagged {@link #COMPONENT_TAG}.
-     */
-    private static final Logger LOG = LoggerFactory.getLogger(IceAdapterLauncher.class);
-
-    /** Grace between SIGTERM and SIGKILL for the adapter (spec §5.3). */
-    private static final Duration TERMINATE_GRACE = Duration.ofSeconds(5);
-
-    /** Per-child log directory handed to the adapter via {@code LOG_DIR} (spec §2.3). */
-    private static final Path LOG_DIR = Path.of("logs", "ice-adapter");
-
-    /** File name of the headless logback config materialised under {@link #LOG_DIR}. */
-    private static final String HEADLESS_LOGBACK_FILE = "logback-headless.xml";
-
-    /**
      * Console-only logback config written for the adapter child JVM. The upstream {@code -nojfx}
      * jar bundles a {@code logback.xml} that wires in a JavaFX {@code TextAreaLogAppender}; on a
      * JavaFX-less JRE the first log line then fails with {@code NoClassDefFoundError:
@@ -104,7 +94,7 @@ public class IceAdapterLauncher {
      * -Dlogback.configurationFile}) keeps the adapter headless; its output still reaches the
      * harness through {@code ProcessOutputLogger}.
      */
-    private static final String HEADLESS_LOGBACK_XML =
+    static final String HEADLESS_LOGBACK_XML =
             """
             <?xml version="1.0" encoding="UTF-8"?>
             <configuration>
@@ -118,6 +108,20 @@ public class IceAdapterLauncher {
               </root>
             </configuration>
             """;
+
+    /**
+     * Diagnostic logger for the launcher itself; adapter output is tagged {@link #COMPONENT_TAG}.
+     */
+    private static final Logger LOG = LoggerFactory.getLogger(IceAdapterLauncher.class);
+
+    /** Grace between SIGTERM and SIGKILL for the adapter (spec §5.3). */
+    private static final Duration TERMINATE_GRACE = Duration.ofSeconds(5);
+
+    /** Per-child log directory handed to the adapter via {@code LOG_DIR} (spec §2.3). */
+    private static final Path LOG_DIR = Path.of("logs", "ice-adapter");
+
+    /** File name of the headless logback config materialised under {@link #LOG_DIR}. */
+    private static final String HEADLESS_LOGBACK_FILE = "logback-headless.xml";
 
     /** Adapter-relevant settings the argument list is built from. */
     private final IceAdapterSettings settings;
@@ -196,7 +200,7 @@ public class IceAdapterLauncher {
         // stderr separate so stderr can be routed to WARN (spec §4 / §5.3).
         createLogDir();
         if (BinaryLaunchCommand.isJar(binary)) {
-            writeHeadlessLogbackConfig();
+            writeHeadlessLogbackConfig(headlessLogbackPath());
         }
 
         LOG.info("Launching ICE adapter: {}", String.join(" ", argv));
@@ -317,16 +321,49 @@ public class IceAdapterLauncher {
     }
 
     /**
-     * Writes {@link #HEADLESS_LOGBACK_XML} to {@link #headlessLogbackPath()} so the {@code .jar}
-     * adapter can be pointed at it. Best-effort: if the write fails, logback simply falls back to a
-     * built-in console default (still JavaFX-free), so the adapter remains launchable.
+     * Writes {@link #HEADLESS_LOGBACK_XML} to {@code target} so the {@code .jar} adapter can be
+     * pointed at it, by renaming a complete temp file over {@code target} rather than rewriting it.
+     *
+     * <p>An adapter launched by another harness command in the same directory may be reading the
+     * file at this moment. A truncated config fails to parse and leaves that adapter running with
+     * no log output, and a missing one makes it load the {@code logback.xml} bundled in its jar,
+     * whose JavaFX appender kills it on its first log line ({@code NoClassDefFoundError:
+     * javafx/application/Application}). {@code ATOMIC_MOVE} keeps the file from ever going missing:
+     * without it {@link Files#move} deletes {@code target} before renaming. It needs no non-atomic
+     * fallback, since a temp file in the same directory never crosses file systems. The temp name
+     * comes from {@link Files#createTempFile} because two writers sharing a fixed name would
+     * truncate each other's temp file.
+     *
+     * <p>Best-effort: a failure is logged at WARN, the temp file is removed, and the launch goes
+     * on. Its adapter then reads whatever file an earlier launch left at {@code target}, and with
+     * none it dies as above. On Windows the rename is refused while another adapter is reading the
+     * file, which costs that launch only the WARN. Package-private for the unit tests.
+     *
+     * @param target the config file the adapter is pointed at
      */
-    private void writeHeadlessLogbackConfig() {
-        Path target = headlessLogbackPath();
+    static void writeHeadlessLogbackConfig(final Path target) {
+        Path temp = null;
         try {
-            Files.writeString(target, HEADLESS_LOGBACK_XML);
+            temp =
+                    Files.createTempFile(
+                            target.toAbsolutePath().getParent(),
+                            target.getFileName() + ".",
+                            ".tmp");
+            Files.writeString(temp, HEADLESS_LOGBACK_XML);
+            Files.move(
+                    temp,
+                    target,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException e) {
             LOG.warn("Could not write headless logback config {}: {}", target, e.getMessage());
+            if (temp != null) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException cleanup) {
+                    LOG.debug("Could not delete {}: {}", temp, cleanup.getMessage());
+                }
+            }
         }
     }
 }
