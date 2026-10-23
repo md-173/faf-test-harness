@@ -1,10 +1,13 @@
 package com.faforever.testharness.client.config;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -12,13 +15,14 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
+import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Model.OptionSpec;
 
 /**
  * Unit-level tests for {@link LayeredDefaultProvider}: env-var derivation, JSON-key derivation via
  * the underlying field, blank-string handling, JSON numeric round trips, and constructor-time file
- * validation. Bypasses the full {@link ConfigLoader} pipeline so failures point at the provider
- * rather than picocli.
+ * validation, including the check that every key in the file is one some command reads. Bypasses
+ * the full {@link ConfigLoader} pipeline so failures point at the provider rather than picocli.
  */
 final class LayeredDefaultProviderTest {
 
@@ -39,7 +43,7 @@ final class LayeredDefaultProviderTest {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", "ws://from-env/ws");
 
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, null);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, null, root());
 
         assertEquals(
                 "ws://from-env/ws", provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
@@ -51,7 +55,7 @@ final class LayeredDefaultProviderTest {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", "");
 
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, file);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, file, root());
 
         assertEquals(
                 TestFixtures.LOBBY_URL,
@@ -63,7 +67,7 @@ final class LayeredDefaultProviderTest {
     void jsonStringValueIsReturnedFromFile(@TempDir final Path tempDir) throws Exception {
         Path file = TestFixtures.writeJson(tempDir, TestFixtures.minimalRequiredJson());
 
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), file);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), file, root());
 
         assertEquals(
                 TestFixtures.LOBBY_URL,
@@ -81,7 +85,7 @@ final class LayeredDefaultProviderTest {
         Path file = tempDir.resolve("port.json");
         Files.writeString(file, json);
 
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), file);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), file, root());
 
         assertEquals(
                 "8765",
@@ -91,7 +95,7 @@ final class LayeredDefaultProviderTest {
 
     @Test
     void unsetFieldReturnsNullSoPicocliFallsBackToBuiltInDefault() {
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), null);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(Map.of(), null, root());
 
         assertNull(provider.defaultValue(optionSpecFor("--ice-adapter-rpc-port")));
     }
@@ -102,7 +106,7 @@ final class LayeredDefaultProviderTest {
         Map<String, String> env = new LinkedHashMap<>();
         env.put("FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL", "ws://from-env/ws");
 
-        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, file);
+        LayeredDefaultProvider provider = new LayeredDefaultProvider(env, file, root());
 
         assertEquals(
                 "ws://from-env/ws", provider.defaultValue(optionSpecFor("--lobby-websocket-url")));
@@ -114,7 +118,7 @@ final class LayeredDefaultProviderTest {
                 IllegalArgumentException.class,
                 () ->
                         new LayeredDefaultProvider(
-                                Map.of(), Path.of("/path/that/does/not/exist.json")));
+                                Map.of(), Path.of("/path/that/does/not/exist.json"), root()));
     }
 
     @Test
@@ -146,7 +150,7 @@ final class LayeredDefaultProviderTest {
         IllegalArgumentException e =
                 assertThrows(
                         IllegalArgumentException.class,
-                        () -> new LayeredDefaultProvider(Map.of(), file));
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
 
         assertEquals(
                 1, e.getMessage().split("\\R").length, "diagnostic spans lines: " + e.getMessage());
@@ -164,13 +168,138 @@ final class LayeredDefaultProviderTest {
         assertTrue(rendered.endsWith("FORGED"), "value was truncated: " + rendered);
     }
 
+    @Test
+    void aKeyNoCommandReadsIsRefusedNamingItAndTheFile(@TempDir final Path tempDir)
+            throws Exception {
+        // The flag in camel case, as the README's old rule had it. --lobby-websocket-url reads
+        // lobbyWebSocketUrl, so this key used to be dropped without a word (#490).
+        Path file =
+                Files.writeString(
+                        tempDir.resolve("typo.json"),
+                        "{\"lobbyWebsocketUrl\": \"ws://localhost:8003\"}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertEquals("unknown config key \"lobbyWebsocketUrl\" in " + file, e.getMessage());
+    }
+
+    @Test
+    void everyUnknownKeyIsNamedInFileOrder(@TempDir final Path tempDir) throws Exception {
+        // A known key among them, and an order that is neither alphabetical nor the one a
+        // java.util.HashSet iterates these three in, so a list that names every key, is sorted,
+        // or is collected through a hash set fails.
+        Path file =
+                Files.writeString(
+                        tempDir.resolve("typos.json"),
+                        "{\"zeta\": 1, \"logLevel\": \"DEBUG\", \"mid\": 2, \"alpha\": 3}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertEquals("unknown config keys \"zeta\", \"mid\", \"alpha\" in " + file, e.getMessage());
+    }
+
+    @Test
+    void theKeysOfTheConfigAndHelpOptionsAreRefused(@TempDir final Path tempDir) throws Exception {
+        // Field names, but of options nothing in a file can set: --config names the file itself,
+        // and the other two are the fields behind picocli's --help and --version. The message must
+        // name all three, so dropping any one exclusion fails.
+        Path file =
+                Files.writeString(
+                        tempDir.resolve("inert.json"),
+                        "{\"configFile\": \"other.json\", \"helpRequested\": true,"
+                                + " \"versionRequested\": true}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertEquals(
+                "unknown config keys \"configFile\", \"helpRequested\", \"versionRequested\" in "
+                        + file,
+                e.getMessage());
+    }
+
+    @Test
+    void aKeyWhoseValueIsNullIsStillChecked(@TempDir final Path tempDir) throws Exception {
+        // null reads as unset, but a misspelt placeholder is still misspelt, and this way it is
+        // caught before anyone fills it in.
+        Path file = Files.writeString(tempDir.resolve("null.json"), "{\"tyop\": null}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertEquals("unknown config key \"tyop\" in " + file, e.getMessage());
+    }
+
+    @Test
+    void aStaleKeySetToNullGetsItsDeprecationError(@TempDir final Path tempDir) throws Exception {
+        // Null values used to be dropped before any check, so this loaded unseen. Kept, it meets
+        // the stale-key check first, whose message says what to do instead.
+        Path file =
+                Files.writeString(tempDir.resolve("stale-null.json"), "{\"oauthPassword\": null}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertTrue(
+                e.getMessage().startsWith("deprecated config key \"oauthPassword\""),
+                e.getMessage());
+    }
+
+    @Test
+    void anUnknownKeyWithALineBreakStaysOnOneLine(@TempDir final Path tempDir) throws Exception {
+        // A JSON key can carry a line break through its \n escape, and the key is part of the
+        // diagnostic, so like every other caller-controlled operand it goes through oneLine.
+        Path file =
+                Files.writeString(
+                        tempDir.resolve("forged.json"), "{\"a\\nUsage: mock-client FORGED\": 1}");
+
+        IllegalArgumentException e =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> new LayeredDefaultProvider(Map.of(), file, root()));
+
+        assertEquals(
+                1, e.getMessage().split("\\R").length, "diagnostic spans lines: " + e.getMessage());
+        assertTrue(
+                e.getMessage().contains("\"a\\nUsage: mock-client FORGED\""),
+                "key was not escaped onto the line: " + e.getMessage());
+    }
+
+    @Test
+    void theShippedExampleConfigHoldsOnlyKeysTheClientReads() throws Exception {
+        // Operators start from this file (harness-runbook.md §4), so a key in it the client
+        // refuses would fail their first run. build.gradle copies it onto the test classpath.
+        URL example = LayeredDefaultProviderTest.class.getResource("/mock-client.example.json");
+        assertNotNull(example, "mock-client.example.json is not on the test classpath");
+        Path file = Path.of(example.toURI());
+
+        assertDoesNotThrow(() -> new LayeredDefaultProvider(Map.of(), file, root()));
+    }
+
+    /** The root command as {@code ConfigLoader} hands it to the provider, subcommands and all. */
+    private static CommandSpec root() {
+        return new CommandLine(new MockClientCli()).getCommandSpec();
+    }
+
     /**
      * Borrow a real {@link OptionSpec} from a {@link MockClientCli} so the provider sees the same
      * option metadata picocli would supply at runtime — including the underlying {@code Field}
      * reference used for JSON-key derivation.
      */
     private static OptionSpec optionSpecFor(final String flag) {
-        OptionSpec opt = new CommandLine(new MockClientCli()).getCommandSpec().findOption(flag);
+        OptionSpec opt = root().findOption(flag);
         if (opt == null) {
             throw new IllegalStateException("Unknown CLI flag in test: " + flag);
         }
