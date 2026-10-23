@@ -7,7 +7,7 @@ import java.util.OptionalInt;
 
 /**
  * The minimal valid {@link MockClientConfig} for tests that need a config but not a particular one,
- * so that only this class calls the record's constructor (#374). Each test class used to spell the
+ * so that no other test calls the record's constructor (#374). Each test class used to spell the
  * components out, and a branch that added a test class compiled on its own yet broke {@code
  * compileTestJava} once it met a branch that changed a component (#424 and #461).
  *

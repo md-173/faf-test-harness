@@ -159,7 +159,8 @@ final class MatchmakingQueueTest {
     /**
      * Sends a sentinel frame and waits until the client has handled it. The connection handles
      * frames in order on one thread, and the lifecycle's handlers run on it, so every frame sent
-     * before the sentinel has been handled too, along with any transition it drove.
+     * before the sentinel has been handled too, along with any transition its handler drove on that
+     * thread.
      */
     private void awaitEarlierFramesHandled() throws InterruptedException {
         CountDownLatch handled = new CountDownLatch(1);
@@ -433,8 +434,8 @@ final class MatchmakingQueueTest {
         server.broadcastText(
                 "{\"command\":\"notice\",\"style\":\"info\","
                         + "\"text\":\"Player Rhiza is timed out for 10 minutes\"}");
-        // No FSM event follows a search_timeout, so once all three frames have been handled the
-        // state must still be IDLE.
+        // A search_timeout posts no FSM event and the paired stop self-loops in IDLE, so once all
+        // three frames have been handled the state must still be IDLE.
         awaitEarlierFramesHandled();
         assertEquals(ClientState.IDLE, lifecycle.getState());
         assertTrue(
