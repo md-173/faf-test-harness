@@ -122,7 +122,7 @@ for A and a joiner B; C and D repeat B's rows.
 | B is joining | `state entry: JOINING` | `MockClientLifecycle` |
 | A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
 | C told about B, B about C (3+ players) | on C: `peer connect: login=<loginB> id=<idB> offer=true`; on B: `peer connect: login=<loginC> id=<idC> offer=false` | `MockClientLifecycle` |
-| Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
+| Candidates crossing | `IceMsg received {"srcId":<id>,"destId":<id>,…,"candidates":[…]}` on both sides | `[ICEAdapter]` |
 | Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
 | **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B; one pair per link, so 2, 6 or 12 lines at two, three or four players | `IceEventLogger` |
 | Teardown | `state entry: TERMINATED` → `session teardown complete`, once per peer | `MockClientLifecycle` |

@@ -170,7 +170,7 @@ final class GameEndReportingTest {
     }
 
     @Test
-    void normalCleanEndRunsTeardownExactlyOnce() throws Exception {
+    void normalCleanEndTerminatesAndDisarmsTheSafetyNet() throws Exception {
         FakeIceAdapterConnection iceConn = new FakeIceAdapterConnection(MINIMAL_CONFIG);
         ListAppender<ILoggingEvent> appender = lifecycleAppender();
         MDC.put(LoggingSetup.INSTANCE_MDC_KEY, "clean-end");

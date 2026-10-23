@@ -731,11 +731,11 @@ public final class MockClientLifecycle {
      * transitions" on every clean run — noise that reads as a fault to anyone scanning the output.
      *
      * <p>Handled here rather than filtered at the event source: both events carry an exit code that
-     * genuinely matters in the other four states, so the events are real and only the timing makes
-     * them uninteresting. Same treatment {@link Disconnected} already gets, and for the same reason
-     * — a deliberate debug-level no-op beats the framework's generic WARN. Self-loops skip entry
-     * hooks, so neither can re-run teardown. {@link AuthFailed} and {@link MatchCancelled} are
-     * no-ops too, without an action (#455, #457; see {@link SessionFailures}).
+     * genuinely matters in the other four states, so the events are real. Same treatment {@link
+     * Disconnected} already gets, and for the same reason: a registered handler beats the
+     * framework's generic WARN. The adapter's handler also classifies the exit (#341). Self-loops
+     * skip entry hooks, so neither can re-run teardown. {@link AuthFailed} and {@link
+     * MatchCancelled} are no-ops, without an action (#455, #457; see {@link SessionFailures}).
      */
     private void registerPostTeardownExitTransitions() {
         states.get(ClientState.TERMINATED)
@@ -1389,21 +1389,20 @@ public final class MockClientLifecycle {
     }
 
     /**
-     * TERMINATED no-op action for {@link AdapterExited} (#252): teardown kills the ICE adapter,
-     * whose exit is then reported on a session that has already torn down. Logged at debug level
-     * only and does not re-run teardown.
+     * TERMINATED action for {@link AdapterExited} (#252): teardown kills the ICE adapter, whose
+     * exit is then reported on a session that has already torn down. Classifies the exit through
+     * {@link #onAdapterExited(Event)} and does not re-run teardown.
      *
      * @param message the {@link AdapterExited} event; guaranteed by registration, never anything
      *     else.
      */
     private void logAdapterExitAfterTeardown(Event message) {
-        // Classify first, exactly as logGameExitAfterTeardown runs onGameExited. This PR makes
-        // TERMINATED the normal state for AdapterExited to arrive in rather than a rare one — the
-        // race drives the failed transition there before the queued event is delivered — so
-        // whatever this handler skips is skipped on the common failure path, not an edge case.
-        // onAdapterExited is what distinguishes a clean exit from an abnormal one and is the only
-        // place a non-zero code reaches WARN; without it every post-race adapter exit reads the
-        // same at DEBUG, whatever the adapter actually did.
+        // Classify first (#341), exactly as logGameExitAfterTeardown runs onGameExited. A launch
+        // whose adapter dies before its RPC port accepts drives the failed transition into
+        // TERMINATED before the queued AdapterExited is delivered, so on that path this handler is
+        // where the exit is classified, not the transition action. onAdapterExited is what
+        // distinguishes a clean exit from an abnormal one; without it every post-race adapter exit
+        // reads the same at DEBUG, whatever the adapter actually did.
         onAdapterExited(message);
         AdapterExited exited = (AdapterExited) message;
         LOG.debug("ICE adapter exited after session teardown (code={})", exited.exitCode());

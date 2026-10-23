@@ -10,8 +10,8 @@ import java.util.Optional;
  * MockClientConfig#joinConfig()}.
  *
  * @param targetGameId ID of the existing game to join
- * @param password optional password sent alongside {@code game_join}; empty is encoded as a {@code
- *     null} password field, matching the protocol
+ * @param password optional password sent alongside {@code game_join}; empty leaves the field out of
+ *     the frame, which faf-server reads as no password
  */
 public record GameJoinConfig(int targetGameId, Optional<String> password) {
 
