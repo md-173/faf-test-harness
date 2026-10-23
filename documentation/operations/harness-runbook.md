@@ -623,22 +623,23 @@ before welcome (code 1011)`, and exits `70` at once. Keep `--uid-binary-path`
 pointed at a real `faf-uid`.
 
 **What a rejection looks like.** Most faults collapse into one message, because
-the broker answers every failed token check alike, then closes the connection.
-The harness logs the lobby's text verbatim:
+the broker answers every failed SmallRye JWT check alike, then closes the
+connection. The harness logs the lobby's text verbatim:
 
 | `lobby authentication_failed:` | What to look at |
 |---|---|
 | `Invalid access token provided` | a signing key absent from the JWKS, or a JWKS the broker could not fetch; a signature that key does not verify; `exp` or `iat` missing, or an expired `exp`; `iss` other than `https://hydra.faforever.xyz` |
 | `Token does not have permission to login to the lobby server` | `scp` missing, or without `lobby` |
 
-Two kinds of bad token produce no `authentication_failed` line at all. A `sub` that is
-not a number ends the login with a Close frame, code 1011, and nothing before
-it, which `run` reports as `the lobby closed the connection before welcome
-(code 1011)`. That is also what a placeholder `unique_id` produces, so rule the
-UID out before suspecting the token. A numeric `sub` naming no account passes
-the broker, faf-server then fails to find it without telling the client, and
-`run` gives up after 45 s with `lobby session with <url> timed out before
-welcome`.
+Two kinds of bad token produce no `authentication_failed` line at all. A `sub`
+that is not a number ends the login with a Close frame, code 1011, and nothing
+before it, which `run` reports as `the lobby closed the connection before
+welcome (code 1011)`. That is also what a placeholder `unique_id` produces, so
+rule the UID out before suspecting the token. A numeric `sub` naming no account
+passes the broker's own checks. The policy server may then refuse it, giving the
+same 1011 close; if it does not, faf-server fails to find the account without
+telling the client, and `run` gives up after 45 s with `lobby session with <url>
+timed out before welcome`.
 
 faf-server v1.18.x answers with its own texts: `Token signature was invalid`
 for a bad `kid` or signature, an expired `exp`, a missing `scp` or a `sub` that
@@ -706,8 +707,8 @@ contain spaces.
 
 This does not tell you whether the signature is good, only what the token claims.
 A token that reads correctly here and is still rejected has a signature the
-lobby's JWKS does not verify. One whose `sub` names no account there is not
-rejected on `ws.faforever.xyz`: its login goes unanswered, as above.
+lobby's JWKS does not verify. One whose `sub` names no account there gets no
+`authentication_failed` on `ws.faforever.xyz`, as above.
 
 **A run with no other OAuth options.** Nothing below configures OAuth except the
 token file:
@@ -1976,7 +1977,8 @@ jobs:
                   print("::warning::%s carries no readable claims; the lobby decides" % name)
                   continue
               if "exp" not in claims:
-                  print("%s carries no exp, which the lobby accepts" % name)
+                  print("::warning::%s carries no exp, which the test lobby's broker rejects; "
+                        "mint a fresh one" % name)
                   continue
               exp = claims["exp"]
               # A bool is an int, so it is not a number here. A number too large for this
