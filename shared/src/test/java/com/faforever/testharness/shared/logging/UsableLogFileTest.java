@@ -19,10 +19,14 @@ import org.junit.jupiter.params.provider.ValueSource;
  * parser, while {@code logs/%d{yyyy}/app.jsonl} converts to a regex perfectly well and then dies
  * starting the rolling policy with {@code Unknown periodicity type}. A guard that checks only the
  * regex conversion accepts the second and leaves #305 open for it.
+ *
+ * <p>{@code a:-b.jsonl} and <code>a}b.jsonl</code> fail neither site. {@code logback.xml} reads the
+ * path through {@code ${LOG_FILE:-...}}, which substitutes inside the value too and cuts both to
+ * {@code a}, so Logback would open another file than the one checked (#524).
  */
 final class UsableLogFileTest {
 
-    /** Paths Logback cannot build a working rollover policy from. */
+    /** Paths Logback cannot build a working rollover policy from, or would not use as given. */
     @ParameterizedTest
     @ValueSource(
             strings = {
@@ -31,7 +35,9 @@ final class UsableLogFileTest {
                 "a(b.jsonl",
                 "a%.jsonl",
                 "${LOG_FILE}",
-                "logs/%d{yyyy}/app.jsonl"
+                "logs/%d{yyyy}/app.jsonl",
+                "a}b.jsonl",
+                "a:-b.jsonl"
             })
     void anUnusablePathIsRejected(final String path) {
         assertFalse(
