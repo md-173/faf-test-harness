@@ -475,7 +475,7 @@ Source:
 ### 5.1 API
 
 ```java
-// Launch — replaces §2.7 steps 3–4
+// Launch: replaces §2.7 step 3
 SubprocessManager ice = SubprocessManager.start(
         pb,                        // fully-configured ProcessBuilder (§2.7 steps 1–2)
         "ICEAdapter",              // MDC component tag — appears in every log line
@@ -519,11 +519,12 @@ follows this sequence:
 // 1. Configure ProcessBuilder per §2.6 / §2.8
 ProcessBuilder pb = new ProcessBuilder(argv);
 pb.environment().put("LOG_DIR", "logs/ice-adapter/");
-pb.directory(sessionScratchDir);
+// No pb.directory(...): §2.4's per-session scratch directory is not
+// built, so the child inherits the harness's working directory.
 // Note: do NOT call redirectErrorStream — SubprocessManager keeps streams
 //       separate so stderr can be routed to WARN (§4 routing diagram).
 
-// 2. Start — one call replaces §2.7 steps 3–4
+// 2. Start: one call replaces §2.7 step 3
 iceAdapter = SubprocessManager.start(pb, "ICEAdapter", Duration.ofSeconds(5));
 LOG.info("ICE adapter started pid={}", iceAdapter.pid());
 
@@ -535,7 +536,7 @@ iceAdapter.onExit().thenAccept(code -> {
     }
 });
 
-// 4. Connect-retry loop (§2.7 steps 5–6) — JSON-RPC, out of scope here
+// 4. Connect-retry loop (§2.7 step 4): JSON-RPC, out of scope here
 
 // 5. Graceful teardown (§7.1)
 shuttingDown.set(true);   // set BEFORE terminate so the callback sees it
@@ -549,8 +550,8 @@ A runnable self-contained demonstration lives at
 
 ## 6. Health monitoring
 
-Two independent signals; either one transitioning to "unhealthy" triggers
-session teardown:
+One signal is built, process liveness (§6.1): a child's exit triggers
+session teardown. The RPC-level check in §6.2 was designed but not built.
 
 ### 6.1 Process liveness
 
@@ -571,9 +572,10 @@ Crashes are observed within milliseconds; no polling required for liveness.
 
 ### 6.2 Hung-process detection (RPC-level health check)
 
-A pure liveness check is insufficient — the adapter can be alive but stuck
-(e.g. internal STUN call deadlock). The Mock Client polls
-`status` (json-rpc-spec §4) every **30 s** with a **2 s** read timeout.
+**Designed, not built.** A pure liveness check is insufficient, since the
+adapter can be alive but stuck (e.g. internal STUN call deadlock), so the
+design had the Mock Client poll `status` (json-rpc-spec §4) every **30 s**
+with a **2 s** read timeout:
 
 | Outcome | Action |
 |---|---|
@@ -582,32 +584,54 @@ A pure liveness check is insufficient — the adapter can be alive but stuck
 | RPC error | Log WARN with code; treat as miss. |
 | Socket EOF | Adapter is dead — handled by §6.1 path. |
 
+The poll was retired by #216 (WBS 3.1.2.5): upstream marks `status`
+`@Deprecated(forRemoval = true)`, and the real client polls nothing.
+Nothing in the harness calls `status`. A hung adapter is caught only when
+one of the setup or role calls (`setLobbyInitMode`, `setIceServers`,
+`hostGame`, `joinGame`, `connectToPeer`) times out after 5 s: the session
+fails, and `run` exits `70`. A hang at any other time does not end the
+session: a timed-out `iceMsg` or `disconnectFromPeer` only logs a WARN.
+
 `mock-game` has no equivalent introspection RPC; its health is inferred
-from (a) liveness via `onExit()`, and (b) GPGNet `GameState` frames
-arriving via the adapter at expected cadence (FSM-driven, not implemented
-in the controller).
+from liveness via `onExit()` (§6.1). The other half of the design, GPGNet
+`GameState` frames arriving via the adapter at an expected cadence, was not
+built either. The one timer on the game is the safety net its `GameEnded`
+frame arms: a game still running 30 s later is torn down
+(`MockClientLifecycle`, #192).
 
 ## 7. Teardown strategy
 
-The teardown sequence has three layers, each a fallback for the previous.
+The teardown has three layers. §7.1 is the session's own sequence, which
+ends each child through §7.2's `terminate()`; §7.3 covers the parent JVM
+exiting or being killed.
 
-### 7.1 Graceful (preferred path, json-rpc-spec §9 phase K)
+### 7.1 Graceful (`SessionTeardown`)
 
 ```text
-1. MC → adapter: disconnectFromPeer(id) per peer  (best-effort)
-2. MC → adapter: quit
-3. Wait up to 5 s for process.onExit().
-4. MC → mock-game: shutdown signal (TBD — likely close GPGNet socket;
-                   mock-game treats EOF as its own teardown trigger).
-5. Wait up to 5 s for mock-game onExit().
+1. MC → mock-game: terminate() (§7.2), which sends no signal if the game
+   already exited. mock-game runs its own teardown on SIGTERM.
+2. MC → lobby: GameState Ended, unless the game already reported its end.
+3. MC → adapter: quit, answer awaited ≤ 2 s; unless refused, wait ≤ 2 s
+   for the exit.
+4. MC → adapter: terminate() (§7.2), which sends no signal if quit ended it.
+5. Close the adapter's JSON-RPC socket, then the lobby WebSocket (≤ 5 s).
 ```
 
-### 7.2 Forceful (any graceful step fails or times out)
+`SessionTeardown` runs these once, whether the state machine's TERMINATED
+entry or a signal hook starts it. On a headless host step 3 never ends the
+adapter: its `quit` handler calls `TrayIcon.close()` without checking that a
+tray exists, which throws before the adapter can exit, so `quit` is refused
+(`-32099`) or goes unanswered and step 4's SIGTERM ends it. No
+`disconnectFromPeer` is sent here, unlike json-rpc-spec §9 step 17; the
+Mock Client sends one only for a peer the lobby reports gone before the
+match starts.
+
+### 7.2 Forceful (`SubprocessManager.terminate()`)
 
 ```text
-6. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
-7. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to the grace again.
-8. Log ERROR if still alive after 10 s total; abandon and continue.
+1. process.toHandle().destroy(): POSIX SIGTERM. Wait up to the grace (5 s for both launchers).
+2. process.toHandle().destroyForcibly(): POSIX SIGKILL. Wait up to the grace again.
+3. If still alive after that, give up and continue; nothing logs it above DEBUG.
 ```
 
 Both strikes go through the process handle. `Process.destroy()` and
@@ -747,17 +771,17 @@ twice, plus up to 1 s for the output) rather than their sum.
 | Adapter exits immediately, with `0` either way | bad CLI args (§2.6), GPGNet port in use (`BindException`, then its own shutdown NPEs on the unstarted RPC server) | `onExit()` before the RPC connect completes (§2.7) | Log args, abort session, surface to FSM as launch failure; `run` exits `70` |
 | Adapter alive but never accepts RPC | crash mid-init | connect-retry loop in §2.7 step 4 exhausts | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
 | Adapter's RPC port already held by another process | a stale process, or a port collision | the adapter logs `Could not start RPC server.`, its listener thread dies and it stays up serving GPGNet only, so the connect succeeds against whatever holds the port and the first setup call times out after 5 s | Tear down (§7.1 → §7.2), abort session as a launch failure; `run` exits `70` |
-| Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
+| Adapter hangs mid-session | internal deadlock | a setup or role call timing out after 5 s; no poll, since §6.2 was not built | Tear down (§7.1 → §7.2); the session fails and `run` exits `70` |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
 | Parent JVM SIGKILL'd | OOM kill, `kill -9` | None in the JVM: a killed JVM runs no hook | On Linux the kernel sends both children SIGTERM (§7.3 layer 2); elsewhere they are left running |
 
 ## 9. Open questions
 
-- **`mock-game` graceful shutdown signal.** §7.1 step 4 assumes EOF on the
-  GPGNet socket is the trigger. The mock-game CLI/lifecycle must confirm
-   this; otherwise an explicit `--shutdown` admin port or
-  a SIGTERM-on-stdin convention is needed.
+- ~~**`mock-game` graceful shutdown signal.**~~ **Resolved: SIGTERM.**
+  `SessionTeardown` ends the game with `terminate()` (§7.1 step 1), and
+  mock-game runs its own teardown on the signal. It also ends at once if the
+  adapter closes its GPGNet connection (§7.3).
 - ~~**Per-host sessions vs per-container.**~~ **Resolved — Java orchestrator is
   the target, not Docker-compose.** The client spec (`project-spec.md`) lists
   "Create test harness that spawns N clients automatically" as an explicit goal,
@@ -826,19 +850,19 @@ sequenceDiagram
 
     Note over MC,IA: live session — JSON-RPC traffic per json-rpc-spec §9
 
-    loop every 30 s
-        MC->>IA: status (2 s timeout)
-        IA-->>MC: Status{...}
-    end
-
-    Note over MC: end-of-game path
-    MC->>IA: disconnectFromPeer(...)
-    MC->>IA: quit
-    IA-->>MC: result null
-    deactivate IA
-    MC->>MG: close GPGNet socket
+    Note over MC: teardown while the game is still running (SessionTeardown, §7.1)
+    MC->>MG: SIGTERM (terminate)
     MG-->>MC: process exit
     deactivate MG
+    MC->>LS: GameState Ended
+    MC->>IA: quit (2 s bound)
+    IA-->>MC: refused (-32099) or no answer, on a headless host
+    MC->>IA: SIGTERM (terminate)
+    IA-->>MC: process exit
+    deactivate IA
+    Note over MC: close the JSON-RPC socket
+    MC->>LS: close WebSocket
+    Note over MC,MG: a game that ends its own match exits first, so teardown sends it no SIGTERM and no GameState Ended
 
     Note over MC,MG: signal path (SIGTERM or SIGINT to the parent)
     MC->>IA: terminate() from the SubprocessRegistry shutdown hook

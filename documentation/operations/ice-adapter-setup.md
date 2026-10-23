@@ -147,9 +147,10 @@ below):
  "id":1,"jsonrpc":"2.0"}
 ```
 
-> **AC #2 is verified manually and recorded here.** The durable, re-runnable connect+`status` check
-> is owned by the 3.1.4.1 `IceAdapterConnection` (#155); it is gated on this task (the real
-> binary) plus #155 (the transport). Re-run the probe (Quick start) after any version bump.
+> **AC #2 is verified manually and recorded here.** The durable, re-runnable check, a connect and
+> then a `setLobbyInitMode` round-trip, is owned by the 3.1.4.1 `IceAdapterConnection` (#155); it
+> is gated on this task (the real binary) plus #155 (the transport). Re-run the probe (Quick start)
+> after any version bump.
 >
 > **Since WBS-3.1.4.3 there is also a CLI check**, `mock-client ice-smoke`, which proves the same
 > bring-up plus the GPGNet endpoint and needs no lobby or OAuth placeholders. It deliberately does
@@ -157,7 +158,7 @@ below):
 > version bump run both: `ice-smoke` for the verdict, and the manual `status` probe below only if
 > you need the response body quoted here.
 >
-> That check ships as `IceAdapterConnectionLiveSmokeTest`, run under `./gradlew integrationTest`
+> The durable check is `IceAdapterConnectionLiveSmokeTest`, run under `./gradlew integrationTest`
 > (not `test`). It resolves the adapter jar from the **`FAF_ICE_ADAPTER_JAR`** environment variable
 > if set, else the default `faf-ice-adapter.jar` on the launcher's path (repo root / CWD), and
 > self-skips cleanly when neither resolves — so it merges and stays green before this jar is

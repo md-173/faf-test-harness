@@ -7,7 +7,6 @@ import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.process.IceAdapterLauncher;
 import com.faforever.testharness.shared.process.SubprocessManager;
-import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.DatagramSocket;
 import java.net.ServerSocket;
@@ -16,9 +15,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -32,10 +29,10 @@ import org.junit.jupiter.api.condition.EnabledIf;
  * <p>The 3.1.4.1 unit tests ({@link IceAdapterConnectionTest}) exercise {@link
  * IceAdapterConnection} against an in-process {@link ScriptedJsonRpcServer} — that proves framing,
  * correlation, and disconnect mechanics, but not that we can actually launch and connect to the
- * real binary. This covers exactly the gap: {@code documentation/research/json-rpc-spec.md} §9 boot
- * steps 1–2 (adapter launch → TCP connect) plus the §6 {@code status} health round-trip. Everything
- * past readiness ({@code setIceServers}, ICE candidate relay, GPGNet forwarding) is downstream and
- * out of scope.
+ * real binary. This covers exactly the gap: {@code documentation/research/json-rpc-spec.md} §9
+ * steps 1 to 3 (adapter launch, TCP connect, then {@code setLobbyInitMode}, the first request a
+ * session sends). Everything after that ({@code setIceServers}, ICE candidate relay, GPGNet
+ * forwarding) is downstream and out of scope.
  *
  * <p><b>Gating.</b> Mirrors {@link
  * com.faforever.testharness.client.lobby.LobbyConnectionLiveSmokeTest}: an {@link EnabledIf} probe
@@ -81,17 +78,6 @@ final class IceAdapterConnectionLiveSmokeTest {
     private static final Duration CALL_TIMEOUT = Duration.ofSeconds(5);
 
     /**
-     * Overall budget for {@code status} to start answering once {@link
-     * IceAdapterConnection#connect()} returns. {@code connect()} only proves the TCP port is open;
-     * the adapter may accept the socket a moment before its JSON-RPC handlers are registered, so
-     * {@code status} is polled across this window rather than called once.
-     */
-    private static final Duration READINESS_TIMEOUT = Duration.ofSeconds(10);
-
-    /** Delay between {@code status} readiness attempts. */
-    private static final Duration READINESS_RETRY_DELAY = Duration.ofMillis(200);
-
-    /**
      * A SIGTERM-ed JVM exits with 128 + SIGTERM(15); 128 + SIGKILL(9) = 137 would mean grace blown.
      * POSIX signal semantics — appropriate for this Linux/WSL-targeted harness; a Windows port
      * would need a different expected code (TerminateProcess does not use signal-offset exit
@@ -101,7 +87,7 @@ final class IceAdapterConnectionLiveSmokeTest {
 
     @Test
     @EnabledIf("adapterJarAvailable")
-    void spawnsRealAdapterConnectsRunsReadinessStatusThenExitsCleanly() throws Exception {
+    void spawnsRealAdapterConnectsSetsLobbyInitModeThenExitsCleanly() throws Exception {
         Path binary = resolveAdapterBinary();
         AdapterPorts ports = freeAdapterPorts();
         int rpcPort = ports.rpc();
@@ -114,12 +100,13 @@ final class IceAdapterConnectionLiveSmokeTest {
             // Boot step 2: TCP connect (with retry while the adapter JVM is still binding).
             conn.connect().get(30, TimeUnit.SECONDS);
 
-            // Readiness (spec §6 health poll): poll `status` until the adapter's RPC handlers
-            // answer — connect() only proves the TCP port is open. A present, non-null result
-            // proves the request/response path works end-to-end (the adapter double-encodes the
-            // result as a JSON string).
-            JsonNode status = awaitStatusReady(conn);
-            System.out.println("[live smoke] ICE adapter status: " + status);
+            // Setup step 3: the first request a session sends, sent once, straight after connect,
+            // as MockClientLifecycle and the real client do. An answer proves the adapter parses,
+            // dispatches and replies, which connect() alone does not. Not polled: a request sent
+            // this early waits in the socket buffer, and 3.3.14's JJsonRpc builds a peer's method
+            // table before the peer starts reading; a poll would pass where a session's single
+            // call fails. Not status: upstream marks it @Deprecated(forRemoval = true).
+            conn.call("setLobbyInitMode", "normal").get(CALL_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
         } finally {
             conn.close();
             // Lifecycle is owned by SubprocessManager: SIGTERM, then SIGKILL after the launcher's
@@ -134,43 +121,6 @@ final class IceAdapterConnectionLiveSmokeTest {
         assertFalse(adapter.isAlive(), "adapter should be dead after terminate()");
         assertEquals(
                 EXIT_SIGTERM, exitCode, "adapter should exit cleanly on SIGTERM within the grace");
-    }
-
-    /**
-     * Poll {@code status} until the adapter returns a real result, retrying on a per-call timeout
-     * or an RPC error (e.g. the method not being registered yet). This turns the accept-before-
-     * handlers-ready race into a self-healing wait. A non-readiness failure — a dropped connection
-     * or any other cause — aborts immediately rather than being retried.
-     *
-     * @param conn the connected adapter transport
-     * @return the first present, non-null {@code status} result
-     * @throws IllegalStateException if {@code status} never answers within {@link
-     *     #READINESS_TIMEOUT}, or the call fails for a reason other than a timeout/RPC error
-     */
-    private static JsonNode awaitStatusReady(final IceAdapterConnection conn)
-            throws InterruptedException {
-        long deadline = System.nanoTime() + READINESS_TIMEOUT.toNanos();
-        Throwable last = null;
-        do {
-            try {
-                JsonNode status =
-                        conn.call("status").get(CALL_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-                if (status != null && !status.isNull()) {
-                    return status;
-                }
-                last = new IllegalStateException("adapter `status` returned no result");
-            } catch (TimeoutException e) {
-                last = e;
-            } catch (ExecutionException e) {
-                if (!(e.getCause() instanceof IceRpcException)) {
-                    throw new IllegalStateException("adapter `status` call failed", e.getCause());
-                }
-                last = e.getCause();
-            }
-            Thread.sleep(READINESS_RETRY_DELAY.toMillis());
-        } while (System.nanoTime() < deadline);
-        throw new IllegalStateException(
-                "adapter `status` never became ready within " + READINESS_TIMEOUT, last);
     }
 
     /**

@@ -143,7 +143,7 @@ a successful response; blank means `null`.
 | `iceMsg` | `remotePlayerId: int`, `msg: string` (**not** an object) | — | Hand a remote ICE candidate / SDP message to the local PeerRelay. `msg` is the candidates payload **as a JSON string**, not an object — see the payload-shape correction below. |
 | `sendToGpgNet` | `header: string`, `chunks: array` | — | Send an arbitrary GPGNet frame to the game (escape hatch for messages without a dedicated method). |
 | `setIceServers` | `iceServers: array<RTCIceServer>` | — | Configure STUN/TURN servers. **MUST be called before `joinGame` / `connectToPeer`.** |
-| `status` | — | `Status` (see §6) | Poll the adapter's runtime state. Used as health-check signal by WBS 2.2.8. |
+| `status` | none | `Status` (see §6) | Poll the adapter's runtime state. Deprecated for removal upstream (3.3.14); the WBS 2.2.8 health poll designed on it was not built (subprocess-orchestration-spec §6.2). |
 
 ### 4.1 `RTCIceServer` shape
 
@@ -249,7 +249,8 @@ Returned by the `status` method. Shape from the README:
 > string**, not a nested object — it must be parsed again; and (2) the gpgnet block is spelled
 > **`gpgpnet`** (an upstream typo), not `gpgnet`. Example:
 > `{"result":"{\"version\":\"SNAPSHOT\",…,\"gpgpnet\":{…},\"relays\":[]}","id":1,"jsonrpc":"2.0"}`.
-> The R35 status DTO and the §6.2 health poller (subprocess-orchestration-spec) must account for both.
+> Anything that parses `status` must handle both. Nothing in the harness does: the R35 status DTO
+> and the subprocess-orchestration-spec §6.2 health poll were never built.
 
 ## 7. ICE candidate relay loop (end-to-end)
 
@@ -366,7 +367,7 @@ must implement.
 | ICE | 14 | IA → MC | `onConnected(local, remote, true)` | High-level confirmation. |
 | Live | 15 | IA → MC | `onGpgNetMessageReceived("GameState", ["Launching"])` | Mock-game has gone live. Mock Client wraps and forwards to lobby. |
 | Live | 16 | IA → MC | additional `onGpgNetMessageReceived(…)` | `GameOption`, `PlayerOption`, `GameMods`, `GameResult`, `JsonStats`, `GameEnded`. Forwarded verbatim. |
-| Health | * | MC → IA | `status` | Polled every 30 s with 2 s timeout (WBS 2.2.8). |
+| Health | * | MC → IA | `status` | Designed, not built: WBS 2.2.8 planned a poll every 30 s with a 2 s timeout, retired with `status`'s deprecation (subprocess-orchestration-spec §6.2). |
 | Teardown | 17 | MC → IA | `disconnectFromPeer(id)` | One per peer; optional but tidy. Adapter side-effects: tears down the PeerRelay and emits GPGNet DisconnectFromPeer(id) to mock-game. |
 | Teardown | 18 | MC → IA | `quit` | Graceful shutdown. |
 | Teardown | 19 | (proc) | wait for adapter exit ≤ 5 s, else `SIGTERM`/`SIGKILL` | See WBS 2.2.8. |
@@ -489,6 +490,7 @@ sequenceDiagram
     Note over HIA,JIA: UDP game traffic now flows IA<->IA, no more JSON-RPC needed for it
 
     Note over HMC,JMC: Phase I — Health polling (every 30 s, optional)
+    Note over HMC,JMC: Not built, the harness never sends status (subprocess-orchestration-spec §6.2)
     HMC->>HIA: status
     HIA-->>HMC: result Status{...}
     JMC->>JIA: status
