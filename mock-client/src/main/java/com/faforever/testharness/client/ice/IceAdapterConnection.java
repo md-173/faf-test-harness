@@ -603,7 +603,9 @@ public class IceAdapterConnection {
             array.add(mapper.valueToTree(param));
         }
         request.put("id", id);
-        LOG.info("Sending ICE RPC request {}", request);
+        // DEBUG, like inbound frames: once real ICE servers are configured, setIceServers carries
+        // TURN credentials, which must stay out of default-level logs (WBS-3.1-fix, #371).
+        LOG.debug("Sending ICE RPC request {}", request);
 
         try {
             write(request);

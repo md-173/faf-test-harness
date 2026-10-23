@@ -1123,7 +1123,7 @@ is a real capture, not a reconstruction:
 | B joins | `Sending game_join for uid=<uid>`, then `game launch: uid=<uid> …` | `MockClientLifecycle` |
 | B is joining | `state entry: JOINING` | `MockClientLifecycle` |
 | A told about B | `peer connect: login=<loginB> id=<idB> offer=true` | `MockClientLifecycle` |
-| Candidates crossing | `Sending ICE RPC request {…"method":"iceMsg"…}` on both sides | `IceAdapterConnection` |
+| Candidates crossing | `IceMsg received {"srcId":<id>,"destId":<id>,…,"candidates":[…]}` on both sides | `[ICEAdapter]` |
 | Peer states moving | `peer ice: local=<id> remote=<id> state=gathering` → `awaitingCandidates` → `checking` → `connected` | `IceEventLogger` |
 | **The verdict** | `peer connected: local=<idA> remote=<idB> connected=true`, and the mirror image on B | `IceEventLogger` |
 | Teardown | `state entry: TERMINATED` → `session teardown complete`, on both peers | `MockClientLifecycle` / `SessionTeardown` |
