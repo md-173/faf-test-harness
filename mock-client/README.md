@@ -274,15 +274,15 @@ the output of `--help`:
 
 The table below is a quick reference. If it ever drifts from `--help`,
 `--help` wins. **Required** there means required by the full-session config
-validation, which only `run` applies. The three diagnostics each validate a
-narrower slice: `ice-smoke` and `launch-ice` the `iceAdapter*` / `player*` /
+validation, which `run` and `session` apply. The three diagnostics each validate
+a narrower slice: `ice-smoke` and `launch-ice` the `iceAdapter*` / `player*` /
 logging fields, and `launch-game` the `mockGame*` / port / `player*` / logging
 fields. None of the lobby or OAuth rows applies to any of them.
 
 | JSON key | Env var | CLI flag | Default | Required | Description |
 |---|---|---|---|---|---|
-| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | `wss://ws.faforever.xyz` | no | WebSocket endpoint of the FAF lobby server; the default is the FAF test lobby. |
-| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | `https://hydra.faforever.xyz/oauth2/token` | no² | OAuth2 token endpoint (Hydra `/oauth2/token`); the default is the FAF test environment's. |
+| `lobbyWebSocketUrl` | `FAF_MOCK_CLIENT_LOBBY_WEBSOCKET_URL` | `--lobby-websocket-url` | `wss://ws.faforever.xyz` | no | WebSocket endpoint of the FAF lobby server: a `ws://` or `wss://` URL with a host, a port no higher than 65535 and no fragment. Any other URL exits `2`, whichever layer set it (#522). The default is the FAF test lobby. A blank variable or config key counts as unset, but an empty `--lobby-websocket-url=` exits `2` as missing, since an empty flag still counts as set and hides the other two: drop it to fall back. |
+| `oauthTokenUrl` | `FAF_MOCK_CLIENT_OAUTH_TOKEN_URL` | `--oauth-token-url` | `https://hydra.faforever.xyz/oauth2/token` | no² | OAuth2 token endpoint (Hydra `/oauth2/token`): an `http://` or `https://` URL with a host and a port no higher than 65535. The default is the FAF test environment's. |
 | `oauthAuthEndpoint` | `FAF_MOCK_CLIENT_OAUTH_AUTH_ENDPOINT` | `--oauth-auth-endpoint` | — | no | OAuth2 authorization endpoint, used by the one-time refresh-token bootstrap. |
 | `oauthRedirectUri` | `FAF_MOCK_CLIENT_OAUTH_REDIRECT_URI` | `--oauth-redirect-uri` | — | no | Redirect URI registered on the OAuth client. |
 | `oauthScopes` | `FAF_MOCK_CLIENT_OAUTH_SCOPES` | `--oauth-scopes` | — | no | Space-separated OAuth2 scopes (e.g. `openid offline lobby`). |
@@ -322,7 +322,11 @@ default to the FAF test environment, as `lobbyWebSocketUrl` does (#421), so
 pointing the harness at another environment means setting the lobby and token
 URLs together, and the client id too if that Hydra registers a different one.
 A blank environment variable or config key counts as unset, so it leaves the
-default in place rather than failing. The three bootstrap settings above
+default in place rather than failing. On the refresh-token channel an empty
+`--oauth-token-url=` or `--oauth-client-id=` exits `2` as missing instead,
+since an empty flag still counts as set and hides the variable and the config
+key, and a token URL outside its row's form exits `2` whichever layer set it
+(#522). The three bootstrap settings above
 (`oauthAuthEndpoint`, `oauthRedirectUri`, `oauthScopes`) are required by
 neither channel — they document the one-time browser procedure that mints a
 refresh token, which nothing in this process runs.
