@@ -15,7 +15,7 @@ import org.junit.jupiter.api.io.TempDir;
  * The shipped {@code logback.xml} loads without a warning or an error (WBS-2.3.6-fix, #524).
  *
  * <p>Its {@code NopStatusListener} keeps Logback's startup status off the console, errors included,
- * so a broken or deprecated element would ship unnoticed, as {@code converterClass} did until #521.
+ * so a broken or deprecated element would ship silently, as {@code converterClass} did until #521.
  * Logback still records every status, so loading the file into a throwaway context and reading them
  * back catches that at build time instead.
  */

@@ -5,7 +5,9 @@ import ch.qos.logback.core.ContextBase;
 import ch.qos.logback.core.rolling.RollingFileAppender;
 import ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy;
 import ch.qos.logback.core.rolling.helper.FileNamePattern;
+import ch.qos.logback.core.spi.ScanException;
 import ch.qos.logback.core.util.FileSize;
+import ch.qos.logback.core.util.OptionHelper;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -210,13 +212,13 @@ public final class LoggingSetup {
      * stays correct if that conversion changes and does not reject paths Logback would have
      * accepted. Legitimate paths pass, including relative, parent-relative and absolute ones.
      *
-     * <p>A path the rotator accepts can still be one Logback cannot open: a directory, or a file
-     * whose directory cannot be created or written (#524). Logback then starts without its file
-     * appender and records why only as a status message, which it prints at startup only when no
-     * status listener is registered, and {@code logback.xml} registers one. So the run wrote no
-     * JSONL and said nothing. {@link #whyUnwritable} catches that here, with the same swap to the
-     * default. When the default cannot be written either, a last line says no JSONL is being
-     * written, and the console is the run's only output.
+     * <p>A path the rotator accepts can still be one Logback cannot open: a directory, or a new
+     * file in a directory that cannot be created or written (#524). Logback then starts, but its
+     * file appender does not, and it records why only as a status message, which it prints at
+     * startup only when no status listener is registered, and {@code logback.xml} registers one.
+     * So the run wrote no JSONL and said nothing. {@link #whyUnwritable} catches that here, with
+     * the same swap to the default. When the default cannot be written either, a last line says
+     * no JSONL is being written, and the console is the run's only output.
      *
      * @param fallback the default path to use when the configured one is unusable.
      */
@@ -296,11 +298,17 @@ public final class LoggingSetup {
      * periodicity type}. Checking only the first left that case failing exactly as it did before
      * this guard existed.
      *
+     * <p>Before either, the path must come through {@code logback.xml}'s own {@code
+     * ${LOG_FILE:-...}} substitution unchanged (#524). Logback substitutes inside the value too, so
+     * a closing brace or {@code :-} that is not part of a variable cuts the path short there, and
+     * Logback would open another file than the one {@link #whyUnwritable} checked, a directory
+     * included. Balanced braces, as in {@code %d{yyyy-MM-dd}}, come through as they are.
+     *
      * <p>{@code setMaxFileSize} is load-bearing rather than cosmetic: it is what builds the
      * size-and-time triggering policy that computes the period. {@code maxHistory} and {@code
      * totalSizeCap} change no verdict and are left out.
      *
-     * <p>The verdict is the throw and nothing else. Scanning {@link
+     * <p>Past that comparison, the verdict is the throw and nothing else. Scanning {@link
      * ch.qos.logback.core.status.StatusManager} for errors instead would reject paths that log
      * perfectly well today, {@code a%b.jsonl} and {@code a%X{k}b.jsonl} among them.
      *
@@ -309,12 +317,16 @@ public final class LoggingSetup {
      * directly, which {@link UsableLogFileTest} does.
      *
      * @param path the candidate log file path.
-     * @return {@code true} if Logback can build and start a rollover policy from it.
+     * @return {@code true} if Logback keeps the path as given and can build and start a rollover
+     *     policy from it.
      */
     static boolean isUsableLogFile(final String path) {
         String pattern = path + ROLLOVER_SUFFIX;
         try {
             ContextBase context = new ContextBase();
+            if (!OptionHelper.substVars(path, context).equals(path)) {
+                return false;
+            }
             Pattern.compile(new FileNamePattern(pattern, context).toRegex());
 
             RollingFileAppender<Object> parent = new RollingFileAppender<>();
@@ -328,7 +340,7 @@ public final class LoggingSetup {
             policy.start();
             policy.stop();
             return true;
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | ScanException e) {
             return false;
         }
     }

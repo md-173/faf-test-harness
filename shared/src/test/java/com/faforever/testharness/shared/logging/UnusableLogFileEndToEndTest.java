@@ -28,7 +28,7 @@ import org.junit.jupiter.params.provider.ValueSource;
  * own failures through the logger, so an operator who mistyped a path got a 45-line {@code
  * LogbackException} and no word about why the run then failed.
  *
- * <p>A path Logback can parse but not open, such as a directory or a file in a directory that
+ * <p>A path Logback can parse but not open, such as a directory or a new file in a directory that
  * cannot be written, lost the JSONL without a word, and gets the same treatment since #524. Every
  * case counts the notice lines exactly: each problem prints one, once, however often {@link
  * UnusableLogFileChild} configures logging.
@@ -117,8 +117,9 @@ final class UnusableLogFileEndToEndTest {
     }
 
     /**
-     * The same for a file in a directory that cannot be written. Not on Windows, where a read-only
-     * directory still takes new files, and skipped for a user who writes through one, as root does.
+     * The same for a new file in a directory that cannot be written. Not on Windows, where a
+     * read-only directory still takes new files, and skipped for a user who writes through one, as
+     * root does.
      */
     @Test
     @DisabledOnOs(OS.WINDOWS)
