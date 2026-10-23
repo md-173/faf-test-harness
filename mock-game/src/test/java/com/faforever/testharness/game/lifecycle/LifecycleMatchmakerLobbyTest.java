@@ -60,6 +60,9 @@ final class LifecycleMatchmakerLobbyTest {
     /** A second peer. */
     private static final int OTHER_PEER_ID = 3;
 
+    /** An id this game was never told about. */
+    private static final int UNKNOWN_PEER_ID = 99;
+
     private MockGameConfig config;
 
     private ScriptedGpgNetServer gpgnet;
@@ -145,6 +148,34 @@ final class LifecycleMatchmakerLobbyTest {
         assertEquals(GameState.JOINING, lifecycle.getState());
     }
 
+    @Test
+    void aDepartureIsAnsweredWithDisconnectedPeerOnly() throws Exception {
+        MockGameLifecycle lifecycle = hosting();
+        announce(peer, PEER_ID);
+        drainFrames(PLAYER_OPTION_FRAMES);
+
+        depart(PEER_ID);
+
+        // The engine's PeerDisconnected callback, with the id as a string: not the custom lobby's
+        // Disconnected, and no ClearSlot after it, even on the host.
+        assertEquals(GpgNetFrame.of("DisconnectedPeer", Integer.toString(PEER_ID)), nextFrame());
+        assertNoFrame("the matchmaker lobby clears no slot");
+        assertEquals(GameState.HOSTING, lifecycle.getState());
+        awaitLogged("stopped sending peer traffic to player " + PEER_ID);
+    }
+
+    @Test
+    void aDepartureOfAnIdTheGameNeverHadIsAnsweredWithNothing() throws Exception {
+        MockGameLifecycle lifecycle = hosting();
+
+        depart(UNKNOWN_PEER_ID);
+        // Logged inside the departure action, before anything it would send.
+        awaitLogged("Peer (ID: " + UNKNOWN_PEER_ID + ") disconnected but never joined this game");
+
+        assertNoFrame("the engine reports only a peer it had");
+        assertEquals(GameState.HOSTING, lifecycle.getState());
+    }
+
     /** A matchmaker lifecycle in LOBBY, with the connection open and the lobby socket bound. */
     private MockGameLifecycle inLobby() throws Exception {
         MockGameLifecycle lifecycle =
@@ -192,6 +223,11 @@ final class LifecycleMatchmakerLobbyTest {
                 new GpgNetFrame(
                         "ConnectToPeer",
                         List.of(relayAddress(relay), "Smith" + playerId, playerId)));
+    }
+
+    /** The adapter forwarding faf-server's notice that {@code playerId} left. */
+    private void depart(final int playerId) throws IOException {
+        gpgnet.sendFrame(new GpgNetFrame("DisconnectFromPeer", List.of(playerId)));
     }
 
     /** A relay socket's address in the {@code host:port} form the adapter names it. */

@@ -13,7 +13,8 @@ import java.util.Set;
  * <p>Scope is the minimal set the mock-game lifecycle and result reporting need (gpgnet-format-spec
  * §7.1), not the full emit catalogue: the lifecycle frames {@code GameState} and {@code GameEnded};
  * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; the
- * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} (WBS-4.3.6); and
+ * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} from FA's custom
+ * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix); and
  * the result frames {@code GameResult} and {@code JsonStats}. The long tail ({@code AIOption},
  * {@code Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added on demand, not here. There are
  * deliberately no per-message-type classes, just frame-builders.
@@ -168,5 +169,19 @@ public final class GpgNetSender {
      */
     public void clearSlot(final int slot) throws IOException {
         sink.send(GpgNetFrame.of("ClearSlot", slot));
+    }
+
+    /**
+     * Emit {@code DisconnectedPeer(peerId)}, FA's matchmaker lobby reporting that a peer it had is
+     * gone (WBS-3.2.4.1-fix, #506): the engine's {@code PeerDisconnected} callback sends it ({@code
+     * AutolobbyController.lua}). The id is the engine's peer id, which FA keeps as a string ({@code
+     * UILobbyPeerId}; {@code PeerIdToIndex} rejects anything else), so it goes on the wire as a
+     * string chunk, as {@link #disconnected}'s does (§7.1). faf-server has no handler for it.
+     *
+     * @param playerId the id of the player who left
+     * @throws IOException if the frame cannot be sent
+     */
+    public void disconnectedPeer(final int playerId) throws IOException {
+        sink.send(GpgNetFrame.of("DisconnectedPeer", Integer.toString(playerId)));
     }
 }

@@ -628,9 +628,10 @@ public final class MockGameLifecycle {
      * the frame unhandled.
      *
      * <ul>
-     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way FA's
-     *       lobby does and plays on without that peer. From {@code CreateLobby} until launch FA has
-     *       a lobby, and a player leaving it frees a slot rather than ending anyone's game.
+     *   <li><b>LOBBY, HOSTING and JOINING</b> stay put: {@link #peerLeft} answers it the way the FA
+     *       lobby {@code CreateLobby} picked does and plays on without that peer. From {@code
+     *       CreateLobby} until launch FA has a lobby, and a player leaving it frees a slot rather
+     *       than ending anyone's game.
      *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreDepartureDuringMatch}): FA destroys
      *       its lobby when the match launches, and a running game processes no GPGNet input.
      *   <li><b>INITIALIZING and IDLE</b> end the game as a success ({@link #peerDisconnected}), as
@@ -1033,10 +1034,10 @@ public final class MockGameLifecycle {
 
     /**
      * Stay-in-state action for a departure notice from {@code CreateLobby} until launch, in LOBBY,
-     * HOSTING or JOINING (WBS-4.3.6): answers it the way FA's lobby does and plays on without that
-     * peer. No departure ends the game here, whoever left.
+     * HOSTING or JOINING (WBS-4.3.6): answers it the way the FA lobby {@code CreateLobby} picked
+     * does and plays on without that peer. No departure ends the game here, whoever left.
      *
-     * <p>What FA's {@code lobby.lua} does, in the same order: its {@code DisconnectFromPeer}
+     * <p>What FA's custom {@code lobby.lua} does, in the same order: its {@code DisconnectFromPeer}
      * replies {@code Disconnected} with the id for any id at all, then drops the peer, and its
      * {@code PeerDisconnected} callback has the host clear that player's slot, which sends {@code
      * ClearSlot}. Nothing ends: the lobby carries on with a free slot, and a host whose last joiner
@@ -1047,10 +1048,16 @@ public final class MockGameLifecycle {
      * handle_disconnected} only logs, and {@code clear_slot} finds nobody, because by the time the
      * replies arrive faf-server has removed the leaver.
      *
+     * <p>FA's matchmaker lobby, {@code autolobby.lua}, sends no reply of its own and clears no
+     * slot: the engine drops the peer, and its {@code PeerDisconnected} callback sends {@code
+     * DisconnectedPeer} with the id, so only for a peer it had (WBS-3.2.4.1-fix, #506). faf-server
+     * has no handler for that frame and logs it as an unrecognized command.
+     *
      * <p>Dropping the peer means {@link #present} forgets it and {@link GameTrafficSession} stops
      * sending to it. {@link #peers} and {@link #slots} keep it, so army numbering and the results
      * {@link #gameEnds} reports do not move. A notice about a peer this game never had, such as a
-     * joiner that aborted before it finished joining, gets the reply and changes nothing else.
+     * joiner that aborted before it finished joining, gets the custom lobby's reply, or nothing
+     * from the matchmaker lobby, and changes nothing else.
      *
      * <p>A self-loop, so no entry or exit hook runs and every pending FSM timeout stays armed: a
      * departure cannot cancel a launch that is already scheduled.
@@ -1071,14 +1078,19 @@ public final class MockGameLifecycle {
             LOG.info("Peer (ID: {}) disconnected but never joined this game; ignoring", playerId);
         }
         try {
-            gpgnetSender.disconnected(playerId);
+            if (!matchmakerLobby) {
+                gpgnetSender.disconnected(playerId);
+            } else if (known) {
+                gpgnetSender.disconnectedPeer(playerId);
+            }
             if (!known) {
                 return;
             }
             traffic.unregisterPeer(playerId);
-            // Only a host has slots to clear: a joiner sends no PlayerOption, so it records none.
+            // Only a custom lobby's host has slots to clear: a joiner sends no PlayerOption, so it
+            // records none, and the matchmaker lobby sends no ClearSlot.
             Integer slot = slots.get(playerId);
-            if (slot != null) {
+            if (slot != null && !matchmakerLobby) {
                 gpgnetSender.clearSlot(slot);
             }
         } catch (IOException e) {
