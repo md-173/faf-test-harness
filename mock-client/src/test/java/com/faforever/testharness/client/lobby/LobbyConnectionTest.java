@@ -370,10 +370,43 @@ final class LobbyConnectionTest {
         lobby = new LobbyConnection(server.uri());
         lobby.connect().get(5, TimeUnit.SECONDS);
         server.awaitFirstClient();
+        // Held, so the second close comes before the lobby has answered the first (#390): this
+        // side's output is already shut, and the second close must still complete normally.
+        server.holdCloseReplies();
 
+        CompletableFuture<Void> first = lobby.close();
+        CompletableFuture<Void> second = lobby.close();
+        server.releaseCloseReplies();
+
+        first.get(2, TimeUnit.SECONDS);
+        second.get(2, TimeUnit.SECONDS);
+        // Once the lobby has answered, there is nothing left to close.
         lobby.close().get(2, TimeUnit.SECONDS);
-        // The first close shut the output, so this one has nothing to send.
-        lobby.close().get(2, TimeUnit.SECONDS);
+    }
+
+    /**
+     * A close made from inside a handler completes once its frame is sent, with the lobby still
+     * holding its reply (#510): the JDK reads that reply only after the handler returns, so a close
+     * that waited for it would leave its caller waiting out a whole bound. A teardown started from
+     * a handler, by a {@code match_cancelled} for instance, closes this way. The handler hands the
+     * future over instead of waiting on it, so the listener stays free whichever way it goes.
+     */
+    @Test
+    void aCloseFromInsideAHandlerCompletesOnceItsFrameIsSent() throws Exception {
+        lobby = new LobbyConnection(server.uri());
+        CompletableFuture<CompletableFuture<Void>> fromHandler = new CompletableFuture<>();
+        lobby.registerHandler("end", frame -> fromHandler.complete(lobby.close()));
+        lobby.connect().get(5, TimeUnit.SECONDS);
+        server.awaitFirstClient();
+        server.holdCloseReplies();
+        try {
+            server.broadcastText("{\"command\":\"end\"}");
+
+            fromHandler.get(5, TimeUnit.SECONDS).get(5, TimeUnit.SECONDS);
+            server.awaitHeldClose(5, TimeUnit.SECONDS);
+        } finally {
+            server.releaseCloseReplies();
+        }
     }
 
     @Test

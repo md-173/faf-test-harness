@@ -403,8 +403,8 @@ the server-supplied login/id are.
 > the process exits with the signal's conventional code (130 SIGINT / 143
 > SIGTERM), not literally 0 — the close is clean with no error logs, which is
 > what the teardown criteria care about. The hook sends the WebSocket close
-> frame; the server's close echo can land after the JVM has halted, so a trailing
-> `lobby WebSocket closed … LOCAL_CLOSE` line is not always flushed.
+> frame and waits up to 5 s for the server's close echo (#510), so the
+> `lobby WebSocket closed … LOCAL_CLOSE` line is logged before the JVM halts.
 
 ### Capturing the artifact
 

@@ -132,8 +132,9 @@ public final class RunCommand implements Callable<Integer> {
         // The hook runs on every JVM exit, a normal one included, so its "shutdown signal" line is
         // guarded on callFinished, raised on every way out of this method. A hook that finds it
         // down started while the run was still live, which only a signal does (#446). The lobby's
-        // disconnect, the guard before, lost a race on a normal exit: teardown's close returns
-        // once its frame is sent, before the server's echo marks the session disconnected.
+        // disconnect, the guard before, lost a race on a normal exit: teardown's close returned
+        // once its frame was sent, before the server's echo marked the session disconnected, and
+        // it still does when a frame is being handled or the echo is late (#510).
         AtomicBoolean callFinished = new AtomicBoolean();
         Runtime.getRuntime()
                 .addShutdownHook(
