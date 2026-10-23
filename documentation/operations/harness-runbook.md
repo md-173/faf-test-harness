@@ -76,9 +76,9 @@ items below are pointless to obtain otherwise.
   as-is, which needs no bootstrap and no account password.
 - **The `faf-uid` binary**, referenced by the `uidBinaryPath` config key. This
   is a **hard requirement** for a live session: the lobby's policy server
-  rejects a placeholder `unique_id`, and without it the login ends in
-  `{"command":"invalid"}`, which `run` reports at once as `the lobby answered
-  the login with invalid`. There is no way around it for a real
+  rejects a placeholder `unique_id`, and without it the lobby closes the
+  connection with code 1011, which `run` reports at once as `the lobby closed
+  the connection before welcome (code 1011)`. There is no way around it for a real
   session — see §3 for how to obtain it.
 
 ## 2. Running the game against an adapter, no lobby required
@@ -860,7 +860,7 @@ and is not repeated here.**
 
 | Symptom | Log line to look for | Cause / fix |
 |---|---|---|
-| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby answered the login with invalid, …`, the lobby's `{"command":"invalid"}` | The lobby's policy server rejected a placeholder `unique_id`: `uidBinaryPath` is unset, so the static `uniqueId` was sent. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. Less often, checking the token failed on the lobby's side (§3). |
+| `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1011)`, with no `lobby notice (…)` line before it | The lobby's policy server rejected a placeholder `unique_id`: `uidBinaryPath` is unset, so the static `uniqueId` was sent. Set it to a real `faf-uid` binary (§1, §3). There is no way to reach a live session without this. Less often, the lobby failed while handling `auth`. |
 | `run` exits `70` at once, before the `auth` frame is sent | `lobby session with <url> failed: AuthenticationException: faf-uid (<path>) …` | The `faf-uid` binary timed out, exited non-zero, or could not be run at all; the message names the binary, its exit code and its stderr. Check the path, that the file is executable, and that it runs on this machine (§1, §3). |
 | `run` exits `70` at once, without a `session ready` line | `lobby session with <url> failed: AuthenticationException: the lobby closed the connection before welcome (code 1000)`, usually after a `lobby notice (…)` line | The lobby ended the login, and its notice says why: an error notice for a ban or a lobby database outage, an info one for maintenance. With no notice at all, it could not parse the `auth` frame. `the lobby connection dropped before welcome` means the connection was lost rather than closed. |
 | `run` exits `70` after the session was up, and the lobby closed the connection | `the lobby answered one of this run's commands with invalid; reporting it in this run's exit code`, after a WARN `the lobby answered a command with invalid, …` | faf-server failed while handling one of `run`'s own commands (`game_host`, `game_join`, `game_matchmaking`, or a GPGNet frame relayed for the game) and closed the connection (#486). The lobby's logs hold the exception; at DEBUG, `run`'s log shows the frames it sent just before. |
@@ -2200,9 +2200,9 @@ killed run exits on its signal, `130` or `143`, and a JVM `Error` exits `1`.
   everything after it, and exits `2` after the adapter build.
 - **A real `faf-uid`** is needed, for the reason §3 gives.
   On a runner the failure is easy to misread: without the
-  binary the lobby's policy request fails and the login ends in
-  `{"command":"invalid"}`, which `run` reports as `the lobby answered the login
-  with invalid` and which looks like an ordinary auth failure. That is
+  binary the lobby's policy request fails and the lobby closes the connection
+  with code 1011, which `run` reports as `the lobby closed the connection before
+  welcome (code 1011)` and which looks like an ordinary auth failure. That is
   what the probe step exists to pre-empt. A stock GitHub-hosted
   `ubuntu-latest` runner is enough: `faf-uid` v4.0.7 produced a real
   `unique_id` there rather than failing, and both

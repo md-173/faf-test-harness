@@ -226,7 +226,7 @@ Once a WebSocket connection is established and the client holds a valid OAuth JW
 | 1 | Client → Server | `ask_session` | Request a session ID |
 | 2 | Server → Client | `session` | Assign session ID |
 | 3 | Client → Server | `auth` | Authenticate with JWT |
-| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close | Success or failure |
+| 4 | Server → Client | `welcome`, or `authentication_failed`, or `invalid` then a close, or a close alone | Success or failure |
 
 After a successful welcome, the client should be prepared to receive additional state-sync messages such as player_info, game_info, and social. The server also supports matchmaker_info, which is sent in response to requests and periodic updates.
 
@@ -300,14 +300,22 @@ After a successful welcome, the client should be prepared to receive additional 
 }
 ```
 
-faf-server's generic handler sends it when handling the `auth` raised, for example when its
-policy server refuses the `unique_id` or checking the token raises, as when it cannot fetch its
-signing keys, then closes the connection. A token that fails the check is answered with
-`authentication_failed` instead.
+faf-server before v1.19.0 sends it from its generic handler when handling the `auth` raised, for
+example when its policy server refuses the `unique_id` or checking the token raises, as when it
+cannot fetch its signing keys, then closes the connection. A token that fails the check is
+answered with `authentication_failed` instead.
 Since faf-server v1.18.0 (FAForever/server#1093) that close is a Close frame, code 1000, with no
 reason. A banned account and a database outage end the login with an error `notice` and the same
 close instead, `{"command":"notice","style":"error","text":"…"}`, whose text says why. The Mock
 Client ends the login at once on either, naming it, and logs every `notice` with its text (#473).
+
+**4d. Failure: the lobby closes the connection with no frame**
+
+Since 2026-10-21 (FAForever/gitops-stack@542f8b1) `ws.faforever.xyz` is faf-message-broker in
+front of faf-server v1.19.0, and the broker handles `auth` itself. It posts the `unique_id` to the
+policy server, and a refusal, such as a placeholder's, throws out of its message handler, so
+Quarkus closes the socket with code 1011 and no reason, with no frame before it (#530). The Mock
+Client ends the login at once on that close too, naming its code (#473).
 
 ### `unique_id` Handling
 
