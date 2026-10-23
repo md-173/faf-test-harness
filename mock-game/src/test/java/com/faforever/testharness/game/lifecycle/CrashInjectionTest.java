@@ -226,9 +226,9 @@ final class CrashInjectionTest {
      *
      * <p>A multi-peer session runs with auto-launch disabled, because faf-server refuses a {@code
      * game_join} once the host reports {@code GameState Launching}. With no launch delay nothing
-     * ever posts {@code LaunchMatch}, since {@code launchMatch()} is called from no production
-     * code, so the game never enters LIVE at all. Anchored there, the fault would have been
-     * silently inert in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
+     * ever launches the match, since {@code launchMatch()} is called from no production code, so
+     * the game never enters LIVE at all. Anchored there, the fault would have been silently inert
+     * in exactly the configuration {@code TwoPeerSessionLiveTest} runs.
      *
      * <p>The crash delay is {@link #SETTLED_CRASH_SECONDS} rather than zero so {@link #stateAtHalt}
      * means what it claims (#357 review). {@code armCrash()} runs inside the transition action, and

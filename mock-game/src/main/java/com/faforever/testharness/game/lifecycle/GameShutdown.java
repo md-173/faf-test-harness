@@ -33,8 +33,9 @@ import org.slf4j.LoggerFactory;
  *
  * <p><b>Stopping scheduling first is safe because {@link StateMachine#cancel()} never waits for the
  * StateMachine monitor</b> (WBS-2.3.7-fix, #328). Every outbound frame is written from a transition
- * action inside the synchronized {@link
- * StateMachine#receiveEvent(com.faforever.testharness.shared.statemachine.Event)}, and {@link
+ * action, which holds that monitor whether the synchronized {@link
+ * StateMachine#receiveEvent(com.faforever.testharness.shared.statemachine.Event)} runs it or an FSM
+ * timeout does, as for the launch and the match end (WBS-3.2.4.1-fix, #498), and {@link
  * GpgNetConnection#send} is a blocking write. If the adapter stops reading, the kernel send buffer
  * fills and the FSM thread blocks in that write still holding the StateMachine monitor. That is not
  * hypothetical: in the pinned faf-ice-adapter, {@code GPGNetServer$GPGNetClient.listenerThread}
@@ -79,9 +80,8 @@ import org.slf4j.LoggerFactory;
  * process, as one due a moment earlier would have. A timeout whose transition is already under way
  * when {@code cancel()} runs still completes: the GPGNet connect timeout, the optional lobby
  * give-up timer and the match end target ENDED, and the launch delay targets LIVE. That residue is
- * inert. The invalid-transition policy is IGNORE, so a stray event in LIVE or ENDED is logged and
- * dropped; a transition into ENDED meets this once-guarded sequence already run, so nothing tears
- * down twice; and a launch that completes leaves the game in LIVE, or in ENDED if its {@code
+ * inert: a transition into ENDED meets this once-guarded sequence already run, so nothing tears
+ * down twice, and a launch that completes leaves the game in LIVE, or in ENDED if its {@code
  * Launching} frame meets the closed socket, with nothing armed after it, since the FSM schedules
  * nothing once cancelled.
  *
@@ -155,7 +155,7 @@ public final class GameShutdown implements Runnable {
     /** SLF4J logger — see logback.xml for the {@code component=MockGame} MDC. */
     private static final Logger LOG = LoggerFactory.getLogger(GameShutdown.class);
 
-    /** The lifecycle FSM whose scheduling is stopped second, before the socket is closed. */
+    /** The lifecycle FSM whose scheduling is stopped first, before the socket is closed. */
     private final StateMachine fsm;
 
     /**

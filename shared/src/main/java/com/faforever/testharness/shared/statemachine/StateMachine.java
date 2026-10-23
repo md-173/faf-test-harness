@@ -294,14 +294,16 @@ public class StateMachine implements EventListener {
     /**
      * Runs {@code task} on the timeout thread once {@code millis} have passed, unless {@link
      * #cancel()} has run first (WBS-3.2.4.1-fix, #498). It is not a timeout: it moves the machine
-     * nowhere, no commit disarms it, and it never takes this machine's monitor, so it keeps
-     * counting across state changes and runs even while a transition holds the monitor. mock-game's
-     * injected crash is one: it must outlive the launch, and halt the game wherever it stands.
+     * nowhere, no commit disarms it, and it takes no monitor of this machine, so it keeps counting
+     * across state changes, and a transition an event drives, holding the monitor on another
+     * thread, does not hold it up. mock-game's injected crash is one: it must outlive the launch.
      *
      * <p>It shares the timeouts' one thread, so the two run in the order they come due, and at
      * equal delays in the order they were armed: the executor runs tasks due at the same instant
-     * first in, first out. {@code cancel()} stops it as it stops a timeout: one still waiting is
-     * discarded, and one already due is started but does nothing.
+     * first in, first out. A task therefore waits behind a timeout that comes due before it, for
+     * that timeout's whole transition, its wait for the monitor included. {@code cancel()} stops it
+     * as it stops a timeout: one still waiting is discarded, and one already due is started but
+     * does nothing.
      *
      * @param millis the time in milliseconds to wait before running {@code task}, on the monotonic
      *     clock; zero or less runs it at once.
