@@ -56,8 +56,8 @@ final class MainTest {
     private static final Duration TEST_MATCH_DURATION = Duration.ofMillis(100);
 
     /**
-     * A timer long enough that it never fires during a test — for cases that drive the FSM by hand
-     * and need the lifecycle's own scheduler to stay out of the way.
+     * A timer long enough that it never fires during a test, for cases that drive the FSM by hand
+     * and need its launch and match-end timeouts to stay out of the way.
      */
     private static final Duration NO_AUTO_ADVANCE = Duration.ofMinutes(5);
 
@@ -240,7 +240,7 @@ final class MainTest {
                 adapter.sendFrame(
                         new GpgNetFrame("CreateLobby", List.of(0, lobbyPort, "Rhiza", 42, 1)));
                 lifecycle.stateReached(GameState.LOBBY).get(10, TimeUnit.SECONDS);
-                // HOSTING is transient: entering it schedules LaunchMatch TEST_LAUNCH_DELAY later.
+                // HOSTING is transient: entering it arms the launch TEST_LAUNCH_DELAY later.
                 // stateReached is edge triggered and cannot observe a state the FSM has already
                 // left (#250), so the future has to be registered before the frame that causes it.
                 CompletableFuture<Void> hosting = lifecycle.stateReached(GameState.HOSTING);
@@ -294,8 +294,8 @@ final class MainTest {
      * the hook's close lands among those sends. That gives a lock cycle introduced later between a
      * teardown step and the FSM thread more chances to show than a single run would. Before #328,
      * with the old guard restored, repetitions 1 and 3 still passed while most of the rest timed
-     * out. Both timers are set long enough that the lifecycle's own scheduler is not a third racer:
-     * the only {@code GameEnded} here is the one posted below.
+     * out. Both timers are set long enough that neither FSM timeout is a third racer: the only
+     * {@code GameEnded} here is the one posted below.
      */
     @RepeatedTest(20)
     void shutdownHookCompletesDuringTheEndedTransition() throws Exception {

@@ -24,10 +24,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.IntConsumer;
 import org.slf4j.Logger;
@@ -105,9 +101,6 @@ public final class MockGameLifecycle {
     /** A copy of the configuration settings given to the mock game. */
     private final MockGameConfig config;
 
-    /** A scheduler used to make certain transitions occur after a configurable delay. */
-    private final ScheduledThreadPoolExecutor scheduler;
-
     /** The delay before initiating a match after all configuration is done. */
     private final Duration launchDelay;
 
@@ -137,18 +130,19 @@ public final class MockGameLifecycle {
     private final AtomicBoolean crashArmed = new AtomicBoolean(false);
 
     /**
-     * A future that upon completion, drives the state machine to launch the match. Created by the
-     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
-     * caller's thread reads from them.
+     * When the launch timeout {@link #armLaunch()} armed is due, on {@link System#nanoTime()}, or
+     * {@code null} if auto-launch is off. Read only by {@link #timeUntilMatchEnds()}, which prefers
+     * {@link #matchEndsAt} once the match has begun. Touched only by FSM actions, under its
+     * monitor.
      */
-    private volatile ScheduledFuture<?> launchFuture;
+    private Long launchAt;
 
     /**
-     * A future that upon completion, drives the state machine to end the match. Created by the
-     * {@code scheduler}. Marked volatile as the state machine thread writes to them and the
-     * caller's thread reads from them.
+     * When the match-end timeout {@code matchBegins} armed is due, on {@link System#nanoTime()}, or
+     * {@code null} until one is armed. Read only by {@link #timeUntilMatchEnds()}. Touched only by
+     * FSM actions, under its monitor.
      */
-    private volatile ScheduledFuture<?> matchEndFuture;
+    private Long matchEndsAt;
 
     /**
      * Every peer this game was told about, in arrival order. Never pruned, because the host numbers
@@ -299,19 +293,6 @@ public final class MockGameLifecycle {
         this.config = config;
         this.gpgnet = gpgnetServer;
         this.gpgnetConnectionTimeout = gpgnetConnectionTimeout;
-        // Only one delay should be scheduled at a time, so one thread is enough.
-        // Uses a daemon thread, so that it doesn't keep the JVM up after the the main thread(s)
-        // finish executing.
-        this.scheduler =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, "game-scheduler");
-                            t.setDaemon(true);
-                            return t;
-                        });
-        // stopSchedules() shuts this down, which then discards every task still waiting.
-        scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
         this.launchDelay = launchDelay;
         this.matchDuration = matchDuration;
 
@@ -330,7 +311,7 @@ public final class MockGameLifecycle {
         this.machine =
                 new StateMachine(
                         states.get(GameState.INITIALIZING), InvalidTransitionPolicy.IGNORE);
-        this.shutdown = new GameShutdown(machine, gpgnet, this);
+        this.shutdown = new GameShutdown(machine, gpgnet);
 
         // Assigned here rather than at the field, which would read a still-null config. Registered
         // with the shutdown sequence immediately: that sequence is the only thing that stops the
@@ -347,20 +328,14 @@ public final class MockGameLifecycle {
      */
     public void launchMatch() {
         LOG.info("Manually instructed to launch match");
-        // Prevents the delayed future from firing if a manual launch is called.
-        if (launchFuture != null && !launchFuture.isDone()) {
-            launchFuture.cancel(true);
-        }
+        // Leaving HOSTING or JOINING disarms a pending launch timeout, so none fires later.
         machine.receiveEvent(new LaunchMatch());
     }
 
     /** Instruct the lifecycle to end the match. Ignored outside of the LIVE state. */
     public void endMatch() {
         LOG.info("Manually instructed to end match");
-        // Prevents the delayed future from firing if a manual end is called.
-        if (matchEndFuture != null && !matchEndFuture.isDone()) {
-            matchEndFuture.cancel(true);
-        }
+        // Leaving LIVE disarms a pending match-end timeout, so none fires later.
         machine.receiveEvent(new GameEnded());
     }
 
@@ -438,37 +413,6 @@ public final class MockGameLifecycle {
      */
     StateMachine stateMachine() {
         return machine;
-    }
-
-    /**
-     * Cancels any not-yet-started configured schedules (launch delay, match duration and injected
-     * crash) and shuts the scheduler down. Only called by {@link GameShutdown#run()} hence
-     * package-private.
-     *
-     * <p><b>Never interrupts</b> (WBS-3.2.4.1-fix, #487). It uses {@code shutdown()}, not {@code
-     * shutdownNow()}, because it often runs on the scheduler's own thread: a match that ends on its
-     * own posts {@code GameEnded} from its match-end task, and ENDED's entry hook runs the whole
-     * teardown there. An interrupt made the traffic step's wait for its receiver return at once, so
-     * the receiver's totals line raced the process exit. A task already due when this runs is still
-     * started, and does nothing; see {@code schedule(Runnable, Duration)}.
-     */
-    /* package-private */ void stopSchedules() {
-        scheduler.shutdown();
-    }
-
-    /**
-     * How many tasks the lifecycle's scheduler holds that have not started yet: a pending launch,
-     * match end or injected crash. Package-private for {@code GameShutdownTest}, which checks that
-     * a launch was pending before teardown and that teardown discarded it, rather than sleeping
-     * past the launch delay. The queue is what tells the two apart: shutting down discards a task
-     * still waiting for its delay, so it never runs, while without the discard policy set in the
-     * constructor it would stay queued to run when its delay expires. A task already due stays
-     * queued either way, and does nothing once started; see {@code schedule(Runnable, Duration)}.
-     *
-     * @return the number of tasks still queued on the lifecycle's scheduler.
-     */
-    /* package-private */ int queuedSchedules() {
-        return scheduler.getQueue().size();
     }
 
     /**
@@ -711,8 +655,9 @@ public final class MockGameLifecycle {
      * <p>Cancellation is the state machine's, not ours: on every state change, {@code
      * commitTransition} disarms each timeout already pending when that change began, so a game
      * driven into HOSTING or JOINING, or dropped into ENDED by a disconnect, never trips this. That
-     * is the whole reason it uses {@code setTimeout} rather than the lifecycle's own scheduler,
-     * which would need cancelling at each of the four ways out of LOBBY.
+     * is the whole reason it uses {@code setTimeout} rather than {@link StateMachine#schedule(long,
+     * Runnable)}, whose tasks no state change disarms, so they would need cancelling at each of the
+     * four ways out of LOBBY.
      *
      * <p>It is armed from a {@link StateMachine#stateReached} callback, which runs inside the
      * commit into LOBBY. Until WBS-2.3.7-fix (#259) that was load-bearing: LOBBY's entry hook and
@@ -853,12 +798,7 @@ public final class MockGameLifecycle {
             throw recordSendFailure(e);
         }
 
-        // Set up the scheduler if configured. Keeping the handle is what lets a manual
-        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
-        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
-        if (launchDelay != null) {
-            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
-        }
+        armLaunch();
     }
 
     /* Transition action for LOBBY -> JOIN. */
@@ -888,17 +828,28 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured. Keeping the handle is what lets a manual
-        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
-        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
-        if (launchDelay != null) {
-            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
-        }
+        armLaunch();
 
         // A peer is connected and traffic is flowing, so there is now a session to lose (WBS-5.2).
-        // Armed after the launch timer, not before it (#357 review): armCrash reads that timer to
-        // tell whether the match will end before the crash fires.
+        // Armed after the launch, not before it (#357 review): armCrash reads the launch's deadline
+        // to tell whether the match will end before the crash fires. Both run on the FSM's one
+        // timer thread, so at equal delays the launch, armed first, also runs first.
         armCrash();
+    }
+
+    /**
+     * Arms the auto-launch, if configured, as an FSM timeout into LIVE with {@link #matchBegins} as
+     * its action (WBS-3.2.4.1-fix, #498). Called from the actions into HOSTING and JOINING, so the
+     * timeout belongs to the state they land in. Leaving that state disarms it, a manual {@link
+     * #launchMatch()} included, while the {@code ConnectToPeer} and {@code DisconnectFromPeer}
+     * self-loops commit nothing and leave it armed.
+     */
+    private void armLaunch() {
+        if (launchDelay == null) {
+            return;
+        }
+        launchAt = System.nanoTime() + launchDelay.toNanos();
+        machine.setTimeout(launchDelay.toMillis(), states.get(GameState.LIVE), this::matchBegins);
     }
 
     /* Transition action for HOSTING/JOINING -> LIVE. */
@@ -909,16 +860,19 @@ public final class MockGameLifecycle {
             throw recordSendFailure(e);
         }
 
-        // Set up the scheduler if configured. Kept for the same reason as launchFuture above: a
-        // manual endMatch() cancels this one rather than leaving it to fire in ENDED.
+        // An FSM timeout like the launch, so leaving LIVE disarms it, a manual endMatch() included.
+        // When the launch timeout brought the game here, this is armed from that timeout's own
+        // action, which its commit into LIVE keeps (WBS-2.3.7-fix, #259).
         if (matchDuration != null) {
-            matchEndFuture = schedule(() -> machine.receiveEvent(new GameEnded()), matchDuration);
+            matchEndsAt = System.nanoTime() + matchDuration.toNanos();
+            machine.setTimeout(
+                    matchDuration.toMillis(), states.get(GameState.ENDED), this::gameEnds);
         }
 
         // The other arming point (WBS-5.2), for a single game with no peers: it reaches LIVE
-        // without anyone ever registering. Scheduled after the match-end timer above so that at
-        // equal delays on this one-thread scheduler the match ends first and the crash is
-        // cancelled with the rest of the schedule, rather than racing it.
+        // without anyone ever registering. Armed after the match end above so that at equal delays
+        // on the FSM's one timer thread the match ends first and its teardown cancels the crash,
+        // rather than racing it.
         armCrash();
     }
 
@@ -1158,8 +1112,8 @@ public final class MockGameLifecycle {
      *
      * <p><b>Why the timer starts here and not on entry to LIVE.</b> The card that asked for this
      * said "measured from entry to LIVE, so the crash lands mid-match while peers are connected".
-     * In this harness those two halves contradict each other. LIVE is reachable only through {@link
-     * #launchFuture}, which {@link #beginHosting} and {@link #joinGame} arm only when {@code
+     * In this harness those two halves contradict each other. LIVE is reachable only through the
+     * launch timeout, which {@link #beginHosting} and {@link #joinGame} arm only when {@code
      * launchDelay} is non-null, and a multi-peer session must disable auto-launch, because
      * faf-server refuses a {@code game_join} once the host reports {@code GameState Launching} (see
      * {@link MockGameConfig#launchDelay()}). So a multi-peer game never enters LIVE at all, and a
@@ -1181,11 +1135,12 @@ public final class MockGameLifecycle {
         if (crashDelay == null || !crashArmed.compareAndSet(false, true)) {
             return;
         }
-        // Logged only once the task is actually queued. The runbook makes this line the operator's
-        // proof that the timer started, and schedule() returns null rather than throwing when the
-        // scheduler is already shut down, so announcing first would let a torn-down lifecycle claim
-        // an armed crash it never armed.
-        if (schedule(this::injectCrash, crashDelay) == null) {
+        // A task on the FSM's timer thread rather than a timeout, so the commit into LIVE leaves it
+        // counting (WBS-3.2.4.1-fix, #498). Logged only once the task is actually queued. The
+        // runbook makes this line the operator's proof that the timer started, and the FSM queues
+        // nothing once teardown has cancelled its scheduling, so announcing first would let a
+        // torn-down lifecycle claim an armed crash it never armed.
+        if (!machine.schedule(crashDelay.toMillis(), this::injectCrash)) {
             return;
         }
         LOG.info(
@@ -1204,35 +1159,34 @@ public final class MockGameLifecycle {
     }
 
     /**
-     * How long until the pending match-end timer fires, as far as the schedule already says
-     * (WBS-5.2), or {@code null} when nothing is scheduled to end the match.
+     * How long until the armed match end is due, as far as the armed timeouts already say
+     * (WBS-5.2), or {@code null} when nothing is armed to end the match.
      *
-     * <p>Read by {@link #armCrash()} to warn about a crash that cannot land. Both timers share the
-     * one scheduler, and the ENDED entry hook shuts that scheduler down, so a crash still queued
-     * when the match ends is cancelled and the run exits {@code 0} with nothing in the log to say
-     * why.
+     * <p>Read by {@link #armCrash()} to warn about a crash that cannot land. The crash and the
+     * match end share the FSM's one timer thread, and the ENDED entry hook cancels its scheduling,
+     * so a crash still queued when the match ends is cancelled and the run exits {@code 0} with
+     * nothing in the log to say why.
      *
      * <p>Answered here rather than at startup (#357 review), because only here is the crash's own
-     * start known. A crash armed on entry to LIVE races the match-end timer {@code matchBegins} has
-     * just scheduled. One armed by a peer connecting starts earlier, before the launch timer has
+     * start known. A crash armed on entry to LIVE starts with the match end {@code matchBegins} has
+     * just armed. One armed by a peer connecting starts earlier, before the launch timeout has
      * fired, so its match ends a launch delay plus a match duration later. A startup check could
      * only compare the crash delay with the match duration, which warned a joiner that no fault
      * would be injected when its crash was due well inside the match.
      *
-     * <p>{@code null} when auto-launch is off: nothing posts {@code LaunchMatch}, so no match-end
-     * timer is ever created and nothing can cancel the crash. That is the configuration a
-     * multi-peer session runs in.
+     * <p>{@code null} when auto-launch is off: nothing launches the match, so no match end is ever
+     * armed and nothing can cancel the crash. That is the configuration a multi-peer session runs
+     * in.
      *
-     * @return the time until the match is due to end, or {@code null} if it is not scheduled to
+     * @return the time until the match is due to end, or {@code null} if it is not armed to
      */
     private Duration timeUntilMatchEnds() {
-        ScheduledFuture<?> matchEnd = matchEndFuture;
-        if (matchEnd != null && !matchEnd.isDone()) {
-            return Duration.ofMillis(matchEnd.getDelay(TimeUnit.MILLISECONDS));
+        long now = System.nanoTime();
+        if (matchEndsAt != null) {
+            return Duration.ofNanos(matchEndsAt - now);
         }
-        ScheduledFuture<?> launch = launchFuture;
-        if (launch != null && !launch.isDone() && matchDuration != null) {
-            return Duration.ofMillis(launch.getDelay(TimeUnit.MILLISECONDS)).plus(matchDuration);
+        if (launchAt != null && matchDuration != null) {
+            return Duration.ofNanos(launchAt - now).plus(matchDuration);
         }
         return null;
     }
@@ -1258,30 +1212,6 @@ public final class MockGameLifecycle {
                         + "(--crash-after-seconds)",
                 ExitCodes.INJECTED_CRASH);
         halt.accept(ExitCodes.INJECTED_CRASH);
-    }
-
-    /* Wrapper around ScheduledExecutorService.schedule: a task that starts once stopSchedules()
-     * has shut the scheduler down does nothing, and a RejectedExecutionException is logged. */
-    private ScheduledFuture<?> schedule(Runnable command, Duration delay) {
-        try {
-            return scheduler.schedule(
-                    () -> {
-                        // stopSchedules() discards every task still waiting, but one already due is
-                        // still started, and returns here (WBS-3.2.4.1-fix, #487). At equal delays
-                        // this is what cancels a crash with the match end that tore the game down.
-                        if (!scheduler.isShutdown()) {
-                            command.run();
-                        }
-                    },
-                    delay.toMillis(),
-                    TimeUnit.MILLISECONDS);
-        } catch (RejectedExecutionException e) {
-            // The scheduler has likely been shut down, so we log and return null.
-            LOG.debug(
-                    "Could not schedule mock game lifecycle task, "
-                            + "likely due to a shut down scheduler");
-            return null;
-        }
     }
 
     /* Sends the set of PlayerOption values needed for a player in the match. */

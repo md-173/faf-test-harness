@@ -9,27 +9,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs four steps, in order:
+ * The mock game's single, idempotent shutdown sequence (WBS-3.2.5.2). Runs three steps, in order:
  *
  * <ol>
- *   <li>stop the lifecycle's own scheduling ({@link MockGameLifecycle#stopSchedules()}), used for
- *       launch delays and timed match durations, so those tasks stop firing transitions;
  *   <li>stop the lifecycle FSM's time-based scheduling ({@link StateMachine#cancel()}), so no
- *       timeout queued <em>on the FSM itself</em> starts a transition mid-teardown;
+ *       timeout starts a transition mid-teardown and no scheduled task, the injected crash among
+ *       them, goes on to run;
  *   <li>close the {@link GpgNetConnection}: closing the socket <em>is</em> the shutdown protocol,
  *       and no farewell frame is sent;
  *   <li>close the {@link GameTrafficSession} (WBS-4.3.2), which stops the peer traffic cadence and
  *       closes the shared lobby socket, ending the receiver's loop.
  * </ol>
  *
- * <p>{@link MockGameLifecycle} uses two separate schedulers: the internal {@link StateMachine} one
- * for timeouts and another for launch-delay and match-duration tasks. This is why there are two
- * very similar steps. Step 2 cancels the StateMachine's own timer while step 1 cancels the other
- * MockGameLifecycle scheduler, so both have stopped before anything is closed, and neither waits
- * for the StateMachine monitor. Nor does either interrupt the thread running this sequence, which
- * is often one of those schedulers' own: a timeout, or a match that ends on its own, drives the
- * game into ENDED, whose entry hook runs this sequence, and an interrupt would cut the traffic
- * step's wait for its receiver short (WBS-2.3.7-fix, #465; WBS-3.2.4.1-fix, #487).
+ * <p>Every delay {@link MockGameLifecycle} arms runs on the {@link StateMachine}'s one timer
+ * thread: the GPGNet connect timeout, the optional lobby give-up timer, the launch delay and the
+ * match end as FSM timeouts, and the injected crash as a task handed to {@link
+ * StateMachine#schedule(long, Runnable)} (WBS-3.2.4.1-fix, #498). So step one stops them all before
+ * anything is closed, without waiting for the StateMachine monitor. Nor does it interrupt the
+ * thread running this sequence, which is often that timer thread itself: a timeout, the match end
+ * included, drives the game into ENDED, whose entry hook runs this sequence there, and an interrupt
+ * would cut the traffic step's wait for its receiver short (WBS-2.3.7-fix, #465; WBS-3.2.4.1-fix,
+ * #487).
  *
  * <p><b>Stopping scheduling first is safe because {@link StateMachine#cancel()} never waits for the
  * StateMachine monitor</b> (WBS-2.3.7-fix, #328). Every outbound frame is written from a transition
@@ -41,7 +41,7 @@ import org.slf4j.LoggerFactory;
  * calls {@code processGpgnetMessage} inline in its read loop, which reaches {@code
  * RPCService.onGpgNetMessageReceived} and then {@code getPeerOrWait}, an untimed {@code
  * CompletableFuture.get()} on the first JSON-RPC peer. Until a peer attaches, the adapter accepts
- * this game's connection and then stops reading it with the socket still open. Step three's close
+ * this game's connection and then stops reading it with the socket still open. Step two's close
  * turns the stalled write into an immediate {@code IOException}, the action fails into ENDED, and
  * the monitor is released, but nothing here waits for that to happen. While {@code cancel()} was
  * synchronized it did wait, behind the one write only the later close could break, so #299 moved
@@ -73,22 +73,24 @@ import org.slf4j.LoggerFactory;
  * not joined, so one straggler round already past its stopped-check can still log after this
  * returns — bounded to a single line each, with the bootstrap's log shutdown following.
  *
- * <p><b>Steps one and two are not a whole-system quiesce.</b> {@link StateMachine#cancel()} cancels
- * only the StateMachine's own timer, and {@link MockGameLifecycle#stopSchedules()} shuts down the
- * launch, match-end and crash scheduler, which discards every task whose delay has not run out.
- * Neither can recall work already running: a scheduler task past its cancellation check can still
- * post an event after teardown, and a timeout whose transition is already under way when {@code
- * cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the optional
- * lobby give-up timer, target ENDED. That residue is inert: the invalid-transition policy is
- * IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that does fire
- * converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears down twice.
+ * <p><b>Step one is not a whole-system quiesce.</b> {@link StateMachine#cancel()} discards every
+ * timeout and scheduled task still waiting, and one already due does nothing when it starts, but it
+ * cannot recall work already running. An injected crash already past that check still halts the
+ * process, as one due a moment earlier would have. A timeout whose transition is already under way
+ * when {@code cancel()} runs still completes: the GPGNet connect timeout, the optional lobby
+ * give-up timer and the match end target ENDED, and the launch delay targets LIVE. That residue is
+ * inert. The invalid-transition policy is IGNORE, so a stray event in LIVE or ENDED is logged and
+ * dropped; a transition into ENDED meets this once-guarded sequence already run, so nothing tears
+ * down twice; and a launch that completes leaves the game in LIVE, or in ENDED if its {@code
+ * Launching} frame meets the closed socket, with nothing armed after it, since the FSM schedules
+ * nothing once cancelled.
  *
- * <p>Step one is what makes that true. Before WBS-3.2.4.1-fix (#265) added it, nothing stopped that
- * scheduler: a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in
- * that state (the local close is filtered, see {@code MockGameLifecycle.setupStateMachine}), and
+ * <p>Stopping the launch used to need a step of its own. Until WBS-3.2.4.1-fix (#498) the launch
+ * delay, the match end and the crash ran on a scheduler of the lifecycle's own, and before #265
+ * added that step, a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM
+ * in that state (the local close is filtered, see {@code MockGameLifecycle.setupStateMachine}), and
  * the orphaned {@code LaunchMatch} then drove the registered transition to LIVE against a socket
- * this sequence had already closed. Shutting the scheduler down removes that case: a launch still
- * waiting is discarded, and one already due finds the scheduler shut down and returns (#487).
+ * this sequence had already closed. Step one now discards that launch with every other timeout.
  *
  * <p>Verified in faf-ice-adapter: {@code GPGNetServer.onGpgnetConnectionLost} closes the client,
  * reports {@code Disconnected} over RPC and calls {@code IceAdapter.onFAShutdown}, which runs
@@ -169,12 +171,6 @@ public final class GameShutdown implements Runnable {
      */
     private volatile GameTrafficSession traffic;
 
-    /**
-     * A reference to the lifecycle of the mock game. This is used by the shutdown sequence to
-     * cancel any scheduled transitions that exist outside of the FSM.
-     */
-    private final MockGameLifecycle lifecycle;
-
     /** Set by the caller that wins {@link #run()}; the lock-free once-guard. */
     private final AtomicBoolean done = new AtomicBoolean();
 
@@ -185,7 +181,7 @@ public final class GameShutdown implements Runnable {
      * @param fsm the lifecycle FSM; must not be {@code null}
      */
     public GameShutdown(final StateMachine fsm) {
-        this(fsm, null, null);
+        this(fsm, null);
     }
 
     /**
@@ -195,23 +191,8 @@ public final class GameShutdown implements Runnable {
      * @param connection the GPGNet connection to close, or {@code null} if not yet opened
      */
     public GameShutdown(final StateMachine fsm, final GpgNetConnection connection) {
-        this(fsm, connection, null);
-    }
-
-    /**
-     * Creates a shutdown for a game whose GPGNet connection already exists.
-     *
-     * @param fsm the lifecycle FSM; must not be {@code null}
-     * @param connection the GPGNet connection to close, or {@code null} if not yet opened
-     * @param lifecycle the lifecycle of the mock game, or {@code null} if it does not exist yet
-     */
-    public GameShutdown(
-            final StateMachine fsm,
-            final GpgNetConnection connection,
-            final MockGameLifecycle lifecycle) {
         this.fsm = Objects.requireNonNull(fsm, "fsm");
         this.connection = connection;
-        this.lifecycle = lifecycle;
     }
 
     /**
@@ -247,10 +228,10 @@ public final class GameShutdown implements Runnable {
     }
 
     /**
-     * Runs the shutdown sequence once: stop the lifecycle's own scheduling, stop FSM scheduling,
-     * close the connection, then close the peer traffic session (the scheduling, connection and
-     * traffic steps each skipped if nothing was registered). Subsequent or concurrent calls return
-     * immediately. Each step is exception-isolated.
+     * Runs the shutdown sequence once: stop FSM scheduling, close the connection, then close the
+     * peer traffic session (the connection and traffic steps each skipped if nothing was
+     * registered). Subsequent or concurrent calls return immediately. Each step is
+     * exception-isolated.
      *
      * <p>The order is the subject of this class's javadoc: scheduling stops first so that no queued
      * timeout starts a transition mid-teardown, which is safe because {@link StateMachine#cancel()}
@@ -262,7 +243,6 @@ public final class GameShutdown implements Runnable {
             return;
         }
         LOG.info("shutting down mock game");
-        stopScheduling();
         stopFSM();
         closeConnection();
         closeTraffic();
@@ -274,17 +254,6 @@ public final class GameShutdown implements Runnable {
             fsm.cancel();
         } catch (RuntimeException e) {
             LOG.warn("failed to stop FSM scheduling: {}", e.getMessage());
-        }
-    }
-
-    private void stopScheduling() {
-        if (lifecycle == null) {
-            return;
-        }
-        try {
-            lifecycle.stopSchedules();
-        } catch (RuntimeException e) {
-            LOG.warn("failed to stop lifecycle scheduling: {}", e.getMessage());
         }
     }
 

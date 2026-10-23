@@ -407,9 +407,9 @@ final class CrashInjectionTest {
     }
 
     /**
-     * Teardown cancels a crash that has not fired. This is {@code GameShutdown}'s {@code
-     * stopSchedules()} discarding it, pinned: a harness that tore the game down deliberately must
-     * not then be told the game crashed.
+     * Teardown cancels a crash that has not fired. This is {@code GameShutdown}'s FSM step
+     * discarding it, pinned: a harness that tore the game down deliberately must not then be told
+     * the game crashed.
      */
     @Test
     void teardownCancelsAPendingCrash() throws Exception {
@@ -428,9 +428,10 @@ final class CrashInjectionTest {
 
     /**
      * A crash due as the match ends is cancelled with it, as {@code matchBegins} promises for equal
-     * delays (WBS-3.2.4.1-fix, #487). The match end tears the game down on the scheduler's own
-     * thread, by when the crash is due, so shutting the scheduler down does not discard it: it is
-     * still started, and only its shut-down check keeps it from halting a game that ended cleanly.
+     * delays (WBS-3.2.4.1-fix, #487). The match end tears the game down on the FSM's timer thread,
+     * which the crash shares (#498), by when the crash is due, so cancelling the FSM's scheduling
+     * does not discard it: it is still started, and only the cancelled check it runs behind keeps
+     * it from halting a game that ended cleanly.
      */
     @Test
     void aCrashDueAsTheMatchEndsIsCancelledWithIt() throws Exception {
