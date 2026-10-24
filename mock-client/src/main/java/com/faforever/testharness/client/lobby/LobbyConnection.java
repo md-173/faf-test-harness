@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
  * {@code lobby-protocol-spec.md} §1), decodes incoming text frames as JSON tolerating trailing
  * whitespace, replies to {@code {"command":"ping"}} with {@code {"command":"pong"}} automatically,
  * and routes every other message to a handler registered against its {@code command} field.
+ * Teardown ends both with {@link #stopDispatching()}, which keeps only the lobby's own reports.
  *
  * <p>This class is intentionally protocol-mechanism only: no auth handshake, no welcome state sync,
  * no reconnect-with-backoff. Higher layers register handlers for {@code session}, {@code welcome},
@@ -75,6 +76,17 @@ public final class LobbyConnection {
      */
     private static final Set<String> SENSITIVE_FIELDS =
             Set.of("token", "jwt", "access_token", "refresh_token", "password", "secret");
+
+    /**
+     * The frames still handed to their handlers once {@link #stopDispatching()} has stopped the
+     * rest (#513): the lobby's own reports, whose handlers only log and record once the session is
+     * logged in. An {@code invalid} can answer a lobby command sent just before teardown started,
+     * which {@code run} reports in its exit code (#486), and a {@code notice} says why the lobby is
+     * ending the connection (#473). During login an {@code invalid} also fails the handshake, which
+     * reaches the state machine, so one that lands while a teardown runs can keep the listener
+     * until teardown's close bound runs out.
+     */
+    private static final Set<String> DISPATCHED_AFTER_STOP = Set.of("invalid", "notice");
 
     /**
      * The close code RFC 6455 reserves for a connection that ended without a Close frame. A peer
@@ -168,6 +180,13 @@ public final class LobbyConnection {
     /** Latch ensuring the disconnect listener fires at most once. */
     private final AtomicBoolean disconnectFired = new AtomicBoolean(false);
 
+    /**
+     * Completed once the disconnect has fired, before the disconnect listeners run: what {@link
+     * #close(int, String)} waits for (#510). Not after them, because the lifecycle's listener takes
+     * the state machine's lock, which a teardown waiting in TERMINATED's entry hook holds.
+     */
+    private final CompletableFuture<Void> disconnected = new CompletableFuture<>();
+
     /** True iff {@link #close()} was called by this side; used to label the disconnect bucket. */
     private final AtomicBoolean closeRequested = new AtomicBoolean(false);
 
@@ -190,9 +209,16 @@ public final class LobbyConnection {
     /**
      * True while the listener holds a frame. A handler can keep it for a long time, a {@code
      * game_launch} for the whole launch, and frames the lobby sends meanwhile wait unread, so that
-     * time is not the lobby's silence.
+     * time is not the lobby's silence. The lobby's reply to a close waits unread too, which is why
+     * {@link #close(int, String)} does not wait for it while this is set (#510).
      */
     private volatile boolean handling;
+
+    /**
+     * Raised by {@link #stopDispatching()}: from then on, only the {@link #DISPATCHED_AFTER_STOP}
+     * frames reach a handler (#513).
+     */
+    private volatile boolean dispatchStopped;
 
     /** The next silence check, cancelled once the connection has disconnected. */
     private volatile ScheduledFuture<?> silenceCheck;
@@ -290,6 +316,19 @@ public final class LobbyConnection {
         if (listener != null) {
             disconnectListeners.add(listener);
         }
+    }
+
+    /**
+     * Stops handing inbound frames to their handlers, for good (#513). Each later frame is dropped
+     * with a DEBUG line naming its command, except {@code invalid} and {@code notice}, the lobby's
+     * own reports; see {@link #DISPATCHED_AFTER_STOP}.
+     *
+     * <p>Teardown calls it before its first step, so a frame the lobby sends while the session
+     * ends, such as a late {@code ConnectToPeer}, reaches neither the state machine nor the
+     * adapter. The close handshake is not a frame, so the disconnect still fires.
+     */
+    public void stopDispatching() {
+        dispatchStopped = true;
     }
 
     /**
@@ -432,6 +471,14 @@ public final class LobbyConnection {
      * DisconnectReason#LOCAL_CLOSE} once the close handshake completes (or immediately if the
      * connection never opened).
      *
+     * <p>The returned future waits for that handshake, not just for this side's frame (#510): it
+     * completes once the lobby's reply has arrived and the disconnect has fired, just before the
+     * listeners run. A teardown that waits on it therefore knows the link is closed and its close
+     * line logged, rather than leaving the reply to land in whatever runs next. A close made while
+     * a frame is being handled is the exception, and completes once its frame is sent: the JDK
+     * reads the reply only after that frame, so a teardown started from a handler, by a {@code
+     * match_cancelled} for instance, would otherwise wait out its whole bound.
+     *
      * <p>A no-op once the connection has disconnected, whichever side ended it (WBS-3.1.2.6-fix,
      * #454): the returned future is already complete and nothing fires again. The JDK answers a
      * server's close itself and shuts its output, so a second close frame could only fail with
@@ -445,8 +492,8 @@ public final class LobbyConnection {
      *
      * @param statusCode WebSocket close status code (1000 = normal)
      * @param reason human-readable close reason (empty string allowed)
-     * @return future that completes when the close frame has been sent, or at once if there is
-     *     nothing left to close
+     * @return future that completes once the lobby has answered the close, once the close frame has
+     *     been sent if a frame is being handled, or at once if there is nothing left to close
      */
     public CompletableFuture<Void> close(final int statusCode, final String reason) {
         closeRequested.set(true);
@@ -459,6 +506,9 @@ public final class LobbyConnection {
         if (disconnectFired.get()) {
             return CompletableFuture.completedFuture(null);
         }
+        // The reply is read only once the frame in hand has been handled, whichever thread holds
+        // it, so a close made meanwhile completes on its own frame being sent (#510).
+        boolean frameInHand = handling;
         // Judged after the attempt, not by another check before it: the server's Close can land
         // between any such check and sendClose, and the JDK's reply to it closes the output first.
         return socket.sendClose(statusCode, reason)
@@ -479,13 +529,18 @@ public final class LobbyConnection {
                             throw error instanceof CompletionException completion
                                     ? completion
                                     : new CompletionException(error);
-                        });
+                        })
+                .thenCompose(
+                        ignored ->
+                                frameInHand
+                                        ? CompletableFuture.completedFuture(null)
+                                        : disconnected);
     }
 
     /**
      * Convenience: normal-close shortcut (status 1000, no reason text).
      *
-     * @return future that completes when the close frame has been sent
+     * @return future that completes as {@link #close(int, String)}'s does
      */
     public CompletableFuture<Void> close() {
         return close(WebSocket.NORMAL_CLOSURE, "");
@@ -497,6 +552,7 @@ public final class LobbyConnection {
             if (check != null) {
                 check.cancel(false);
             }
+            disconnected.complete(null);
             for (Consumer<DisconnectEvent> listener : disconnectListeners) {
                 try {
                     listener.accept(event);
@@ -581,6 +637,11 @@ public final class LobbyConnection {
             return;
         }
         String command = commandNode.asText();
+
+        if (dispatchStopped && !DISPATCHED_AFTER_STOP.contains(command)) {
+            LOG.debug("dropping lobby frame '{}': the session is being torn down", command);
+            return;
+        }
 
         if ("ping".equals(command)) {
             replyPong();

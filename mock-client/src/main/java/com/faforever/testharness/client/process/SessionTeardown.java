@@ -31,6 +31,13 @@ import org.slf4j.LoggerFactory;
  * report comes before the adapter step, and either way it reaches the lobby before the close. Each
  * step is exception-isolated: a failing step is logged and the sequence continues.
  *
+ * <p>Before the first step, the lobby stops handing frames to their handlers (#513). Teardown runs
+ * under the state machine's lock when TERMINATED's entry hook starts it, so a frame that lands
+ * meanwhile, such as a late {@code ConnectToPeer}, would wait for teardown and then reach
+ * TERMINATED, which has no edge for it and logs the machine's no-transition WARN. The lobby's own
+ * {@code invalid} and {@code notice} still reach theirs; see {@link
+ * LobbyConnection#stopDispatching()}.
+ *
  * <p><b>Adapter step is quit-first (WBS-3.1.2.5):</b> while the RPC connection is still open, a
  * {@code quit} request is sent and briefly awaited — the one real-client behaviour ({@code
  * iceAdapterProxy.quit()}) this teardown previously lacked. That always falls through to the
@@ -40,10 +47,12 @@ import org.slf4j.LoggerFactory;
  * <p><b>Bounded:</b> subprocess termination reuses {@link SubprocessManager#terminate()}'s
  * SIGTERM→grace→SIGKILL escalation (bounded internally by twice each manager's start-time grace,
  * plus up to a second for the child's output to reach the log); {@link
- * IceAdapterConnection#close()} is a synchronous socket close; the lobby close is awaited for at
- * most {@link #LOBBY_CLOSE_TIMEOUT}. A hung resource cannot block the sequence indefinitely. The
- * owner's step runs under this instance's lock and has to bound itself: the lifecycle's waits at
- * most five seconds for its lobby send and two for a dying adapter.
+ * IceAdapterConnection#close()} is a synchronous socket close; the lobby close, the lobby's reply
+ * to it included (#510), is awaited for at most {@link #LOBBY_CLOSE_TIMEOUT}, so the close's own
+ * line is logged before teardown returns rather than in whatever runs next in the JVM, unless a
+ * frame was being handled when teardown closed. A hung resource cannot block the sequence
+ * indefinitely. The owner's step runs under this instance's lock and has to bound itself: the
+ * lifecycle's waits at most five seconds for its lobby send and two for a dying adapter.
  *
  * <p><b>Idempotent and convergent:</b> the first {@link #run()} wins; later calls (and concurrent
  * ones, which block until the first finishes) are no-ops. The signal hook and the FSM's TERMINATED
@@ -63,7 +72,7 @@ public final class SessionTeardown {
     /** Diagnostic logger; teardown handles no credentials. */
     private static final Logger LOG = LoggerFactory.getLogger(SessionTeardown.class);
 
-    /** Bound on the clean lobby WebSocket close. */
+    /** Bound on the clean lobby WebSocket close, the lobby's reply included (#510). */
     private static final Duration LOBBY_CLOSE_TIMEOUT = Duration.ofSeconds(5);
 
     /** Bound on the quit RPC's response, before falling through to SIGTERM. */
@@ -222,16 +231,17 @@ public final class SessionTeardown {
     }
 
     /**
-     * Runs the teardown sequence once: terminate game, run the owner's step, terminate adapter,
-     * close the adapter RPC connection, close the lobby connection. Unregistered handles are
-     * skipped; a failing step is logged and does not stop the rest. Subsequent (or concurrent)
-     * calls are no-ops.
+     * Runs the teardown sequence once: stop the lobby's frame dispatch, terminate game, run the
+     * owner's step, terminate adapter, close the adapter RPC connection, close the lobby
+     * connection. Unregistered handles are skipped; a failing step is logged and does not stop the
+     * rest. Subsequent (or concurrent) calls are no-ops.
      */
     public synchronized void run() {
         if (done) {
             return;
         }
         done = true;
+        lobby.stopDispatching();
         LOG.info("tearing down session");
         terminate(gameProcess, "mock-game");
         runAfterGameStep();
@@ -344,14 +354,23 @@ public final class SessionTeardown {
         }
     }
 
-    /** Closes the lobby WebSocket, waiting at most {@link #LOBBY_CLOSE_TIMEOUT}. */
+    /**
+     * Closes the lobby WebSocket and waits, at most {@link #LOBBY_CLOSE_TIMEOUT}, for the lobby to
+     * answer (#510); see {@link LobbyConnection#close(int, String)}. A lobby that never answers
+     * costs that bound and a WARN naming the wait.
+     */
     private void closeLobby() {
         try {
             lobby.close(WebSocket.NORMAL_CLOSURE, "Session teardown")
                     .get(LOBBY_CLOSE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        } catch (ExecutionException | TimeoutException e) {
+        } catch (TimeoutException e) {
+            LOG.warn(
+                    "lobby close did not complete cleanly: the close handshake did not finish"
+                            + " within {} s",
+                    LOBBY_CLOSE_TIMEOUT.toSeconds());
+        } catch (ExecutionException e) {
             LOG.warn("lobby close did not complete cleanly: {}", e.getMessage());
         }
     }

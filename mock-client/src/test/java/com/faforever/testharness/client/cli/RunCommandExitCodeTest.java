@@ -378,10 +378,11 @@ final class RunCommandExitCodeTest {
     /**
      * The hook names a signal only while {@code call()} still had the session (#446). It runs on
      * every JVM exit, and the guard it used before, the lobby's disconnect, lost a race on a normal
-     * one: teardown's close returns once its frame is sent, before the server's echo marks the
-     * session disconnected, so a run that ended on its own logged the line after its verdict.
-     * {@code call()} raises the flag on every way out, so a hook that finds it down started under a
-     * live run. Teardown runs either way.
+     * one: teardown's close returned once its frame was sent, before the server's echo marked the
+     * session disconnected (as it still does when a frame is being handled or the echo is late,
+     * #510), so a run that ended on its own logged the line after its verdict. {@code call()}
+     * raises the flag on every way out, so a hook that finds it down started under a live run.
+     * Teardown runs either way.
      */
     @Test
     void theShutdownHookNamesASignalOnlyWhileTheRunWasLive() {

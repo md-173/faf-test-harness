@@ -328,7 +328,8 @@ public final class LobbySession {
      * the connection has already gone. The disconnect listener fires with {@link
      * LobbyConnection.DisconnectReason#LOCAL_CLOSE}, releasing {@link #awaitDisconnect()}.
      *
-     * @return future that completes when the close frame has been sent
+     * @return future that completes once the lobby has answered the close; see {@link
+     *     LobbyConnection#close(int, String)}
      */
     public CompletableFuture<Void> close() {
         return connection.close();
