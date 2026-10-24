@@ -131,7 +131,7 @@ final class MockClientCliRecordSyncTest {
         // queueConfig component).
         // Both went up by one for --mock-game-crash-after-seconds (WBS-5.2), which is an ordinary
         // ungrouped option: one flag, one record component, so the gap between the two is unmoved.
-        // Leaves are counted, so nesting the groups (#143) left both numbers as they were.
+        // The record side counts leaves, with the nested groups expanded by ConfigLeaves.
         long expectedRecordComponents = 29;
         long expectedCliOptionsExcludingHelpers = 38;
 
@@ -148,8 +148,8 @@ final class MockClientCliRecordSyncTest {
         assertEquals(
                 expectedCliOptionsExcludingHelpers,
                 actualCliOptions,
-                "MockClientCli @Option-annotated field count drifted; update this test if "
-                        + "intentional.");
+                "MockClientCli and mixin @Option-annotated field count drifted; update this test "
+                        + "if intentional.");
     }
 
     private static Set<String> collectRecordComponentNames() {

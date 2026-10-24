@@ -38,10 +38,10 @@ import picocli.CommandLine.Spec;
  * mixins, regardless of which command observed the flag, and subcommands then read the populated
  * config via {@code @ParentCommand}.
  *
- * <p>The option fields and the mixins are declared in the order picocli registers the options in,
- * and that order shows: it decides which malformed environment or config-file value is reported
- * when there are several, and the order of a mistyped flag's suggested solutions. Reordering them,
- * or splitting a mixin, changes both.
+ * <p>Picocli registers the options in the order their fields are declared, a mixin's where its
+ * field is, and that order decides which malformed environment or config-file value is reported
+ * when there are several, and the order of a mistyped flag's suggested solutions. Keep it when
+ * moving an option.
  *
  * <p>Subcommands produce a validated {@link MockClientConfig} by calling {@link
  * #toValidatedConfig(CommandSpec)}. That method translates {@link IllegalArgumentException} from

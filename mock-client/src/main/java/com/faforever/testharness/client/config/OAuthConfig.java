@@ -5,8 +5,9 @@ import java.nio.file.Path;
 import java.util.Optional;
 
 /**
- * The OAuth part of {@link MockClientConfig}: the endpoints and public client the refresh-token
- * exchange uses, and the two credential channels.
+ * The OAuth part of {@link MockClientConfig}: the token endpoint and public client the
+ * refresh-token exchange uses, the authorization endpoint, redirect URI and scopes of the one-time
+ * bootstrap that mints a refresh token, and the two credential channels.
  *
  * <p>A plain carrier. Which of these are required, and whether both channels may be set, is checked
  * by {@link MockClientConfig}'s compact constructor together with the rest of the configuration, so

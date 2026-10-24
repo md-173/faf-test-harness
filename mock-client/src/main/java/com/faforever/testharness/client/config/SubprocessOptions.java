@@ -10,11 +10,10 @@ import picocli.CommandLine.ScopeType;
  * Mixed into {@link MockClientCli}'s root command; they build both the {@link IceAdapterConfig} and
  * the {@link MockGameConfig} group of {@link MockClientConfig}.
  *
- * <p>One mixin holds both groups because of the order the fields are declared in, which picocli
- * registers the options in: it decides which malformed environment or config-file value is reported
- * when there are several, and the order of a mistyped flag's suggestions. This is the order the
- * options had when {@link MockClientCli} declared them all, and in it the two binary paths come
- * before the adapter's ports, so two mixins could not keep it.
+ * <p>One mixin holds both groups because of the order its fields are declared in, which is the
+ * order picocli registers the options in (see {@link MockClientCli}): the two binary paths come
+ * before the adapter's ports and the launch delay after them, which two separate mixins could not
+ * keep.
  *
  * <p>Each field is named for its option in camel case, because the config-file key is the field
  * name.

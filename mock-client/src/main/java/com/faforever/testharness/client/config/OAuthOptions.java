@@ -8,10 +8,10 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.ScopeType;
 
 /**
- * The OAuth options of {@link MockClientCli}: the token and authorization endpoints, the public
- * client, and the two credential files. Mixed into the root command, so like every root option they
- * are accepted by every subcommand; they build the {@link OAuthConfig} group of {@link
- * MockClientConfig}.
+ * The OAuth options of {@link MockClientCli}: the token endpoint and public client of the
+ * refresh-token exchange, the bootstrap's authorization endpoint, redirect URI and scopes, and the
+ * two credential files. Mixed into the root command, so like every root option they are accepted by
+ * every subcommand; they build the {@link OAuthConfig} group of {@link MockClientConfig}.
  *
  * <p>Each field is named for its option in camel case, because the config-file key is the field
  * name.
@@ -119,7 +119,7 @@ final class OAuthOptions {
      * operators to copy it, so supplying an access token by flag, or by {@code
      * FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE} (the CI shape this card exists for), failed with
      * "two OAuth credential channels configured" rather than doing what the precedence contract
-     * promises. Both were reproduced against a build of this branch.
+     * promises.
      *
      * <p>Only a genuine tie still throws. Two channels at the same layer is an operator writing
      * both into one config file or exporting both variables, where there is no precedence to apply

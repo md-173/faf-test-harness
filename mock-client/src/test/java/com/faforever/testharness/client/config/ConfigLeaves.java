@@ -7,10 +7,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The leaf components of {@link MockClientConfig} under their flat names, which are the names of
- * the options that set them and the config-file keys. A leaf of a nested group is named by the
- * group's prefix and its own name, so {@code oauth().tokenUrl()} is {@code oauthTokenUrl}; a
- * top-level component is a leaf under its own name.
+ * The leaf components of {@link MockClientConfig} under their flat names: the name of the option
+ * field that sets each one, which is also its config-file key, except for {@code hostConfig},
+ * {@code joinConfig} and {@code queueConfig}, which several options build. A leaf of a nested group
+ * is named by the group's prefix and its own name, so {@code oauth().tokenUrl()} is {@code
+ * oauthTokenUrl}; a top-level component is a leaf under its own name.
  *
  * <p>Shared by the drift guard, which matches these names to the options, and by the tests that
  * check a copy of a config moves no value to the wrong component.
