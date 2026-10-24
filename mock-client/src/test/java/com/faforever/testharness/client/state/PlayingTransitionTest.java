@@ -108,7 +108,7 @@ final class PlayingTransitionTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -134,7 +134,7 @@ final class PlayingTransitionTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -160,7 +160,7 @@ final class PlayingTransitionTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -195,7 +195,7 @@ final class PlayingTransitionTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -222,7 +222,7 @@ final class PlayingTransitionTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,

@@ -554,34 +554,33 @@ public final class MockClientCli implements Callable<Integer> {
             final Path refreshTokenFile, final Optional<Path> accessTokenFile) {
         return new MockClientConfig(
                 lobbyWebSocketUrl,
-                oauthTokenUrl,
-                oauthAuthEndpoint,
-                oauthRedirectUri,
-                oauthScopes,
-                oauthClientId,
-                refreshTokenFile,
-                accessTokenFile,
+                new OAuthConfig(
+                        oauthTokenUrl,
+                        oauthAuthEndpoint,
+                        oauthRedirectUri,
+                        oauthScopes,
+                        oauthClientId,
+                        refreshTokenFile,
+                        accessTokenFile),
                 Optional.ofNullable(uniqueId),
                 clientVersion,
                 userAgent,
                 Optional.ofNullable(uidBinaryPath),
-                iceAdapterBinaryPath,
-                mockGameBinaryPath,
-                iceAdapterRpcPort,
-                iceAdapterGpgNetPort,
-                iceAdapterLobbyPort,
-                iceAdapterGameId,
-                mockGameLaunchDelaySeconds,
-                logLevel,
-                Optional.ofNullable(logFile),
+                new IceAdapterConfig(
+                        iceAdapterBinaryPath,
+                        iceAdapterRpcPort,
+                        iceAdapterGpgNetPort,
+                        iceAdapterLobbyPort,
+                        iceAdapterGameId),
+                new MockGameConfig(mockGameBinaryPath, mockGameLaunchDelaySeconds),
+                new LoggingConfig(logLevel, Optional.ofNullable(logFile)),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
                 buildHostConfig(),
                 buildJoinConfig(),
                 buildQueueConfig(),
-                iceRelayDelayMs,
-                mockGameUdpDropPercent,
-                mockGameCrashAfterSeconds);
+                new FaultConfig(
+                        iceRelayDelayMs, mockGameUdpDropPercent, mockGameCrashAfterSeconds));
     }
 
     /**
@@ -980,15 +979,15 @@ public final class MockClientCli implements Callable<Integer> {
     }
 
     /**
-     * Bridges {@link MockClientConfig#logLevel()} and {@link MockClientConfig#logFile()} into the
-     * system properties consumed by {@code logback.xml}. Subcommands call this from their {@code
-     * Callable.call()} before {@link LoggingSetup#configure(String)} so Logback observes the
+     * Bridges the configuration's {@link LoggingConfig#level()} and {@link LoggingConfig#file()}
+     * into the system properties consumed by {@code logback.xml}. Subcommands call this from their
+     * {@code Callable.call()} before {@link LoggingSetup#configure(String)} so Logback observes the
      * caller-supplied log level and JSONL path.
      *
      * @param config the validated configuration whose logging fields should be applied
      */
     public static void applyLoggingProperties(final MockClientConfig config) {
-        applyLoggingProperties(config.logLevel(), config.logFile());
+        applyLoggingProperties(config.logging().level(), config.logging().file());
     }
 
     /**

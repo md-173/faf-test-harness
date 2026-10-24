@@ -40,8 +40,9 @@ import org.slf4j.LoggerFactory;
  * either flag existed.
  *
  * <p>The {@code --gpgnet-port} and {@code --lobby-port} values are sourced from the same {@link
- * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
- * iceAdapterLobbyPort}), because spec §2.8 requires the values to match between adapter and game.
+ * MockClientConfig} fields the ICE adapter uses ({@code iceAdapter().gpgNetPort()}, {@code
+ * iceAdapter().lobbyPort()}), because spec §2.8 requires the values to match between adapter and
+ * game.
  *
  * <p>The identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is the orchestrated
  * path and takes the id and login the lobby assigned plus the {@code game_launch} uid. {@link

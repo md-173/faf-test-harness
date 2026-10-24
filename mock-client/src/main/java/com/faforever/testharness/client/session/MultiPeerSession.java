@@ -1,10 +1,13 @@
 package com.faforever.testharness.client.session;
 
 import ch.qos.logback.classic.Level;
+import com.faforever.testharness.client.config.FaultConfig;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.GameJoinConfig;
 import com.faforever.testharness.client.config.GameQueueConfig;
+import com.faforever.testharness.client.config.IceAdapterConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.config.MockGameConfig;
 import com.faforever.testharness.client.lobby.AuthenticationException;
 import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.client.lobby.SessionState;
@@ -405,8 +408,8 @@ public final class MultiPeerSession implements AutoCloseable {
             String label = labelFor(i);
             MockClientConfig base = bases.get(i);
             // The record holds exactly one channel, so exactly one of these is the credential.
-            boolean accessToken = base.oauthAccessTokenFile().isPresent();
-            Path file = base.oauthAccessTokenFile().orElse(base.oauthRefreshTokenFile());
+            boolean accessToken = base.oauth().accessTokenFile().isPresent();
+            Path file = base.oauth().accessTokenFile().orElse(base.oauth().refreshTokenFile());
             String channel = accessToken ? "access-token file" : "refresh-token file";
             TokenSource source;
             try {
@@ -461,11 +464,11 @@ public final class MultiPeerSession implements AutoCloseable {
         for (MockClientConfig base : bases) {
             // The traffic checkpoint reads the games' INFO progress lines, which neither the games
             // nor this JVM emit above INFO. Logback reads an unrecognised level as DEBUG.
-            if (!Level.INFO.isGreaterOrEqual(Level.toLevel(base.logLevel(), Level.DEBUG))) {
+            if (!Level.INFO.isGreaterOrEqual(Level.toLevel(base.logging().level(), Level.DEBUG))) {
                 throw new IllegalArgumentException(
                         "--log-level must be INFO or finer for a session, which reads game traffic"
                                 + " from the games' INFO lines; got "
-                                + base.logLevel());
+                                + base.logging().level());
             }
         }
         if (!TrafficEvidence.capturable()) {
@@ -481,8 +484,8 @@ public final class MultiPeerSession implements AutoCloseable {
         // Checked here rather than at launch: the host would otherwise log in, rotating its
         // refresh token, before a wrong path surfaced.
         for (MockClientConfig base : bases) {
-            requireBinary("faf-ice-adapter", base.iceAdapterBinaryPath());
-            requireBinary("mock-game", base.mockGameBinaryPath());
+            requireBinary("faf-ice-adapter", base.iceAdapter().binaryPath());
+            requireBinary("mock-game", base.mockGame().binaryPath());
             base.uidBinaryPath().ifPresent(uid -> requireBinary("faf-uid", uid));
         }
     }
@@ -534,7 +537,7 @@ public final class MultiPeerSession implements AutoCloseable {
                             + (joiner < 0 ? "position " + joiner : labelFor(joiner)));
         }
         for (int i = 0; i < peerBases.size(); i++) {
-            if (peerBases.get(i).mockGameCrashAfterSeconds() >= 0) {
+            if (peerBases.get(i).faults().mockGameCrashAfterSeconds() >= 0) {
                 throw new IllegalArgumentException(
                         "peer "
                                 + labelFor(i)
@@ -548,8 +551,8 @@ public final class MultiPeerSession implements AutoCloseable {
                 joiner,
                 withFaults(
                         base,
-                        base.iceRelayDelayMs(),
-                        base.mockGameUdpDropPercent(),
+                        base.faults().iceRelayDelayMs(),
+                        base.faults().mockGameUdpDropPercent(),
                         crashAfterSeconds(peerBases.size())));
         return bases;
     }
@@ -758,8 +761,8 @@ public final class MultiPeerSession implements AutoCloseable {
     public List<ProcessHandle> survivingSubprocesses() throws InterruptedException {
         Set<String> needles = new HashSet<>();
         for (SessionPeer peer : peers) {
-            needles.add(peer.config().iceAdapterBinaryPath().getFileName().toString());
-            needles.add(peer.config().mockGameBinaryPath().getFileName().toString());
+            needles.add(peer.config().iceAdapter().binaryPath().getFileName().toString());
+            needles.add(peer.config().mockGame().binaryPath().getFileName().toString());
         }
         if (needles.isEmpty()) {
             return List.of();
@@ -808,7 +811,10 @@ public final class MultiPeerSession implements AutoCloseable {
         }
         String port = args.get(flag + 1);
         return candidates.stream()
-                .filter(peer -> port.equals(Integer.toString(peer.config().iceAdapterGpgNetPort())))
+                .filter(
+                        peer ->
+                                port.equals(
+                                        Integer.toString(peer.config().iceAdapter().gpgNetPort())))
                 .map(SessionPeer::name)
                 .findFirst();
     }
@@ -936,9 +942,9 @@ public final class MultiPeerSession implements AutoCloseable {
     private static List<String> portsOf(final SessionPeer peer) {
         MockClientConfig c = peer.config();
         return List.of(
-                "tcp " + c.iceAdapterRpcPort(),
-                "tcp " + c.iceAdapterGpgNetPort(),
-                "udp " + c.iceAdapterLobbyPort());
+                "tcp " + c.iceAdapter().rpcPort(),
+                "tcp " + c.iceAdapter().gpgNetPort(),
+                "udp " + c.iceAdapter().lobbyPort());
     }
 
     /**
@@ -1808,14 +1814,15 @@ public final class MultiPeerSession implements AutoCloseable {
         return copy(
                 base,
                 new AdapterPorts(
-                        base.iceAdapterRpcPort(),
-                        base.iceAdapterGpgNetPort(),
-                        base.iceAdapterLobbyPort()),
+                        base.iceAdapter().rpcPort(),
+                        base.iceAdapter().gpgNetPort(),
+                        base.iceAdapter().lobbyPort()),
                 base.hostConfig(),
                 base.joinConfig(),
                 base.queueConfig(),
-                base.mockGameLaunchDelaySeconds(),
-                new Faults(iceRelayDelayMs, mockGameUdpDropPercent, mockGameCrashAfterSeconds));
+                base.mockGame().launchDelaySeconds(),
+                new FaultConfig(
+                        iceRelayDelayMs, mockGameUdpDropPercent, mockGameCrashAfterSeconds));
     }
 
     /**
@@ -1837,27 +1844,8 @@ public final class MultiPeerSession implements AutoCloseable {
             final Optional<GameHostConfig> host,
             final Optional<GameJoinConfig> join,
             final int launchDelaySeconds) {
-        return copy(
-                base,
-                ports,
-                host,
-                join,
-                Optional.empty(),
-                launchDelaySeconds,
-                new Faults(
-                        base.iceRelayDelayMs(),
-                        base.mockGameUdpDropPercent(),
-                        base.mockGameCrashAfterSeconds()));
+        return copy(base, ports, host, join, Optional.empty(), launchDelaySeconds, base.faults());
     }
-
-    /**
-     * One peer's three fault values, as {@link MockClientConfig} holds them.
-     *
-     * @param iceRelayDelayMs the ICE relay delay
-     * @param dropPercent the game's outbound drop percentage
-     * @param crashAfterSeconds the game's crash delay, negative for never
-     */
-    private record Faults(int iceRelayDelayMs, int dropPercent, int crashAfterSeconds) {}
 
     /**
      * The one positional copy of {@link MockClientConfig}, shared by {@link #peerConfig} and {@link
@@ -1880,37 +1868,28 @@ public final class MultiPeerSession implements AutoCloseable {
             final Optional<GameJoinConfig> join,
             final Optional<GameQueueConfig> queue,
             final int launchDelaySeconds,
-            final Faults faults) {
+            final FaultConfig faults) {
         return new MockClientConfig(
                 base.lobbyWebSocketUrl(),
-                base.oauthTokenUrl(),
-                base.oauthAuthEndpoint(),
-                base.oauthRedirectUri(),
-                base.oauthScopes(),
-                base.oauthClientId(),
-                base.oauthRefreshTokenFile(),
-                base.oauthAccessTokenFile(),
+                base.oauth(),
                 base.uniqueId(),
                 base.clientVersion(),
                 base.userAgent(),
                 base.uidBinaryPath(),
-                base.iceAdapterBinaryPath(),
-                base.mockGameBinaryPath(),
-                ports.rpc(),
-                ports.gpgnet(),
-                ports.lobby(),
-                base.iceAdapterGameId(),
-                launchDelaySeconds,
-                base.logLevel(),
-                base.logFile(),
+                new IceAdapterConfig(
+                        base.iceAdapter().binaryPath(),
+                        ports.rpc(),
+                        ports.gpgnet(),
+                        ports.lobby(),
+                        base.iceAdapter().gameId()),
+                new MockGameConfig(base.mockGame().binaryPath(), launchDelaySeconds),
+                base.logging(),
                 base.playerIdOverride(),
                 base.playerLogin(),
                 host,
                 join,
                 queue,
-                faults.iceRelayDelayMs(),
-                faults.dropPercent(),
-                faults.crashAfterSeconds());
+                faults);
     }
 
     /**

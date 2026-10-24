@@ -84,7 +84,8 @@ final class ConfigLoaderInvalidValuesTest {
                                 TestFixtures.minimalRequiredCli(),
                                 Map.of("FAF_MOCK_CLIENT_MOCK_GAME_UDP_DROP_PERCENT", "37"))
                         .orElseThrow();
-        assertEquals(37, fromEnv.mockGameUdpDropPercent(), "the env var must reach the field");
+        assertEquals(
+                37, fromEnv.faults().mockGameUdpDropPercent(), "the env var must reach the field");
 
         Path cfg =
                 Files.writeString(tempDir.resolve("cfg.json"), "{\"mockGameUdpDropPercent\": 23}");
@@ -95,7 +96,10 @@ final class ConfigLoaderInvalidValuesTest {
                                         new String[] {"--config=" + cfg}),
                                 Map.of())
                         .orElseThrow();
-        assertEquals(23, fromFile.mockGameUdpDropPercent(), "the JSON key must reach the field");
+        assertEquals(
+                23,
+                fromFile.faults().mockGameUdpDropPercent(),
+                "the JSON key must reach the field");
     }
 
     /**
@@ -115,7 +119,7 @@ final class ConfigLoaderInvalidValuesTest {
         MockClientConfig config =
                 ConfigLoader.load(args, Map.of())
                         .orElseThrow(() -> new AssertionError("config did not load for " + value));
-        assertEquals(Integer.parseInt(value), config.mockGameUdpDropPercent());
+        assertEquals(Integer.parseInt(value), config.faults().mockGameUdpDropPercent());
     }
 
     /**

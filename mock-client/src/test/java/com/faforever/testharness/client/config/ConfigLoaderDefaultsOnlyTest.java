@@ -62,7 +62,7 @@ final class ConfigLoaderDefaultsOnlyTest {
 
         MockClientConfig config = ConfigLoader.load(withoutIceBinary, Map.of()).orElseThrow();
 
-        assertEquals(Path.of("faf-ice-adapter.jar"), config.iceAdapterBinaryPath());
+        assertEquals(Path.of("faf-ice-adapter.jar"), config.iceAdapter().binaryPath());
     }
 
     @Test
@@ -79,7 +79,7 @@ final class ConfigLoaderDefaultsOnlyTest {
 
         assertEquals(
                 Path.of("mock-game/build/install/mock-game/bin/mock-game"),
-                config.mockGameBinaryPath());
+                config.mockGame().binaryPath());
     }
 
     @Test
@@ -87,15 +87,20 @@ final class ConfigLoaderDefaultsOnlyTest {
         MockClientConfig config =
                 ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of()).orElseThrow();
 
-        assertEquals(7236, config.iceAdapterRpcPort(), "iceAdapterRpcPort default should be 7236");
         assertEquals(
-                7237, config.iceAdapterGpgNetPort(), "iceAdapterGpgNetPort default should be 7237");
+                7236, config.iceAdapter().rpcPort(), "iceAdapterRpcPort default should be 7236");
         assertEquals(
-                7238, config.iceAdapterLobbyPort(), "iceAdapterLobbyPort default should be 7238");
+                7237,
+                config.iceAdapter().gpgNetPort(),
+                "iceAdapterGpgNetPort default should be 7237");
+        assertEquals(
+                7238,
+                config.iceAdapter().lobbyPort(),
+                "iceAdapterLobbyPort default should be 7238");
         assertEquals(
                 "mock-client", config.playerLogin(), "playerLogin default should be mock-client");
-        assertEquals("INFO", config.logLevel(), "logLevel default should be INFO");
-        assertTrue(config.logFile().isEmpty(), "logFile should default to empty Optional");
+        assertEquals("INFO", config.logging().level(), "logLevel default should be INFO");
+        assertTrue(config.logging().file().isEmpty(), "logFile should default to empty Optional");
         assertTrue(
                 config.playerIdOverride().isEmpty(),
                 "playerIdOverride should default to empty OptionalInt");

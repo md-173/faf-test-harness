@@ -47,7 +47,7 @@ public record LaunchIdentity(int playerId, String login, int gameUid) {
         return new LaunchIdentity(
                 config.playerIdOverride().orElse(defaultPlayerId),
                 config.playerLogin(),
-                config.iceAdapterGameId());
+                config.iceAdapter().gameId());
     }
 
     /**

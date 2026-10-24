@@ -174,7 +174,7 @@ final class HarnessLogContractTest {
 
     private MockClientLifecycle newLifecycle() {
         return newLifecycle(
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                 new DummyGameLauncher(MINIMAL_CONFIG));
     }
 
@@ -238,7 +238,7 @@ final class HarnessLogContractTest {
         // determinism should not depend on another card's choice of default.
         MockClientLifecycle lifecycle =
                 newLifecycle(
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         new DummyGameLauncher(
                                 MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "10")));
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
@@ -278,7 +278,7 @@ final class HarnessLogContractTest {
     @Test
     void reportsPeerStateFromAnOrchestratedSession() {
         DummyIceAdapterConnection adapter =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle = newLifecycle(adapter);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(MINIMAL_GAME_CONFIG));
@@ -422,7 +422,7 @@ final class HarnessLogContractTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         new DummyGameLauncher(MINIMAL_CONFIG),
                         new DummyIceLauncher(MINIMAL_CONFIG, true),
                         new SessionTeardown(lobby));

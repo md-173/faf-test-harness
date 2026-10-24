@@ -155,7 +155,7 @@ final class GameProcessTest {
         return new MockClientLifecycle(
                 MINIMAL_CONFIG,
                 session,
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                 launcher,
                 new DummyIceLauncher(MINIMAL_CONFIG),
                 teardown);

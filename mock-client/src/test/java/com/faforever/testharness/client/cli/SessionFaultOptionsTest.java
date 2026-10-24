@@ -298,7 +298,7 @@ final class SessionFaultOptionsTest {
      * @return the values
      */
     private static List<Integer> drops(final List<MockClientConfig> peers) {
-        return peers.stream().map(MockClientConfig::mockGameUdpDropPercent).toList();
+        return peers.stream().map(peer -> peer.faults().mockGameUdpDropPercent()).toList();
     }
 
     /**
@@ -308,7 +308,7 @@ final class SessionFaultOptionsTest {
      * @return the values
      */
     private static List<Integer> delays(final List<MockClientConfig> peers) {
-        return peers.stream().map(MockClientConfig::iceRelayDelayMs).toList();
+        return peers.stream().map(peer -> peer.faults().iceRelayDelayMs()).toList();
     }
 
     /**
@@ -318,6 +318,6 @@ final class SessionFaultOptionsTest {
      * @return the values
      */
     private static List<Integer> crashes(final List<MockClientConfig> peers) {
-        return peers.stream().map(MockClientConfig::mockGameCrashAfterSeconds).toList();
+        return peers.stream().map(peer -> peer.faults().mockGameCrashAfterSeconds()).toList();
     }
 }

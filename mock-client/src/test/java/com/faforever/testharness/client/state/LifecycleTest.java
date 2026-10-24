@@ -374,7 +374,7 @@ final class LifecycleTest {
                 new MockClientLifecycle(
                         config,
                         session,
-                        new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(config.iceAdapter().rpcPort()),
                         game,
                         ice,
                         new SessionTeardown(lobby));

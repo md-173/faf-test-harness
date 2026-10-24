@@ -43,7 +43,7 @@ final class HostLaunchDelayTest {
 
         assertEquals(
                 MultiPeerSession.LAUNCH_DISABLED,
-                host.mockGameLaunchDelaySeconds(),
+                host.mockGame().launchDelaySeconds(),
                 "the two-argument path must keep WBS-4.3.1's auto-launch-off default");
     }
 
@@ -54,10 +54,10 @@ final class HostLaunchDelayTest {
         MockClientConfig host = MultiPeerSession.hostConfig(base, PORTS, "title", 120);
         MockClientConfig joiner = MultiPeerSession.joinConfig(base, PORTS, 4242);
 
-        assertEquals(120, host.mockGameLaunchDelaySeconds());
+        assertEquals(120, host.mockGame().launchDelaySeconds());
         assertEquals(
                 MultiPeerSession.LAUNCH_DISABLED,
-                joiner.mockGameLaunchDelaySeconds(),
+                joiner.mockGame().launchDelaySeconds(),
                 "a joiner that auto-launched would end its own session on a timer the caller"
                         + " never chose");
     }

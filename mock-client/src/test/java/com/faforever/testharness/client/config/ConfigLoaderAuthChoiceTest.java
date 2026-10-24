@@ -80,8 +80,8 @@ final class ConfigLoaderAuthChoiceTest {
 
         MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
 
-        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
-        assertNull(config.oauthRefreshTokenFile(), "the CLI flag must win over the config file");
+        assertEquals(access, config.oauth().accessTokenFile().orElse(null));
+        assertNull(config.oauth().refreshTokenFile(), "the CLI flag must win over the config file");
     }
 
     @Test
@@ -103,8 +103,8 @@ final class ConfigLoaderAuthChoiceTest {
                                         access.toString()))
                         .orElseThrow();
 
-        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
-        assertNull(config.oauthRefreshTokenFile(), "the env var must win over the config file");
+        assertEquals(access, config.oauth().accessTokenFile().orElse(null));
+        assertNull(config.oauth().refreshTokenFile(), "the env var must win over the config file");
     }
 
     @Test
@@ -124,9 +124,10 @@ final class ConfigLoaderAuthChoiceTest {
                                         access.toString()))
                         .orElseThrow();
 
-        assertEquals(refresh, config.oauthRefreshTokenFile());
+        assertEquals(refresh, config.oauth().refreshTokenFile());
         assertTrue(
-                config.oauthAccessTokenFile().isEmpty(), "the CLI flag must win over the env var");
+                config.oauth().accessTokenFile().isEmpty(),
+                "the CLI flag must win over the env var");
     }
 
     @Test
@@ -173,7 +174,7 @@ final class ConfigLoaderAuthChoiceTest {
 
         MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
 
-        assertEquals(access, config.oauthAccessTokenFile().orElse(null));
+        assertEquals(access, config.oauth().accessTokenFile().orElse(null));
     }
 
     @Test

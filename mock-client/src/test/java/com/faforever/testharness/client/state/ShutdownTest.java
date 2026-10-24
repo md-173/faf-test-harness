@@ -95,7 +95,7 @@ final class ShutdownTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         gameLauncher,
                         iceLauncher,
                         new SessionTeardown(lobby));
@@ -130,7 +130,7 @@ final class ShutdownTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         gameLauncher,
                         iceLauncher,
                         new SessionTeardown(lobby));
@@ -166,7 +166,7 @@ final class ShutdownTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         gameLauncher,
                         iceLauncher,
                         new SessionTeardown(lobby));

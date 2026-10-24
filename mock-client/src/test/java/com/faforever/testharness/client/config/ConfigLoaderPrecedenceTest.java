@@ -36,7 +36,7 @@ final class ConfigLoaderPrecedenceTest {
         MockClientConfig config =
                 ConfigLoader.load(TestFixtures.minimalRequiredCli(), Map.of()).orElseThrow();
 
-        assertEquals(PORT_DEFAULT, config.iceAdapterRpcPort());
+        assertEquals(PORT_DEFAULT, config.iceAdapter().rpcPort());
     }
 
     @Test
@@ -45,7 +45,7 @@ final class ConfigLoaderPrecedenceTest {
 
         MockClientConfig config = loadWithFile(file).orElseThrow();
 
-        assertEquals(PORT_FROM_FILE, config.iceAdapterRpcPort());
+        assertEquals(PORT_FROM_FILE, config.iceAdapter().rpcPort());
     }
 
     @Test
@@ -57,7 +57,7 @@ final class ConfigLoaderPrecedenceTest {
         MockClientConfig config =
                 ConfigLoader.load(new String[] {"--config", file.toString()}, env).orElseThrow();
 
-        assertEquals(PORT_FROM_ENV, config.iceAdapterRpcPort());
+        assertEquals(PORT_FROM_ENV, config.iceAdapter().rpcPort());
     }
 
     @Test
@@ -73,7 +73,7 @@ final class ConfigLoaderPrecedenceTest {
 
         MockClientConfig config = ConfigLoader.load(args, env).orElseThrow();
 
-        assertEquals(PORT_FROM_CLI, config.iceAdapterRpcPort());
+        assertEquals(PORT_FROM_CLI, config.iceAdapter().rpcPort());
     }
 
     @Test

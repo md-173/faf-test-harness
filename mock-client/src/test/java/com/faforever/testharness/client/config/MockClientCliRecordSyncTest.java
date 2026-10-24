@@ -5,23 +5,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine.Option;
 
 /**
- * Drift guard: every {@link MockClientConfig} record component must have a matching {@link
- * Option}-annotated field on {@link MockClientCli}, and vice versa. Names must agree under the
- * kebab-case ↔ camelCase mapping. Without this test, adding a new field to one side and forgetting
- * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
- * NPE instead of a config error.
+ * Drift guard: every leaf component of {@link MockClientConfig}, its nested groups flattened under
+ * the names {@link ConfigLeaves} gives them, must have a matching {@link Option}-annotated field on
+ * {@link MockClientCli}, and vice versa. Names must agree under the kebab-case ↔ camelCase mapping.
+ * Without this test, adding a new field to one side and forgetting the other compiles fine but
+ * produces a {@code null} value at runtime, and the user sees a confusing NPE instead of a config
+ * error.
  *
  * <p>The 1:1 rule has three deliberate exceptions: {@code hostConfig} groups seven CLI options
  * ({@code hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code
@@ -134,10 +133,13 @@ final class MockClientCliRecordSyncTest {
         // queueConfig component).
         // Both went up by one for --mock-game-crash-after-seconds (WBS-5.2), which is an ordinary
         // ungrouped option: one flag, one record component, so the gap between the two is unmoved.
+        // Leaves are counted, so nesting the groups (#143) left both numbers as they were.
         long expectedRecordComponents = 29;
         long expectedCliOptionsExcludingHelpers = 38;
 
-        long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
+        List<String> leaves = ConfigLeaves.names();
+        assertEquals(leaves.size(), Set.copyOf(leaves).size(), "leaves share a name: " + leaves);
+        long actualRecordComponents = leaves.size();
         long actualCliOptions =
                 Arrays.stream(MockClientCli.class.getDeclaredFields())
                                 .filter(f -> f.isAnnotationPresent(Option.class))
@@ -147,7 +149,7 @@ final class MockClientCliRecordSyncTest {
         assertEquals(
                 expectedRecordComponents,
                 actualRecordComponents,
-                "MockClientConfig record-component count drifted; update this test if "
+                "MockClientConfig leaf-component count drifted; update this test if "
                         + "intentional.");
         assertEquals(
                 expectedCliOptionsExcludingHelpers,
@@ -157,9 +159,7 @@ final class MockClientCliRecordSyncTest {
     }
 
     private static Set<String> collectRecordComponentNames() {
-        return Stream.of(MockClientConfig.class.getRecordComponents())
-                .map(RecordComponent::getName)
-                .collect(Collectors.toCollection(TreeSet::new));
+        return new TreeSet<>(ConfigLeaves.names());
     }
 
     private static Set<String> collectCliOptionFieldNames() {
