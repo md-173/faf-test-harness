@@ -56,10 +56,11 @@ import java.util.OptionalInt;
  *     adapter); a default for the {@code launch-ice} diagnostic, overridden by the lobby {@code
  *     game_launch.uid} during a full {@code run} session
  * @param mockGameLaunchDelaySeconds how long mock-game sits in the lobby before starting the match
- *     on its own, passed straight through as its {@code --launch-delay-seconds} (WBS-4.3.1).
- *     Negative disables auto-launch, which is what a multi-peer session needs: the FAF server
- *     refuses a {@code game_join} once the host has reported {@code GameState Launching}, so a host
- *     on a timer makes itself unjoinable while the joiner is still booting
+ *     on its own, passed straight through as its {@code --launch-delay-seconds} (WBS-4.3.1); a
+ *     matchmaker game counts it from its first {@code Ready} report (WBS-3.2.4.3-fix, #534).
+ *     Negative disables auto-launch, which is what a multi-peer custom session needs: the FAF
+ *     server refuses a {@code game_join} once the host has reported {@code GameState Launching}, so
+ *     a host on a timer makes itself unjoinable while the joiner is still booting
  * @param logLevel minimum log level
  * @param logFile optional JSONL log file path
  * @param playerIdOverride optional player ID override for deterministic local testing. Applies to

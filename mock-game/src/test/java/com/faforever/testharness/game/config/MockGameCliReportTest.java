@@ -150,14 +150,14 @@ final class MockGameCliReportTest {
     void unknownArgumentReturnsUsageAndNamesIt() {
         String[] args = new String[VALID_ARGS.length + 2];
         System.arraycopy(VALID_ARGS, 0, args, 0, VALID_ARGS.length);
-        args[VALID_ARGS.length] = "--faction";
-        args[VALID_ARGS.length + 1] = "3";
+        args[VALID_ARGS.length] = "--map";
+        args[VALID_ARGS.length + 1] = "scmp_007";
 
         ParseOutcome outcome = MockGameCli.parseOrReport(args, out, err);
 
         assertEquals(ExitCodes.USAGE, outcome.exitCode());
         assertNull(outcome.config());
-        assertTrue(errorLine().contains("--faction"), "message must name the unknown argument");
+        assertTrue(errorLine().contains("--map"), "message must name the unknown argument");
     }
 
     /**

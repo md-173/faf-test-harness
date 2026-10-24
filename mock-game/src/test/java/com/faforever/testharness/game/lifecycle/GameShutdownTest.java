@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assumptions.abort;
 
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectEvent;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
@@ -183,7 +184,8 @@ final class GameShutdownTest {
     void stopsLifecycleScheduledDelay() throws Exception {
         Duration launchDelay = Duration.ofMinutes(1);
         MockGameConfig defaultConfig =
-                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                new MockGameConfig(
+                        50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1, Seat.DEFAULT, 2);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
         try {
             MockGameLifecycle lifecycle =
@@ -230,7 +232,19 @@ final class GameShutdownTest {
     void aMatchThatEndsOnItsOwnIsNotInterruptedByItsOwnTeardown() throws Exception {
         int lobbyPort = TestPorts.freeUdpPort();
         MockGameConfig config =
-                new MockGameConfig(50000, lobbyPort, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                new MockGameConfig(
+                        50000,
+                        lobbyPort,
+                        1,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        -1,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2);
         ScriptedGpgNetServer gpgnet = new ScriptedGpgNetServer();
         try {
             MockGameLifecycle lifecycle =
@@ -453,7 +467,8 @@ final class GameShutdownTest {
     @Timeout(30)
     void aLocalCloseNeverTakesTheFsmMonitor() throws Exception {
         MockGameConfig config =
-                new MockGameConfig(50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                new MockGameConfig(
+                        50000, 50001, 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1, Seat.DEFAULT, 2);
         // Never connected, which is what makes close() dispatch on the thread that calls it.
         GpgNetConnection connection = new GpgNetConnection(1);
         MockGameLifecycle lifecycle = new MockGameLifecycle(config, connection, null, null);
@@ -582,7 +597,7 @@ final class GameShutdownTest {
         try (DatagramSocket probe = new DatagramSocket(0)) {
             lobbyPort = probe.getLocalPort();
         }
-        GameTrafficSession traffic = new GameTrafficSession(1, 0);
+        GameTrafficSession traffic = new GameTrafficSession(1, Seat.DEFAULT, 0, first -> {});
         traffic.bind(lobbyPort);
         return traffic;
     }

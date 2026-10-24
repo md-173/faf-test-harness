@@ -293,7 +293,8 @@ public final class MockClientCli implements Callable<Integer> {
             defaultValue = "5",
             description =
                     "Seconds mock-game sits in the lobby before launching the match on its own "
-                            + "(default: ${DEFAULT-VALUE}). Use a negative value for a multi-peer "
+                            + "(default: ${DEFAULT-VALUE}), in a matchmaker game counted from its "
+                            + "first Ready report. Use a negative value for a multi-peer custom "
                             + "session: the lobby server refuses a game_join once the host has "
                             + "launched, so an auto-launching host is unjoinable.")
     private int mockGameLaunchDelaySeconds;

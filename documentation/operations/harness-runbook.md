@@ -1181,6 +1181,15 @@ The game's and the adapter's lines can interleave in either order. The
 survivors' traffic to each other carries on, and a host whose last joiner
 leaves keeps its lobby open, as FA's does.
 
+Those are not the only `Disconnected` lines a custom game's adapter logs. FA's
+custom lobby also sends one before it connects to each peer it is told about
+with `ConnectToPeer`, and so does the game (WBS-3.2.4.1-fix, #506): the
+host's adapter logs `Received GPGNet message: Disconnected <id>` as each
+joiner is announced, and each joiner's as every other joiner is. A joiner
+learns of the host through `JoinGame`, which gets no reply. Only the
+`Disconnected` next to the game's `Peer (ID: <id>) disconnected` line is a
+departure.
+
 The rest of the rule, from `MockGameLifecycle`'s departure transitions:
 
 - **No notice ends a game, not even one about the host.** When the host
@@ -1193,8 +1202,14 @@ The rest of the rule, from `MockGameLifecycle`'s departure transitions:
   before it finished joining, is answered with `Disconnected` and changes
   nothing: `Peer (ID: <id>) disconnected but never joined this game; ignoring`.
 - **A malformed `DisconnectFromPeer` still ends the game as a failure.**
-- **FA's matchmaker lobby answers with `DisconnectedPeer <id>` instead**, and
-  sends no `ClearSlot`. The Mock Game speaks only the custom lobby's frames.
+- **A matchmaker game answers as FA's matchmaker lobby does**
+  (WBS-3.2.4.1-fix, #506):
+  `Received GPGNet message: DisconnectedPeer <departing id>` in place of the
+  last two lines, only for a peer the game had, and no `ClearSlot`. It sends
+  no `Disconnected` on connect either. Instead each survivor's adapter logged
+  `Received GPGNet message: EstablishedPeer <id>` when that peer's first
+  datagram arrived. faf-server has a handler for neither and logs each as an
+  unrecognized command.
 
 **After launch**, that guard closes and **no targeted notification is sent at
 all**. The server broadcasts a `game_info` with the reduced player list and
@@ -1246,7 +1261,7 @@ Four consequences worth knowing before you read a post-launch log:
 - **The verdict brings a junk datagram or a dead listener thread.** Within a
   few milliseconds of a survivor's `connected=false`, either its game logs
   `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>: GameDatagram
-  is exactly 20 bytes, got 1499`, `<port>` being the lost peer's relay port, or
+  is exactly 32 bytes, got 1499`, `<port>` being the lost peer's relay port, or
   its adapter logs `Exception in thread "Thread-<n>"
   java.lang.RuntimeException: java.lang.InterruptedException`.
   Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's
@@ -1653,7 +1668,9 @@ ends. The crash and the match-end timer share one scheduler, and the end of the
 match tears that scheduler down, so the crash is cancelled and the run exits
 `0`. The game warns when it arms the timer, right after the `injected crash
 armed` line, for example `injected crash is due in 20s but the match is due
-to end in 14998ms`.
+to end in 14998ms`. A matchmaker game expecting other players cannot warn:
+it arms its launch only on its first `Ready`, after a peer has connected and
+started its crash timer (WBS-3.2.4.3-fix, #534).
 
 When the match is due to end depends on where the timer started. Armed on
 entry to LIVE, the match ends one match length later. Armed by a peer

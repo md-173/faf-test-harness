@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -406,7 +407,19 @@ final class MainTest {
     /** As {@link #lifecycleOn(int)}, left unstarted: constructed, inert, nothing opened. */
     private static MockGameLifecycle unstartedLifecycleOn(final int gpgNetPort) {
         return new MockGameLifecycle(
-                new MockGameConfig(gpgNetPort, 6112, 42, "Rhiza", 9001, Map.of(), 0, -1, 0, -1),
+                new MockGameConfig(
+                        gpgNetPort,
+                        6112,
+                        42,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        -1,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2),
                 new GpgNetConnection(gpgNetPort),
                 TEST_LAUNCH_DELAY,
                 TEST_MATCH_DURATION);
@@ -418,7 +431,18 @@ final class MainTest {
         MockGameLifecycle created =
                 new MockGameLifecycle(
                         new MockGameConfig(
-                                gpgNetPort, lobbyPort, 42, "Rhiza", 9001, Map.of(), 0, -1, 0, -1),
+                                gpgNetPort,
+                                lobbyPort,
+                                42,
+                                "Rhiza",
+                                9001,
+                                Map.of(),
+                                0,
+                                -1,
+                                0,
+                                -1,
+                                Seat.DEFAULT,
+                                2),
                         new GpgNetConnection(gpgNetPort),
                         launchDelay,
                         matchDuration);

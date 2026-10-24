@@ -3,6 +3,7 @@ package com.faforever.testharness.client.state;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
@@ -235,6 +236,9 @@ final class LifecycleSetupTest {
                         MINIMAL_GAME_CONFIG.uid());
         assertEquals(expected, iceLauncher.getIdentity());
         assertEquals(expected, gameLauncher.getIdentity());
+        // The game also gets the game_launch itself, whose matchmaker fields become its lobby
+        // arguments (WBS-3.2.4.3-fix, #534); MockGameLauncherTest pins which ones it emits.
+        assertSame(MINIMAL_GAME_CONFIG, gameLauncher.getGameConfig());
 
         // Guards the fixture itself. If SessionFixture ever drifted into matching the config, the
         // assertions above would pass while proving nothing.

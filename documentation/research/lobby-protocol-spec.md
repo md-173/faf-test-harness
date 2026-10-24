@@ -422,7 +422,7 @@ Client                           Server
     │                              │   map_position, expected_players
     │                              │
     │  (matchmaker games have init_mode=1 / AUTO_LOBBY)
-    │  (game skips manual host config, server pre-sets options)
+    │  (server pre-sets options; host's PlayerOption confirms)
     │                              │
     │─── GameState("Idle") ───────▶│   (same GPGNet flow from here)
 ```

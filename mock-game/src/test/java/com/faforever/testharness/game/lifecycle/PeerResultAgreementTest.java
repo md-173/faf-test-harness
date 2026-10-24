@@ -10,6 +10,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -59,15 +60,14 @@ import org.slf4j.LoggerFactory;
  * ConnectToPeer} for the newcomer. The joiner here arrives second, so every later peer reaches it
  * the second way.
  *
- * <p><b>What proves a peer was counted.</b> A joiner answers {@code ConnectToPeer} with nothing on
- * the wire, and {@code launchMatch()} runs on this thread without queueing behind frames still
- * unread on the socket, so a frame sent just before it can land in LIVE and be dropped, leaving
- * that game an army short. The barrier is the lifecycle's own "New peer" line, logged inside the
- * {@code ConnectToPeer} transition: {@code StateMachine.receiveEvent} is synchronized, so a {@code
- * launchMatch()} from this thread queues behind the rest of that transition, {@code peers.add}
- * included. Any line logged inside the transition would serve, and this is the one {@code
- * LifecyclePeerConnectTest} already reads. Each game has its own stub relay socket, so the address
- * in the line says which game logged it.
+ * <p><b>What proves a peer was counted.</b> {@code launchMatch()} runs on this thread without
+ * queueing behind frames still unread on the socket, so a frame sent just before it can land in
+ * LIVE and be dropped, leaving that game an army short. The barrier is the lifecycle's own "New
+ * peer" line, logged inside the {@code ConnectToPeer} transition: {@code StateMachine.receiveEvent}
+ * is synchronized, so a {@code launchMatch()} from this thread queues behind the rest of that
+ * transition, {@code peers.add} included. Any line logged inside the transition would serve, and
+ * this is the one {@code LifecyclePeerConnectTest} already reads. Each game has its own stub relay
+ * socket, so the address in the line says which game logged it.
  *
  * <p>Pinning the host's frames value by value is {@code LifecycleSetupTest}'s job. This class
  * asserts only what the two games' results have to say about each other.
@@ -141,7 +141,9 @@ final class PeerResultAgreementTest {
                             -1,
                             -1,
                             0,
-                            -1);
+                            -1,
+                            Seat.DEFAULT,
+                            2);
             this.lifecycle =
                     new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
         }

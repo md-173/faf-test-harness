@@ -11,6 +11,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -30,9 +31,10 @@ import org.slf4j.LoggerFactory;
 
 /**
  * The game half of mid-session peer departure (WBS-4.3.4, WBS-4.3.6): what a {@code
- * DisconnectFromPeer} frame from the adapter does. In the lobby the game answers it as FA's lobby
- * does and plays on without that peer, whoever left; once the match is live it is ignored; a frame
- * with no usable id ends the game as a failure.
+ * DisconnectFromPeer} frame from the adapter does. In the lobby the game answers it as FA's custom
+ * lobby does and plays on without that peer, whoever left; once the match is live it is ignored; a
+ * frame with no usable id ends the game as a failure. The matchmaker lobby's answers are {@link
+ * LifecycleMatchmakerLobbyTest}'s.
  *
  * <p>The frames arrive over a real socket from {@link ScriptedGpgNetServer} and the game's answers
  * are read back from it, rather than events being posted, because the dispatcher registration and
@@ -100,7 +102,18 @@ final class LifecyclePeerDisconnectTest {
         // peer gets 2 and the next 3.
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                        50000,
+                        TestPorts.freeUdpPort(),
+                        1,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        -1,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         otherPeer = new DatagramSocket(0);
@@ -338,8 +351,13 @@ final class LifecyclePeerDisconnectTest {
         return lifecycle;
     }
 
-    /** The adapter announcing a peer whose relay is {@code relay}. */
-    private void announce(final DatagramSocket relay, final int playerId) throws IOException {
+    /**
+     * The adapter announcing a peer whose relay is {@code relay}, and the game's answer: FA's
+     * custom lobby sends {@code Disconnected} with the id before it connects, so this reads that
+     * frame here, and a departure's answer is never mistaken for it.
+     */
+    private void announce(final DatagramSocket relay, final int playerId)
+            throws IOException, InterruptedException {
         gpgnet.sendFrame(
                 new GpgNetFrame(
                         "ConnectToPeer",
@@ -347,6 +365,7 @@ final class LifecyclePeerDisconnectTest {
                                 "127.0.0.1:" + relay.getLocalPort(),
                                 "Smith" + playerId,
                                 playerId)));
+        assertEquals(disconnected(playerId), nextFrame());
     }
 
     /** The adapter forwarding faf-server's notice that {@code playerId} left. */

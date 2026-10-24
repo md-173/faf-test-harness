@@ -78,10 +78,13 @@ import org.slf4j.LoggerFactory;
  * launch, match-end and crash scheduler, which discards every task whose delay has not run out.
  * Neither can recall work already running: a scheduler task past its cancellation check can still
  * post an event after teardown, and a timeout whose transition is already under way when {@code
- * cancel()} runs still completes; both FSM timeouts, the GPGNet connect timeout and the optional
- * lobby give-up timer, target ENDED. That residue is inert: the invalid-transition policy is
- * IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and a transition that does fire
- * converges on ENDED, whose entry hook is this once-guarded sequence, so nothing tears down twice.
+ * cancel()} runs still completes. The GPGNet connect timeout and the optional lobby give-up timer
+ * target ENDED. A matchmaker game's 2 s {@code LaunchStatus} report is a self-loop: one already
+ * under way sends at most one frame, a send on the closed socket fails into ENDED, and its re-arm
+ * arms nothing once {@code cancel()} has run (WBS-3.2.4.3-fix, #534). That residue is inert: the
+ * invalid-transition policy is IGNORE, so a stray event in LIVE or ENDED is logged and dropped, and
+ * a transition that does fire converges on ENDED, whose entry hook is this once-guarded sequence,
+ * so nothing tears down twice.
  *
  * <p>Step one is what makes that true. Before WBS-3.2.4.1-fix (#265) added it, nothing stopped that
  * scheduler: a {@code SIGTERM} in HOSTING or JOINING with a launch still pending left the FSM in

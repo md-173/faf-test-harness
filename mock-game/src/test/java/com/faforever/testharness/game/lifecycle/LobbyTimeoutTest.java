@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -139,7 +140,18 @@ final class LobbyTimeoutTest {
     private MockGameLifecycle lifecycleWithLobbyTimeout(final int seconds) {
         MockGameConfig config =
                 new MockGameConfig(
-                        gpgnet.port(), 50001, 1, "Rhiza", 9001, Map.of(), -1, seconds, 0, -1);
+                        gpgnet.port(),
+                        50001,
+                        1,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        -1,
+                        seconds,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2);
         MockGameLifecycle created =
                 new MockGameLifecycle(
                         config,

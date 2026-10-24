@@ -335,7 +335,8 @@ final class PlayingTransitionTest {
         }
 
         @Override
-        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity, GameConfig gameConfig)
+                throws MockGameLaunchException {
             try {
                 SubprocessManager manager =
                         SubprocessManager.start(

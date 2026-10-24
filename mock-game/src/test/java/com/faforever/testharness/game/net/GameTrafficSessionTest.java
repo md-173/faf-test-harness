@@ -13,6 +13,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.faforever.testharness.game.config.Seat;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -87,7 +88,14 @@ final class GameTrafficSessionTest {
 
     @BeforeEach
     void setUp() throws IOException {
-        session = new GameTrafficSession(OWN_PLAYER_ID, 0, TEST_CADENCE, TEST_PROGRESS_INTERVAL);
+        session =
+                new GameTrafficSession(
+                        OWN_PLAYER_ID,
+                        Seat.DEFAULT,
+                        0,
+                        first -> {},
+                        TEST_CADENCE,
+                        TEST_PROGRESS_INTERVAL);
         peer = new DatagramSocket(0);
         peer.setSoTimeout((int) RECEIVE_TIMEOUT.toMillis());
 
@@ -118,7 +126,9 @@ final class GameTrafficSessionTest {
         assertNotNull(session.socket(), "the lobby socket must be bound");
         assertEquals(lobbyPort, session.socket().getLocalPort(), "bound on the port it was given");
 
-        sendToLobby(lobbyPort, new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis()));
+        sendToLobby(
+                lobbyPort,
+                new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis(), Seat.DEFAULT));
 
         awaitReceived(PEER_PLAYER_ID, 1);
     }
@@ -207,7 +217,8 @@ final class GameTrafficSessionTest {
         for (int sequence = 0; sequence < 3; sequence++) {
             sendToLobby(
                     lobbyPort,
-                    new GameDatagram(PEER_PLAYER_ID, sequence, System.currentTimeMillis()));
+                    new GameDatagram(
+                            PEER_PLAYER_ID, sequence, System.currentTimeMillis(), Seat.DEFAULT));
         }
 
         String expected = "player " + OWN_PLAYER_ID + " peer traffic from player " + PEER_PLAYER_ID;
@@ -266,11 +277,11 @@ final class GameTrafficSessionTest {
         // surfacing there would escape into a state machine transition.
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameTrafficSession(OWN_PLAYER_ID, -1),
+                () -> new GameTrafficSession(OWN_PLAYER_ID, Seat.DEFAULT, -1, first -> {}),
                 "a negative drop percentage must be rejected");
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameTrafficSession(OWN_PLAYER_ID, 101),
+                () -> new GameTrafficSession(OWN_PLAYER_ID, Seat.DEFAULT, 101, first -> {}),
                 "a drop percentage above 100 must be rejected");
     }
 

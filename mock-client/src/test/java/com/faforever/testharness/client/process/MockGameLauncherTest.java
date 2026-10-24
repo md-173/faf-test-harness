@@ -12,6 +12,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.MockClientConfig;
+import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.ParentDeathSignal;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -319,7 +320,7 @@ final class MockGameLauncherTest {
         LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
 
         List<String> argv =
-                new MockGameLauncher(configWithBinary(binary)).buildArgv(binary, identity);
+                new MockGameLauncher(configWithBinary(binary)).buildArgv(binary, identity, null);
 
         // The config this launcher holds would give player id 1 and login "mock-client".
         assertEquals("9001", valueAfter(argv, "--player-id"));
@@ -334,12 +335,48 @@ final class MockGameLauncherTest {
 
         List<String> argv =
                 new MockGameLauncher(config)
-                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242));
+                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242), null);
 
         assertEquals(
                 "9001",
                 valueAfter(argv, "--player-id"),
                 "a session launch is bound to the lobby id, so the override must not apply");
+    }
+
+    @Test
+    void aMatchmakerLaunchCarriesItsLobbyArguments() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        // Every value distinct, so an argument carrying the wrong field cannot pass.
+        GameConfig matchmaker = gameLaunch("matchmaker", 3, 5, 4, 6);
+
+        List<String> argv =
+                new MockGameLauncher(configWithBinary(binary))
+                        .buildArgv(
+                                binary,
+                                new LaunchIdentity(9001, "welcome-login", 4242),
+                                matchmaker);
+
+        assertEquals("3", valueAfter(argv, "--team"));
+        assertEquals("5", valueAfter(argv, "--start-spot"));
+        assertEquals("4", valueAfter(argv, "--faction"));
+        assertEquals("6", valueAfter(argv, "--expected-players"));
+    }
+
+    @Test
+    void aCustomLaunchAndTheDiagnosticCarryNoLobbyArguments() throws Exception {
+        Path binary = createStub("mock-game", "#!/bin/sh\nexit 0\n");
+        MockGameLauncher launcher = new MockGameLauncher(configWithBinary(binary));
+        GameConfig custom = gameLaunch("custom", null, null, null, null);
+        LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
+        List<List<String>> argvs =
+                List.of(launcher.buildArgv(binary, identity, custom), launcher.buildArgv(binary));
+        List<String> flags = List.of("--team", "--start-spot", "--faction", "--expected-players");
+
+        for (List<String> argv : argvs) {
+            for (String flag : flags) {
+                assertFalse(argv.contains(flag), flag + " must be absent: " + argv);
+            }
+        }
     }
 
     @Test
@@ -464,6 +501,30 @@ final class MockGameLauncherTest {
         Files.writeString(script, body);
         assertTrue(script.toFile().setExecutable(true), "could not mark stub executable");
         return script;
+    }
+
+    /** A validated game_launch for game 4242 with the given matchmaker fields. */
+    private static GameConfig gameLaunch(
+            final String gameType,
+            final Integer team,
+            final Integer mapPosition,
+            final Integer faction,
+            final Integer expectedPlayers) {
+        return new GameConfig(
+                4242,
+                "faf",
+                "Test Game Name",
+                null,
+                gameType,
+                "global",
+                List.of(),
+                null,
+                team,
+                faction,
+                mapPosition,
+                expectedPlayers,
+                null,
+                null);
     }
 
     private static String valueAfter(final List<String> argv, final String flag) {

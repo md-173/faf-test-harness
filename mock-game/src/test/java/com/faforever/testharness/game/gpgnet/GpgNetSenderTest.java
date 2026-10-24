@@ -86,6 +86,19 @@ final class GpgNetSenderTest {
     }
 
     @Test
+    void disconnectedPeerCarriesTheIdAsAStringAsFaDoes() throws IOException {
+        // FA's matchmaker lobby sends the engine's own peer id, which FA keeps as a string.
+        sender.disconnectedPeer(330072);
+        assertEquals(List.of(GpgNetFrame.of("DisconnectedPeer", "330072")), sent);
+    }
+
+    @Test
+    void establishedPeerCarriesTheIdAsAStringAsFaDoes() throws IOException {
+        sender.establishedPeer(330072);
+        assertEquals(List.of(GpgNetFrame.of("EstablishedPeer", "330072")), sent);
+    }
+
+    @Test
     void clearSlotCarriesTheSlotAsAnInt() throws IOException {
         sender.clearSlot(3);
         assertEquals(List.of(GpgNetFrame.of("ClearSlot", 3)), sent);

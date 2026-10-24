@@ -11,6 +11,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.faforever.testharness.game.config.Seat;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
@@ -64,7 +65,9 @@ final class GameUdpReceiverTest {
 
     /** Sends one encoded {@link GameDatagram} to the lobby socket. */
     private void forward(final int senderId, final long sequence) throws Exception {
-        forward(new GameDatagram(senderId, sequence, System.currentTimeMillis()).toBytes());
+        forward(
+                new GameDatagram(senderId, sequence, System.currentTimeMillis(), Seat.DEFAULT)
+                        .toBytes());
     }
 
     /** Polls {@code condition} up to {@code timeoutMs}, returning whether it became true. */
@@ -190,7 +193,8 @@ final class GameUdpReceiverTest {
             for (long seq = 0; seq < 5; seq++) {
                 adapterSocket.send(
                         new DatagramPacket(
-                                new GameDatagram(7, seq, System.currentTimeMillis()).toBytes(),
+                                new GameDatagram(7, seq, System.currentTimeMillis(), Seat.DEFAULT)
+                                        .toBytes(),
                                 GameDatagram.BYTES,
                                 lobby()));
                 Thread.sleep(10);

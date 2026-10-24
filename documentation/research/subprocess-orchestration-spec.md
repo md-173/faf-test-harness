@@ -308,6 +308,11 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
   "--player-id",   welcome.me.id,
   "--player-login", welcome.me.login,
   "--game-uid",    game_launch.uid,
+  // each only when game_launch carries it, as for a matchmaker game
+  "--team",        game_launch.team,
+  "--start-spot",  game_launch.map_position,
+  "--faction",     game_launch.faction,
+  "--expected-players", game_launch.expected_players,
   "--launch-delay-seconds", mockGameLaunchDelaySeconds,
   // only when mockGameUdpDropPercent > 0 (WBS-5.1)
   "--udp-drop-percent", mockGameUdpDropPercent,
@@ -317,21 +322,25 @@ launched, otherwise the GPGNet connect would race the adapter's bind.
 
 The game-side parser is `MockGameCli` in mock-game's `game.config` package
 (WBS-3.2.1.1): strict, unknown arguments rejected, and every argument that
-states a *session fact* required and never defaulted.
+states a *session fact* required and never defaulted. The four matchmaker
+arguments are the exception (WBS-3.2.4.3-fix, #534): a custom game has none of
+them, so each defaults to the value FA takes when it is launched without it.
 
 The behavioural knobs are the defaulted arguments: `--launch-delay-seconds`
 (WBS-4.3.1), `--udp-drop-percent` (WBS-5.1), `--lobby-timeout-seconds`
-(WBS-3.2.1.3) and `--crash-after-seconds` (WBS-5.2). Every session fact stays
-required. Taking the first as the
+(WBS-3.2.1.3) and `--crash-after-seconds` (WBS-5.2). Every other session fact
+stays required. Taking the first as the
 worked example: it is defaulted because it
 is a behavioural knob rather than a session fact: how long the game sits in the
 lobby before starting the match on its own, with a negative value meaning it
-never does. Its default (5 s, the value `Main` used to hardcode) applies only to
+never does. In a matchmaker lobby the game counts it from when it first reports
+`Ready`, as FA's host launches only once every peer is ready (WBS-3.2.4.3-fix,
+#534). Its default (5 s, the value `Main` used to hardcode) applies only to
 a hand-run binary — `MockGameLauncher` always emits the flag explicitly, from
 the client's own `--mock-game-launch-delay-seconds`, and `Main` logs the
 effective policy in its startup line either way.
 
-A multi-peer session must pass a negative value **to the host at least**. The
+A multi-peer custom session must pass a negative value **to the host at least**. The
 FAF server only accepts a `game_join` while the game is in `GameState.LOBBY`
 (`lobbyconnection.command_game_join`) and moves it out of that state as soon as
 the host reports `GameState Launching` (`gameconnection._handle_game_state` →
@@ -340,7 +349,9 @@ unjoinable while the joiner is still booting its adapter and game. The one
 exception is a session that has to leave the lobby phase (WBS-4.3.4, and
 `mock-client session --crash-peer`, WBS-5.2.1): its host gets a delay no
 shorter than `MultiPeerSession.minHostLaunchDelaySeconds`, which leaves every
-joiner time to join first.
+joiner time to join first. A matchmaker game must not: it would never launch,
+and faf-server cancels a match whose host has not launched within 60 s plus
+10 s per guest (`ladder_service.launch_match`).
 
 The two fault-injection arguments are emitted **conditionally**. The launcher
 passes `--udp-drop-percent` only when the client's own
@@ -371,11 +382,11 @@ client hands Forged Alliance its game uid inside the
 filename, with no flag of its own. mock-game has neither, so it takes the uid
 directly.
 
-#### Deferred `game_launch`-derived flags
+#### `game_launch`-derived flags
 
 An earlier draft of this section listed mod, map, faction, and team as flags
-to pass. None are emitted. Verified against downlords-faf-client v2026.7.1 and
-FAForever/server, they fall into three groups.
+to pass. Verified against downlords-faf-client v2026.7.1 and FAForever/server,
+they fall into three groups.
 
 - **`mod` has no argv representation, but is a real `game_launch` field.**
   `_prepare_launch_game` sets `"mod": game.game_mode` as a top-level field, so
@@ -387,15 +398,18 @@ FAForever/server, they fall into three groups.
   `/map` is reached only from `launchOfflineGame`. The `game_launch` mapname
   is used to pre-download the map, after which FA gets it through the lobby.
 - **Faction, team, expected players, start spot, game options, and additional
-  args are a real conditional handoff, deferred rather than dismissed.**
+  args are a real conditional handoff.**
   `ForgedAllianceLaunchService.launchOnlineGame` passes all of them on every
   online launch, and `build()` emits each only when non-null. The client does
   not branch on matchmaker. The FAF server produces the difference, since
   `GameLaunchOptions` defaults every field to `None` and `_prepare_launch_game`
   strips every `None` before sending, while ladder and team matchmaking fill
-  them in. Track these against whatever grows mock-game's lobby-option
-  fidelity. Passing them through the launcher is the mechanism the real client
-  uses, so this is a scope decision, not a correctness one.
+  them in. The launcher passes the first four the same way, as `--team`,
+  `--start-spot`, `--faction` and `--expected-players`, because FA's matchmaker
+  lobby seats each player and reports it to faf-server from them
+  (WBS-3.2.4.3-fix, #534). Game options and additional args stay deferred:
+  passing them is the mechanism the real client uses, so that is a scope
+  decision, not a correctness one.
 
 The Subprocess Execution Controller treats the argv as opaque except for the
 two ports it shares with the adapter.
@@ -717,7 +731,7 @@ at the unguarded `TrayIcon.close()` after closing the game's connection.
 
 mock-game keeps running too, and while the adapter holds its connection only
 its own timers can end it. In `LOBBY` it has none: the launch timer is armed
-only by `HostGame` or `JoinGame`, which the adapter sends only when its client
+only once `HostGame` or `JoinGame` arrives, which the adapter sends only when its client
 asks, and `--lobby-timeout-seconds`, which `MockGameLauncher` does not pass,
 defaults to waiting indefinitely. A Mock Client killed before it gives the game
 a role therefore leaves mock-game in `LOBBY` indefinitely, whatever the launch
@@ -726,8 +740,9 @@ Once hosting or joining, mock-game ends when its launch and match timers finish,
 unless auto-launch is off, as `mock-client session` sets it for every joiner,
 and for the host unless `--crash-peer` asks for a launch, and a negative
 `--mock-game-launch-delay-seconds` sets it for `run`; then it also waits
-indefinitely. It ends at once if the adapter closes its connection, and
-within 30 s if the connection never comes up.
+indefinitely. So does a matchmaker game that never reports `Ready`, since its
+launch timer starts only then (WBS-3.2.4.3-fix, #534). It ends at once if the
+adapter closes its connection, and within 30 s if the connection never comes up.
 
 ### 7.4 Process tracking
 

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -55,7 +56,18 @@ public final class LifecycleSetupTest {
     void setup() throws IOException {
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                        50000,
+                        TestPorts.freeUdpPort(),
+                        1,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        -1,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2);
         gpgnet = new ScriptedGpgNetServer();
         gpgnet.start();
         peer = new DatagramSocket(0);
@@ -265,6 +277,8 @@ public final class LifecycleSetupTest {
         for (int playerId = 2; playerId <= 4; playerId++) {
             gpgnet.sendFrame(
                     new GpgNetFrame("ConnectToPeer", List.of(peerAddress(), "Smith", playerId)));
+            // FA's custom lobby answers before it connects (init mode 0 above).
+            assertMessage("Disconnected", Integer.toString(playerId));
             assertPlayerOptions(playerId, playerId, playerId % 2 == 0 ? 3 : 2);
         }
         lifecycle.launchMatch();

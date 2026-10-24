@@ -2,6 +2,7 @@ package com.faforever.testharness.client.process;
 
 import com.faforever.testharness.client.config.MockClientConfig;
 import com.faforever.testharness.client.config.MockGameSettings;
+import com.faforever.testharness.client.lobby.GameConfig;
 import com.faforever.testharness.shared.logging.InstanceLabel;
 import com.faforever.testharness.shared.logging.LoggingSetup;
 import com.faforever.testharness.shared.process.SubprocessManager;
@@ -29,6 +30,8 @@ import org.slf4j.LoggerFactory;
  * <pre>{@code
  * <binary> --gpgnet-port <gpgnet> --lobby-port <lobby>
  *          --player-id <id> --player-login <login> --game-uid <uid>
+ *          [--team <team>] [--start-spot <spot>] [--faction <faction>]
+ *          [--expected-players <count>]
  *          --launch-delay-seconds <seconds>
  *          [--udp-drop-percent <percent>] [--crash-after-seconds <seconds>]
  * }</pre>
@@ -43,20 +46,21 @@ import org.slf4j.LoggerFactory;
  * MockClientConfig} fields the ICE adapter uses ({@code iceAdapterGpgNetPort}, {@code
  * iceAdapterLobbyPort}), because spec §2.8 requires the values to match between adapter and game.
  *
- * <p>The identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity)} is the orchestrated
- * path and takes the id and login the lobby assigned plus the {@code game_launch} uid. {@link
- * #start()} is the {@code launch-game} diagnostic path and falls back to config values, which is
- * also the only place {@code playerIdOverride} applies. Its uid is {@code iceAdapterGameId},
- * default 0, meaning no session.
+ * <p>The identity has two sources (WBS-3.1.2.9). {@link #start(LaunchIdentity, GameConfig)} is the
+ * orchestrated path and takes the id and login the lobby assigned plus the {@code game_launch} uid.
+ * {@link #start()} is the {@code launch-game} diagnostic path and falls back to config values,
+ * which is also the only place {@code playerIdOverride} applies. Its uid is {@code
+ * iceAdapterGameId}, default 0, meaning no session.
  *
- * <p>Spec §2.8 also sketched {@code game_launch}-derived mod, map, faction, and team flags. None
- * are emitted, for two different reasons. Verified against downlords-faf-client v2026.7.1, {@code
- * LaunchCommandBuilder} has no mod argument at all and its {@code /map} is set only by {@code
- * launchOfflineGame}, so no online game receives either. Faction, team, expected players, and start
- * spot are genuinely passed on every online launch, but the client does not branch on matchmaker.
- * It forwards whatever {@code game_launch} carried, and the FAF server is what leaves those fields
- * null for a custom game and fills them for a matchmaker one. Those four are deferred rather than
- * dismissed, and are tracked in spec §2.8.
+ * <p>The four bracketed lobby arguments carry {@code game_launch}'s {@code team}, {@code
+ * map_position}, {@code faction} and {@code expected_players} (WBS-3.2.4.3-fix, #534), each only
+ * when the frame carried it. That is how downlords-faf-client v2026.7.1 passes them to Forged
+ * Alliance on every online launch: {@code LaunchCommandBuilder} emits {@code /team}, {@code
+ * /startspot}, the faction and {@code /players} only when non-null, without branching on
+ * matchmaker. The FAF server fills them for a matchmaker game and leaves them out of a custom one,
+ * so a custom launch's argv is unchanged. Spec §2.8 also sketched mod and map flags, and neither is
+ * emitted: {@code LaunchCommandBuilder} has no mod argument at all, and its {@code /map} is set
+ * only by {@code launchOfflineGame}, so no online game receives either.
  *
  * <p>If the configured binary path ends in {@code .jar} it is launched via {@code java -jar} on the
  * same JRE as the parent (spec §2.2); otherwise it is executed directly. Log level is forwarded to
@@ -136,24 +140,28 @@ public class MockGameLauncher {
      *     or the process could not be started ("binary failed to start")
      */
     public SubprocessManager start() throws MockGameLaunchException {
-        return start(configIdentity());
+        return start(configIdentity(), null);
     }
 
     /**
-     * Launches mock-game under {@code identity} rather than under the config defaults.
+     * Launches mock-game under {@code identity} rather than under the config defaults, for the game
+     * {@code gameConfig} describes.
      *
      * <p>This is the orchestrated path (WBS-3.1.2.9). The lifecycle calls it once the lobby has
      * answered with a {@code welcome}, so the game is started as the player the lobby actually
-     * authenticated. Everything else about the launch is identical to {@link #start()}.
+     * authenticated, and with the lobby arguments its {@code game_launch} carried (WBS-3.2.4.3-fix,
+     * #534). Everything else about the launch is identical to {@link #start()}.
      *
      * @param identity the session identity to launch under; must not be {@code null}
+     * @param gameConfig the validated {@code game_launch}, or {@code null} for no lobby arguments
      * @return the manager wrapping the started mock-game process
      * @throws MockGameLaunchException if the binary path is not a regular file ("binary not found")
      *     or the process could not be started ("binary failed to start")
      */
-    public SubprocessManager start(final LaunchIdentity identity) throws MockGameLaunchException {
+    public SubprocessManager start(final LaunchIdentity identity, final GameConfig gameConfig)
+            throws MockGameLaunchException {
         Path binary = resolveBinary();
-        List<String> argv = buildArgv(binary, identity);
+        List<String> argv = buildArgv(binary, identity, gameConfig);
 
         ProcessBuilder pb = new ProcessBuilder(argv);
         // Forward LOG_LEVEL so mock-game's LoggingSetup observes the same level as the harness.
@@ -225,7 +233,7 @@ public class MockGameLauncher {
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
     List<String> buildArgv(final Path binary) {
-        return buildArgv(binary, configIdentity());
+        return buildArgv(binary, configIdentity(), null);
     }
 
     /**
@@ -239,9 +247,11 @@ public class MockGameLauncher {
      *
      * @param binary the resolved mock-game binary path
      * @param identity the identity mock-game is launched under
+     * @param gameConfig the validated {@code game_launch}, or {@code null} for no lobby arguments
      * @return the argv list, ready to hand to {@link ProcessBuilder}
      */
-    List<String> buildArgv(final Path binary, final LaunchIdentity identity) {
+    List<String> buildArgv(
+            final Path binary, final LaunchIdentity identity, final GameConfig gameConfig) {
         // Spec §2.2, JAR runs via java -jar on the same JRE and a native binary is exec'd directly.
         List<String> argv = new ArrayList<>(BinaryLaunchCommand.commandPrefix(binary));
 
@@ -258,6 +268,14 @@ public class MockGameLauncher {
         argv.add(identity.login());
         argv.add("--game-uid");
         argv.add(Integer.toString(identity.gameUid()));
+        // Each only when game_launch carried it, as LaunchCommandBuilder does (WBS-3.2.4.3-fix,
+        // #534). faf-server sends them for a matchmaker game only, so a custom launch gets none.
+        if (gameConfig != null) {
+            addIfPresent(argv, "--team", gameConfig.team());
+            addIfPresent(argv, "--start-spot", gameConfig.mapPosition());
+            addIfPresent(argv, "--faction", gameConfig.faction());
+            addIfPresent(argv, "--expected-players", gameConfig.expectedPlayers());
+        }
         for (var option : settings.gameOptions().entrySet()) {
             argv.add("--game-option");
             argv.add(String.format("%s=%s", option.getKey(), option.getValue()));
@@ -287,5 +305,14 @@ public class MockGameLauncher {
             argv.add(Integer.toString(settings.mockGameCrashAfterSeconds()));
         }
         return argv;
+    }
+
+    /* Appends option and value to argv when value is present. */
+    private static void addIfPresent(
+            final List<String> argv, final String option, final Integer value) {
+        if (value != null) {
+            argv.add(option);
+            argv.add(value.toString());
+        }
     }
 }
