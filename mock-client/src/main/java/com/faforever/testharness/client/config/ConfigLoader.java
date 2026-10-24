@@ -226,6 +226,11 @@ public final class ConfigLoader {
      * message names neither the flag nor the whole value, and on Windows the reserved characters
      * {@code < > : " | ? *} make this reachable from an ordinary shell.
      *
+     * <p>The reason is escaped as well as the value. On Windows it quotes the rejected character,
+     * so a value holding a line break gives {@code Illegal char <\n>} with the break itself inside.
+     * On Linux and macOS the reason is fixed text with no line break, so only a Windows run could
+     * pin this escape, and CI runs on Linux only.
+     *
      * @param value the raw {@code --config} argument
      * @return the parsed path
      * @throws IllegalArgumentException if {@code value} is not a valid path on this platform

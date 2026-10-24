@@ -21,6 +21,9 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.net.StandardProtocolFamily;
+import java.net.UnixDomainSocketAddress;
+import java.nio.channels.ServerSocketChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -691,7 +694,7 @@ final class MockClientCliExitCodeTest {
         Path directory = Files.createDirectory(tempDir.resolve("config-dir"));
         MainOutcome outcome = runMain(new String[] {"run", "--config", directory.toString()});
 
-        assertSingleLineUsageError(outcome, "failed to parse config file " + directory + ": ");
+        assertSingleLineUsageError(outcome, "failed to read config file " + directory + ": ");
     }
 
     @Test
@@ -705,7 +708,26 @@ final class MockClientCliExitCodeTest {
                         tempDir.resolve("not-utf8.json"), new byte[] {(byte) 0x80, (byte) 0x81});
         MainOutcome outcome = runMain(new String[] {"run", "--config", binary.toString()});
 
-        assertSingleLineUsageError(outcome, "failed to parse config file " + binary + ": ");
+        assertSingleLineUsageError(outcome, "failed to read config file " + binary + ": ");
+    }
+
+    @Test
+    void readFailureMessageContainingNewlineStaysOnOneLine() throws IOException {
+        // The IOException branch's other operand: the exception's own message. A
+        // FileSystemException starts its message with the path, so a path with a line break puts
+        // one there too. A UNIX socket gets that far, since it passes the isReadable guard and
+        // then cannot be opened. The name is short because the JDK refuses a socket path over 106
+        // bytes, or 102 on macOS, where the temp directory alone takes about 74.
+        Path socket = tempDir.resolve("x\nUsage: F");
+        try (ServerSocketChannel channel = ServerSocketChannel.open(StandardProtocolFamily.UNIX)) {
+            channel.bind(UnixDomainSocketAddress.of(socket));
+        }
+        String escaped = socket.toString().replace("\n", "\\n");
+        MainOutcome outcome = runMain(new String[] {"run", "--config", socket.toString()});
+
+        // The path twice, the second copy opening the message: either one left raw breaks the line.
+        assertSingleLineUsageError(
+                outcome, "failed to read config file " + escaped + ": " + escaped + ": ");
     }
 
     @Test
@@ -769,7 +791,7 @@ final class MockClientCliExitCodeTest {
         Path directory = Files.createDirectory(tempDir.resolve(forgery + "dir"));
         assertEscapedPath(
                 runMain(new String[] {"run", "--config", directory.toString()}),
-                "failed to parse config file ",
+                "failed to read config file ",
                 directory);
 
         // 4. ConfigLoader.toPath, which never gets a Path to escape — the value is rejected before
