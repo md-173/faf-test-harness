@@ -10,7 +10,6 @@ import com.faforever.testharness.shared.logging.LoggingSetup;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,23 +17,31 @@ import java.util.OptionalInt;
 import java.util.concurrent.Callable;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
+import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.ScopeType;
 import picocli.CommandLine.Spec;
 
 /**
- * Picocli root command for the Mock Client. Holds every {@link MockClientConfig} field as a
- * {@code @Option} and registers the five subcommands ({@code run}, {@code launch-ice}, {@code
- * launch-game}, {@code ice-smoke}, {@code session}). Picocli populates the fields by merging (in
- * priority order): CLI flags, environment variables (via {@link LayeredDefaultProvider}), the JSON
- * config file (also via the provider), and built-in {@code defaultValue} attributes.
+ * Picocli root command for the Mock Client. Declares a {@code @Option} for every {@link
+ * MockClientConfig} setting, here or in one of its option mixins ({@link OAuthOptions}, {@link
+ * SubprocessOptions}, {@link FaultOptions}, {@link LoggingOptions}, {@link GameIntentOptions}), and
+ * registers the five subcommands ({@code run}, {@code launch-ice}, {@code launch-game}, {@code
+ * ice-smoke}, {@code session}). Picocli populates the fields by merging (in priority order): CLI
+ * flags, environment variables (via {@link LayeredDefaultProvider}), the JSON config file (also via
+ * the provider), and built-in {@code defaultValue} attributes.
  *
- * <p>Every {@code @Option} declared here uses {@link ScopeType#INHERIT}, so the same flags are
- * accepted by every subcommand and may appear before <em>or</em> after the subcommand name on the
- * command line. The parsed value is always stored on this root instance, regardless of which
- * command observed the flag — subcommands then read the populated config via
- * {@code @ParentCommand}.
+ * <p>Every {@code @Option} declared here or in a mixin uses {@link ScopeType#INHERIT}, so the same
+ * flags are accepted by every subcommand and may appear before <em>or</em> after the subcommand
+ * name on the command line. The parsed value is always stored on this root instance or one of its
+ * mixins, regardless of which command observed the flag, and subcommands then read the populated
+ * config via {@code @ParentCommand}.
+ *
+ * <p>The option fields and the mixins are declared in the order picocli registers the options in,
+ * and that order shows: it decides which malformed environment or config-file value is reported
+ * when there are several, and the order of a mistyped flag's suggested solutions. Reordering them,
+ * or splitting a mixin, changes both.
  *
  * <p>Subcommands produce a validated {@link MockClientConfig} by calling {@link
  * #toValidatedConfig(CommandSpec)}. That method translates {@link IllegalArgumentException} from
@@ -111,65 +118,8 @@ public final class MockClientCli implements Callable<Integer> {
             description = "WebSocket endpoint of the FAF lobby server.")
     private URI lobbyWebSocketUrl;
 
-    /** OAuth2 token endpoint used to acquire lobby access tokens. */
-    @Option(
-            names = "--oauth-token-url",
-            scope = ScopeType.INHERIT,
-            description = "OAuth2 token endpoint used to acquire lobby access tokens.")
-    private URI oauthTokenUrl;
-
-    /** OAuth2 authorization endpoint used by the one-time refresh-token bootstrap. */
-    @Option(
-            names = "--oauth-auth-endpoint",
-            scope = ScopeType.INHERIT,
-            description =
-                    "OAuth2 authorization endpoint used by the one-time refresh-token bootstrap.")
-    private URI oauthAuthEndpoint;
-
-    /** Redirect URI registered on the OAuth client. */
-    @Option(
-            names = "--oauth-redirect-uri",
-            scope = ScopeType.INHERIT,
-            description = "Redirect URI registered on the OAuth client.")
-    private URI oauthRedirectUri;
-
-    /** Space-separated OAuth2 scopes (e.g. "openid offline lobby"). */
-    @Option(
-            names = "--oauth-scopes",
-            scope = ScopeType.INHERIT,
-            description = "Space-separated OAuth2 scopes (e.g. \"openid offline lobby\").")
-    private String oauthScopes;
-
-    /** OAuth2 public client identifier. */
-    @Option(
-            names = "--oauth-client-id",
-            scope = ScopeType.INHERIT,
-            description = "OAuth2 public client identifier.")
-    private String oauthClientId;
-
-    /** Path to a file holding the refresh token; rewritten atomically on each rotation. */
-    @Option(
-            names = "--oauth-refresh-token-file",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Path to a file holding the refresh token; rewritten atomically on each "
-                            + "rotation.")
-    private Path oauthRefreshTokenFile;
-
-    /**
-     * Path to a file holding a pre-signed access token, used verbatim (WBS-3.1.6.4, #325).
-     *
-     * <p>The alternative to {@code --oauth-refresh-token-file}, and mutually exclusive with it. A
-     * file rather than a bare value so the token stays out of the process table and out of CI logs.
-     */
-    @Option(
-            names = "--oauth-access-token-file",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Path to a file holding a pre-signed OAuth access token, used as-is with no "
-                            + "exchange and no renewal. Mutually exclusive with "
-                            + "--oauth-refresh-token-file.")
-    private Path oauthAccessTokenFile;
+    /** The OAuth endpoints, public client and credential files. */
+    @Mixin private OAuthOptions oauth = new OAuthOptions();
 
     /**
      * Optional stable hardware identifier sent in the lobby auth message. If {@code
@@ -218,160 +168,14 @@ public final class MockClientCli implements Callable<Integer> {
                             + "static --unique-id is sent.")
     private Path uidBinaryPath;
 
-    /** Path to the faf-ice-adapter binary; defaults to {@code faf-ice-adapter.jar} in the CWD. */
-    @Option(
-            names = "--ice-adapter-binary-path",
-            scope = ScopeType.INHERIT,
-            defaultValue = "faf-ice-adapter.jar",
-            description =
-                    "Path to the faf-ice-adapter binary (default: ${DEFAULT-VALUE}, resolved "
-                            + "against the working directory). A .jar is launched via "
-                            + "'java -jar'; any other file is executed directly.")
-    private Path iceAdapterBinaryPath;
+    /** The ICE adapter and mock-game binaries, the adapter's ports, game id and launch delay. */
+    @Mixin private SubprocessOptions subprocesses = new SubprocessOptions();
 
-    /**
-     * Path to the {@code mock-game} binary; defaults to the {@code application} plugin's install
-     * layout ({@code mock-game/build/install/mock-game/bin/mock-game}) so the harness "just works"
-     * when run from the repo root after {@code ./gradlew :mock-game:installDist}.
-     */
-    @Option(
-            names = "--mock-game-binary-path",
-            scope = ScopeType.INHERIT,
-            defaultValue = "mock-game/build/install/mock-game/bin/mock-game",
-            description =
-                    "Path to the mock-game binary (default: ${DEFAULT-VALUE}, the Gradle "
-                            + "'application' plugin install layout, resolved against the working "
-                            + "directory). A .jar is launched via 'java -jar'; any other file is "
-                            + "executed directly.")
-    private Path mockGameBinaryPath;
+    /** The fault-injection options (WBS-5.1, 5.2). */
+    @Mixin private FaultOptions faults = new FaultOptions();
 
-    /** Local JSON-RPC port exposed by faf-ice-adapter. */
-    @Option(
-            names = "--ice-adapter-rpc-port",
-            scope = ScopeType.INHERIT,
-            defaultValue = "7236",
-            description = "Local JSON-RPC port exposed by faf-ice-adapter.")
-    private int iceAdapterRpcPort;
-
-    /** Local GPGNet port exposed by faf-ice-adapter. */
-    @Option(
-            names = "--ice-adapter-gpg-net-port",
-            scope = ScopeType.INHERIT,
-            defaultValue = "7237",
-            description = "Local GPGNet port exposed by faf-ice-adapter.")
-    private int iceAdapterGpgNetPort;
-
-    /** Local UDP lobby port passed to faf-ice-adapter as {@code --lobby-port}. */
-    @Option(
-            names = "--ice-adapter-lobby-port",
-            scope = ScopeType.INHERIT,
-            defaultValue = "7238",
-            description =
-                    "Local UDP lobby port the game lobby uses for game traffic; passed to "
-                            + "faf-ice-adapter as --lobby-port.")
-    private int iceAdapterLobbyPort;
-
-    /** Game ID passed to faf-ice-adapter as {@code --game-id} (required by the adapter). */
-    @Option(
-            names = "--ice-adapter-game-id",
-            scope = ScopeType.INHERIT,
-            defaultValue = "0",
-            description =
-                    "Game ID passed to faf-ice-adapter as --game-id (required by the adapter). "
-                            + "Used by the launch-ice / ice-smoke diagnostics; a full 'run' "
-                            + "session sets it from the lobby game_launch.uid.")
-    private int iceAdapterGameId;
-
-    /**
-     * Seconds mock-game waits in the lobby before starting the match on its own; negative disables
-     * auto-launch (WBS-4.3.1). This is the single default for the knob — mock-game's own default
-     * only ever applies to a hand-run binary, since {@code MockGameLauncher} always emits the flag.
-     */
-    @Option(
-            names = "--mock-game-launch-delay-seconds",
-            scope = ScopeType.INHERIT,
-            defaultValue = "5",
-            description =
-                    "Seconds mock-game sits in the lobby before launching the match on its own "
-                            + "(default: ${DEFAULT-VALUE}). Use a negative value for a multi-peer "
-                            + "session: the lobby server refuses a game_join once the host has "
-                            + "launched, so an auto-launching host is unjoinable.")
-    private int mockGameLaunchDelaySeconds;
-
-    /** Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR). */
-    @Option(
-            names = "--log-level",
-            scope = ScopeType.INHERIT,
-            defaultValue = "INFO",
-            description = "Minimum log level (TRACE, DEBUG, INFO, WARN, ERROR).")
-    private String logLevel;
-
-    /**
-     * Milliseconds the ICE signal relay holds each relayed candidate before forwarding it
-     * (WBS-5.1). Off by default: fault injection is something a test asks for explicitly.
-     */
-    @Option(
-            names = "--ice-relay-delay-ms",
-            scope = ScopeType.INHERIT,
-            defaultValue = "0",
-            description =
-                    "Milliseconds to delay each relayed ICE candidate, in both directions, "
-                            + "simulating slow negotiation (default: ${DEFAULT-VALUE}). Delays "
-                            + "signalling only; the adapter's own connectivity checks are "
-                            + "untouched. Candidates are delayed, never dropped or reordered.")
-    private int iceRelayDelayMs;
-
-    /**
-     * Percentage of outbound peer datagrams the launched mock-game suppresses (WBS-5.1-fix, #322).
-     *
-     * <p>Passed through to mock-game as {@code --udp-drop-percent}. Without this, the flag existed
-     * only on a hand-run mock-game: {@code MockGameLauncher.buildArgv} never emitted it and no
-     * client-side option sourced a value, so an orchestrated run — the normal one — had no way to
-     * turn the fault on at all.
-     */
-    @Option(
-            names = "--mock-game-udp-drop-percent",
-            scope = ScopeType.INHERIT,
-            defaultValue = "0",
-            description =
-                    "Percentage of outbound peer datagrams the launched mock-game suppresses, "
-                            + "drawn independently per peer per round (default: ${DEFAULT-VALUE}). "
-                            + "Dropped datagrams still consume their sequence number, so the "
-                            + "receiving peer sees them as gaps.")
-    private int mockGameUdpDropPercent;
-
-    /**
-     * Seconds after entering a session before the launched mock-game halts itself, standing in for
-     * a game crash (WBS-5.2). Off by default, like the other fault-injection knobs.
-     *
-     * <p>Named {@code --mock-game-*} rather than {@code --game-*} because that is the prefix every
-     * flag targeting a subprocess already uses here: {@code --mock-game-binary-path}, {@code
-     * --mock-game-launch-delay-seconds}, {@code --mock-game-udp-drop-percent}, and {@code
-     * --ice-adapter-*} for the adapter. {@code --game-*} on this CLI already means the FAF lobby
-     * game rather than the child process, as in {@code --game-join-password}.
-     *
-     * <p>Without this the fault existed only on a hand-run mock-game: {@code
-     * MockGameLauncher.buildArgv} would never emit it and no client-side option would source a
-     * value, so an orchestrated run, the normal one and the one where the client owns the child and
-     * its crash recovery is worth exercising, could not turn the fault on at all.
-     */
-    @Option(
-            names = "--mock-game-crash-after-seconds",
-            scope = ScopeType.INHERIT,
-            defaultValue = "-1",
-            description =
-                    "Seconds after the launched mock-game enters a session before it halts "
-                            + "without a shutdown, simulating a game crash (default: "
-                            + "${DEFAULT-VALUE}). Negative never crashes. The game's timer starts "
-                            + "when a peer connects or its match goes live, whichever is first.")
-    private int mockGameCrashAfterSeconds;
-
-    /** Optional JSONL log file path. */
-    @Option(
-            names = "--log-file",
-            scope = ScopeType.INHERIT,
-            description = "Optional JSONL log file path.")
-    private Path logFile;
+    /** The log level and JSONL log file options. */
+    @Mixin private LoggingOptions logging = new LoggingOptions();
 
     /** Optional player ID override for deterministic local testing. */
     @Option(
@@ -395,124 +199,8 @@ public final class MockClientCli implements Callable<Integer> {
                             + "instead.")
     private String playerLogin;
 
-    /** ID of an existing game to join; when set the FSM sends {@code game_join} from IDLE. */
-    @Option(
-            names = "--target-game-id",
-            scope = ScopeType.INHERIT,
-            description =
-                    "ID of an existing game to join. When set, the mock client sends game_join "
-                            + "for this ID once it reaches the IDLE lobby state.")
-    private Integer targetGameId;
-
-    /** Optional password sent alongside {@code game_join} for password-protected games. */
-    @Option(
-            names = "--game-join-password",
-            scope = ScopeType.INHERIT,
-            description = "Optional password sent alongside game_join for a protected game.")
-    private String gameJoinPassword;
-
-    /**
-     * Title advertised in the {@code game_host} request (lobby-protocol-spec §4.1 / §10.2). No
-     * default: set together with {@code --host-map}, {@code --host-mod}, and {@code
-     * --host-visibility} to host a game on IDLE; omit all four to not host.
-     */
-    @Option(
-            names = "--host-title",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Hosted game title advertised to the lobby. Set together with --host-map, "
-                            + "--host-mod, and --host-visibility to host a game on IDLE; omit "
-                            + "all four to not host.")
-    private String hostTitle;
-
-    /**
-     * Map folder name sent in the {@code game_host} request. No default; see {@code --host-title}.
-     */
-    @Option(
-            names = "--host-map",
-            scope = ScopeType.INHERIT,
-            description = "Map folder name for the hosted game. See --host-title.")
-    private String hostMap;
-
-    /**
-     * Featured-mod technical name sent in the {@code game_host} request. No default; see {@code
-     * --host-title}.
-     */
-    @Option(
-            names = "--host-mod",
-            scope = ScopeType.INHERIT,
-            description = "Featured-mod technical name for the hosted game. See --host-title.")
-    private String hostMod;
-
-    /**
-     * Visibility ({@code public}/{@code friends}) sent in the {@code game_host} request. No
-     * default; see {@code --host-title}.
-     */
-    @Option(
-            names = "--host-visibility",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Visibility for the hosted game, \"public\" or \"friends\". See "
-                            + "--host-title.")
-    private String hostVisibility;
-
-    /**
-     * Minimum displayed rating for joining the hosted game. No default; see {@code --host-title}.
-     */
-    @Option(
-            names = "--host-rating-min",
-            scope = ScopeType.INHERIT,
-            description = "Minimum displayed rating for joining the hosted game.")
-    private Double hostRatingMin;
-
-    /**
-     * Maximum displayed rating for joining the hosted game. No default; see {@code --host-title}.
-     */
-    @Option(
-            names = "--host-rating-max",
-            scope = ScopeType.INHERIT,
-            description = "Maximum displayed rating for joining the hosted game.")
-    private Double hostRatingMax;
-
-    /** Whether the server should enforce {@code --host-rating-min}/{@code --host-rating-max}. */
-    @Option(
-            names = "--host-enforce-rating-range",
-            scope = ScopeType.INHERIT,
-            defaultValue = "false",
-            description =
-                    "Whether to enforce --host-rating-min/--host-rating-max for the hosted game "
-                            + "(default: ${DEFAULT-VALUE}).")
-    private boolean hostEnforceRatingRange;
-
-    /** A set of key-value pair game options to be sent by the host game. */
-    @Option(
-            names = "--host-game-option",
-            arity = "0..*",
-            scope = ScopeType.INHERIT,
-            description = "A set of key-value pair game options to be sent by the host game.")
-    private Map<String, String> hostGameOption = new HashMap<>();
-
-    /**
-     * Matchmaker queue name sent in the {@code game_matchmaking} request. No default: set to queue
-     * on reaching IDLE; omit to not queue.
-     */
-    @Option(
-            names = "--queue-name",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Matchmaker queue to search, e.g. \"ladder1v1\". When set, the mock client "
-                            + "sends game_matchmaking start for this queue once it reaches the "
-                            + "IDLE lobby state.")
-    private String queueName;
-
-    /** Faction sent alongside {@code game_matchmaking} state {@code start}. No default. */
-    @Option(
-            names = "--queue-faction",
-            scope = ScopeType.INHERIT,
-            description =
-                    "Faction to search with (1=UEF, 2=Aeon, 3=Cybran, 4=Seraphim, 5=Nomad). Sent "
-                            + "only on game_matchmaking start. See --queue-name.")
-    private Integer queueFaction;
+    /** The options that host, join or queue for a game on reaching IDLE. */
+    @Mixin private GameIntentOptions intents = new GameIntentOptions();
 
     /**
      * Default action when the root is invoked with no subcommand: print usage to the configured
@@ -534,107 +222,36 @@ public final class MockClientCli implements Callable<Integer> {
      *     {@link MockClientConfig} compact constructor)
      */
     public MockClientConfig toConfig() {
-        return toConfig(oauthRefreshTokenFile, Optional.ofNullable(oauthAccessTokenFile));
+        return toConfig(oauth.toConfig());
     }
 
     /**
-     * {@link #toConfig()} with the credential supplied by the caller instead of the two {@code
-     * --oauth-*-token-file} options: the {@code session} command builds one config per peer this
-     * way, each with its own account.
+     * {@link #toConfig()} with the OAuth group supplied by the caller, so that its credential can
+     * come from elsewhere than the two {@code --oauth-*-token-file} options: the {@code session}
+     * command builds one config per peer this way, each with its own account.
      *
-     * @param refreshTokenFile the refresh-token file this config authenticates with, or {@code
-     *     null} on the access-token channel
-     * @param accessTokenFile the access-token file this config authenticates with, or empty on the
-     *     refresh-token channel
+     * @param credentials the OAuth group this config authenticates with
      * @return the validated configuration
      * @throws IllegalArgumentException if a mandatory field is missing (raised by the {@link
      *     MockClientConfig} compact constructor)
      */
-    private MockClientConfig toConfig(
-            final Path refreshTokenFile, final Optional<Path> accessTokenFile) {
+    private MockClientConfig toConfig(final OAuthConfig credentials) {
         return new MockClientConfig(
                 lobbyWebSocketUrl,
-                new OAuthConfig(
-                        oauthTokenUrl,
-                        oauthAuthEndpoint,
-                        oauthRedirectUri,
-                        oauthScopes,
-                        oauthClientId,
-                        refreshTokenFile,
-                        accessTokenFile),
+                credentials,
                 Optional.ofNullable(uniqueId),
                 clientVersion,
                 userAgent,
                 Optional.ofNullable(uidBinaryPath),
-                new IceAdapterConfig(
-                        iceAdapterBinaryPath,
-                        iceAdapterRpcPort,
-                        iceAdapterGpgNetPort,
-                        iceAdapterLobbyPort,
-                        iceAdapterGameId),
-                new MockGameConfig(mockGameBinaryPath, mockGameLaunchDelaySeconds),
-                new LoggingConfig(logLevel, Optional.ofNullable(logFile)),
+                subprocesses.toIceAdapterConfig(),
+                subprocesses.toMockGameConfig(),
+                logging.toConfig(),
                 playerIdOverride == null ? OptionalInt.empty() : OptionalInt.of(playerIdOverride),
                 playerLogin,
-                buildHostConfig(),
-                buildJoinConfig(),
-                buildQueueConfig(),
-                new FaultConfig(
-                        iceRelayDelayMs, mockGameUdpDropPercent, mockGameCrashAfterSeconds));
-    }
-
-    /**
-     * Builds the join config from {@code --target-game-id} and {@code --game-join-password}, or
-     * empty if no target game was set.
-     *
-     * @return the join config, or {@link Optional#empty()} if the operator did not request joining
-     */
-    private Optional<GameJoinConfig> buildJoinConfig() {
-        if (targetGameId == null) {
-            return Optional.empty();
-        }
-        return Optional.of(new GameJoinConfig(targetGameId, Optional.ofNullable(gameJoinPassword)));
-    }
-
-    /**
-     * Builds the host config from the four {@code --host-*} options, or empty if none of them was
-     * set. A partial set (e.g. only {@code --host-title}) is rejected by {@link GameHostConfig}'s
-     * compact constructor, which names the specific missing option.
-     *
-     * @return the host config, or {@link Optional#empty()} if the operator did not request hosting
-     */
-    private Optional<GameHostConfig> buildHostConfig() {
-        if (hostTitle == null && hostMap == null && hostMod == null && hostVisibility == null) {
-            return Optional.empty();
-        }
-        return Optional.of(
-                new GameHostConfig(
-                        hostTitle,
-                        hostMap,
-                        hostMod,
-                        hostVisibility,
-                        Optional.ofNullable(hostRatingMin),
-                        Optional.ofNullable(hostRatingMax),
-                        hostEnforceRatingRange,
-                        hostGameOption));
-    }
-
-    /**
-     * Builds the queue config from {@code --queue-name} and {@code --queue-faction}, or empty if
-     * neither was set. Triggers on <em>either</em> option, the same shape {@link
-     * #buildHostConfig()} uses, so a partial set is rejected by {@link GameQueueConfig}'s compact
-     * constructor naming the missing option rather than silently starting a session that never
-     * queues (#304 review). Gating on {@code queueName} alone would also make that record's
-     * "--queue-name must not be blank" message unreachable from this path.
-     *
-     * @return the queue config, or {@link Optional#empty()} if the operator did not request
-     *     queueing
-     */
-    private Optional<GameQueueConfig> buildQueueConfig() {
-        if (queueName == null && queueFaction == null) {
-            return Optional.empty();
-        }
-        return Optional.of(new GameQueueConfig(queueName, Optional.ofNullable(queueFaction)));
+                intents.buildHostConfig(),
+                intents.buildJoinConfig(),
+                intents.buildQueueConfig(),
+                faults.toConfig());
     }
 
     /**
@@ -649,7 +266,7 @@ public final class MockClientCli implements Callable<Integer> {
      */
     public MockClientConfig toValidatedConfig(final CommandSpec callerSpec) {
         try {
-            dropShadowedCredentialChannel(callerSpec);
+            oauth.dropShadowedCredentialChannel(callerSpec);
             dropShadowedUniqueIdSource(callerSpec);
             // Read after the precedence step, which may clear a shadowed refresh-token file.
             return toConfig();
@@ -673,7 +290,7 @@ public final class MockClientCli implements Callable<Integer> {
             final CommandSpec callerSpec, final Path refreshTokenFile) {
         try {
             dropShadowedUniqueIdSource(callerSpec);
-            return toConfig(refreshTokenFile, Optional.empty());
+            return toConfig(oauth.toConfig(refreshTokenFile, Optional.empty()));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
@@ -693,7 +310,7 @@ public final class MockClientCli implements Callable<Integer> {
             final CommandSpec callerSpec, final Path accessTokenFile) {
         try {
             dropShadowedUniqueIdSource(callerSpec);
-            return toConfig(null, Optional.of(accessTokenFile));
+            return toConfig(oauth.toConfig(null, Optional.of(accessTokenFile)));
         } catch (IllegalArgumentException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
@@ -752,41 +369,6 @@ public final class MockClientCli implements Callable<Integer> {
         return layeredProvider(callerSpec)
                 .flatMap(provider -> provider.layerFor(flag))
                 .orElse(LayeredDefaultProvider.Layer.CLI);
-    }
-
-    /**
-     * Applies the documented precedence to the two OAuth credential channels before validation, so
-     * that a higher layer <em>overrides</em> a lower one instead of colliding with it.
-     *
-     * <p>Without this, {@link MockClientConfig}'s conflict check sees only that both fields are
-     * populated and rejects the run. That is wrong for every shape the repo actually ships: {@code
-     * mock-client.example.json} carries {@code oauthRefreshTokenFile} and the runbook tells
-     * operators to copy it, so supplying an access token by flag — or by {@code
-     * FAF_MOCK_CLIENT_OAUTH_ACCESS_TOKEN_FILE}, which is the CI shape this card exists for — failed
-     * with "two OAuth credential channels configured" rather than doing what the precedence
-     * contract promises. Both were reproduced against a build of this branch.
-     *
-     * <p>Only a genuine tie still throws. Two channels at the same layer is an operator writing
-     * both into one config file or exporting both variables, where there is no precedence to apply
-     * and picking either would silently choose a failure mode they did not: the channels renew
-     * differently, which is the whole reason the rejection exists.
-     *
-     * @param callerSpec the spec whose command line carries the layered provider
-     */
-    private void dropShadowedCredentialChannel(final CommandSpec callerSpec) {
-        if (oauthRefreshTokenFile == null || oauthAccessTokenFile == null) {
-            return;
-        }
-        Optional<String> winner =
-                higherLayer(callerSpec, "--oauth-access-token-file", "--oauth-refresh-token-file");
-        if (winner.isEmpty()) {
-            return;
-        }
-        if (winner.get().equals("--oauth-access-token-file")) {
-            oauthRefreshTokenFile = null;
-        } else {
-            oauthAccessTokenFile = null;
-        }
     }
 
     /**
@@ -856,22 +438,24 @@ public final class MockClientCli implements Callable<Integer> {
      *     ports are equal, or an adapter-relevant value is blank
      */
     public IceAdapterSettings toValidatedAdapterSettings(final CommandSpec callerSpec) {
+        IceAdapterConfig adapterConfig = subprocesses.toIceAdapterConfig();
+        LoggingConfig logConfig = logging.toConfig();
         List<String> problems = new ArrayList<>();
-        checkPort(problems, "--ice-adapter-rpc-port", iceAdapterRpcPort);
-        checkPort(problems, "--ice-adapter-gpg-net-port", iceAdapterGpgNetPort);
-        checkPort(problems, "--ice-adapter-lobby-port", iceAdapterLobbyPort);
+        checkPort(problems, "--ice-adapter-rpc-port", adapterConfig.rpcPort());
+        checkPort(problems, "--ice-adapter-gpg-net-port", adapterConfig.gpgNetPort());
+        checkPort(problems, "--ice-adapter-lobby-port", adapterConfig.lobbyPort());
         // Both are TCP listeners in one process: equal values make the adapter fail to bind the
         // second one and exit, which would otherwise only show up as an unexplained "unreachable"
         // once the connect budget expired.
-        if (iceAdapterRpcPort == iceAdapterGpgNetPort) {
+        if (adapterConfig.rpcPort() == adapterConfig.gpgNetPort()) {
             problems.add(
                     "--ice-adapter-rpc-port and --ice-adapter-gpg-net-port must differ; both are "
-                            + iceAdapterRpcPort);
+                            + adapterConfig.rpcPort());
         }
         // Checked here rather than on the record: the full-session path accepts a blank level
         // (MockClientConfig does not validate it), and this card must not change what launch-ice
         // and run accept. A diagnostic invocation gets the clean usage error instead.
-        if (logLevel == null || logLevel.isBlank()) {
+        if (logConfig.level() == null || logConfig.level().isBlank()) {
             problems.add("--log-level must not be blank");
         }
         if (!problems.isEmpty()) {
@@ -880,17 +464,17 @@ public final class MockClientCli implements Callable<Integer> {
         }
         try {
             return new IceAdapterSettings(
-                    iceAdapterBinaryPath,
-                    iceAdapterRpcPort,
-                    iceAdapterGpgNetPort,
-                    iceAdapterLobbyPort,
-                    iceAdapterGameId,
+                    adapterConfig.binaryPath(),
+                    adapterConfig.rpcPort(),
+                    adapterConfig.gpgNetPort(),
+                    adapterConfig.lobbyPort(),
+                    adapterConfig.gameId(),
                     playerIdOverride == null
                             ? OptionalInt.empty()
                             : OptionalInt.of(playerIdOverride),
                     playerLogin,
-                    logLevel,
-                    Optional.ofNullable(logFile));
+                    logConfig.level(),
+                    logConfig.file());
         } catch (IllegalArgumentException | NullPointerException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
@@ -916,22 +500,26 @@ public final class MockClientCli implements Callable<Integer> {
      * @throws CommandLine.ParameterException if any value the launch reads is missing or invalid
      */
     public MockGameSettings toValidatedGameSettings(final CommandSpec callerSpec) {
+        IceAdapterConfig adapterConfig = subprocesses.toIceAdapterConfig();
+        MockGameConfig gameConfig = subprocesses.toMockGameConfig();
+        FaultConfig faultConfig = faults.toConfig();
+        LoggingConfig logConfig = logging.toConfig();
         List<String> problems = new ArrayList<>();
-        checkPort(problems, "--ice-adapter-gpg-net-port", iceAdapterGpgNetPort);
-        checkPort(problems, "--ice-adapter-lobby-port", iceAdapterLobbyPort);
+        checkPort(problems, "--ice-adapter-gpg-net-port", adapterConfig.gpgNetPort());
+        checkPort(problems, "--ice-adapter-lobby-port", adapterConfig.lobbyPort());
         // The 0-100 range check has to be repeated here. It lives in MockClientConfig's compact
         // constructor, which launch-game no longer reaches now that this command builds the
         // narrowed record directly — so without this copy --mock-game-udp-drop-percent=150 would
         // stop exiting USAGE on that path. It also belongs here by this PR's own rule: range
         // checks on operator input are the CLI layer's business, next to the port checks above.
-        if (mockGameUdpDropPercent < 0 || mockGameUdpDropPercent > MAX_DROP_PERCENT) {
+        int dropPercent = faultConfig.mockGameUdpDropPercent();
+        if (dropPercent < 0 || dropPercent > MAX_DROP_PERCENT) {
             problems.add(
-                    "--mock-game-udp-drop-percent must be between 0 and 100; got "
-                            + mockGameUdpDropPercent);
+                    "--mock-game-udp-drop-percent must be between 0 and 100; got " + dropPercent);
         }
         // Checked here rather than on the record, matching toValidatedAdapterSettings: the
         // full-session path accepts a blank level, and this must not change what run accepts.
-        if (logLevel == null || logLevel.isBlank()) {
+        if (logConfig.level() == null || logConfig.level().isBlank()) {
             problems.add("--log-level must not be blank");
         }
         if (!problems.isEmpty()) {
@@ -940,25 +528,25 @@ public final class MockClientCli implements Callable<Integer> {
         }
         try {
             return new MockGameSettings(
-                    mockGameBinaryPath,
-                    iceAdapterGpgNetPort,
-                    iceAdapterLobbyPort,
-                    iceAdapterGameId,
+                    gameConfig.binaryPath(),
+                    adapterConfig.gpgNetPort(),
+                    adapterConfig.lobbyPort(),
+                    adapterConfig.gameId(),
                     playerIdOverride == null
                             ? OptionalInt.empty()
                             : OptionalInt.of(playerIdOverride),
                     playerLogin,
-                    mockGameLaunchDelaySeconds,
-                    mockGameUdpDropPercent,
-                    mockGameCrashAfterSeconds,
+                    gameConfig.launchDelaySeconds(),
+                    dropPercent,
+                    faultConfig.mockGameCrashAfterSeconds(),
                     // Gated exactly as MockGameSettings.from(config) gates it. Forwarding the raw
                     // map here made launch-game send --game-option for a run with no host flags,
                     // while the lobby-driven path dropped it — contradicting MockGameSettings'
                     // own javadoc that both routes launch mock-game identically, and #308's
                     // "neither command's behaviour changes".
-                    buildHostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
-                    logLevel,
-                    Optional.ofNullable(logFile));
+                    intents.buildHostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
+                    logConfig.level(),
+                    logConfig.file());
         } catch (IllegalArgumentException | NullPointerException e) {
             throw new CommandLine.ParameterException(callerSpec.commandLine(), e.getMessage(), e);
         }
@@ -1039,11 +627,12 @@ public final class MockClientCli implements Callable<Integer> {
      * way, which treats it as {@code DEBUG}.
      */
     void applyLoggingPropertiesFromOptions() {
-        if (logLevel != null) {
-            System.setProperty(LoggingSetup.LOG_LEVEL_ENV, logLevel);
+        LoggingConfig logConfig = logging.toConfig();
+        if (logConfig.level() != null) {
+            System.setProperty(LoggingSetup.LOG_LEVEL_ENV, logConfig.level());
         }
-        if (logFile != null) {
-            System.setProperty(LoggingSetup.LOG_FILE_ENV, logFile.toString());
-        }
+        logConfig
+                .file()
+                .ifPresent(path -> System.setProperty(LoggingSetup.LOG_FILE_ENV, path.toString()));
     }
 }
