@@ -282,9 +282,9 @@ final class LobbyConnectionTest {
 
     /**
      * Once teardown has stopped dispatch (#513), a late frame reaches no handler, while the lobby's
-     * own reports still do: an {@code invalid} can answer teardown's own {@code GameState Ended},
-     * which {@code run} reports in its exit code (#486). Frames are handled in the order they
-     * arrive, so once the last one's handler has run, the dropped one has been seen.
+     * own reports still do: an {@code invalid} can answer a lobby command sent just before teardown
+     * started, which {@code run} reports in its exit code (#486). Frames are handled in the order
+     * they arrive, so once the last one's handler has run, the dropped one has been seen.
      */
     @Test
     void stoppedDispatchDropsLateFramesButNotTheLobbysOwnReports() throws Exception {

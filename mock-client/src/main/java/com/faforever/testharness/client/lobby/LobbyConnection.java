@@ -80,11 +80,11 @@ public final class LobbyConnection {
     /**
      * The frames still handed to their handlers once {@link #stopDispatching()} has stopped the
      * rest (#513): the lobby's own reports, whose handlers only log and record once the session is
-     * logged in. An {@code invalid} can answer teardown's own {@code GameState Ended}, which {@code
-     * run} reports in its exit code (#486), and a {@code notice} says why the lobby is ending the
-     * connection (#473). During login an {@code invalid} also fails the handshake, which reaches
-     * the state machine, so one that lands while a teardown runs can keep the listener until
-     * teardown's close bound runs out.
+     * logged in. An {@code invalid} can answer a lobby command sent just before teardown started,
+     * which {@code run} reports in its exit code (#486), and a {@code notice} says why the lobby is
+     * ending the connection (#473). During login an {@code invalid} also fails the handshake, which
+     * reaches the state machine, so one that lands while a teardown runs can keep the listener
+     * until teardown's close bound runs out.
      */
     private static final Set<String> DISPATCHED_AFTER_STOP = Set.of("invalid", "notice");
 
