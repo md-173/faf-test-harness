@@ -1428,10 +1428,10 @@ public final class MockGameLifecycle {
      * <p><b>Why the timer starts here and not on entry to LIVE.</b> The card that asked for this
      * said "measured from entry to LIVE, so the crash lands mid-match while peers are connected".
      * In this harness those two halves contradict each other. LIVE is reachable only through {@link
-     * #launchFuture}, which {@link #beginHosting} and {@link #joinGame} arm only when {@code
-     * launchDelay} is non-null, and a multi-peer session must disable auto-launch, because
-     * faf-server refuses a {@code game_join} once the host reports {@code GameState Launching} (see
-     * {@link MockGameConfig#launchDelay()}). So a multi-peer game never enters LIVE at all, and a
+     * #launchFuture}, which {@link #armLaunch()} arms only when {@code launchDelay} is non-null,
+     * and a multi-peer custom session must disable auto-launch, because faf-server refuses a {@code
+     * game_join} once the host reports {@code GameState Launching} (see {@link
+     * MockGameConfig#launchDelay()}). So a custom multi-peer game never enters LIVE at all, and a
      * LIVE-anchored crash would have been silently inert in the one configuration the fault is most
      * worth injecting into.
      *

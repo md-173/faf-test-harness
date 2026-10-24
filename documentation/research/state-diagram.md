@@ -66,9 +66,15 @@ stateDiagram-v2
 
 `CreateLobby`'s init mode tells the game which of FA's two lobbies it stands in for, and it answers its peers as that lobby does (WBS-3.2.4.1-fix, #506).
 In a custom lobby (init mode 0), HOSTING and JOINING answer each `ConnectToPeer` with `Disconnected` and the peer's id before connecting, as FA's `lobby.lua` does for every peer the adapter relays; a `JoinGame` gets no reply.
-In a matchmaker lobby (init mode 1), a `ConnectToPeer` gets no `Disconnected` first, so a host sends only that peer's `PlayerOption` set.
+In a matchmaker lobby (init mode 1), a `ConnectToPeer` gets no answer at all.
 HOSTING and JOINING send `EstablishedPeer` with a peer's id when the first datagram from that peer arrives, once per peer, as FA's `autolobby.lua` does when its link to a peer is up.
 LIVE sends nothing for a link first heard after launch, because FA's lobby is gone by then.
+
+A matchmaker host also reports its players as FA's does (WBS-3.2.4.3-fix, #534).
+Each player's datagrams carry its team, start spot and faction, standing in for the `AddPlayer` message FA's joiner sends its host, so the host seats a peer on that peer's first datagram.
+It then sends `Team`, `Army`, `StartSpot` and `Faction` for every seated player, with armies in start-spot order, and once more just before `GameState(Launching)`.
+Every matchmaker game sends `LaunchStatus`: `Hosting` from HOSTING or `Connecting` from JOINING on entry, then every 2 s until launch, `Missing local peers` or `Ready` once it is linked to all the other expected players.
+A joiner's 2 s reports start once its host's link is up, and a matchmaker game arms its launch delay when it first reports `Ready`, as FA's host launches only once every peer is ready.
 
 ### Operational Failure
 

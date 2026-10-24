@@ -160,8 +160,9 @@ public final class MockGameCli {
             defaultValue = DEFAULT_LAUNCH_DELAY_SECONDS,
             description =
                     "Seconds to sit in the lobby before launching the match on our own "
-                            + "(default: ${DEFAULT-VALUE}). Negative never auto-launches, which is "
-                            + "what a multi-peer session needs: a host that launches makes its own "
+                            + "(default: ${DEFAULT-VALUE}), in a matchmaker lobby counted from the "
+                            + "first Ready report. Negative never auto-launches, which is what a "
+                            + "multi-peer custom session needs: a host that launches makes its own "
                             + "game unjoinable.")
     private int launchDelaySeconds;
 

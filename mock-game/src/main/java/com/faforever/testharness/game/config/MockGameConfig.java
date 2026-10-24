@@ -28,11 +28,12 @@ import java.util.Optional;
  *     no orchestrated session, which is what the standalone {@code launch-game} diagnostic passes.
  *     A mock adaptation, since the real client hands Forged Alliance its game uid inside the {@code
  *     /savereplay} URL and the {@code /log} filename rather than as its own flag
- * @param gameOptions a set of game options to be sent by the host. Ignored if this is a joiner. Can
- *     be empty.
+ * @param gameOptions a set of game options to be sent by a custom lobby's host. Ignored by a joiner
+ *     and by a matchmaker host, as FA's sends none (WBS-3.2.4.3-fix, #534). Can be empty.
  * @param launchDelaySeconds how long the game sits in the lobby before starting the match on its
- *     own; negative means it never does, and the match is then launched only on an explicit {@code
- *     launchMatch()}. Read through {@link #launchDelay()} rather than directly
+ *     own, in a matchmaker lobby counted from its first {@code Ready} report; negative means it
+ *     never does, and the match is then launched only on an explicit {@code launchMatch()}. Read
+ *     through {@link #launchDelay()} rather than directly
  * @param lobbyTimeoutSeconds how long the game waits in LOBBY for something to drive it into a role
  *     before giving up; negative, the default, waits forever, which is the behaviour the game has
  *     always had. Read through {@link #lobbyTimeout()} rather than directly
@@ -66,11 +67,16 @@ public record MockGameConfig(
      * The auto-launch delay as the lifecycle wants it: a duration to arm the timer with, or empty
      * when this game must not launch on its own.
      *
-     * <p>Empty is what a multi-peer session needs (WBS-4.3.1). The FAF server only accepts a {@code
-     * game_join} while the game is in {@code GameState.LOBBY} and moves it out of that state the
-     * moment the <em>host</em> reports {@code GameState Launching} (faf-server {@code
+     * <p>Empty is what a multi-peer custom session needs (WBS-4.3.1). The FAF server only accepts a
+     * {@code game_join} while the game is in {@code GameState.LOBBY} and moves it out of that state
+     * the moment the <em>host</em> reports {@code GameState Launching} (faf-server {@code
      * lobbyconnection.command_game_join} and {@code gameconnection._handle_game_state}), so a host
      * that auto-launches on a timer makes itself unjoinable while the joiner is still booting.
+     *
+     * <p>A matchmaker game counts the delay from when it first reports {@code Ready}, as FA's host
+     * launches only once every peer is ready (WBS-3.2.4.3-fix, #534), so there it is safe at any
+     * value of zero or more, and empty never launches, which faf-server ends by cancelling the
+     * match.
      *
      * @return the delay to arm the launch timer with, or empty to never auto-launch
      */

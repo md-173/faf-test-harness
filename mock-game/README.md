@@ -19,7 +19,8 @@ java -jar mock-game-<version>-all.jar \
 Every argument that states a **session fact** — the ports, the identity, the game uid —
 is required and never defaulted. A guessed port or player id produces a session that
 looks alive and is wrong, so the parser refuses to guess. Unknown arguments fail the
-parse.
+parse. The four matchmaker arguments are the exception: a custom game has none of them,
+so each defaults to the value FA takes when it is launched without it.
 
 `--help` (`-h`) and `--version` (`-V`) need none of the arguments below and exit `0`.
 `--version` prints `mock-game <version>`, read from the jar manifest, so a release jar
@@ -34,8 +35,12 @@ described under [Logging](#logging).
 | `--player-id <id>` | yes | — | FAF player id of the owning session. |
 | `--player-login <login>` | yes | — | FAF player login. Must not be blank. |
 | `--game-uid <uid>` | yes | — | Lobby game uid. `0` means no orchestrated session, which is what a standalone run passes. |
-| `--game-option <k=v>` | no | none | Extra game options for a host to send. Repeatable. Ignored by a joiner. |
-| `--launch-delay-seconds <n>` | no | `5` | How long to sit in the lobby before launching the match unprompted. **Negative never auto-launches** — see below. |
+| `--team <n>` | no | `-1` | The team a matchmaker `game_launch` assigned, as FA's `/team`. The Mock Client passes it, and the three below, only when `game_launch` carries them, as the FAF client does (WBS-3.2.4.3-fix, #534). |
+| `--start-spot <n>` | no | `-1` | The start spot it assigned (`map_position`), as FA's `/startspot`. |
+| `--faction <n>` | no | `1` | The faction it assigned, numbered as `game_launch` numbers it. |
+| `--expected-players <n>` | no | `2` | How many players the match has, as FA's `/players`. A matchmaker game reports `Ready` once it is linked to all the others. |
+| `--game-option <k=v>` | no | none | Extra game options for a custom lobby's host to send. Repeatable. Ignored by a joiner, and by a matchmaker host, as FA's sends none. |
+| `--launch-delay-seconds <n>` | no | `5` | How long to sit in the lobby before launching the match unprompted; in a matchmaker lobby, counted from the game's first `Ready` report. **Negative never auto-launches**: see below. |
 | `--lobby-timeout-seconds <n>` | no | wait forever | How long to wait in the lobby for a `HostGame` or `JoinGame` before giving up and exiting `75`. A game driven into a role never trips it. |
 | `--udp-drop-percent <n>` | no | `0` | Percentage of outbound peer datagrams the UDP sender suppresses, simulating a lossy link (WBS-5.1). The sequence number is still advanced, so the loss is visible to the receiving peer. |
 | `--crash-after-seconds <n>` | no | `-1` (never) | Seconds after the game first has a session to lose (a peer registers, or the match goes live) before it halts the JVM with no shutdown, simulating a crash and exiting `134` (WBS-5.2). Negative never crashes; `0` crashes immediately. See [Fault injection](../documentation/operations/harness-runbook.md#10-fault-injection-wbs-51-52). |
@@ -43,10 +48,16 @@ described under [Logging](#logging).
 ### `--launch-delay-seconds` is the flag a multi-peer host needs
 
 A negative value disables auto-launch entirely, and that is not an edge case — it is
-what the host of a two-peer session must pass. The FAF server accepts a `game_join`
+what the host of a two-peer custom session must pass. The FAF server accepts a `game_join`
 only while the game is in `GameState.LOBBY`, and it moves the game out of that state
 the moment the **host** reports `GameState Launching`. A host that launches on a timer
 therefore makes its own game unjoinable while the joiner is still booting.
+
+A matchmaker game is the other way round (WBS-3.2.4.3-fix, #534). It counts the delay
+from when it first reports `Ready`, as FA's host launches only once every peer is ready,
+so its joiners are always seated first and any value of zero or more is safe. A
+negative value never launches, and faf-server cancels a match whose host has not
+launched within 60 s plus 10 s per guest.
 
 The default of `5` is the behaviour `mock-game` had before the flag existed, and it
 applies only to a hand-run binary: when the Mock Client orchestrates a run it always
@@ -139,9 +150,11 @@ harness sets it per child when it spawns one; see
 3. Announces itself (`GameState Idle`), then answers the adapter's `CreateLobby` with
    `GameState Lobby`, and takes that frame's init mode to pick which FA lobby it answers
    its peers as (below).
-4. Waits for a role. `HostGame` makes it a host and it sends its `PlayerOption` set;
-   `JoinGame` makes it a joiner.
-5. Launches the match — on the launch-delay timer, or when told to. If nothing ever
+4. Waits for a role. `HostGame` makes it a host and `JoinGame` a joiner. In a custom
+   lobby a host then sends its `PlayerOption` set; in a matchmaker lobby a host reports
+   `LaunchStatus Hosting` and a joiner `Connecting` (below).
+5. Launches the match: on the launch-delay timer, which in a matchmaker lobby starts
+   when the game first reports `Ready`, or when told to. If nothing ever
    drives it into a role and `--lobby-timeout-seconds` was set, it gives up here and
    exits `75` instead.
 6. Exchanges peer traffic for the duration of the match: one datagram per peer every
@@ -158,10 +171,22 @@ its peers as that lobby does (WBS-3.2.4.1-fix, #506). Init mode 0, a custom game
 `lobby.lua`, which answers each `ConnectToPeer` with `Disconnected` and the peer's id before it
 connects, and a `JoinGame` with nothing. Init mode 1, a matchmaker game, gets FA's
 `autolobby.lua`, which sends no peer frame on connect and sends `EstablishedPeer` with a peer's
-id once its link to that peer is up. In either lobby a host still follows a `ConnectToPeer` with
-that peer's `PlayerOption` set. The game takes a peer's first datagram as the link coming up, so
+id once its link to that peer is up. A custom host also follows a `ConnectToPeer` with that
+peer's `PlayerOption` set. The game takes a peer's first datagram as the link coming up, so
 it reports each peer once, and not at all for one whose first datagram arrives after launch,
-since FA's lobby is gone by then. Every id goes on the wire as a string.
+since FA's lobby is gone by then. Every id in these peer frames goes on the wire as a string.
+
+A matchmaker host reports its players as FA's does (WBS-3.2.4.3-fix, #534). Every peer
+datagram carries its sender's team, start spot and faction, the mock's stand-in for the
+`AddPlayer` message FA's joiner sends its host once their link is up, and the host seats each
+joiner on that joiner's first datagram. It then sends `Team`, `Army`, `StartSpot` and
+`Faction`, with no `Color`, for every seated player in start-spot order, and again just before
+launch. It sends nothing on `HostGame` or `ConnectToPeer` and no `GameOption`, logging any
+`--game-option` it was given instead. Every matchmaker game also reports `LaunchStatus`:
+`Hosting` or `Connecting` on taking its role, then every 2 s until launch `Missing local
+peers`, or `Ready` once it is linked to all the other `--expected-players`. A joiner's 2 s
+reports start only once its host's link is up. A matchmaker game arms its launch delay when it
+first reports `Ready`, so its host's last set before launch holds every expected joiner.
 
 A player leaving does not end the game (WBS-4.3.6). From `CreateLobby` until launch, a
 `DisconnectFromPeer` is answered the way the game's FA lobby answers it: in a custom game
@@ -171,19 +196,21 @@ then stops sending to that peer and plays on, whoever left, and a host whose las
 keeps its lobby open. Once the match is live the frame is only logged, because a running FA game
 processes no GPGNet input.
 
-Players are split into two teams in arrival order: armies 1, 3, ... on team 2 and
-armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it marks a
-game with more `MULTI_TEAM` invalid). The end-of-match result is fixed by design: army
-1's team wins and the other team loses, on every run. Each game reports every army, one
-`GameResult` per army, and an army's result is its team's, so the winning team's armies
-all report victory. The harness asserts on the shape and ordering of those closing frames,
-and a result that varied would make those assertions depend on configuration nothing
-has asked to vary. Every game in a session sends the same set, the host and each joiner
-alike, just as real FA clients each report every army. The army numbers are the ones the
-host assigned in its `PlayerOption` frames, which faf-server accepts from no other game,
-and faf-server resolves each army's outcome by comparing what every player reported for
-it. Identical sets resolve every army unanimously; sets that disagree can leave the
-outcome ambiguous or wrong.
+In a custom lobby, players are split into two teams in arrival order: armies 1, 3, ... on
+team 2 and armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it
+marks a game with more `MULTI_TEAM` invalid). A matchmaker host reports the teams and
+start spots the match assigned instead, and armies in start-spot order; faf-server's
+matchmaker puts odd slots on team 2 and even slots on team 3, so the two agree. The
+end-of-match result is fixed by design: army 1's team wins and the other team loses, on
+every run. Each game reports every army, one `GameResult` per army, and an army's result
+is its team's, so the winning team's armies all report victory. The harness asserts on the
+shape and ordering of those closing frames, and a result that varied would make those
+assertions depend on configuration nothing has asked to vary. Every game in a session
+sends the same set, the host and each joiner alike, just as real FA clients each report
+every army. The army numbers are the ones the host assigned in its `PlayerOption` frames,
+which faf-server accepts from no other game, and faf-server resolves each army's outcome
+by comparing what every player reported for it. Identical sets resolve every army
+unanimously; sets that disagree can leave the outcome ambiguous or wrong.
 
 Before WBS-4.3.3 each player was its own team (`Team` = its army number), so at one
 or two players the `Team` option changes: the first player now sends `Team 2`
