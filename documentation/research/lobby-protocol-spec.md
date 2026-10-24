@@ -340,14 +340,15 @@ The mock client should be ready to consume these messages as soon as `welcome` i
 
 ### An `invalid` after `welcome`
 
-faf-server answers any lobby command whose handling raised with the `invalid` of 4c, then drops
-the session on its side (#486). It never answers a `target: "game"` frame with one:
-`GameConnection.handle_action` deals with that frame's errors itself. A faf-server v1.18.x lobby,
-such as local-stack CI's, then closes the connection. faf-message-broker on `ws.faforever.xyz`
-keeps it open: faf-server's abort ends only its own RabbitMQ side, and the broker closes a socket
-only after a `notice` with style `kick`. Within a minute the broker's periodic `existing`
-announcement of the session has faf-server take it up again, sending `irc_password` and no
-`welcome`, and pings and broadcasts resume.
+When handling a lobby command raises an error that faf-server has no specific handler for, its
+generic handler answers with the `invalid` of 4c, then drops the session on its side (#486). It
+never answers a `target: "game"` frame with one: `GameConnection.handle_action` deals with that
+frame's errors itself. A faf-server v1.18.x lobby, such as local-stack CI's, then closes the
+connection. faf-message-broker on `ws.faforever.xyz` keeps it open: faf-server's abort ends only
+its own RabbitMQ side, and of the frames faf-server sends, the broker closes a socket only after a
+`notice` with style `kick`. Within a minute the broker's periodic `existing` announcement of the
+session has faf-server take it up again, sending `irc_password` and no `welcome`, and pings and
+broadcasts resume.
 
 Checked live on 2026-10-24 (faf-message-broker 1.1.0, faf-server v1.19.0) with a `game_host`
 whose `title` was a number: `{"command":"invalid","request_id":"…"}` arrived and no close
@@ -361,7 +362,7 @@ same way behind either lobby, and `run` exits `70` naming it (#538).
 - Lobby state machine: [https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/state-machine.md)
 - [faf-server v1.19.0 `server/servercontext.py`: a session reaches faf-server only once the broker has authenticated it, and `_on_session_message` takes up an `existing` one it no longer holds](https://github.com/FAForever/server/blob/v1.19.0/server/servercontext.py)
 - [faf-server v1.19.0 `server/protocol/rabbitmq.py`: `close()` and `abort()` end only faf-server's side](https://github.com/FAForever/server/blob/v1.19.0/server/protocol/rabbitmq.py)
-- [faf-message-broker 1.1.0 `MessageBroker.java`: it closes a socket only after a `kick` notice, and `sendPlayerSessionUpdates` re-announces each session every minute](https://github.com/FAForever/faf-message-broker/blob/1.1.0/src/main/java/com/faforever/messagebroker/message/MessageBroker.java)
+- [faf-message-broker 1.1.0 `MessageBroker.java`: of faf-server's frames, only a `kick` notice makes it close a socket, and `sendPlayerSessionUpdates` re-announces each session every minute](https://github.com/FAForever/faf-message-broker/blob/1.1.0/src/main/java/com/faforever/messagebroker/message/MessageBroker.java)
 
 <a id="section-4-game-setup"></a>
 ## 4. Game Session Setup Flows
