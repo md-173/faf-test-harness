@@ -11,6 +11,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -51,7 +52,18 @@ public final class LifecyclePeerConnectTest {
     void setup() throws IOException {
         config =
                 new MockGameConfig(
-                        50000, TestPorts.freeUdpPort(), 1, "Rhiza", 9001, Map.of(), 0, -1, 0, -1);
+                        50000,
+                        TestPorts.freeUdpPort(),
+                        1,
+                        "Rhiza",
+                        9001,
+                        Map.of(),
+                        0,
+                        -1,
+                        0,
+                        -1,
+                        Seat.DEFAULT,
+                        2);
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         secondPeer = new DatagramSocket(0);

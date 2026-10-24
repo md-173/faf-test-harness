@@ -16,11 +16,17 @@ import picocli.CommandLine.ParameterException;
  * the identity, the game uid) is required and never defaulted, because a guessed port or player id
  * produces a session that looks alive and is wrong.
  *
- * <p><b>The behavioural knobs are the defaulted arguments</b>; every session fact is required.
- * There are four: {@code --launch-delay-seconds} (WBS-4.3.1), {@code --udp-drop-percent} (WBS-5.1),
- * {@code --lobby-timeout-seconds} (WBS-3.2.1.3) and {@code --crash-after-seconds} (WBS-5.2). Each
- * defaults to the behaviour mock-game had before the flag existed, so a run that passes none of
- * them behaves exactly as it always did. {@code MockGameLauncher} emits {@code
+ * <p>The four matchmaker arguments, {@code --team}, {@code --start-spot}, {@code --faction} and
+ * {@code --expected-players}, are the exception (WBS-3.2.4.3-fix, #534). The FAF client passes each
+ * to Forged Alliance only when {@code game_launch} carried it, which faf-server does for a
+ * matchmaker game only, so a custom game has none. Each defaults to FA's own value for a player
+ * launched without it.
+ *
+ * <p><b>The behavioural knobs are the defaulted arguments</b>; every other session fact is
+ * required. There are four: {@code --launch-delay-seconds} (WBS-4.3.1), {@code --udp-drop-percent}
+ * (WBS-5.1), {@code --lobby-timeout-seconds} (WBS-3.2.1.3) and {@code --crash-after-seconds}
+ * (WBS-5.2). Each defaults to the behaviour mock-game had before the flag existed, so a run that
+ * passes none of them behaves exactly as it always did. {@code MockGameLauncher} emits {@code
  * --launch-delay-seconds} unconditionally, emits the two fault-injection flags only when the client
  * was asked for them, and never emits {@code --lobby-timeout-seconds}, which therefore applies only
  * to a hand-run binary. In an orchestrated run the defaults are what a session gets unless a test
@@ -28,11 +34,12 @@ import picocli.CommandLine.ParameterException;
  * says which it took.
  *
  * <p>Accepted argument list (subprocess-orchestration-spec.md §2.8). Extend both ends together if
- * orchestration ever adds the remaining {@code game_launch}-derived flags.
+ * orchestration ever adds more {@code game_launch}-derived flags.
  *
  * <pre>{@code
  * --gpgnet-port <port> --lobby-port <port> --player-id <id> --player-login <login>
- * --game-uid <uid> [--game-option <k=v>]... [--launch-delay-seconds <seconds>]
+ * --game-uid <uid> [--team <team>] [--start-spot <spot>] [--faction <faction>]
+ * [--expected-players <count>] [--game-option <k=v>]... [--launch-delay-seconds <seconds>]
  * [--lobby-timeout-seconds <seconds>] [--udp-drop-percent <0-100>]
  * [--crash-after-seconds <seconds>]
  * }</pre>
@@ -100,6 +107,38 @@ public final class MockGameCli {
             required = true,
             description = "lobby game uid, 0 when launched without a session")
     private int gameUid;
+
+    /** The team a matchmaker game assigned, FA's {@code /team}; FA's own default when absent. */
+    @Option(
+            names = "--team",
+            defaultValue = "-1",
+            description = "matchmaker team, as FA's /team (default: ${DEFAULT-VALUE})")
+    private int team;
+
+    /**
+     * The start spot a matchmaker game assigned, FA's {@code /startspot}; FA's default if absent.
+     */
+    @Option(
+            names = "--start-spot",
+            defaultValue = "-1",
+            description = "matchmaker start spot, as FA's /startspot (default: ${DEFAULT-VALUE})")
+    private int startSpot;
+
+    /** The faction a matchmaker game assigned; FA's own default, UEF, when absent. */
+    @Option(
+            names = "--faction",
+            defaultValue = "1",
+            description =
+                    "matchmaker faction, as game_launch numbers it (default: ${DEFAULT-VALUE})")
+    private int faction;
+
+    /** How many players a matchmaker game has, FA's {@code /players}; FA's default when absent. */
+    @Option(
+            names = "--expected-players",
+            defaultValue = "2",
+            description =
+                    "players in a matchmaker game, as FA's /players (default: ${DEFAULT-VALUE})")
+    private int expectedPlayers;
 
     /**
      * A list of game options that can be set and, if this game is a host, will be sent to the
@@ -228,7 +267,9 @@ public final class MockGameCli {
                 cli.launchDelaySeconds,
                 cli.lobbyTimeoutSeconds,
                 cli.udpDropPercent,
-                cli.crashAfterSeconds);
+                cli.crashAfterSeconds,
+                new Seat(cli.team, cli.startSpot, cli.faction),
+                cli.expectedPlayers);
     }
 
     /**

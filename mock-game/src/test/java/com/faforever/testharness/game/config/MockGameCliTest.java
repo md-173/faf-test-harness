@@ -121,6 +121,37 @@ final class MockGameCliTest {
     }
 
     @Test
+    void theMatchmakerArgumentsGiveTheSeatAndPlayerCount() {
+        // Every value distinct, so an argument read into the wrong field cannot pass.
+        String[] args =
+                withExtra(
+                        VALID_ARGS,
+                        "--team",
+                        "3",
+                        "--start-spot",
+                        "5",
+                        "--faction",
+                        "4",
+                        "--expected-players",
+                        "6");
+
+        MockGameConfig config = MockGameCli.parse(args);
+
+        assertEquals(new Seat(3, 5, 4), config.seat());
+        assertEquals(6, config.expectedPlayers());
+    }
+
+    @Test
+    void withoutTheMatchmakerArgumentsTheGameTakesFasOwnDefaults() {
+        // A custom game's argv carries none of them (WBS-3.2.4.3-fix, #534): FA then plays on team
+        // -1 from start spot -1 as faction 1 (CreateLocalPlayer) and expects 2 players.
+        MockGameConfig config = MockGameCli.parse(VALID_ARGS);
+
+        assertEquals(new Seat(-1, -1, 1), config.seat());
+        assertEquals(2, config.expectedPlayers());
+    }
+
+    @Test
     void negativeGameUidFailsTheParse() {
         String[] args = VALID_ARGS.clone();
         args[9] = "-1";
@@ -152,7 +183,8 @@ final class MockGameCliTest {
 
     @Test
     void unknownArgumentFailsTheParse() {
-        String[] args = withExtra(VALID_ARGS, "--faction", "3");
+        // FA's /map, which no online launch passes (subprocess-orchestration-spec §2.8).
+        String[] args = withExtra(VALID_ARGS, "--map", "scmp_007");
 
         assertThrows(ParameterException.class, () -> MockGameCli.parse(args));
     }

@@ -10,6 +10,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -140,7 +141,9 @@ final class PeerResultAgreementTest {
                             -1,
                             -1,
                             0,
-                            -1);
+                            -1,
+                            Seat.DEFAULT,
+                            2);
             this.lifecycle =
                     new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
         }

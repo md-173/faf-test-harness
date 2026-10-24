@@ -14,7 +14,8 @@ import java.util.Optional;
  * caller (the launcher), so there are no environment-variable or config-file sources. Every field
  * that states a <em>session fact</em> — the ports, the identity, the game uid — comes from a
  * required argument, because guessing one is always wrong. {@code launchDelaySeconds} is the one
- * exception and is defaulted; see {@link MockGameCli} for why.
+ * exception and is defaulted; see {@link MockGameCli} for why. The matchmaker's {@code seat} and
+ * {@code expectedPlayers} are defaulted too, to FA's own values, because a custom game has none.
  *
  * @param gpgNetPort TCP port of the ICE adapter's local GPGNet server the game connects to; must
  *     match the port the adapter was started with
@@ -41,6 +42,11 @@ import java.util.Optional;
  * @param crashAfterSeconds how long after the game enters a real session it halts the JVM without
  *     an orderly shutdown, standing in for a game crash (WBS-5.2); negative, the default, never
  *     crashes. Read through {@link #crashDelay()} rather than directly
+ * @param seat the team, start spot and faction a matchmaker {@code game_launch} assigned this
+ *     player, or {@link Seat#DEFAULT}, FA's own values, when it was launched without them
+ *     (WBS-3.2.4.3-fix, #534)
+ * @param expectedPlayers how many players a matchmaker game has, {@code game_launch}'s {@code
+ *     expected_players} and FA's {@code /players}; FA's own default is {@code 2}
  */
 public record MockGameConfig(
         int gpgNetPort,
@@ -52,7 +58,9 @@ public record MockGameConfig(
         int launchDelaySeconds,
         int lobbyTimeoutSeconds,
         int udpDropPercent,
-        int crashAfterSeconds) {
+        int crashAfterSeconds,
+        Seat seat,
+        int expectedPlayers) {
 
     /**
      * The auto-launch delay as the lifecycle wants it: a duration to arm the timer with, or empty

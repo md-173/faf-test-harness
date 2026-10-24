@@ -596,7 +596,8 @@ final class CrashRecoveryTest {
         }
 
         @Override
-        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity, GameConfig gameConfig)
+                throws MockGameLaunchException {
             try {
                 manager = SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));
                 return manager;
@@ -620,7 +621,8 @@ final class CrashRecoveryTest {
         }
 
         @Override
-        public SubprocessManager start(LaunchIdentity identity) throws MockGameLaunchException {
+        public SubprocessManager start(LaunchIdentity identity, GameConfig gameConfig)
+                throws MockGameLaunchException {
             try {
                 SubprocessManager manager =
                         SubprocessManager.start(builder, "TEST GAME", Duration.ofSeconds(5));

@@ -11,6 +11,7 @@ import ch.qos.logback.core.read.ListAppender;
 import com.faforever.testharness.game.TestPorts;
 import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.ScriptedGpgNetServer;
@@ -159,7 +160,9 @@ final class CrashInjectionTest {
                         0,
                         -1,
                         0,
-                        crashAfterSeconds);
+                        crashAfterSeconds,
+                        Seat.DEFAULT,
+                        2);
         MockGameLifecycle lifecycle =
                 new MockGameLifecycle(
                         config,

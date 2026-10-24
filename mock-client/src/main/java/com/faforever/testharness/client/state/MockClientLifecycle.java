@@ -1309,7 +1309,7 @@ public final class MockClientLifecycle {
             // (IllegalStateException: gameState must not change to null, from its telemetry
             // debugger) and the game loses its connection, exiting 69 in under a second. Unit fakes
             // do not reproduce this; see the 3.2.2.4 live test and gpgnet-format-spec §8.1.
-            SubprocessManager gameBinary = gameLauncher.start(identity);
+            SubprocessManager gameBinary = gameLauncher.start(identity, gameConfig);
             // Single ownership of the game process (WBS-3.1.2.4): register it for coordinated
             // teardown and fan its exit code into the session's one exit signal. Consumers
             // subscribe via gameExit(); nothing else touches the manager's onExit.
