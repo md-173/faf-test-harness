@@ -1668,7 +1668,9 @@ ends. The crash and the match-end timer share one scheduler, and the end of the
 match tears that scheduler down, so the crash is cancelled and the run exits
 `0`. The game warns when it arms the timer, right after the `injected crash
 armed` line, for example `injected crash is due in 20s but the match is due
-to end in 14998ms`.
+to end in 14998ms`. A matchmaker game expecting other players cannot warn:
+it arms its launch only on its first `Ready`, after a peer has connected and
+started its crash timer (WBS-3.2.4.3-fix, #534).
 
 When the match is due to end depends on where the timer started. Armed on
 entry to LIVE, the match ends one match length later. Armed by a peer

@@ -77,12 +77,13 @@ final class LifecycleMatchmakerLobbyTest {
     /** How long after {@code GameState Launching} no report may come: past one 2 s period. */
     private static final long AFTER_LAUNCH_MILLIS = 2500;
 
-    /** How long the period test counts reports for. */
+    /** How long the period test counts reports for, from before it sends {@code HostGame}. */
     private static final long PERIOD_WINDOW_MILLIS = 4500;
 
     /**
-     * The most reports that fit in {@link #PERIOD_WINDOW_MILLIS} at FA's 2 s period, with one to
-     * spare. A loaded machine can only delay a report, so this bound cannot fail spuriously.
+     * The most periodic reports that fit in {@link #PERIOD_WINDOW_MILLIS} at FA's 2 s period: one
+     * on {@code HostGame}, then 2 s and 4 s later. Each is sent at least 2 s after the one before,
+     * and a loaded machine can only delay one, so this bound cannot fail spuriously.
      */
     private static final int MAX_STATUSES_IN_WINDOW = 3;
 
@@ -218,12 +219,13 @@ final class LifecycleMatchmakerLobbyTest {
 
     @Test
     void launchStatusRepeatsEveryTwoSecondsAndNoFaster() throws Exception {
-        hosting();
-        nextStatus();
-        nextStatus();
+        inLobby();
 
-        int statuses = 0;
+        // The window opens before HostGame, so every report counted was sent inside it. A report
+        // read late is not counted, which can only lower the count.
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PERIOD_WINDOW_MILLIS);
+        gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scmp_007")));
+        int statuses = 0;
         while (true) {
             long left = deadline - System.nanoTime();
             if (left <= 0) {
@@ -232,13 +234,15 @@ final class LifecycleMatchmakerLobbyTest {
             GpgNetFrame frame = pollOrNull(left);
             if (frame != null) {
                 assertEquals("LaunchStatus", frame.command(), "only a LaunchStatus is due");
-                statuses++;
+                if (!frame.stringArg(0).equals("Hosting")) {
+                    statuses++;
+                }
             }
         }
 
         assertTrue(
                 statuses <= MAX_STATUSES_IN_WINDOW,
-                statuses + " LaunchStatus frames in " + PERIOD_WINDOW_MILLIS + " ms");
+                statuses + " periodic LaunchStatus frames in " + PERIOD_WINDOW_MILLIS + " ms");
     }
 
     @Test
@@ -370,6 +374,7 @@ final class LifecycleMatchmakerLobbyTest {
     void aJoinerLaunchesOnlyOnceItHasReportedReady() throws Exception {
         launchDelay = Duration.ZERO;
         joining();
+        assertEquals(launchStatus("Connecting"), nextRawFrame());
 
         // With no delay, a launch armed on JoinGame would come at once.
         assertNoFrameFor(NO_LAUNCH_MILLIS, "no launch before the host is linked");
@@ -378,7 +383,8 @@ final class LifecycleMatchmakerLobbyTest {
 
         assertEquals(established(PEER_ID), nextRawFrame());
         assertEquals(launchStatus("Ready"), nextRawFrame());
-        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextRawFrame());
+        // A loaded machine can hold the launch past the next 2 s report, so that report is skipped.
+        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextFrame());
     }
 
     @Test

@@ -237,18 +237,6 @@ public class MockGameLauncher {
     }
 
     /**
-     * Builds the mock-game argument list for {@code binary} under {@code identity}, with no lobby
-     * arguments.
-     *
-     * @param binary the resolved mock-game binary path
-     * @param identity the identity mock-game is launched under
-     * @return the argv list, ready to hand to {@link ProcessBuilder}
-     */
-    List<String> buildArgv(final Path binary, final LaunchIdentity identity) {
-        return buildArgv(binary, identity, null);
-    }
-
-    /**
      * Builds the mock-game argument list for {@code binary} under {@code identity} with a potential
      * set of game options.
      *

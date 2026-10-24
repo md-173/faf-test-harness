@@ -1490,7 +1490,9 @@ public final class MockGameLifecycle {
      *
      * <p>{@code null} when auto-launch is off: nothing posts {@code LaunchMatch}, so no match-end
      * timer is ever created and nothing can cancel the crash. That is the configuration a
-     * multi-peer session runs in.
+     * multi-peer session runs in. Also {@code null} when a matchmaker game expecting other players
+     * arms its crash: it arms its launch only on its first {@code Ready}, after a peer has
+     * connected and armed the crash (WBS-3.2.4.3-fix, #534).
      *
      * @return the time until the match is due to end, or {@code null} if it is not scheduled to
      */

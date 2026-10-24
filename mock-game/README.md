@@ -178,15 +178,16 @@ since FA's lobby is gone by then. Every id in these peer frames goes on the wire
 
 A matchmaker host reports its players as FA's does (WBS-3.2.4.3-fix, #534). Every peer
 datagram carries its sender's team, start spot and faction, the mock's stand-in for the
-`AddPlayer` message FA's joiner sends its host once their link is up, and the host seats each
-joiner on that joiner's first datagram. It then sends `Team`, `Army`, `StartSpot` and
-`Faction`, with no `Color`, for every seated player in start-spot order, and again just before
-launch. It sends nothing on `HostGame` or `ConnectToPeer` and no `GameOption`, logging any
-`--game-option` it was given instead. Every matchmaker game also reports `LaunchStatus`:
-`Hosting` or `Connecting` on taking its role, then every 2 s until launch `Missing local
-peers`, or `Ready` once it is linked to all the other `--expected-players`. A joiner's 2 s
-reports start only once its host's link is up. A matchmaker game arms its launch delay when it
-first reports `Ready`, so its host's last set before launch holds every expected joiner.
+`AddPlayer` message FA's joiner sends its host once their link is up, and the host seats
+each joiner on that joiner's first datagram. It then sends `Team`, `Army`, `StartSpot` and
+`Faction`, with no `Color`, for every seated player in start-spot order, and again just
+before launch. It sends no `PlayerOption` on `HostGame`, nothing on `ConnectToPeer`, and no
+`GameOption`, logging any `--game-option` it was given instead. Every matchmaker game also
+reports `LaunchStatus`: `Hosting` or `Connecting` on taking its role, then every 2 s until
+launch `Missing local peers`, or `Ready` once it is linked to all the other
+`--expected-players`. A joiner's 2 s reports start only once its host's link is up. A
+matchmaker game arms its launch delay when it first reports `Ready`, so its host's last set
+before launch holds every expected joiner.
 
 A player leaving does not end the game (WBS-4.3.6). From `CreateLobby` until launch, a
 `DisconnectFromPeer` is answered the way the game's FA lobby answers it: in a custom game
@@ -198,19 +199,20 @@ processes no GPGNet input.
 
 In a custom lobby, players are split into two teams in arrival order: armies 1, 3, ... on
 team 2 and armies 2, 4, ... on team 3, so faf-server never sees more than two teams (it
-marks a game with more `MULTI_TEAM` invalid). A matchmaker host reports the teams and
-start spots the match assigned instead, and armies in start-spot order; faf-server's
-matchmaker puts odd slots on team 2 and even slots on team 3, so the two agree. The
-end-of-match result is fixed by design: army 1's team wins and the other team loses, on
-every run. Each game reports every army, one `GameResult` per army, and an army's result
-is its team's, so the winning team's armies all report victory. The harness asserts on the
-shape and ordering of those closing frames, and a result that varied would make those
-assertions depend on configuration nothing has asked to vary. Every game in a session
-sends the same set, the host and each joiner alike, just as real FA clients each report
-every army. The army numbers are the ones the host assigned in its `PlayerOption` frames,
-which faf-server accepts from no other game, and faf-server resolves each army's outcome
-by comparing what every player reported for it. Identical sets resolve every army
-unanimously; sets that disagree can leave the outcome ambiguous or wrong.
+marks a game with more `MULTI_TEAM` invalid). A matchmaker host reports the teams and start
+spots the match assigned instead, and armies in start-spot order; faf-server's matchmaker
+puts odd slots on team 2 and even slots on team 3, so once every expected player is seated,
+armies 1, 3, ... are on team 2 and armies 2, 4, ... on team 3 there too. The end-of-match
+result is fixed by design: army 1's team wins and the other team loses, on every run. Each
+game reports every army, one `GameResult` per army, and an army's result is its team's, so
+the winning team's armies all report victory. The harness asserts on the shape and ordering
+of those closing frames, and a result that varied would make those assertions depend on
+configuration nothing has asked to vary. Every game in a session sends the same set, the
+host and each joiner alike, just as real FA clients each report every army. The army numbers
+are the ones the host assigned in its `PlayerOption` frames, which faf-server accepts from
+no other game, and faf-server resolves each army's outcome by comparing what every player
+reported for it. Identical sets resolve every army unanimously; sets that disagree can leave
+the outcome ambiguous or wrong.
 
 Before WBS-4.3.3 each player was its own team (`Team` = its army number), so at one
 or two players the `Team` option changes: the first player now sends `Team 2`

@@ -320,7 +320,7 @@ final class MockGameLauncherTest {
         LaunchIdentity identity = new LaunchIdentity(9001, "welcome-login", 4242);
 
         List<String> argv =
-                new MockGameLauncher(configWithBinary(binary)).buildArgv(binary, identity);
+                new MockGameLauncher(configWithBinary(binary)).buildArgv(binary, identity, null);
 
         // The config this launcher holds would give player id 1 and login "mock-client".
         assertEquals("9001", valueAfter(argv, "--player-id"));
@@ -335,7 +335,7 @@ final class MockGameLauncherTest {
 
         List<String> argv =
                 new MockGameLauncher(config)
-                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242));
+                        .buildArgv(binary, new LaunchIdentity(9001, "welcome-login", 4242), null);
 
         assertEquals(
                 "9001",
