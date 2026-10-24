@@ -112,7 +112,9 @@ public final class SubprocessManager {
      * enrols the returned manager in a JVM-wide registry; the manager deregisters itself
      * automatically when its process exits. The process itself is started on one JVM-wide thread,
      * not the caller's, so a {@link ParentDeathSignal} prefix in {@code pb} ties the child to that
-     * thread rather than to one that may end first.
+     * thread rather than to one that may end first. Where that prefix is empty, the child is handed
+     * to {@link OrphanReaper} instead, whose process the first such call starts, and which ends the
+     * child if this JVM dies without running its shutdown hook.
      *
      * @param pb fully-configured ProcessBuilder for the child
      * @param componentTag MDC component label applied to every captured log line; must be non-blank
@@ -173,6 +175,7 @@ public final class SubprocessManager {
             manager.terminate();
             throw e;
         }
+        OrphanReaper.watch(process);
         // The constructor's onExit chain calls deregister(this), but for a fast-exiting child
         // that chain may fire before register() above, concurrently on the common-pool thread
         // that completes Process.onExit(). The deregister then becomes a no-op and the just-added

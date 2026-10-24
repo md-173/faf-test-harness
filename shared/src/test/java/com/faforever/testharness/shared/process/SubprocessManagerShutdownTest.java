@@ -20,18 +20,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Verifies that a forked parent JVM's children end with it: through the JVM shutdown hook installed
- * by {@link SubprocessRegistry} when the parent receives SIGTERM, and through {@link
- * ParentDeathSignal}'s prefix when it receives SIGKILL, which runs no hook. Polls {@code /proc} for
- * the grandchild; slower than the surrounding unit tests (~5 s each) but kept in the same source
- * set rather than split into a separate integration-test task. Linux-only: relies on POSIX signal
- * semantics for {@code Process.destroy()}, and on {@code setpriv} for the SIGKILL case. On Windows
- * {@code destroy()} is TerminateProcess, which bypasses Java shutdown hooks entirely. Runs under
- * WSL on Windows dev boxes.
+ * by {@link SubprocessRegistry} when the parent receives SIGTERM, and through layer 2 when it is
+ * killed, which runs no hook: {@link ParentDeathSignal}'s prefix on Linux, {@link OrphanReaper}
+ * elsewhere. Slower than the surrounding unit tests (~5 s each) but kept in the same source set
+ * rather than split into a separate integration-test task. The SIGTERM and setpriv cases are
+ * Linux-only: they rely on POSIX signal semantics for {@code Process.destroy()}, which on Windows
+ * is TerminateProcess and bypasses Java shutdown hooks entirely, and on {@code setpriv}. They run
+ * under WSL on Windows dev boxes. The reaper case runs everywhere.
  */
-@EnabledOnOs(OS.LINUX)
 class SubprocessManagerShutdownTest {
 
     private static final String PID_PREFIX = "GRANDCHILD_PID=";
@@ -39,9 +39,12 @@ class SubprocessManagerShutdownTest {
     private static final long PID_WAIT_MS = 30_000;
     private static final long PARENT_EXIT_TIMEOUT_S = 10;
     private static final long REAP_BUDGET_MS = 10_000;
+    // The reaper is a JVM of its own, which may still be starting when the parent is killed.
+    private static final long REAPER_BUDGET_MS = 30_000;
     private static final long POLL_INTERVAL_MS = 100;
 
     @Test
+    @EnabledOnOs(OS.LINUX)
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
     void parentSigtermReapsGrandchild() throws Exception {
         ProcessBuilder pb = TestSupport.forMain(HarnessChild.class);
@@ -80,12 +83,39 @@ class SubprocessManagerShutdownTest {
      * parent dies.
      */
     @Test
+    @EnabledOnOs(OS.LINUX)
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
     void parentSigkillSignalsGrandchild() throws Exception {
         assertFalse(
                 ParentDeathSignal.prefix().isEmpty(),
                 "needs setpriv --pdeathsig on PATH (util-linux 2.33 or later)");
-        ProcessBuilder pb = TestSupport.forMain(HarnessChild.class, "pdeathsig");
+        killParentAndAwaitGrandchild(
+                TestSupport.forMain(HarnessChild.class, "pdeathsig"), REAP_BUDGET_MS);
+    }
+
+    /**
+     * Where the prefix is empty, as on macOS and Windows, {@link OrphanReaper} ends the grandchild
+     * of a killed parent instead (#508): SIGKILL there, TerminateProcess on Windows, as {@code
+     * taskkill /F} does. On Linux the parent's {@code PATH} is an empty directory, so its setpriv
+     * probe fails and it takes the same route; it starts {@code java} by absolute path, so nothing
+     * else needs {@code PATH}.
+     */
+    @Test
+    @Timeout(value = 90, unit = TimeUnit.SECONDS)
+    void parentHardKillEndsGrandchildThroughTheReaper(@TempDir Path emptyDir) throws Exception {
+        ProcessBuilder pb = TestSupport.forMain(HarnessChild.class, "reaper");
+        if (OS.LINUX.isCurrentOs()) {
+            pb.environment().put("PATH", emptyDir.toString());
+        }
+        killParentAndAwaitGrandchild(pb, REAPER_BUDGET_MS);
+    }
+
+    /**
+     * Starts the parent {@code pb} describes, kills it once its grandchild runs, and fails unless
+     * the grandchild exits within {@code budgetMs}.
+     */
+    private static void killParentAndAwaitGrandchild(ProcessBuilder pb, long budgetMs)
+            throws Exception {
         pb.redirectErrorStream(true);
         Process parent = pb.start();
         Optional<ProcessHandle> grandchild = Optional.empty();
@@ -93,14 +123,14 @@ class SubprocessManagerShutdownTest {
             grandchild = ProcessHandle.of(awaitGrandchildPid(parent));
             assertTrue(
                     grandchild.isPresent() && grandchild.get().isAlive(),
-                    "grandchild should be alive before SIGKILL");
+                    "grandchild should be alive before its parent is killed");
 
             parent.destroyForcibly();
             assertTrue(
                     parent.waitFor(PARENT_EXIT_TIMEOUT_S, TimeUnit.SECONDS),
-                    "parent JVM did not die on SIGKILL within budget");
+                    "parent JVM did not die within budget");
 
-            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REAP_BUDGET_MS);
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(budgetMs);
             while (System.nanoTime() < deadline) {
                 if (hasExited(grandchild.get())) {
                     return;
@@ -110,8 +140,8 @@ class SubprocessManagerShutdownTest {
             fail(
                     "grandchild pid="
                             + grandchild.get().pid()
-                            + " outlived its SIGKILLed parent by "
-                            + REAP_BUDGET_MS
+                            + " outlived its killed parent by "
+                            + budgetMs
                             + " ms");
         } finally {
             if (parent.isAlive()) {
@@ -128,14 +158,18 @@ class SubprocessManagerShutdownTest {
     }
 
     /**
-     * Whether an orphaned {@code process} has exited. Init or a subreaper reaps it, not this JVM,
-     * and {@link ProcessHandle#isAlive()} reports an exited but unreaped process (state {@code Z})
-     * as alive, so that state counts as exited. The handle also ignores a later process that reused
+     * Whether an orphaned {@code process} has exited. On Linux init or a subreaper reaps it, not
+     * this JVM, and {@link ProcessHandle#isAlive()} reports an exited but unreaped process (state
+     * {@code Z}) as alive, so that state counts as exited. Elsewhere there is no {@code /proc} to
+     * ask, and {@code isAlive()} alone decides. The handle also ignores a later process that reused
      * the PID.
      */
     private static boolean hasExited(ProcessHandle process) {
         if (!process.isAlive()) {
             return true;
+        }
+        if (!OS.LINUX.isCurrentOs()) {
+            return false;
         }
         try {
             String stat = Files.readString(Path.of("/proc/" + process.pid() + "/stat"));
