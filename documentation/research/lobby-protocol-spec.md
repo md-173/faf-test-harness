@@ -320,9 +320,13 @@ For the Mock Client, this is an implementation decision that should be made expl
 such as `FAF_MOCK_UNIQUE_ID`). A random per-session UUID may be acceptable for isolated testing, but it may reduce reproducibility if the test environment expects a stable identity.
 
 ### Timing Constraint
-The server enforces a login timeout of **5 minutes** (`LOGIN_TIMEOUT = 300` seconds in 
-[server/config.py](https://github.com/FAForever/server/blob/develop/server/config.py)). 
-A connection that does not successfully authenticate within this window is dropped.
+A faf-server v1.18.x lobby, such as local-stack CI's, enforces a login timeout of **5 minutes**
+(`LOGIN_TIMEOUT = 300` seconds in
+[server/config.py](https://github.com/FAForever/server/blob/v1.18.3/server/config.py)): a
+connection that does not authenticate within this window is dropped. None applies on
+`ws.faforever.xyz` since 2026-10-21: faf-server v1.19.0 starts `timeout_login` only once
+faf-message-broker has authenticated the session, and the broker sets no login timer of its own.
+`run` bounds its own login at 45 s either way.
 
 ### Post-Welcome State Sync
 Immediately after `welcome`, the server pushes the current world state:
@@ -334,9 +338,31 @@ Immediately after `welcome`, the server pushes the current world state:
 
 The mock client should be ready to consume these messages as soon as `welcome` is received. Ensure the Mock Client's WebSocket listener is fully initialized and ready to buffer incoming JSON frames before sending the auth command, or you risk dropping the initial world state.
 
+### An `invalid` after `welcome`
+
+When handling a lobby command raises an error that faf-server has no specific handler for, its
+generic handler answers with the `invalid` of 4c, then drops the session on its side (#486). It
+never answers a `target: "game"` frame with one: `GameConnection.handle_action` deals with that
+frame's errors itself. A faf-server v1.18.x lobby, such as local-stack CI's, then closes the
+connection. faf-message-broker on `ws.faforever.xyz` keeps it open: faf-server's abort ends only
+its own RabbitMQ side, and of the frames faf-server sends, the broker closes a socket only after a
+`notice` with style `kick`. Within a minute the broker's periodic `existing` announcement of the
+session has faf-server take it up again, sending `irc_password` and no `welcome`, and pings and
+broadcasts resume.
+
+Checked live on 2026-10-24 (faf-message-broker 1.1.0, faf-server v1.19.0) with a `game_host`
+whose `title` was a number: `{"command":"invalid","request_id":"…"}` arrived and no close
+followed, a `matchmaker_info` sent 3 s later went unanswered, `irc_password` arrived 24 s after
+the `invalid`, then a `ping` about every 45 s, and a later `matchmaker_info` was answered. The
+Mock Client closes the connection itself on an `invalid` after `welcome`, so the session ends the
+same way behind either lobby, and `run` exits `70` naming it (#538).
+
 ### Sources
 - AsyncAPI: [https://faforever.github.io/faf-api-specs](https://faforever.github.io/faf-api-specs)
 - Lobby state machine: [https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/state-machine.md](https://github.com/FAForever/faf-api-specs/blob/main/lobby-to-client/state-machine.md)
+- [faf-server v1.19.0 `server/servercontext.py`: a session reaches faf-server only once the broker has authenticated it, and `_on_session_message` takes up an `existing` one it no longer holds](https://github.com/FAForever/server/blob/v1.19.0/server/servercontext.py)
+- [faf-server v1.19.0 `server/protocol/rabbitmq.py`: `close()` and `abort()` end only faf-server's side](https://github.com/FAForever/server/blob/v1.19.0/server/protocol/rabbitmq.py)
+- [faf-message-broker 1.1.0 `MessageBroker.java`: of faf-server's frames, only a `kick` notice makes it close a socket, and `sendPlayerSessionUpdates` re-announces each session every minute](https://github.com/FAForever/faf-message-broker/blob/1.1.0/src/main/java/com/faforever/messagebroker/message/MessageBroker.java)
 
 <a id="section-4-game-setup"></a>
 ## 4. Game Session Setup Flows
@@ -872,7 +898,7 @@ direction.
 | Constant | Value | Purpose |
 |---|---|---|
 | `PING_INTERVAL` | 45s | Server ping frequency |
-| `LOGIN_TIMEOUT` | 300s (5 min) | Max time allowed to complete authentication |
+| `LOGIN_TIMEOUT` | 300s (5 min) | Max time allowed to complete authentication, on a faf-server v1.18.x lobby only ([§3](#section-3-auth)) |
 
 ### Sources
 

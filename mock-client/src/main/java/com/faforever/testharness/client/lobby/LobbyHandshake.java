@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
+import java.net.http.WebSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Optional;
@@ -329,21 +330,26 @@ public final class LobbyHandshake {
     }
 
     /**
-     * faf-server's answer to a command whose handling raised, sent just before it closes the
-     * connection (#473). Before {@code welcome} that command is the login, so the handshake fails
-     * at once, and the caller's one ERROR names it; a refused {@code unique_id} and an error
-     * checking the token, such as signing keys the lobby could not fetch, both end this way. Once
-     * the handshake is over, the frame answers one of the session's own commands, so it is logged
-     * and recorded for {@code run} to report (#486).
+     * faf-server's answer to a command whose handling raised, after which it drops the session
+     * (#473). Before {@code welcome} that command is the login, so the handshake fails at once, and
+     * the caller's one ERROR names it; a refused {@code unique_id} and an error checking the token,
+     * such as signing keys the lobby could not fetch, both end this way. Once the handshake is
+     * over, the frame answers one of the session's own commands, so it is logged and recorded for
+     * {@code run} to report (#486), and this side closes the connection (#538). A faf-server
+     * v1.18.x lobby closes it too, but faf-message-broker, in front of faf-server v1.19.0 on {@code
+     * ws.faforever.xyz}, keeps it open, and within a minute faf-server takes the session up again
+     * with an {@code irc_password} and no {@code welcome}, so the lobby itself never ends it. The
+     * disconnect then ends the session as any close of the connection does.
      *
-     * @param msg the {@code invalid} frame, which carries nothing else
+     * @param msg the {@code invalid} frame, which carries nothing the handler reads
      */
     private void onInvalid(final JsonNode msg) {
         if (result.isDone()) {
             invalidAfterLogin.set(true);
             LOG.warn(
-                    "the lobby answered a command with invalid, a server-side error;"
-                            + " faf-server closes the connection next");
+                    "the lobby answered a command with invalid, a server-side error that ends the"
+                            + " session; closing the connection");
+            connection.close(WebSocket.NORMAL_CLOSURE, "Command answered with invalid");
             return;
         }
         result.completeExceptionally(

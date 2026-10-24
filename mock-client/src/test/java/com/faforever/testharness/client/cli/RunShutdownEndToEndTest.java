@@ -29,6 +29,8 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.condition.DisabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * How the real {@code run} ends, when a signal stops it and when it stops on its own
@@ -262,25 +264,36 @@ final class RunShutdownEndToEndTest {
 
     /**
      * An {@code invalid} after welcome, faf-server's answer to one of the run's own commands that
-     * it failed on, ends the run with {@code 70} and a verdict naming it (#486). faf-server closes
-     * the connection cleanly right after, which used to read as the lobby ending the session, so
-     * the run exited {@code 0}. Both WARNs are logged before the run ends: the frame's as it
-     * arrives, the verdict's once TERMINATED commits.
+     * it failed on, ends the run with {@code 70} and a verdict naming it (#486), whether or not the
+     * lobby closes the connection after it. A faf-server v1.18.x lobby closes it cleanly, which
+     * used to read as the lobby ending the session, so the run exited {@code 0}. faf-message-broker
+     * keeps it open, and the run waited until killed, so the client now closes it itself (#538):
+     * this lobby never pings, so without that close the run would outlast the step budget. Both
+     * WARNs are logged before the run ends: the frame's as it arrives, the verdict's once
+     * TERMINATED commits.
+     *
+     * @param lobbyCloses whether the lobby closes the connection after the frame, as v1.18.x does
      */
-    @Test
-    void anInvalidAfterWelcomeExits70() throws Exception {
+    @ParameterizedTest(name = "lobby closes after the frame: {0}")
+    @ValueSource(booleans = {true, false})
+    void anInvalidAfterWelcomeExits70(final boolean lobbyCloses) throws Exception {
         startRunAndReachIdle();
 
         lobby.broadcastText("{\"command\":\"invalid\"}");
-        lobby.closeAllClean(1000, "");
+        if (lobbyCloses) {
+            lobby.closeAllClean(1000, "");
+        }
 
         assertExitCode(ExitCodes.RUNTIME);
+        if (!lobbyCloses) {
+            assertEquals(1000, lobby.awaitClose(5, TimeUnit.SECONDS), "the run's own clean close");
+        }
         List<JsonNode> records = records();
         assertEquals(List.of(REFUSED_VERDICT), verdicts(records), "the refusal is the verdict");
         assertEquals(
                 List.of(
-                        "the lobby answered a command with invalid, a server-side error;"
-                                + " faf-server closes the connection next",
+                        "the lobby answered a command with invalid, a server-side error that ends"
+                                + " the session; closing the connection",
                         REFUSED_VERDICT),
                 messagesAt(records, "WARN"),
                 "the frame's WARN, then the verdict's");

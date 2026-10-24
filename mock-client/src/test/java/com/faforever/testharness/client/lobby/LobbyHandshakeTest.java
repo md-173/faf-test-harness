@@ -16,7 +16,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
@@ -154,8 +153,10 @@ final class LobbyHandshakeTest {
      * An {@code invalid} after {@code welcome} answers one of the session's own commands, so it
      * warns rather than failing the login (#473), and is recorded for {@code run} to report (#486).
      * Its handler took the place of the unhandled-command WARN that frame used to draw, and must
-     * not lose it. Frames and the close are handled in order on one thread, so once the close is
-     * seen, the frame has been.
+     * not lose it. faf-server has dropped the session by then, but behind faf-message-broker the
+     * connection stays open, so the client closes it itself (#538): this lobby never closes, so the
+     * close it records is the client's. Frames and the close are handled in order on one thread, so
+     * once the close is seen, the frame has been.
      */
     @Test
     void anInvalidAfterWelcomeIsAWarning() throws Exception {
@@ -169,8 +170,8 @@ final class LobbyHandshakeTest {
             lobby = new LobbyConnection(server.uri());
             lobby.connect().get(5, TimeUnit.SECONDS);
             server.awaitFirstClient();
-            CountDownLatch closed = new CountDownLatch(1);
-            lobby.onDisconnect(event -> closed.countDown());
+            CompletableFuture<LobbyConnection.DisconnectEvent> closed = new CompletableFuture<>();
+            lobby.onDisconnect(closed::complete);
             LobbyHandshake handshake =
                     new LobbyHandshake(lobby, "uid-fixture", "1.0.0", "mock-client-test");
             CompletableFuture<JsonNode> welcome = handshake.perform(fixedToken("jwt-token-abc"));
@@ -181,14 +182,17 @@ final class LobbyHandshakeTest {
             welcome.get(2, TimeUnit.SECONDS);
 
             server.broadcastText("{\"command\":\"invalid\"}");
-            server.closeAllClean(1000, "");
 
-            assertTrue(closed.await(5, TimeUnit.SECONDS), "the lobby's close never arrived");
+            assertEquals(
+                    LobbyConnection.DisconnectReason.LOCAL_CLOSE,
+                    closed.get(5, TimeUnit.SECONDS).reason(),
+                    "the client must close the connection itself (#538)");
+            assertEquals(1000, server.awaitClose(5, TimeUnit.SECONDS), "a clean close");
             assertTrue(handshake.invalidAfterLogin(), "a late invalid must be recorded (#486)");
             assertEquals(
                     List.of(
-                            "the lobby answered a command with invalid, a server-side error;"
-                                    + " faf-server closes the connection next"),
+                            "the lobby answered a command with invalid, a server-side error that"
+                                    + " ends the session; closing the connection"),
                     appender.list.stream()
                             .filter(event -> event.getLevel() == Level.WARN)
                             .map(ILoggingEvent::getFormattedMessage)
