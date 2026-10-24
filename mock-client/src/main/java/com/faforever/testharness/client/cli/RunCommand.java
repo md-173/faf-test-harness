@@ -267,7 +267,7 @@ public final class RunCommand implements Callable<Integer> {
      * session is a different and more fundamental finding than anything that happened inside one,
      * and it was here first. A command the lobby answered with {@code invalid} follows it (#486):
      * the lobby failing on the harness's own traffic is a finding about the lobby too, and
-     * faf-server closes the connection straight after it. A launch that never came up is next
+     * faf-server drops the session; this side closes it (#538). A launch that never came up is next
      * (#437). It shares {@code RUNTIME} with the two lobby findings, so between those only the
      * logged line differs, and in practice it never meets the two below it: no session ran for an
      * adapter or a game to die in. The adapter comes before the game because it is the verdict with

@@ -314,8 +314,9 @@ public final class LobbySession {
 
     /**
      * Whether the lobby answered one of the session's commands with {@code invalid} after {@code
-     * welcome} (#486). faf-server sends it when handling a command raised, then closes the
-     * connection cleanly, so the close alone would read as the lobby ending the session.
+     * welcome} (#486). faf-server sends it when handling a command raised and drops the session;
+     * the handshake then closes the connection (#538), so the close alone would read as the session
+     * ending normally.
      *
      * @return {@code true} once such a frame has arrived
      */
