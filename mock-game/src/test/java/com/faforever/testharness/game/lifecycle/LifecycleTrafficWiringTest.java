@@ -106,7 +106,7 @@ final class LifecycleTrafficWiringTest {
         appender.start();
         root.addAppender(appender);
 
-        lifecycle = newLifecycle(0);
+        lifecycle = newLifecycle(0, Seat.DEFAULT);
     }
 
     /**
@@ -114,9 +114,12 @@ final class LifecycleTrafficWiringTest {
      *
      * @param udpDropPercent the config's drop percentage; {@code 0} everywhere except the test that
      *     proves the value reaches the sender
+     * @param seat the config's seat; {@link Seat#DEFAULT} everywhere except the test that proves it
+     *     reaches the datagrams
      * @return a lifecycle that is constructed but not started
      */
-    private MockGameLifecycle newLifecycle(final int udpDropPercent) throws IOException {
+    private MockGameLifecycle newLifecycle(final int udpDropPercent, final Seat seat)
+            throws IOException {
         config =
                 new MockGameConfig(
                         50000,
@@ -129,7 +132,7 @@ final class LifecycleTrafficWiringTest {
                         -1,
                         udpDropPercent,
                         -1,
-                        Seat.DEFAULT,
+                        seat,
                         2);
         return new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
     }
@@ -148,8 +151,8 @@ final class LifecycleTrafficWiringTest {
         reachLobby();
 
         // The adapter's return leg: a peer's datagram, repackaged to the game's lobby port.
-        sendToLobby(new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis()));
-        sendToLobby(new GameDatagram(PEER_PLAYER_ID, 1, System.currentTimeMillis()));
+        sendToLobby(new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis(), Seat.DEFAULT));
+        sendToLobby(new GameDatagram(PEER_PLAYER_ID, 1, System.currentTimeMillis(), Seat.DEFAULT));
 
         awaitLog(
                 event -> event.getFormattedMessage().startsWith(progressPrefix()),
@@ -175,8 +178,12 @@ final class LifecycleTrafficWiringTest {
                 new GpgNetFrame("CreateLobby", List.of(0, announced, "Rhiza", OWN_PLAYER_ID, 1)));
         awaitState(GameState.LOBBY);
 
-        sendToPort(announced, new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis()));
-        sendToPort(announced, new GameDatagram(PEER_PLAYER_ID, 1, System.currentTimeMillis()));
+        sendToPort(
+                announced,
+                new GameDatagram(PEER_PLAYER_ID, 0, System.currentTimeMillis(), Seat.DEFAULT));
+        sendToPort(
+                announced,
+                new GameDatagram(PEER_PLAYER_ID, 1, System.currentTimeMillis(), Seat.DEFAULT));
 
         awaitLog(
                 event -> event.getFormattedMessage().startsWith(progressPrefix()),
@@ -216,7 +223,7 @@ final class LifecycleTrafficWiringTest {
     void configuredDropPercentReachesTheSenderTheLifecycleBuilds() throws Exception {
         // Replaces setUp's lifecycle. It was never started, so shutting it down is harmless.
         lifecycle.shutdown().run();
-        lifecycle = newLifecycle(100);
+        lifecycle = newLifecycle(100, Seat.DEFAULT);
 
         // The drop record is DEBUG and the harness defaults to INFO. Restores the logger's own
         // level, normally null (inherited), not its effective one, which would pin INFO on it.
@@ -242,6 +249,27 @@ final class LifecycleTrafficWiringTest {
                 SocketTimeoutException.class,
                 this::receiveFromGame,
                 "at a drop percentage of 100 no datagram may reach the peer");
+    }
+
+    /**
+     * The seat on {@link MockGameConfig} must reach the datagrams the game sends (WBS-3.2.4.3-fix,
+     * #534), as the drop percentage must reach the sender (#353). A matchmaker host seats a joiner
+     * from them, and the lobby tests build their datagrams by hand, so only this proves a game's
+     * own datagrams carry its seat.
+     */
+    @Test
+    void configuredSeatReachesTheDatagramsTheGameSends() throws Exception {
+        // Replaces setUp's lifecycle. It was never started, so shutting it down is harmless.
+        lifecycle.shutdown().run();
+        Seat seat = new Seat(3, 5, 4);
+        lifecycle = newLifecycle(0, seat);
+        reachLobby();
+
+        gpgnet.sendFrame(
+                new GpgNetFrame("JoinGame", List.of(peerAddress(), "Smith", PEER_PLAYER_ID)));
+        awaitState(GameState.JOINING);
+
+        assertEquals(seat, receiveFromGame().seat());
     }
 
     @Test

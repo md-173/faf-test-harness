@@ -8,6 +8,7 @@ import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
 import com.faforever.testharness.game.gpgnet.GpgNetFrame;
 import com.faforever.testharness.game.gpgnet.GpgNetSender;
 import com.faforever.testharness.game.gpgnet.Peer;
+import com.faforever.testharness.game.net.GameDatagram;
 import com.faforever.testharness.game.net.GameTrafficSession;
 import com.faforever.testharness.shared.statemachine.Event;
 import com.faforever.testharness.shared.statemachine.FailedTransitionException;
@@ -350,7 +351,10 @@ public final class MockGameLifecycle {
         // cadence and closes the socket, on every exit path including a SIGTERM before CreateLobby.
         this.traffic =
                 new GameTrafficSession(
-                        config.playerId(), config.udpDropPercent(), this::firstDatagramFrom);
+                        config.playerId(),
+                        config.seat(),
+                        config.udpDropPercent(),
+                        this::firstDatagramFrom);
         this.shutdown.registerTrafficSession(traffic);
 
         setupStateMachine();
@@ -1198,11 +1202,12 @@ public final class MockGameLifecycle {
      * #registerPeerEstablishedTransitions()} gives. Once teardown has shut the scheduler down, the
      * report is dropped.
      *
-     * @param playerId the sender id the datagram carried
+     * @param first the sender's first datagram, which carries its id and seat
      */
-    private void firstDatagramFrom(int playerId) {
+    private void firstDatagramFrom(GameDatagram first) {
         if (matchmakerLobby) {
-            schedule(() -> machine.receiveEvent(new PeerEstablished(playerId)), Duration.ZERO);
+            PeerEstablished established = new PeerEstablished(first.senderId(), first.seat());
+            schedule(() -> machine.receiveEvent(established), Duration.ZERO);
         }
     }
 

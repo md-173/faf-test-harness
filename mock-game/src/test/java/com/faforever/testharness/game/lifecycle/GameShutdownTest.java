@@ -597,7 +597,7 @@ final class GameShutdownTest {
         try (DatagramSocket probe = new DatagramSocket(0)) {
             lobbyPort = probe.getLocalPort();
         }
-        GameTrafficSession traffic = new GameTrafficSession(1, 0, peerId -> {});
+        GameTrafficSession traffic = new GameTrafficSession(1, Seat.DEFAULT, 0, first -> {});
         traffic.bind(lobbyPort);
         return traffic;
     }

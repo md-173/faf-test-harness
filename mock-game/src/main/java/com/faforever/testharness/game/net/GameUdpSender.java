@@ -1,6 +1,7 @@
 package com.faforever.testharness.game.net;
 
 import com.faforever.testharness.game.activity.GameTicker;
+import com.faforever.testharness.game.config.Seat;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -55,6 +56,9 @@ public final class GameUdpSender {
     /** This mock game's player id, stamped into every datagram. */
     private final int senderPlayerId;
 
+    /** This mock game's seat, stamped into every datagram (WBS-3.2.4.3-fix, #534). */
+    private final Seat seat;
+
     /** The shared UDP socket, bound by the caller on the lobby port. */
     private final DatagramSocket socket;
 
@@ -76,8 +80,9 @@ public final class GameUdpSender {
     private record Peer(InetSocketAddress address, AtomicLong sequence) {}
 
     /**
-     * Creates a sender that emits every datagram. Equivalent to {@link #GameUdpSender(int,
-     * DatagramSocket, Duration, int)} with a drop percentage of zero.
+     * Creates a sender that emits every datagram, with the default seat. Equivalent to {@link
+     * #GameUdpSender(int, Seat, DatagramSocket, Duration, int)} with {@link Seat#DEFAULT} and a
+     * drop percentage of zero.
      *
      * @param senderPlayerId this game's FAF player id, stamped into each datagram
      * @param socket the UDP socket to send from — bound by the caller on the lobby port and shared
@@ -87,7 +92,7 @@ public final class GameUdpSender {
      */
     public GameUdpSender(
             final int senderPlayerId, final DatagramSocket socket, final Duration cadence) {
-        this(senderPlayerId, socket, cadence, 0);
+        this(senderPlayerId, Seat.DEFAULT, socket, cadence, 0);
     }
 
     /**
@@ -95,6 +100,7 @@ public final class GameUdpSender {
      * outbound datagrams.
      *
      * @param senderPlayerId this game's FAF player id, stamped into each datagram
+     * @param seat this game's seat, stamped into each datagram; must not be {@code null}
      * @param socket the UDP socket to send from — bound by the caller on the lobby port and shared
      *     with the receiver card; must not be {@code null}
      * @param cadence the delay between send rounds; must be positive
@@ -105,6 +111,7 @@ public final class GameUdpSender {
      */
     public GameUdpSender(
             final int senderPlayerId,
+            final Seat seat,
             final DatagramSocket socket,
             final Duration cadence,
             final int dropPercent) {
@@ -113,6 +120,7 @@ public final class GameUdpSender {
                     "dropPercent must be between 0 and 100: " + dropPercent);
         }
         this.senderPlayerId = senderPlayerId;
+        this.seat = Objects.requireNonNull(seat, "seat");
         this.socket = Objects.requireNonNull(socket, "socket");
         this.dropPercent = dropPercent;
         this.ticker = GameTicker.realTime(cadence, this::sendRound);
@@ -182,7 +190,8 @@ public final class GameUdpSender {
                     new GameDatagram(
                             senderPlayerId,
                             peer.sequence().getAndIncrement(),
-                            System.currentTimeMillis());
+                            System.currentTimeMillis(),
+                            seat);
             if (shouldDrop()) {
                 // DEBUG, not WARN: an injected fault is the operator's own doing, and at a high
                 // percentage a per-datagram WARN would bury everything else in the run. The

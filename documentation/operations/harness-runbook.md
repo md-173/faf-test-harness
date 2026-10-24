@@ -1261,7 +1261,7 @@ Four consequences worth knowing before you read a post-launch log:
 - **The verdict brings a junk datagram or a dead listener thread.** Within a
   few milliseconds of a survivor's `connected=false`, either its game logs
   `dropping malformed datagram (1499 bytes) from /127.0.0.1:<port>: GameDatagram
-  is exactly 20 bytes, got 1499`, `<port>` being the lost peer's relay port, or
+  is exactly 32 bytes, got 1499`, `<port>` being the lost peer's relay port, or
   its adapter logs `Exception in thread "Thread-<n>"
   java.lang.RuntimeException: java.lang.InterruptedException`.
   Neither affects a verdict. `onConnectionLost()` interrupts the lost peer's

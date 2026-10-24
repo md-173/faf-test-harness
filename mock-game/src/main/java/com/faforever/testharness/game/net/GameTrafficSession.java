@@ -1,13 +1,14 @@
 package com.faforever.testharness.game.net;
 
 import com.faforever.testharness.game.activity.GameTicker;
+import com.faforever.testharness.game.config.Seat;
 import java.net.DatagramSocket;
 import java.net.SocketException;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.IntConsumer;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,8 +32,8 @@ import org.slf4j.LoggerFactory;
  *       closes the socket, ending the receive loop per 3.2.2.6's contract.
  * </ul>
  *
- * <p>Its one call back is the listener given at construction, which the receiver runs the first
- * time each peer is heard from (WBS-3.2.4.1-fix, #506).
+ * <p>Its one call back is the listener given at construction, which the receiver hands each peer's
+ * first datagram (WBS-3.2.4.1-fix, #506).
  *
  * <p><b>Why the cadence starts on the first peer rather than on LIVE.</b> mock-game has no external
  * launch trigger — {@code LaunchMatch} is posted only in-process or by the launch-delay timer — and
@@ -73,7 +74,7 @@ public final class GameTrafficSession implements AutoCloseable {
 
     /**
      * Delay between send rounds. A judgement call, not a measurement: nothing on the wire depends
-     * on the rate, and at 20 bytes a datagram this is negligible either way. Slow enough that a
+     * on the rate, and at 32 bytes a datagram this is negligible either way. Slow enough that a
      * session does not flood its own logs, fast enough that a few seconds of a live session is
      * enough evidence for the exchange test.
      */
@@ -95,6 +96,9 @@ public final class GameTrafficSession implements AutoCloseable {
     /** This game's FAF player id: stamped into every datagram, and named in the progress line. */
     private final int playerId;
 
+    /** This game's seat, stamped into every datagram (WBS-3.2.4.3-fix, #534). */
+    private final Seat seat;
+
     /**
      * Percentage of outbound datagrams the sender suppresses (WBS-5.1), handed to the sender when
      * {@link #bind(int)} builds it. {@code 0} sends everything.
@@ -107,8 +111,8 @@ public final class GameTrafficSession implements AutoCloseable {
     /** Progress sampling interval; {@link #PROGRESS_INTERVAL} outside tests. */
     private final Duration progressInterval;
 
-    /** Told each peer's id on its first datagram; handed to the receiver {@link #bind} builds. */
-    private final IntConsumer firstDatagramFrom;
+    /** Handed each peer's first datagram; given to the receiver {@link #bind} builds. */
+    private final Consumer<GameDatagram> firstDatagramFrom;
 
     /** Endpoint each peer id is registered at, so an unchanged re-registration can be skipped. */
     private final Map<Integer, String> registered = new HashMap<>();
@@ -147,14 +151,18 @@ public final class GameTrafficSession implements AutoCloseable {
      * then silently discarded (#353).
      *
      * @param playerId this game's FAF player id, as the lobby assigned it
+     * @param seat this game's seat, stamped into every datagram; must not be {@code null}
      * @param dropPercent percentage of outbound datagrams to suppress, {@code 0} to {@code 100}
-     * @param firstDatagramFrom told each peer's id the first time it is heard from, on the receive
-     *     thread; see {@link GameUdpReceiver#GameUdpReceiver(DatagramSocket, IntConsumer)}
+     * @param firstDatagramFrom handed each peer's first datagram, on the receive thread; see {@link
+     *     GameUdpReceiver#GameUdpReceiver(DatagramSocket, Consumer)}
      * @throws IllegalArgumentException if {@code dropPercent} is outside {@code 0} to {@code 100}
      */
     public GameTrafficSession(
-            final int playerId, final int dropPercent, final IntConsumer firstDatagramFrom) {
-        this(playerId, dropPercent, firstDatagramFrom, CADENCE, PROGRESS_INTERVAL);
+            final int playerId,
+            final Seat seat,
+            final int dropPercent,
+            final Consumer<GameDatagram> firstDatagramFrom) {
+        this(playerId, seat, dropPercent, firstDatagramFrom, CADENCE, PROGRESS_INTERVAL);
     }
 
     /**
@@ -165,16 +173,18 @@ public final class GameTrafficSession implements AutoCloseable {
      * escape into the state machine's transition after the socket had already bound.
      *
      * @param playerId this game's FAF player id
+     * @param seat this game's seat; must not be {@code null}
      * @param dropPercent percentage of outbound datagrams to suppress, {@code 0} to {@code 100}
-     * @param firstDatagramFrom told each peer's id the first time it is heard from
+     * @param firstDatagramFrom handed each peer's first datagram
      * @param cadence delay between send rounds; must be positive
      * @param progressInterval how often the receiver's counters are sampled; must be positive
      * @throws IllegalArgumentException if {@code dropPercent} is outside {@code 0} to {@code 100}
      */
     GameTrafficSession(
             final int playerId,
+            final Seat seat,
             final int dropPercent,
-            final IntConsumer firstDatagramFrom,
+            final Consumer<GameDatagram> firstDatagramFrom,
             final Duration cadence,
             final Duration progressInterval) {
         if (dropPercent < 0 || dropPercent > MAX_DROP_PERCENT) {
@@ -182,6 +192,7 @@ public final class GameTrafficSession implements AutoCloseable {
                     "dropPercent must be between 0 and 100: " + dropPercent);
         }
         this.playerId = playerId;
+        this.seat = Objects.requireNonNull(seat, "seat");
         this.dropPercent = dropPercent;
         this.firstDatagramFrom = Objects.requireNonNull(firstDatagramFrom, "firstDatagramFrom");
         this.cadence = cadence;
@@ -214,7 +225,7 @@ public final class GameTrafficSession implements AutoCloseable {
             return;
         }
         bindFailed = false;
-        sender = new GameUdpSender(playerId, socket, cadence, dropPercent);
+        sender = new GameUdpSender(playerId, seat, socket, cadence, dropPercent);
         receiver = new GameUdpReceiver(socket, firstDatagramFrom);
         progress = GameTicker.realTime(progressInterval, () -> logProgress(false));
         receiver.start();

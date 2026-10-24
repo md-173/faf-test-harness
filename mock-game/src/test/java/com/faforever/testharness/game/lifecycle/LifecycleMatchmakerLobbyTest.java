@@ -355,7 +355,9 @@ final class LifecycleMatchmakerLobbyTest {
      * adapter would relay it. Sent from {@link #peer}: the receiver goes by the payload's sender.
      */
     private void sendDatagram(final int senderId, final long sequence) throws IOException {
-        byte[] payload = new GameDatagram(senderId, sequence, System.currentTimeMillis()).toBytes();
+        byte[] payload =
+                new GameDatagram(senderId, sequence, System.currentTimeMillis(), Seat.DEFAULT)
+                        .toBytes();
         peer.send(
                 new DatagramPacket(
                         payload,

@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.IntConsumer;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,8 +38,9 @@ import org.slf4j.LoggerFactory;
  * blocking or retrying. Malformed datagrams are logged and dropped (the sender's log-and-drop
  * convention) — a UDP port receives garbage in the wild and must never crash.
  *
- * <p>The first datagram from each sender is also reported to an optional listener, which the
- * lifecycle uses as the moment a peer's link is up (WBS-3.2.4.1-fix, #506).
+ * <p>The first datagram from each sender is also handed, whole, to an optional listener, which the
+ * lifecycle uses as the moment a peer's link is up (WBS-3.2.4.1-fix, #506) and takes that peer's
+ * seat from (WBS-3.2.4.3-fix, #534).
  *
  * <p>No reply logic and no delivery guarantees, because the real path has neither.
  */
@@ -63,8 +64,8 @@ public final class GameUdpReceiver {
     /** Per-sender counters keyed by payload {@code senderId}; read by tests on another thread. */
     private final Map<Integer, SenderStats> stats = new ConcurrentHashMap<>();
 
-    /** Told each sender's id on its first datagram; see the two-argument constructor. */
-    private final IntConsumer firstDatagramFrom;
+    /** Handed each sender's first datagram; see the two-argument constructor. */
+    private final Consumer<GameDatagram> firstDatagramFrom;
 
     /** The single receive thread; {@code null} until {@link #start()}. */
     private volatile Thread thread;
@@ -93,18 +94,19 @@ public final class GameUdpReceiver {
      *     receiver.
      */
     public GameUdpReceiver(final DatagramSocket socket) {
-        this(socket, senderId -> {});
+        this(socket, first -> {});
     }
 
     /**
      * Creates a receiver that also reports each sender's first datagram (WBS-3.2.4.1-fix, #506).
      *
      * @param socket the UDP socket to read from, as for the one-argument constructor
-     * @param firstDatagramFrom told the sender id of the first datagram attributed to each sender,
-     *     once per sender for the life of the socket. It runs on the receive thread, holding no
-     *     lock, so it must return promptly and must not throw: a throw would end the receive loop.
+     * @param firstDatagramFrom handed the first datagram attributed to each sender, once per sender
+     *     for the life of the socket. It runs on the receive thread, holding no lock, so it must
+     *     return promptly and must not throw: a throw would end the receive loop.
      */
-    public GameUdpReceiver(final DatagramSocket socket, final IntConsumer firstDatagramFrom) {
+    public GameUdpReceiver(
+            final DatagramSocket socket, final Consumer<GameDatagram> firstDatagramFrom) {
         this.socket = Objects.requireNonNull(socket, "socket");
         this.firstDatagramFrom = Objects.requireNonNull(firstDatagramFrom, "firstDatagramFrom");
     }
@@ -248,7 +250,7 @@ public final class GameUdpReceiver {
 
         if (first) {
             LOG.info("first datagram from sender {} (seq {}) at {}", senderId, sequence, source);
-            firstDatagramFrom.accept(senderId);
+            firstDatagramFrom.accept(datagram);
         }
         LOG.debug(
                 "datagram from sender {}: seq {} (received {}, highest {}, gaps {}) from {}",

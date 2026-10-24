@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.faforever.testharness.game.config.Seat;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -93,7 +94,7 @@ final class GameUdpSenderDropTest {
     /** A drop percentage of 100 suppresses everything; nothing reaches the peer at all. */
     @Test
     void oneHundredPercentDropsEveryDatagram() throws Exception {
-        sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 100);
+        sender = new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 100);
         sender.registerPeer(local(peer), 7);
 
         for (int i = 0; i < 20; i++) {
@@ -106,7 +107,7 @@ final class GameUdpSenderDropTest {
     /** The default is off, and stays off: zero drops nothing, round after round. */
     @Test
     void zeroPercentDropsNothing() throws Exception {
-        sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 0);
+        sender = new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 0);
         sender.registerPeer(local(peer), 7);
 
         for (int i = 0; i < 20; i++) {
@@ -136,7 +137,7 @@ final class GameUdpSenderDropTest {
         // tearDown does.
         GameUdpReceiver receiver = new GameUdpReceiver(peer);
         receiver.start();
-        sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 50);
+        sender = new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 50);
         sender.registerPeer(local(peer), peerPlayerId);
 
         for (int i = 0; i < ROUNDS; i++) {
@@ -180,7 +181,7 @@ final class GameUdpSenderDropTest {
      */
     @Test
     void aConfiguredPercentageProducesAProportionateReduction() throws Exception {
-        sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 50);
+        sender = new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 50);
         sender.registerPeer(local(peer), 7);
 
         for (int i = 0; i < ROUNDS; i++) {
@@ -218,7 +219,7 @@ final class GameUdpSenderDropTest {
     void eachPeerIsDrawnIndependently() throws Exception {
         try (DatagramSocket secondPeer =
                 new DatagramSocket(new InetSocketAddress("127.0.0.1", 0))) {
-            sender = new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 50);
+            sender = new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 50);
             sender.registerPeer(local(peer), 7);
             sender.registerPeer(local(secondPeer), 8);
 
@@ -254,9 +255,11 @@ final class GameUdpSenderDropTest {
     void outOfRangePercentagesAreRejected() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameUdpSender(42, senderSocket, Duration.ofMillis(50), -1));
+                () -> new GameUdpSender(42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), -1));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new GameUdpSender(42, senderSocket, Duration.ofMillis(50), 101));
+                () ->
+                        new GameUdpSender(
+                                42, Seat.DEFAULT, senderSocket, Duration.ofMillis(50), 101));
     }
 }
