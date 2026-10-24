@@ -691,7 +691,7 @@ final class MockClientCliExitCodeTest {
         Path directory = Files.createDirectory(tempDir.resolve("config-dir"));
         MainOutcome outcome = runMain(new String[] {"run", "--config", directory.toString()});
 
-        assertSingleLineUsageError(outcome, "failed to parse config file " + directory + ": ");
+        assertSingleLineUsageError(outcome, "failed to read config file " + directory + ": ");
     }
 
     @Test
@@ -705,7 +705,7 @@ final class MockClientCliExitCodeTest {
                         tempDir.resolve("not-utf8.json"), new byte[] {(byte) 0x80, (byte) 0x81});
         MainOutcome outcome = runMain(new String[] {"run", "--config", binary.toString()});
 
-        assertSingleLineUsageError(outcome, "failed to parse config file " + binary + ": ");
+        assertSingleLineUsageError(outcome, "failed to read config file " + binary + ": ");
     }
 
     @Test
@@ -769,7 +769,7 @@ final class MockClientCliExitCodeTest {
         Path directory = Files.createDirectory(tempDir.resolve(forgery + "dir"));
         assertEscapedPath(
                 runMain(new String[] {"run", "--config", directory.toString()}),
-                "failed to parse config file ",
+                "failed to read config file ",
                 directory);
 
         // 4. ConfigLoader.toPath, which never gets a Path to escape — the value is rejected before

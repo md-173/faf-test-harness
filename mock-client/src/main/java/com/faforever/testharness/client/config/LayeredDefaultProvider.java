@@ -220,7 +220,7 @@ final class LayeredDefaultProvider implements IDefaultValueProvider {
             // reaches it (FileSystemException and MalformedInputException both override
             // getMessage() non-null), which is the standing #285 itself had.
             throw new IllegalArgumentException(
-                    "failed to parse config file "
+                    "failed to read config file "
                             + oneLine(path)
                             + ": "
                             + oneLine(
