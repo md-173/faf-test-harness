@@ -30,16 +30,19 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * The peer frames of FA's matchmaker lobby (WBS-3.2.4.1-fix, #506). FA loads {@code autolobby.lua}
- * rather than the custom {@code lobby.lua} when {@code CreateLobby}'s init mode is 1, which the
- * adapter sends for a matchmaker game, and the two answer peer frames differently. The custom
- * lobby's are pinned by {@link LifecyclePeerConnectTest} and {@link LifecyclePeerDisconnectTest}.
+ * The peer frames of FA's matchmaker lobby (WBS-3.2.4.1-fix, #506), and its host's {@code
+ * PlayerOption} frames (WBS-3.2.4.3-fix, #534). FA loads {@code autolobby.lua} rather than the
+ * custom {@code lobby.lua} when {@code CreateLobby}'s init mode is 1, which the adapter sends for a
+ * matchmaker game, and the two answer peer frames differently. The custom lobby's are pinned by
+ * {@link LifecyclePeerConnectTest} and {@link LifecyclePeerDisconnectTest}.
  *
  * <p>As there, frames arrive over a real socket from {@link ScriptedGpgNetServer} and the game's
  * answers are read back from it, so the dispatcher registration is under test too. A link comes up
- * the way it does in a session: a stub peer sends real {@link GameDatagram}s to the game's lobby
- * port. The receiver reports a sender once, so a datagram is only ever sent once its peer is
- * registered, or the report would be spent before there was anyone to report.
+ * the way it does in a session: a stub peer sends real {@link GameDatagram}s, carrying that peer's
+ * seat, to the game's lobby port. The receiver reports a sender once, so a datagram is only ever
+ * sent once its peer is registered, or the report would be spent before there was anyone to report.
+ * A matchmaker host answers {@code ConnectToPeer} with nothing, so {@link #announce} waits for the
+ * line the game logs inside that action instead.
  */
 final class LifecycleMatchmakerLobbyTest {
 
@@ -58,10 +61,13 @@ final class LifecycleMatchmakerLobbyTest {
      */
     private static final long NO_FRAME_MILLIS = 300;
 
-    /** PlayerOption frames the game emits per player it configures as host: Army through Color. */
-    private static final int PLAYER_OPTION_FRAMES = 5;
+    /** PlayerOption frames a custom host emits per player it configures: Army through Color. */
+    private static final int CUSTOM_PLAYER_OPTION_FRAMES = 5;
 
-    /** This game's player id. As host it is army 1, so its first peer gets army 2. */
+    /** PlayerOption frames a matchmaker host emits per seated player: Team through Faction. */
+    private static final int MATCHMAKER_PLAYER_OPTION_FRAMES = 4;
+
+    /** This game's player id. */
     private static final int OWN_ID = 1;
 
     /** The first peer a host is told about, and the host a joiner joins. */
@@ -72,6 +78,22 @@ final class LifecycleMatchmakerLobbyTest {
 
     /** An id this game was never told about. */
     private static final int UNKNOWN_PEER_ID = 99;
+
+    /**
+     * This game's seat. Its start spot lies between the two peers', so a host that arrived first is
+     * army 2, and every field differs from the army and from each other, so one sent as another
+     * cannot pass.
+     */
+    private static final Seat OWN_SEAT = new Seat(3, 5, 4);
+
+    /** {@link #PEER_ID}'s seat, which its datagrams carry: army 1 by start spot. */
+    private static final Seat PEER_SEAT = new Seat(2, 3, 4);
+
+    /** {@link #OTHER_PEER_ID}'s seat, which its datagrams carry: army 3 by start spot. */
+    private static final Seat OTHER_SEAT = new Seat(2, 7, 1);
+
+    /** A game option, to show which lobby sends it. */
+    private static final Map<String, String> GAME_OPTION = Map.of("Victory", "demoralization");
 
     private MockGameConfig config;
 
@@ -97,20 +119,7 @@ final class LifecycleMatchmakerLobbyTest {
 
     @BeforeEach
     void setup() throws IOException {
-        config =
-                new MockGameConfig(
-                        50000,
-                        TestPorts.freeUdpPort(),
-                        OWN_ID,
-                        "Rhiza",
-                        9001,
-                        Map.of(),
-                        0,
-                        -1,
-                        0,
-                        -1,
-                        Seat.DEFAULT,
-                        2);
+        config = newConfig(Map.of());
         gpgnet = new ScriptedGpgNetServer();
         peer = new DatagramSocket(0);
         otherPeer = new DatagramSocket(0);
@@ -136,16 +145,76 @@ final class LifecycleMatchmakerLobbyTest {
     }
 
     @Test
-    void aHostAnswersConnectToPeerWithThatPeersPlayerOptionsOnly() throws Exception {
+    void aHostAnswersHostGameWithNothingNotEvenItsGameOptions() throws Exception {
+        config = newConfig(GAME_OPTION);
+
+        MockGameLifecycle lifecycle = hosting();
+
+        // FA's matchmaker host seats itself and reports nobody until a joiner is seated, and it
+        // sends no GameOption (AutolobbyController.lua). The skipped option is logged instead.
+        awaitLogged("not sending 1 --game-option");
+        assertNoFrame("the matchmaker lobby sends nothing on HostGame");
+        assertEquals(GameState.HOSTING, lifecycle.getState());
+    }
+
+    @Test
+    void aCustomHostStillSendsItsGameOptions() throws Exception {
+        config = newConfig(GAME_OPTION);
+
+        hosting(CUSTOM_INIT_MODE);
+
+        assertEquals(GpgNetFrame.of("GameOption", "Victory", "demoralization"), nextFrame());
+    }
+
+    @Test
+    void aHostAnswersConnectToPeerWithNothing() throws Exception {
         MockGameLifecycle lifecycle = hosting();
 
         announce(peer, PEER_ID);
 
-        // Not the custom lobby's Disconnected first: the matchmaker lobby's ConnectToPeer only
-        // connects (autolobby.lua).
-        assertEquals(GpgNetFrame.of("PlayerOption", PEER_ID, "Army", 2), nextFrame());
-        drainFrames(PLAYER_OPTION_FRAMES - 1);
+        // Not the custom lobby's Disconnected and PlayerOption set: the matchmaker lobby's
+        // ConnectToPeer only connects (autolobby.lua), and its host reports a joiner once the
+        // joiner's AddPlayer arrives over the link.
+        assertNoFrame("the matchmaker lobby answers ConnectToPeer with nothing");
         assertEquals(GameState.HOSTING, lifecycle.getState());
+    }
+
+    @Test
+    void aHostSeatsEachJoinerFromItsDatagramAndReportsEverySeatedPlayer() throws Exception {
+        hosting();
+        announce(peer, PEER_ID);
+
+        sendDatagram(PEER_ID, 0);
+
+        // The link report, then FA's set for every seated player in start-spot order: the joiner
+        // at 3 is army 1 and the host at 5 army 2, though the host was seated first.
+        assertEquals(established(PEER_ID), nextFrame());
+        assertPlayerOptions(PEER_ID, PEER_SEAT, 1);
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 2);
+
+        announce(otherPeer, OTHER_PEER_ID);
+        sendDatagram(OTHER_PEER_ID, 0);
+
+        assertEquals(established(OTHER_PEER_ID), nextFrame());
+        assertPlayerOptions(PEER_ID, PEER_SEAT, 1);
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 2);
+        assertPlayerOptions(OTHER_PEER_ID, OTHER_SEAT, 3);
+        assertNoFrame("no Color, and nothing else, follows the set");
+    }
+
+    @Test
+    void aHostReportsEverySeatedPlayerAgainBeforeLaunch() throws Exception {
+        MockGameLifecycle lifecycle = hosting();
+        announce(peer, PEER_ID);
+        sendDatagram(PEER_ID, 0);
+        drainFrames(1 + 2 * MATCHMAKER_PLAYER_OPTION_FRAMES);
+
+        lifecycle.launchMatch();
+
+        // FA's LaunchThread sends the set once more, then the game launches.
+        assertPlayerOptions(PEER_ID, PEER_SEAT, 1);
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 2);
+        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextFrame());
     }
 
     @Test
@@ -153,8 +222,6 @@ final class LifecycleMatchmakerLobbyTest {
         MockGameLifecycle lifecycle = joining();
 
         announce(otherPeer, OTHER_PEER_ID);
-        // Logged inside the ConnectToPeer action, before anything it would send.
-        awaitLogged("New peer (Smith" + OTHER_PEER_ID + ", ID: " + OTHER_PEER_ID + ")");
 
         assertNoFrame("the matchmaker lobby answers neither JoinGame nor ConnectToPeer");
         assertEquals(GameState.JOINING, lifecycle.getState());
@@ -164,7 +231,6 @@ final class LifecycleMatchmakerLobbyTest {
     void aDepartureIsAnsweredWithDisconnectedPeerOnly() throws Exception {
         MockGameLifecycle lifecycle = hosting();
         announce(peer, PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
 
         depart(PEER_ID);
 
@@ -192,9 +258,7 @@ final class LifecycleMatchmakerLobbyTest {
     void eachPeersFirstDatagramIsReportedOnceAsEstablishedPeer() throws Exception {
         hosting();
         announce(peer, PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
         announce(otherPeer, OTHER_PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
 
         sendDatagram(PEER_ID, 0);
         sendDatagram(PEER_ID, 1);
@@ -202,8 +266,11 @@ final class LifecycleMatchmakerLobbyTest {
 
         // One receive thread, one scheduler thread and one state machine, each in order, so a
         // second report for PEER_ID would arrive before OTHER_PEER_ID's. The id is a string chunk.
+        // Each report is followed by the host's set for the players seated by then.
         assertEquals(established(PEER_ID), nextFrame());
+        drainFrames(2 * MATCHMAKER_PLAYER_OPTION_FRAMES);
         assertEquals(established(OTHER_PEER_ID), nextFrame());
+        drainFrames(3 * MATCHMAKER_PLAYER_OPTION_FRAMES);
         assertNoFrame("each peer is reported once");
     }
 
@@ -214,29 +281,32 @@ final class LifecycleMatchmakerLobbyTest {
         sendDatagram(PEER_ID, 0);
 
         assertEquals(established(PEER_ID), nextFrame());
+        // FA's lobby only lets its host send PlayerOption (SendPlayerOptionToServer).
+        assertNoFrame("a joiner seats nobody and reports no PlayerOption");
     }
 
     @Test
     void aSenderTheGameNeverHadIsNotReported() throws Exception {
         hosting();
         announce(peer, PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
 
         sendDatagram(UNKNOWN_PEER_ID, 0);
         sendDatagram(PEER_ID, 0);
 
         // In order as above, so a report for the stranger would arrive first.
         assertEquals(established(PEER_ID), nextFrame());
-        assertNoFrame("only a peer the game has is reported");
+        drainFrames(2 * MATCHMAKER_PLAYER_OPTION_FRAMES);
+        assertNoFrame("only a peer the game has is reported, and seated");
     }
 
     @Test
     void aLinkFirstHeardAfterLaunchIsNotReported() throws Exception {
         MockGameLifecycle lifecycle = hosting();
         announce(peer, PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
         lifecycle.launchMatch();
         lifecycle.stateReached(GameState.LIVE).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        // Only the host is seated, so the set before launch names it alone, as army 1.
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 1);
         assertEquals(GpgNetFrame.of("GameState", "Launching"), nextFrame());
 
         sendDatagram(PEER_ID, 0);
@@ -250,7 +320,6 @@ final class LifecycleMatchmakerLobbyTest {
     void theReceiveThreadNeverWaitsOnTheStateMachine() throws Exception {
         MockGameLifecycle lifecycle = hosting();
         announce(peer, PEER_ID);
-        drainFrames(PLAYER_OPTION_FRAMES);
 
         // Held as the shutdown sequence holds it while it waits for the receive thread to stop. A
         // report posted from that thread would block it on the first datagram, and the second
@@ -271,7 +340,7 @@ final class LifecycleMatchmakerLobbyTest {
         hosting(CUSTOM_INIT_MODE);
         announce(peer, PEER_ID);
         // The custom lobby's Disconnected, then the peer's PlayerOptions.
-        drainFrames(1 + PLAYER_OPTION_FRAMES);
+        drainFrames(1 + CUSTOM_PLAYER_OPTION_FRAMES);
 
         sendDatagram(PEER_ID, 0);
         awaitLogged("first datagram from sender " + PEER_ID + " ");
@@ -308,20 +377,22 @@ final class LifecycleMatchmakerLobbyTest {
         return lifecycle;
     }
 
-    /** A matchmaker host, its own PlayerOption frames already read. */
+    /** A matchmaker host, which answers {@code HostGame} with no frame. */
     private MockGameLifecycle hosting() throws Exception {
         return hosting(MATCHMAKER_INIT_MODE);
     }
 
     /**
-     * A host, its own PlayerOption frames already read.
+     * A host, with a custom host's own PlayerOption frames already read.
      *
      * @param initMode the init mode {@code CreateLobby} names
      */
     private MockGameLifecycle hosting(final int initMode) throws Exception {
         MockGameLifecycle lifecycle = inLobby(initMode);
         gpgnet.sendFrame(new GpgNetFrame("HostGame", List.of("scmp_007")));
-        drainFrames(PLAYER_OPTION_FRAMES);
+        if (initMode == CUSTOM_INIT_MODE) {
+            drainFrames(CUSTOM_PLAYER_OPTION_FRAMES);
+        }
         lifecycle.stateReached(GameState.HOSTING).get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         return lifecycle;
     }
@@ -337,12 +408,20 @@ final class LifecycleMatchmakerLobbyTest {
         return lifecycle;
     }
 
-    /** The adapter announcing a peer whose relay is {@code relay}. */
-    private void announce(final DatagramSocket relay, final int playerId) throws IOException {
+    /**
+     * The adapter announcing a peer whose relay is {@code relay}, returning once the game holds the
+     * peer. That is the line the {@code ConnectToPeer} action logs: {@code receiveEvent} is
+     * synchronized, so a link report for the peer queues behind the rest of that action, which
+     * records it. Without the wait a datagram sent next could be reported first, find no such peer,
+     * and never be reported again.
+     */
+    private void announce(final DatagramSocket relay, final int playerId)
+            throws IOException, InterruptedException {
         gpgnet.sendFrame(
                 new GpgNetFrame(
                         "ConnectToPeer",
                         List.of(relayAddress(relay), "Smith" + playerId, playerId)));
+        awaitLogged("New peer (Smith" + playerId + ", ID: " + playerId + ")");
     }
 
     /** The adapter forwarding faf-server's notice that {@code playerId} left. */
@@ -351,12 +430,13 @@ final class LifecycleMatchmakerLobbyTest {
     }
 
     /**
-     * A datagram as {@code senderId}'s game sends it, arriving at this game's lobby port as the
-     * adapter would relay it. Sent from {@link #peer}: the receiver goes by the payload's sender.
+     * A datagram as {@code senderId}'s game sends it, carrying that game's seat, arriving at this
+     * game's lobby port as the adapter would relay it. Sent from {@link #peer}: the receiver goes
+     * by the payload's sender.
      */
     private void sendDatagram(final int senderId, final long sequence) throws IOException {
         byte[] payload =
-                new GameDatagram(senderId, sequence, System.currentTimeMillis(), Seat.DEFAULT)
+                new GameDatagram(senderId, sequence, System.currentTimeMillis(), seatOf(senderId))
                         .toBytes();
         peer.send(
                 new DatagramPacket(
@@ -366,9 +446,52 @@ final class LifecycleMatchmakerLobbyTest {
                         config.lobbyPort()));
     }
 
+    /** The seat {@code playerId}'s datagrams carry. */
+    private static Seat seatOf(final int playerId) {
+        return switch (playerId) {
+            case PEER_ID -> PEER_SEAT;
+            case OTHER_PEER_ID -> OTHER_SEAT;
+            default -> Seat.DEFAULT;
+        };
+    }
+
+    /**
+     * This test's config, with this game's seat and the given game options.
+     *
+     * @param gameOptions the game options a host would send
+     */
+    private static MockGameConfig newConfig(final Map<String, String> gameOptions)
+            throws IOException {
+        return new MockGameConfig(
+                50000,
+                TestPorts.freeUdpPort(),
+                OWN_ID,
+                "Rhiza",
+                9001,
+                gameOptions,
+                0,
+                -1,
+                0,
+                -1,
+                OWN_SEAT,
+                2);
+    }
+
     /** The frame FA's matchmaker lobby reports a link with: the id as a string chunk. */
     private static GpgNetFrame established(final int playerId) {
         return GpgNetFrame.of("EstablishedPeer", Integer.toString(playerId));
+    }
+
+    /** Reads FA's matchmaker set for one seated player: Team, Army, StartSpot, Faction. */
+    private void assertPlayerOptions(final int playerId, final Seat seat, final int army)
+            throws InterruptedException {
+        assertEquals(GpgNetFrame.of("PlayerOption", playerId, "Team", seat.team()), nextFrame());
+        assertEquals(GpgNetFrame.of("PlayerOption", playerId, "Army", army), nextFrame());
+        assertEquals(
+                GpgNetFrame.of("PlayerOption", playerId, "StartSpot", seat.startSpot()),
+                nextFrame());
+        assertEquals(
+                GpgNetFrame.of("PlayerOption", playerId, "Faction", seat.faction()), nextFrame());
     }
 
     /** A relay socket's address in the {@code host:port} form the adapter names it. */

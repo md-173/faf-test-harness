@@ -2,6 +2,7 @@ package com.faforever.testharness.game.lifecycle;
 
 import com.faforever.testharness.game.config.ExitCodes;
 import com.faforever.testharness.game.config.MockGameConfig;
+import com.faforever.testharness.game.config.Seat;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection;
 import com.faforever.testharness.game.gpgnet.GpgNetConnection.DisconnectReason;
 import com.faforever.testharness.game.gpgnet.GpgNetDispatcher;
@@ -24,6 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
@@ -156,9 +159,10 @@ public final class MockGameLifecycle {
     private volatile ScheduledFuture<?> matchEndFuture;
 
     /**
-     * Every peer this game was told about, in arrival order. Never pruned, because the host numbers
-     * armies by arrival ({@link #sendPlayerOptions}) and {@link #gameEnds} reports every army, so a
-     * peer that left keeps its number (WBS-4.3.6). {@link #present} says who is still here.
+     * Every peer this game was told about, in arrival order. Never pruned, because a custom host
+     * numbers armies by arrival ({@link #sendPlayerOptions}) and {@link #gameEnds} reports every
+     * army, so a peer that left keeps its number (WBS-4.3.6). {@link #present} says who is still
+     * here.
      */
     private List<Peer> peers;
 
@@ -171,9 +175,28 @@ public final class MockGameLifecycle {
     /**
      * The {@code StartSpot} this game gave each player while hosting, which is the slot a
      * departure's {@code ClearSlot} names (WBS-4.3.6). Stays empty on a joiner, which sends no
-     * {@code PlayerOption}. Touched only by FSM actions, under its monitor.
+     * {@code PlayerOption}, and in a matchmaker lobby, which clears no slot. Touched only by FSM
+     * actions, under its monitor.
      */
     private final Map<Integer, Integer> slots = new HashMap<>();
+
+    /**
+     * The players a matchmaker host has seated, by start spot (WBS-3.2.4.3-fix, #534): itself on
+     * {@code HostGame}, and each joiner once that joiner's first datagram brings its seat. FA's
+     * host seats a player at {@code PlayerOptions[StartSpot]} and numbers armies in start-spot
+     * order ({@code AutolobbyController.lua}), hence sorted. A player at a start spot already taken
+     * replaces the one there, as in FA. Never pruned, as FA keeps a departed player's options.
+     * Touched only by FSM actions, under its monitor.
+     */
+    private final SortedMap<Integer, SeatedPlayer> seated = new TreeMap<>();
+
+    /**
+     * A player a matchmaker host has seated.
+     *
+     * @param playerId the player's id
+     * @param seat the seat its launch arguments gave it
+     */
+    private record SeatedPlayer(int playerId, Seat seat) {}
 
     /**
      * Whether {@code CreateLobby} named init mode 1, for which FA loads its matchmaker lobby,
@@ -683,7 +706,7 @@ public final class MockGameLifecycle {
      *
      * <ul>
      *   <li><b>LOBBY, HOSTING and JOINING</b> stay put, and {@link #peerEstablished} sends the
-     *       report for a peer this game has.
+     *       report for a peer this game has; a host then seats that peer (WBS-3.2.4.3-fix, #534).
      *   <li><b>LIVE</b> stays put and only logs ({@link #ignoreLinkAfterLaunch}): FA destroys its
      *       lobby when the match launches, so a link that first carries traffic later is never
      *       reported.
@@ -921,15 +944,29 @@ public final class MockGameLifecycle {
     private void beginHosting(Event event) throws FailedTransitionException {
         LOG.info("Setting up game as host");
 
-        try {
-            sendPlayerOptions(config.playerId());
-
-            // No game options are required, but any could be passed to test different properties.
-            for (var entry : config.gameOptions().entrySet()) {
-                gpgnetSender.gameOption(entry.getKey(), entry.getValue());
+        // FA's matchmaker lobby seats its host when it starts hosting and reports nobody until a
+        // joiner is seated (AutolobbyController.lua's Hosting), and nothing in it calls
+        // SendGameOptionToServer, so it sends no GameOption at all (WBS-3.2.4.3-fix, #534).
+        if (matchmakerLobby) {
+            seatPlayer(config.playerId(), config.seat());
+            if (!config.gameOptions().isEmpty()) {
+                LOG.info(
+                        "not sending {} --game-option value(s): FA's matchmaker lobby sends no"
+                                + " GameOption",
+                        config.gameOptions().size());
             }
-        } catch (IOException e) {
-            throw recordSendFailure(e);
+        } else {
+            try {
+                sendPlayerOptions(config.playerId());
+
+                // No game options are required, but any could be passed to test different
+                // properties.
+                for (var entry : config.gameOptions().entrySet()) {
+                    gpgnetSender.gameOption(entry.getKey(), entry.getValue());
+                }
+            } catch (IOException e) {
+                throw recordSendFailure(e);
+            }
         }
 
         // Set up the scheduler if configured. Keeping the handle is what lets a manual
@@ -983,6 +1020,12 @@ public final class MockGameLifecycle {
     /* Transition action for HOSTING/JOINING -> LIVE. */
     private void matchBegins(Event event) throws FailedTransitionException {
         try {
+            // FA's matchmaker host reports every seated player once more right before it launches
+            // (LaunchThread), so faf-server counts all of them as the game's players
+            // (WBS-3.2.4.3-fix, #534). Inside this action the state is still the one being left.
+            if (matchmakerLobby && getState() == GameState.HOSTING) {
+                sendSeatedPlayerOptions();
+            }
             gpgnetSender.gameState("Launching");
         } catch (IOException e) {
             throw recordSendFailure(e);
@@ -1038,7 +1081,9 @@ public final class MockGameLifecycle {
             present.add(peer.playerId());
             // As in joinGame: this peer's relay socket is where its share of our traffic goes.
             traffic.registerPeer(address, peer.playerId());
-            if (getState() == GameState.HOSTING) {
+            // A matchmaker host reports a joiner only once its seat arrives (peerEstablished), as
+            // FA's does on the joiner's AddPlayer (WBS-3.2.4.3-fix, #534).
+            if (getState() == GameState.HOSTING && !matchmakerLobby) {
                 sendPlayerOptions(peer.playerId());
             }
         } catch (IOException e) {
@@ -1111,10 +1156,10 @@ public final class MockGameLifecycle {
      * has no handler for that frame and logs it as an unrecognized command.
      *
      * <p>Dropping the peer means {@link #present} forgets it and {@link GameTrafficSession} stops
-     * sending to it. {@link #peers} and {@link #slots} keep it, so army numbering and the results
-     * {@link #gameEnds} reports do not move. A notice about a peer this game never had, such as a
-     * joiner that aborted before it finished joining, gets the custom lobby's reply, or nothing
-     * from the matchmaker lobby, and changes nothing else.
+     * sending to it. {@link #peers}, {@link #slots} and {@link #seated} keep it, so army numbering
+     * and the results {@link #gameEnds} reports do not move. A notice about a peer this game never
+     * had, such as a joiner that aborted before it finished joining, gets the custom lobby's reply,
+     * or nothing from the matchmaker lobby, and changes nothing else.
      *
      * <p>A self-loop, so no entry or exit hook runs and every pending FSM timeout stays armed: a
      * departure cannot cancel a launch that is already scheduled.
@@ -1217,17 +1262,27 @@ public final class MockGameLifecycle {
      * does from the engine's {@code EstablishedPeers} callback, for a peer this game has. A sender
      * it never had, or one that has left since, gets no report.
      *
+     * <p>A host then seats that peer with the seat its datagram carried, the mock's stand-in for
+     * the {@code AddPlayer} a joiner sends FA's host once the link is up, and reports every seated
+     * player, as FA's host does on each {@code AddPlayer} (WBS-3.2.4.3-fix, #534). The receiver
+     * hands over a sender's first datagram only once, so each peer is seated once.
+     *
      * @param event the {@link PeerEstablished} event; guaranteed by registration.
-     * @throws FailedTransitionException into ENDED if the report cannot be sent.
+     * @throws FailedTransitionException into ENDED if a frame cannot be sent.
      */
     private void peerEstablished(Event event) throws FailedTransitionException {
-        int playerId = ((PeerEstablished) event).playerId();
+        PeerEstablished established = (PeerEstablished) event;
+        int playerId = established.playerId();
         if (!present.contains(playerId)) {
             return;
         }
         LOG.info("Peer (ID: {}) link established", playerId);
         try {
             gpgnetSender.establishedPeer(playerId);
+            if (getState() == GameState.HOSTING) {
+                seatPlayer(playerId, established.seat());
+                sendSeatedPlayerOptions();
+            }
         } catch (IOException e) {
             throw recordSendFailure(e);
         }
@@ -1282,6 +1337,13 @@ public final class MockGameLifecycle {
             // teamForArmy) drift apart: nothing here fails, and faf-server can resolve the game
             // wrongly or not at all. PeerResultAgreementTest derives its expectation from the
             // host's frames to catch exactly that.
+            //
+            // A matchmaker host numbers armies in start-spot order instead, with the teams the
+            // match assigned (sendSeatedPlayerOptions, WBS-3.2.4.3-fix, #534). This loop still
+            // agrees with it once every expected player is seated before launch: faf-server's
+            // matchmaker puts slot i on team 2 when i is odd and team 3 when it is even
+            // (ladder_service.py), which is teamForArmy(i), and with every slot seated each army
+            // is its slot. A launch before then, such as a manual one, leaves the two apart.
             //
             // Games play on after a lobby-phase departure (WBS-4.3.6), and peers is never pruned,
             // so a departed player's army stays in the range of every game that knew them, and
@@ -1435,7 +1497,7 @@ public final class MockGameLifecycle {
         }
     }
 
-    /* Sends the set of PlayerOption values needed for a player in the match. */
+    /* Sends the set of PlayerOption values needed for a player in the match, in a custom lobby. */
     private void sendPlayerOptions(int playerId) throws IOException {
         // Players assigned army number (and start spot, faction, and color) in arrival order, with
         // the host being first.
@@ -1446,6 +1508,27 @@ public final class MockGameLifecycle {
         gpgnetSender.playerOption(playerId, "StartSpot", army);
         gpgnetSender.playerOption(playerId, "Faction", army);
         gpgnetSender.playerOption(playerId, "Color", army);
+    }
+
+    /* Seats a player at its start spot in a matchmaker host's table, replacing whoever sat there,
+     * as FA's host does (WBS-3.2.4.3-fix, #534). */
+    private void seatPlayer(int playerId, Seat seat) {
+        seated.put(seat.startSpot(), new SeatedPlayer(playerId, seat));
+    }
+
+    /* Sends FA's matchmaker set for every seated player (WBS-3.2.4.3-fix, #534): Team, Army,
+     * StartSpot and Faction, with no Color, each player's own values, and armies numbered in
+     * start-spot order (AutolobbyController.lua's ProcessAddPlayerMessage and LaunchThread). */
+    private void sendSeatedPlayerOptions() throws IOException {
+        int army = 0;
+        for (SeatedPlayer player : seated.values()) {
+            army++;
+            Seat seat = player.seat();
+            gpgnetSender.playerOption(player.playerId(), "Team", seat.team());
+            gpgnetSender.playerOption(player.playerId(), "Army", army);
+            gpgnetSender.playerOption(player.playerId(), "StartSpot", seat.startSpot());
+            gpgnetSender.playerOption(player.playerId(), "Faction", seat.faction());
+        }
     }
 
     /* The team an army plays on. Configured for a two-team game, so armies alternate between
