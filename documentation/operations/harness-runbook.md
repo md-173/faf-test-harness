@@ -59,9 +59,12 @@ see the note at the end of that section. Running a session unattended in CI is
   ([spec §7.3](../research/subprocess-orchestration-spec.md#73-catastrophic-parent-dying)).
   Ubuntu 24.04, which CI's `ubuntu-latest` runs, ships 2.39; RHEL 8 (2.32) and
   Ubuntu 18.04 (2.31) are too old. Without it the harness still runs and logs
-  one INFO line saying so, but a `kill -9` leaves the adapter and game running,
-  and `./gradlew check` fails its parent-death tests. Windows and macOS need
-  nothing: there the harness launches its children as it always did.
+  one INFO line saying so, and a reaper process ends the adapter and game after
+  a `kill -9` instead, but `./gradlew check` fails its two `setpriv` tests.
+  Windows and macOS need nothing: the reaper always does it there. It is one
+  more `java` process while the harness runs,
+  `java com.faforever.testharness.shared.process.OrphanReaper`, and it exits
+  with the harness.
 
 That is the complete list for the adapter-only path in §2. **Do not go
 further down this list unless you are going to use the live lobby** — the

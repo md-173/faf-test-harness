@@ -34,8 +34,10 @@ spawns subprocesses. The Mock Client is the sole supervisor of both.
 
 This spec **targets Linux**, the platform CI runs on (`ubuntu-latest`). The
 Java code itself is OS-portable. The orphan-prevention layers in §7.3 beyond
-the JVM's own shutdown hook rely on `util-linux`: `prctl(PR_SET_PDEATHSIG)` via
-`setpriv` (built), and `setsid` for process-group cleanup (not built).
+the JVM's own shutdown hook rely on `util-linux` where it is there:
+`prctl(PR_SET_PDEATHSIG)` via `setpriv` (built), and `setsid` for
+process-group cleanup (not built). Where `setpriv` is unusable, as on macOS
+and Windows, a reaper process stands in for the first (built).
 
 The harness needs **no container**. Both mocks ship as runnable jars on the
 releases page (WBS-7.6) and run as plain processes on a Java 21 or newer
@@ -508,7 +510,7 @@ copy does not affect internal cleanup or other listeners.
 | §6.1 process liveness | `onExit()` chains a `CompletableFuture<Integer>` off `Process.onExit()` |
 | §7.2 forceful teardown | `terminate([grace])`: SIGTERM, wait, SIGKILL, through the process handle so the pipes stay open, then up to 1 s for the output to reach the log (#361) |
 | §7.3 layer 1 shutdown hook | `SubprocessRegistry` tracks all active managers and calls `terminate()` on each **in parallel** when the JVM exits |
-| §7.3 layer 2 parent-death signal | `start()` runs `ProcessBuilder.start()` on `subprocess-spawner`, one thread that lives as long as the JVM, so a `ParentDeathSignal` prefix signals a child only when the JVM itself ends |
+| §7.3 layer 2 parent-death signal | `start()` runs `ProcessBuilder.start()` on `subprocess-spawner`, one thread that lives as long as the JVM, so a `ParentDeathSignal` prefix signals a child only when the JVM itself ends; where that prefix is empty, it hands the child to `OrphanReaper` |
 
 ### 5.3 Launcher pattern (ICE adapter and mock-game)
 
@@ -627,15 +629,16 @@ this — when the JVM is killed by `SIGKILL`, the OOM-killer, or
 `Runtime.halt()`, **shutdown hooks do not run** and child processes survive
 as orphans (they are reparented to PID 1).
 
-The design has four layers. Layers 1 and 2 are built, layer 2 on Linux only
-(#378). Layer 4 was designed but never added to the launch argv. Layer 3
-applies only when the JVM is PID 1, as in a container; the harness runs as
-plain processes, so it does not apply.
+The design has four layers. Layers 1 and 2 are built: layer 2 through the
+kernel on Linux (#378), and through a reaper process where `setpriv` is
+unusable, as on macOS and Windows (#508). Layer 4 was designed but never added
+to the launch argv. Layer 3 applies only when the JVM is PID 1, as in a
+container; the harness runs as plain processes, so it does not apply.
 
 | Layer | Mechanism | Covers | Provided by | Status |
 |---|---|---|---|---|
 | 1. JVM-controlled exit | `Runtime.addShutdownHook` in `SubprocessRegistry` that runs §7.2 `terminate()` on every tracked child in parallel (`run` and `session` each add their own hook for the §7.1 teardown) | `System.exit`, `SIGTERM`, `SIGINT`, last-non-daemon-thread | Mock Client (Java) | **Built.** `SubprocessManagerShutdownTest` covers `SIGTERM` |
-| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)`, set by `setpriv --pdeathsig TERM --` in front of each launcher's argv, which then `execve`s the actual child | Parent dies via `SIGKILL` or the OOM killer while children are running | Linux kernel + `util-linux` 2.33 or later (`setpriv`) | **Built** on Linux (`ParentDeathSignal`, and `SubprocessManager`'s spawner thread). `SubprocessManagerShutdownTest` covers `SIGKILL`, `ParentDeathSignalTest` the thread rule below |
+| 2. Parent-death signal | Linux `prctl(PR_SET_PDEATHSIG, SIGTERM)`, set by `setpriv --pdeathsig TERM --` in front of each launcher's argv, which then `execve`s the actual child. Where that is unusable, `OrphanReaper`: a process reading a pipe from the JVM, which ends the JVM's children at end of file | Parent dies via `SIGKILL`, `taskkill /F` or the OOM killer while children are running | Linux kernel + `util-linux` 2.33 or later (`setpriv`); elsewhere the Mock Client (Java) | **Built** (`ParentDeathSignal` and `SubprocessManager`'s spawner thread on Linux, `OrphanReaper` elsewhere). `SubprocessManagerShutdownTest` covers both routes, `ParentDeathSignalTest` the thread rule below, `OrphanReaperTest` the reaper's start-time check |
 | 3. Init / PID 1 | An init (e.g. tini) at PID 1 that reaps zombies and forwards signals to the JVM | The harness JVM being PID 1 (no zombie reaping, no signal forwarding) | A container runtime | Not applicable: the harness runs as plain processes, so its JVM is not PID 1 |
 | 4. Process-group cleanup | Children launched via `setsid` into their own session and process group | A child's own descendants, which a signal to the child's PID does not reach | `util-linux` (`setsid`) | Designed, not built: neither child has descendants of its own, and mock-game's start script `exec`s its JVM |
 
@@ -662,30 +665,72 @@ minute into a quiet `HOSTING`, as that worker retired. So
 one daemon thread that lives as long as the JVM. Only the spawn moves there;
 the launch log lines keep the caller's thread.
 
+Where the prefix is empty, `SubprocessManager.start` hands each child to
+`OrphanReaper` instead (#508). The first such child also starts the reaper, a
+JVM on the same `java` that runs that class with only the harness's own jar or
+class directory on its classpath. That path goes in `CLASSPATH`, not `-cp`, so
+the reaper's command line holds nothing `session`'s survivor sweep could take
+for an adapter or game, and `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS` and
+`_JAVA_OPTIONS` are kept out of its environment. Its stdin is a pipe from the
+harness JVM, which the OS closes however that JVM ends, so end of file means
+the JVM is gone. The reaper then ends every child it was sent as `terminate()`
+would (§7.2): SIGTERM, or TerminateProcess on Windows, up to 5 s, then
+SIGKILL. Like `setpriv`, it ends children still running at any JVM exit, not
+only a kill; nothing relies on a child outliving its JVM.
+
+Each child is sent as its PID and start time, and the reaper keeps a handle
+only to a process with that PID that started then, so it never signals a
+process that took the PID of a child that had already exited. From then on the
+JDK's handle refuses a reused PID by itself. The start times are compared
+through an offset: on Linux the JDK dates a process from the boot time each JVM
+reads from `/proc/stat` at start-up, which moves whenever the wall clock is
+stepped, and two JVMs on a WSL2 dev box disagreed on one process by 2 s within
+a minute. So the harness first sends the reaper's own start time as it sees
+it, and the reaper shifts every later line by the difference from its own view
+(zero on macOS and Windows, where the kernel stores the start time).
+
 Rejected:
 
 - **A watchdog** (the former fallback: a Bash launcher that `exec`s the child,
   plus a watchdog polling `/proc/<parent>/stat`). As specified, the watchdog
-  was a thread in the parent, which dies with it. One outside the parent adds
-  a process per child, polling latency and PID-reuse hazards.
+  was a thread in the parent, which dies with it, and one outside the parent
+  per child adds a process per child and polling latency. The reaper is one
+  process per JVM, woken by end of file, and checks start times before it
+  signals anything.
 - **JNA prctl**: adds a native dependency for one syscall.
+- **An in-child watcher** (#508): each child exits when its stdin, a pipe from
+  the harness, reaches end of file. mock-game could do that itself, but the
+  adapter would need a `-javaagent`, which puts our code inside the real
+  adapter's JVM, plus a jar to ship; and it covers JVM children only.
+- **Native OS features** (Windows Job Objects with kill-on-close, macOS kqueue
+  on the parent): JNI, JNA or a helper binary per OS.
 
 For layer 4, prefix the argv with `setsid -w` (also `util-linux`). The
 resulting child is the leader of a new session, so `kill -- -<pgid>` delivers
 SIGTERM to every descendant in one syscall.
 
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
-`System.exit`) terminates its children through layer 1. On Linux a `SIGKILL`
-or OOM kill of that JVM ends them through layer 2. Measured live against the
-pinned 3.3.14 adapter (raw monotonic clock), after a `kill -9` of the client in
-`HOSTING` and in `PLAYING` the adapter was gone within 0.33 s and the game
-within 0.04 s. Not covered:
+`System.exit`) terminates its children through layer 1, and a `SIGKILL`,
+`taskkill /F` or OOM kill ends them through layer 2. Measured live against the
+pinned 3.3.14 adapter (raw monotonic clock on Linux), killing
+`java -jar mock-client-all.jar run` in `HOSTING` and in `PLAYING`:
 
-- other operating systems, and a Linux host without a usable `setpriv`, where
-  a killed JVM leaves both children running;
-- a kill between a child's spawn and `setpriv` setting the signal, a window of
-  about a millisecond: the kernel sends nothing if the parent thread is
-  already gone when the signal is set;
+| Host and kill | Layer 2 | Adapter gone within | Game gone within |
+|---|---|---|---|
+| Linux, `kill -9` | `setpriv` | 0.34 s | 0.04 s |
+| Linux without `setpriv` on `PATH`, `kill -9` | reaper | 0.38 s | 0.06 s |
+| Windows 11, `taskkill /F` | reaper | 0.27 s | 0.19 s |
+
+Not covered:
+
+- a kill between a child's spawn and `setpriv` setting the signal, or the
+  child's line reaching the reaper's pipe, a window of about a millisecond:
+  the kernel sends nothing if the parent thread is already gone when the
+  signal is set;
+- a reaper killed along with its JVM, as by a process-tree kill
+  (`taskkill /F /T`, which takes the children too); a reaper that could not be
+  started, which logs one WARN; and one that died after starting, which shows
+  only when the next child cannot be sent to it;
 - a child that ignores SIGTERM (neither does), or whose signal the kernel
   clears, which it does when the child execs a setuid, setgid or
   file-capability binary, or on a security module's secure exec;
@@ -700,11 +745,12 @@ within 0.04 s. Not covered:
   step signals only the step's shell, so the JVM and its children run on
   until the runner's own cleanup.
 
-Without layer 2, neither child ends by itself.
-The adapter normally never notices:
+Without layer 2, neither child normally ends by itself on Linux or macOS.
+The adapter never notices there:
 faf-ice-adapter 3.3.14's JSON-RPC library runs the connection-loss handler only
 when a read throws (JJsonRpc `JJsonPeer.run`), and a killed client's socket
-closes in an orderly way unless it had unread data, so the adapter carries on
+closes in an orderly way unless it had unread data (XNU's `tcp_disconnect`
+does as Linux does), so the adapter carries on
 with its GPGNet server still serving the game. Observed against 3.3.14 on a
 headless host: live, the adapter stayed up with the client killed in `HOSTING`
 and in `PLAYING`; locally, with the adapter's only JSON-RPC client killed while
@@ -714,6 +760,10 @@ handler in `RPCService.init` still leaves the adapter up on a headless host. It
 stays up by design while the game state is `Launching`; otherwise it throws
 before `System.exit`, with a `NullPointerException` if no game is connected, or
 at the unguarded `TrayIcon.close()` after closing the game's connection.
+Windows resets a killed process's connections, so there the read does throw.
+Measured on Windows 11 with no layer 2, the adapter killed in `HOSTING` closed
+the game's connection, mock-game exited `69`, and the adapter, whose tray icon
+could be removed, exited within 1.4 s; killed in `PLAYING`, it stayed up.
 
 mock-game keeps running too, and while the adapter holds its connection only
 its own timers can end it. In `LOBBY` it has none: the launch timer is armed
@@ -750,7 +800,7 @@ twice, plus up to 1 s for the output) rather than their sum.
 | Adapter hangs mid-session | internal deadlock | `status` poll (§6.2) | §7.1 → §7.2 |
 | `mock-game` exits before `GameState("Ended")` | mock-game crash | `onExit()` while FSM is in PLAYING | Forward as `GameEnded(crash)` to lobby; tear down adapter |
 | Pipe buffer blocks the child | bug — capture thread died | child stops emitting log lines for ≥ 30 s while RPC traffic continues | Detected in PoC stress test; capture failure logs an ERROR |
-| Parent JVM SIGKILL'd | OOM kill, `kill -9` | None in the JVM: a killed JVM runs no hook | On Linux the kernel sends both children SIGTERM (§7.3 layer 2); elsewhere they are left running |
+| Parent JVM SIGKILL'd | OOM kill, `kill -9`, `taskkill /F` | None in the JVM: a killed JVM runs no hook | On Linux the kernel sends both children SIGTERM, elsewhere the reaper process ends them (§7.3 layer 2) |
 
 ## 9. Open questions
 
@@ -797,6 +847,9 @@ twice, plus up to 1 s for the output) rather than their sum.
 - [JJsonRpc `JJsonPeer.java` at `37669e0`](https://github.com/FAForever/JJsonRpc/blob/37669e0fed05937b733bbb64155bcb874ed07c35/src/main/java/com/nbarraille/jjsonrpc/JJsonPeer.java): the read loop that decides whether faf-ice-adapter 3.3.14 notices a lost JSON-RPC client
 - [`PR_SET_PDEATHSIG(2const)`](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html): the parent-death signal follows the thread that created the child, and is cleared by a setuid, setgid or file-capability exec
 - [util-linux 2.33 release notes](https://mirrors.edge.kernel.org/pub/linux/utils/util-linux/v2.33/v2.33-ReleaseNotes): the release that gave `setpriv` its `--pdeathsig` option
+- [JDK 21 `ProcessHandleImpl_linux.c`](https://github.com/openjdk/jdk21u/blob/jdk-21.0.10%2B7/src/java.base/linux/native/libjava/ProcessHandleImpl_linux.c): a process's start time is dated from the boot time each JVM reads once, so two JVMs can disagree on it
+- JDK 21 [`ProcessHandleImpl_unix.c`](https://github.com/openjdk/jdk21u/blob/jdk-21.0.10%2B7/src/java.base/unix/native/libjava/ProcessHandleImpl_unix.c) and [`ProcessHandleImpl_win.c`](https://github.com/openjdk/jdk21u/blob/jdk-21.0.10%2B7/src/java.base/windows/native/libjava/ProcessHandleImpl_win.c): `destroy0` refuses a PID whose start time is not the handle's
+- [XNU `tcp_usrreq.c` at `xnu-12377.121.6`](https://github.com/apple-oss-distributions/xnu/blob/xnu-12377.121.6/bsd/netinet/tcp_usrreq.c): `tcp_disconnect` resets a connection only when unread data is waiting, as Linux does
 
 ## 11. Sequence diagram — one-session lifecycle
 
