@@ -20,7 +20,7 @@ class OrphanReaperTest {
 
     /**
      * How far this JVM's and the reaper's views of one start time are made to differ, as two JVMs
-     * on Linux do after the wall clock is stepped between their start-ups.
+     * on Linux do when the wall clock is stepped between their first reads of the boot time.
      */
     private static final long SKEW_MS = 5_000;
 

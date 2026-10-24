@@ -63,8 +63,9 @@ see the note at the end of that section. Running a session unattended in CI is
   a `kill -9` instead, but `./gradlew check` fails its two `setpriv` tests.
   Windows and macOS need nothing: the reaper always does it there. It is one
   more `java` process while the harness runs,
-  `java com.faforever.testharness.shared.process.OrphanReaper`, and it exits
-  with the harness.
+  `java com.faforever.testharness.shared.process.OrphanReaper`, which exits
+  right after the harness, or up to 5 s after a kill while it ends the adapter
+  and game.
 
 That is the complete list for the adapter-only path in §2. **Do not go
 further down this list unless you are going to use the live lobby** — the

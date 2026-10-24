@@ -28,7 +28,10 @@ The JSON-RPC traffic itself is out of scope here.
 | `mock-game` | Sibling Gradle module's `application` distribution — `mock-game/build/install/mock-game/bin/mock-game` (or `java -jar` against its shadow JAR) | Stands in for the Forged Alliance executable; opens a TCP client to the adapter's GPGNet port and exchanges UDP via `--lobby-port` | Started **after** the adapter's TCP RPC socket is reachable |
 
 Both children are started by the **Mock Client only**; no other component
-spawns subprocesses. The Mock Client is the sole supervisor of both.
+spawns subprocesses. The Mock Client is the sole supervisor of both. Where
+`setpriv` is unusable it also starts a third process, the reaper of §7.3
+layer 2, which carries no traffic and, once the Mock Client has exited, ends
+whichever of the two is still running.
 
 ### 1.1 Target environment
 
@@ -682,12 +685,13 @@ Each child is sent as its PID and start time, and the reaper keeps a handle
 only to a process with that PID that started then, so it never signals a
 process that took the PID of a child that had already exited. From then on the
 JDK's handle refuses a reused PID by itself. The start times are compared
-through an offset: on Linux the JDK dates a process from the boot time each JVM
-reads from `/proc/stat` at start-up, which moves whenever the wall clock is
-stepped, and two JVMs on a WSL2 dev box disagreed on one process by 2 s within
-a minute. So the harness first sends the reaper's own start time as it sees
-it, and the reaper shifts every later line by the difference from its own view
-(zero on macOS and Windows, where the kernel stores the start time).
+through an offset: on Linux the JDK dates a process from the boot time in
+`/proc/stat`, which moves whenever the wall clock is stepped, and each JVM
+reads it once, at its first use of a process handle. Two JVMs on a WSL2 dev
+box disagreed on one process by 2 s within a minute. So the harness first
+sends the reaper's own start time as it sees it, and the reaper shifts every
+later line by the difference from its own view (zero on macOS and Windows,
+where the kernel stores the start time).
 
 Rejected:
 
@@ -712,7 +716,7 @@ SIGTERM to every descendant in one syscall.
 Net effect today: a polite exit of the Mock Client JVM (`SIGTERM`, `SIGINT`,
 `System.exit`) terminates its children through layer 1, and a `SIGKILL`,
 `taskkill /F` or OOM kill ends them through layer 2. Measured live against the
-pinned 3.3.14 adapter (raw monotonic clock on Linux), killing
+pinned 3.3.14 adapter (raw monotonic clock on Linux and macOS), killing
 `java -jar mock-client-all.jar run` in `HOSTING` and in `PLAYING`:
 
 | Host and kill | Layer 2 | Adapter gone within | Game gone within |
@@ -720,13 +724,16 @@ pinned 3.3.14 adapter (raw monotonic clock on Linux), killing
 | Linux, `kill -9` | `setpriv` | 0.34 s | 0.04 s |
 | Linux without `setpriv` on `PATH`, `kill -9` | reaper | 0.38 s | 0.06 s |
 | Windows 11, `taskkill /F` | reaper | 0.27 s | 0.19 s |
+| macOS 26 arm64 (GitHub `macos-latest`), `kill -9` | reaper | 2.2 s | 0.14 s |
 
 Not covered:
 
-- a kill between a child's spawn and `setpriv` setting the signal, or the
-  child's line reaching the reaper's pipe, a window of about a millisecond:
-  the kernel sends nothing if the parent thread is already gone when the
-  signal is set;
+- a kill between a child's spawn and `setpriv` setting the signal, a window
+  of about a millisecond: the kernel sends nothing if the parent thread is
+  already gone when the signal is set. The reaper's window, from a child's
+  spawn to its line reaching the reaper's pipe, is as short for every child
+  but the first, whose line waits for the reaper itself to start: about 20 ms
+  longer on Linux, and 0.15 s to a second on Windows;
 - a reaper killed along with its JVM, as by a process-tree kill
   (`taskkill /F /T`, which takes the children too); a reaper that could not be
   started, which logs one WARN; and one that died after starting, which shows
