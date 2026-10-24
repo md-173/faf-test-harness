@@ -605,12 +605,12 @@ final class ClientGameLifecycleLiveTest {
 
     /** File name identifying the adapter subprocess in a command line, e.g. the jar's name. */
     private static String adapterNeedle(final MockClientConfig config) {
-        return config.iceAdapterBinaryPath().getFileName().toString();
+        return config.iceAdapter().binaryPath().getFileName().toString();
     }
 
     /** File name identifying the mock-game subprocess, both as a start script and as the JVM. */
     private static String gameNeedle(final MockClientConfig config) {
-        return config.mockGameBinaryPath().getFileName().toString();
+        return config.mockGame().binaryPath().getFileName().toString();
     }
 
     /** The {@code game_launch}-derived config the lifecycle launches this session under. */

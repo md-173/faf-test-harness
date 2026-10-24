@@ -374,7 +374,7 @@ final class GameEndReportingTest {
                 new HashMap<>();
 
         FakeIceAdapterConnection(MockClientConfig config) {
-            super(config.iceAdapterRpcPort());
+            super(config.iceAdapter().rpcPort());
         }
 
         @Override

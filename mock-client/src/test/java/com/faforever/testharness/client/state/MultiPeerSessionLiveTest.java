@@ -548,9 +548,9 @@ final class MultiPeerSessionLiveTest {
     private static List<String> portsOf(final SessionPeer peer) {
         MockClientConfig c = peer.config();
         return List.of(
-                "tcp " + c.iceAdapterRpcPort(),
-                "tcp " + c.iceAdapterGpgNetPort(),
-                "udp " + c.iceAdapterLobbyPort());
+                "tcp " + c.iceAdapter().rpcPort(),
+                "tcp " + c.iceAdapter().gpgNetPort(),
+                "udp " + c.iceAdapter().lobbyPort());
     }
 
     /**

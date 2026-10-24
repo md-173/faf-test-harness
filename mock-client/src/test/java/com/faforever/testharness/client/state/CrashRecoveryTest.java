@@ -379,7 +379,7 @@ final class CrashRecoveryTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         launcher,
                         iceLauncher,
                         new SessionTeardown(lobby));
@@ -524,7 +524,7 @@ final class CrashRecoveryTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         launcher,
                         iceLauncher,
                         teardown);

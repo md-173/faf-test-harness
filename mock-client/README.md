@@ -222,7 +222,7 @@ configuration.
 Settings are resolved per field from four sources, lowest to highest priority.
 Higher sources override lower ones.
 
-1. **Built-in defaults** — `@Option(defaultValue = ...)` on `MockClientCli`.
+1. **Built-in defaults** — `@Option(defaultValue = ...)` on `MockClientCli` and its option mixins.
 2. **Config file** — JSON, supplied with `--config <path>`.
 3. **Environment variables** — `FAF_MOCK_CLIENT_*`, see convention below.
 4. **CLI flags** — `--kebab-case`, see `--help` output.

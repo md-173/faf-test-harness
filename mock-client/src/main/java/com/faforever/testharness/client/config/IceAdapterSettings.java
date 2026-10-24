@@ -83,14 +83,14 @@ public record IceAdapterSettings(
     public static IceAdapterSettings from(final MockClientConfig config) {
         Objects.requireNonNull(config, "config");
         return new IceAdapterSettings(
-                config.iceAdapterBinaryPath(),
-                config.iceAdapterRpcPort(),
-                config.iceAdapterGpgNetPort(),
-                config.iceAdapterLobbyPort(),
-                config.iceAdapterGameId(),
+                config.iceAdapter().binaryPath(),
+                config.iceAdapter().rpcPort(),
+                config.iceAdapter().gpgNetPort(),
+                config.iceAdapter().lobbyPort(),
+                config.iceAdapter().gameId(),
                 config.playerIdOverride(),
                 config.playerLogin(),
-                config.logLevel(),
-                config.logFile());
+                config.logging().level(),
+                config.logging().file());
     }
 }

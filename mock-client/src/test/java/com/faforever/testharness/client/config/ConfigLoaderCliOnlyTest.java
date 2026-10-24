@@ -31,6 +31,6 @@ final class ConfigLoaderCliOnlyTest {
 
         MockClientConfig config = ConfigLoader.load(args, Map.of()).orElseThrow();
 
-        assertEquals(9000, config.iceAdapterRpcPort());
+        assertEquals(9000, config.iceAdapter().rpcPort());
     }
 }

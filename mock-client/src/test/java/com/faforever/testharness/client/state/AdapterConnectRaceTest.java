@@ -148,7 +148,8 @@ final class AdapterConnectRaceTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new NeverConnectingIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new NeverConnectingIceAdapterConnection(
+                                MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         new DummyGameLauncher(MINIMAL_CONFIG),
                         iceLauncher,
                         new SessionTeardown(lobby));
@@ -221,7 +222,7 @@ final class AdapterConnectRaceTest {
                         MINIMAL_CONFIG,
                         session,
                         new NeverConnectingIceAdapterConnection(
-                                MINIMAL_CONFIG.iceAdapterRpcPort(), connecting),
+                                MINIMAL_CONFIG.iceAdapter().rpcPort(), connecting),
                         new DummyGameLauncher(MINIMAL_CONFIG),
                         iceLauncher,
                         teardown);
@@ -274,7 +275,7 @@ final class AdapterConnectRaceTest {
                         MINIMAL_CONFIG,
                         session,
                         new NeverConnectingIceAdapterConnection(
-                                MINIMAL_CONFIG.iceAdapterRpcPort(), connecting),
+                                MINIMAL_CONFIG.iceAdapter().rpcPort(), connecting),
                         new DummyGameLauncher(MINIMAL_CONFIG),
                         iceLauncher,
                         new SessionTeardown(lobby));

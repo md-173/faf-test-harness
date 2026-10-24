@@ -160,7 +160,7 @@ final class SessionFaultLiveTest {
         assertEquals(
                 List.of(0, 0, PASSING_DROP_PERCENT),
                 session.peers().stream()
-                        .map(peer -> peer.config().mockGameUdpDropPercent())
+                        .map(peer -> peer.config().faults().mockGameUdpDropPercent())
                         .toList());
     }
 
@@ -193,7 +193,9 @@ final class SessionFaultLiveTest {
 
         assertEquals(
                 List.of(0, 0, RELAY_DELAY_MS),
-                session.peers().stream().map(peer -> peer.config().iceRelayDelayMs()).toList());
+                session.peers().stream()
+                        .map(peer -> peer.config().faults().iceRelayDelayMs())
+                        .toList());
     }
 
     /**

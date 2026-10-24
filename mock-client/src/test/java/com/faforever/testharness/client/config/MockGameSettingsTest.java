@@ -157,16 +157,16 @@ final class MockGameSettingsTest {
                         .orElseThrow();
         MockGameSettings narrowed = MockGameSettings.from(config);
 
-        assertEquals(config.mockGameBinaryPath(), narrowed.binaryPath());
-        assertEquals(config.iceAdapterGpgNetPort(), narrowed.gpgNetPort());
-        assertEquals(config.iceAdapterLobbyPort(), narrowed.lobbyPort());
-        assertEquals(config.iceAdapterGameId(), narrowed.gameUid());
+        assertEquals(config.mockGame().binaryPath(), narrowed.binaryPath());
+        assertEquals(config.iceAdapter().gpgNetPort(), narrowed.gpgNetPort());
+        assertEquals(config.iceAdapter().lobbyPort(), narrowed.lobbyPort());
+        assertEquals(config.iceAdapter().gameId(), narrowed.gameUid());
         assertEquals(config.playerIdOverride(), narrowed.playerIdOverride());
         assertEquals(config.playerLogin(), narrowed.playerLogin());
-        assertEquals(config.mockGameLaunchDelaySeconds(), narrowed.launchDelaySeconds());
+        assertEquals(config.mockGame().launchDelaySeconds(), narrowed.launchDelaySeconds());
         assertEquals(37, narrowed.mockGameUdpDropPercent(), "the drop percent must survive");
-        assertEquals(config.logLevel(), narrowed.logLevel());
-        assertEquals(config.logFile(), narrowed.logFile());
+        assertEquals(config.logging().level(), narrowed.logLevel());
+        assertEquals(config.logging().file(), narrowed.logFile());
         assertEquals(
                 config.hostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
                 narrowed.gameOptions(),

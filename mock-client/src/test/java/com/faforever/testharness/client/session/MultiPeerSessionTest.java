@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
+import com.faforever.testharness.client.config.ConfigLeaves;
 import com.faforever.testharness.client.config.ConfigLoader;
 import com.faforever.testharness.client.config.GameHostConfig;
 import com.faforever.testharness.client.config.MockClientConfig;
@@ -20,11 +21,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.io.IOException;
-import java.lang.reflect.RecordComponent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
@@ -32,7 +31,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
@@ -44,10 +42,11 @@ import org.slf4j.LoggerFactory;
 final class MultiPeerSessionTest {
 
     /**
-     * The config components {@link MultiPeerSession} replaces for each peer. Every other component
-     * must survive the copy, which is what {@link #copiesEveryFieldExceptTheOnesTheSessionOwns}
-     * checks: the compiler catches a missing argument in that positional copy, but not two ints or
-     * two paths given in the wrong order, and #357 and #340 each add another component to it.
+     * The config components {@link MultiPeerSession} replaces for each peer, as {@link
+     * ConfigLeaves} names them, nested ones included. Every other component must survive the copy,
+     * which is what {@link #copiesEveryFieldExceptTheOnesTheSessionOwns} checks: the compiler
+     * catches a missing argument in that positional copy, but not two ints or two paths given in
+     * the wrong order, and #357 and #340 each add another component to it.
      */
     private static final Set<String> SESSION_OWNED =
             Set.of(
@@ -150,8 +149,8 @@ final class MultiPeerSessionTest {
         // component gets its distinct value from a base on that channel.
         Path accessToken = Files.writeString(dir.resolve("access_token.txt"), "access-token");
         MockClientConfig base = distinctBase("--oauth-access-token-file=" + accessToken);
-        assertEquals(Optional.of(accessToken), base.oauthAccessTokenFile());
-        assertEquals(null, base.oauthRefreshTokenFile());
+        assertEquals(Optional.of(accessToken), base.oauth().accessTokenFile());
+        assertEquals(null, base.oauth().refreshTokenFile());
 
         assertCopiesEveryOtherField(base);
     }
@@ -169,21 +168,22 @@ final class MultiPeerSessionTest {
         MockClientConfig host = MultiPeerSession.hostConfig(base, PORTS, "title-1");
         MockClientConfig joiner = MultiPeerSession.joinConfig(base, PORTS, 12345);
 
-        for (RecordComponent component : MockClientConfig.class.getRecordComponents()) {
-            if (SESSION_OWNED.contains(component.getName())) {
+        Map<String, Object> hosted = ConfigLeaves.of(host);
+        Map<String, Object> joined = ConfigLeaves.of(joiner);
+        for (Map.Entry<String, Object> leaf : ConfigLeaves.of(base).entrySet()) {
+            if (SESSION_OWNED.contains(leaf.getKey())) {
                 continue;
             }
-            Object expected = component.getAccessor().invoke(base);
-            assertEquals(expected, component.getAccessor().invoke(host), component.getName());
-            assertEquals(expected, component.getAccessor().invoke(joiner), component.getName());
+            assertEquals(leaf.getValue(), hosted.get(leaf.getKey()), leaf.getKey());
+            assertEquals(leaf.getValue(), joined.get(leaf.getKey()), leaf.getKey());
         }
         // The loop above proves nothing about a field it skips, and a positional copy can swap two
         // ints or two paths without the compiler noticing, so the owned fields are pinned by value.
         for (MockClientConfig copy : List.of(host, joiner)) {
-            assertEquals(40001, copy.iceAdapterRpcPort());
-            assertEquals(40002, copy.iceAdapterGpgNetPort());
-            assertEquals(40003, copy.iceAdapterLobbyPort());
-            assertEquals(-1, copy.mockGameLaunchDelaySeconds());
+            assertEquals(40001, copy.iceAdapter().rpcPort());
+            assertEquals(40002, copy.iceAdapter().gpgNetPort());
+            assertEquals(40003, copy.iceAdapter().lobbyPort());
+            assertEquals(-1, copy.mockGame().launchDelaySeconds());
             assertTrue(copy.queueConfig().isEmpty());
         }
         assertEquals("title-1", host.hostConfig().orElseThrow().title());
@@ -200,17 +200,15 @@ final class MultiPeerSessionTest {
 
         MockClientConfig faulted = MultiPeerSession.withFaults(base, 501, 51, 41);
 
-        for (RecordComponent component : MockClientConfig.class.getRecordComponents()) {
-            if (!faults.contains(component.getName())) {
-                assertEquals(
-                        component.getAccessor().invoke(base),
-                        component.getAccessor().invoke(faulted),
-                        component.getName());
+        Map<String, Object> after = ConfigLeaves.of(faulted);
+        for (Map.Entry<String, Object> leaf : ConfigLeaves.of(base).entrySet()) {
+            if (!faults.contains(leaf.getKey())) {
+                assertEquals(leaf.getValue(), after.get(leaf.getKey()), leaf.getKey());
             }
         }
-        assertEquals(501, faulted.iceRelayDelayMs());
-        assertEquals(51, faulted.mockGameUdpDropPercent());
-        assertEquals(41, faulted.mockGameCrashAfterSeconds());
+        assertEquals(501, faulted.faults().iceRelayDelayMs());
+        assertEquals(51, faulted.faults().mockGameUdpDropPercent());
+        assertEquals(41, faulted.faults().mockGameCrashAfterSeconds());
     }
 
     @Test
@@ -222,7 +220,7 @@ final class MultiPeerSessionTest {
 
         assertEquals(
                 List.of(-1, MultiPeerSession.crashAfterSeconds(3), -1),
-                crashing.stream().map(MockClientConfig::mockGameCrashAfterSeconds).toList());
+                crashing.stream().map(peer -> peer.faults().mockGameCrashAfterSeconds()).toList());
     }
 
     @Test
@@ -238,9 +236,11 @@ final class MultiPeerSessionTest {
 
         MockClientConfig crashing = MultiPeerSession.crashBases(bases, 1).get(1);
 
-        assertEquals(250, crashing.iceRelayDelayMs());
-        assertEquals(20, crashing.mockGameUdpDropPercent());
-        assertEquals(MultiPeerSession.crashAfterSeconds(3), crashing.mockGameCrashAfterSeconds());
+        assertEquals(250, crashing.faults().iceRelayDelayMs());
+        assertEquals(20, crashing.faults().mockGameUdpDropPercent());
+        assertEquals(
+                MultiPeerSession.crashAfterSeconds(3),
+                crashing.faults().mockGameCrashAfterSeconds());
     }
 
     @Test
@@ -381,12 +381,9 @@ final class MultiPeerSessionTest {
 
     @Test
     void theSessionOwnedFieldNamesStillExist() {
-        Set<String> components =
-                Arrays.stream(MockClientConfig.class.getRecordComponents())
-                        .map(RecordComponent::getName)
-                        .collect(Collectors.toSet());
+        List<String> leaves = ConfigLeaves.names();
 
-        assertTrue(components.containsAll(SESSION_OWNED), components.toString());
+        assertTrue(leaves.containsAll(SESSION_OWNED), leaves.toString());
     }
 
     @Test
@@ -654,12 +651,12 @@ final class MultiPeerSessionTest {
      */
     private static void assertSessionOwnedFields(
             final MockClientConfig base, final MockClientConfig copy) {
-        assertEquals(40001, copy.iceAdapterRpcPort());
-        assertEquals(40002, copy.iceAdapterGpgNetPort());
-        assertEquals(40003, copy.iceAdapterLobbyPort());
-        assertEquals(-1, copy.mockGameLaunchDelaySeconds());
+        assertEquals(40001, copy.iceAdapter().rpcPort());
+        assertEquals(40002, copy.iceAdapter().gpgNetPort());
+        assertEquals(40003, copy.iceAdapter().lobbyPort());
+        assertEquals(-1, copy.mockGame().launchDelaySeconds());
         assertTrue(copy.queueConfig().isEmpty());
-        assertEquals(base.oauthRefreshTokenFile(), copy.oauthRefreshTokenFile());
+        assertEquals(base.oauth().refreshTokenFile(), copy.oauth().refreshTokenFile());
         assertEquals(base.lobbyWebSocketUrl(), copy.lobbyWebSocketUrl());
     }
 

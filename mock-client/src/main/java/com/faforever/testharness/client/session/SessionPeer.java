@@ -129,7 +129,7 @@ public final class SessionPeer {
             lobby.registerHandler("game_join_failed", frame -> joinRefusal.set(frame.toString()));
             lobby.registerHandler("ConnectToPeer", this::recordOffer);
             lobby.registerHandler("game_info", this::recordGameInfo);
-            IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapterRpcPort());
+            IceAdapterConnection adapter = new IceAdapterConnection(config.iceAdapter().rpcPort());
             adapter.registerNotification("onConnected", this::recordVerdict);
             this.teardown = new SessionTeardown(lobby, signalled);
             this.lifecycle =

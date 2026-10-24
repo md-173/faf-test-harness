@@ -33,19 +33,19 @@ public final class TokenSources {
      *     configured file cannot be read
      */
     public static TokenSource fromConfig(final MockClientConfig config) {
-        if (config.oauthAccessTokenFile().isPresent()) {
-            return new StaticTokenSource(config.oauthAccessTokenFile().get());
+        if (config.oauth().accessTokenFile().isPresent()) {
+            return new StaticTokenSource(config.oauth().accessTokenFile().get());
         }
-        if (config.oauthRefreshTokenFile() != null) {
+        if (config.oauth().refreshTokenFile() != null) {
             try {
                 return new LobbyAuthenticator(
-                        config.oauthRefreshTokenFile(),
-                        config.oauthTokenUrl(),
-                        config.oauthClientId());
+                        config.oauth().refreshTokenFile(),
+                        config.oauth().tokenUrl(),
+                        config.oauth().clientId());
             } catch (IOException e) {
                 throw new AuthenticationException(
                         "could not read OAuth refresh-token file: "
-                                + config.oauthRefreshTokenFile(),
+                                + config.oauth().refreshTokenFile(),
                         e);
             }
         }

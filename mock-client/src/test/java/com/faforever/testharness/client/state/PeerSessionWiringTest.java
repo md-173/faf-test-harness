@@ -569,7 +569,7 @@ final class PeerSessionWiringTest {
 
     @Test
     void gameLaunchedStaysPendingWhenTheLaunchFails() throws Exception {
-        adapter = new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort(), true);
+        adapter = new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort(), true);
         MockClientLifecycle lifecycle = lifecycleWith(adapter);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(GAME_CONFIG));
@@ -583,7 +583,7 @@ final class PeerSessionWiringTest {
 
     /** A lifecycle driven to STARTING_GAME with both stub subprocesses up. */
     private MockClientLifecycle launchedLifecycle() throws Exception {
-        adapter = new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+        adapter = new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle = lifecycleWith(adapter);
         lifecycle.post(new WelcomeReceived(SessionFixture.SESSION));
         lifecycle.post(new LaunchGame(GAME_CONFIG));

@@ -350,7 +350,7 @@ final class AdapterCrashRecoveryTest {
         iceLauncher =
                 new DummyIceLauncher(MINIMAL_CONFIG, false, new ProcessBuilder("sleep", "60"));
         RecordingIceAdapterConnection iceConn =
-                new RecordingIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new RecordingIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,

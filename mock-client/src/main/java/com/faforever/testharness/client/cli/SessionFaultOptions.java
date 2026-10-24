@@ -173,7 +173,7 @@ final class SessionFaultOptions {
                                 0,
                                 0,
                                 Integer.MAX_VALUE,
-                                MockClientConfig::iceRelayDelayMs,
+                                config -> config.faults().iceRelayDelayMs(),
                                 peerIceRelayDelayMs),
                         new Fault(
                                 "--mock-game-udp-drop-percent",
@@ -181,7 +181,7 @@ final class SessionFaultOptions {
                                 0,
                                 0,
                                 MAX_DROP_PERCENT,
-                                MockClientConfig::mockGameUdpDropPercent,
+                                config -> config.faults().mockGameUdpDropPercent(),
                                 peerMockGameUdpDropPercent),
                         new Fault(
                                 "--mock-game-crash-after-seconds",
@@ -189,7 +189,7 @@ final class SessionFaultOptions {
                                 -1,
                                 Integer.MIN_VALUE,
                                 Integer.MAX_VALUE,
-                                MockClientConfig::mockGameCrashAfterSeconds,
+                                config -> config.faults().mockGameCrashAfterSeconds(),
                                 peerMockGameCrashAfterSeconds));
         boolean anyRootFault = false;
         for (Fault fault : faults) {
@@ -211,7 +211,7 @@ final class SessionFaultOptions {
         }
         if (crashPeer(spec, peers).isPresent()) {
             boolean anyCrash =
-                    root.mockGameCrashAfterSeconds() >= 0
+                    root.faults().mockGameCrashAfterSeconds() >= 0
                             || (peerMockGameCrashAfterSeconds != null
                                     && peerMockGameCrashAfterSeconds.stream()
                                             .anyMatch(seconds -> seconds >= 0));
@@ -283,14 +283,14 @@ final class SessionFaultOptions {
         for (int i = 0; i < bases.size(); i++) {
             MockClientConfig base = bases.get(i);
             List<String> parts = new ArrayList<>();
-            if (base.iceRelayDelayMs() != 0) {
-                parts.add("ICE relay delay " + base.iceRelayDelayMs() + " ms");
+            if (base.faults().iceRelayDelayMs() != 0) {
+                parts.add("ICE relay delay " + base.faults().iceRelayDelayMs() + " ms");
             }
-            if (base.mockGameUdpDropPercent() != 0) {
-                parts.add("UDP drop " + base.mockGameUdpDropPercent() + "%");
+            if (base.faults().mockGameUdpDropPercent() != 0) {
+                parts.add("UDP drop " + base.faults().mockGameUdpDropPercent() + "%");
             }
-            if (base.mockGameCrashAfterSeconds() >= 0) {
-                parts.add("crash after " + base.mockGameCrashAfterSeconds() + " s");
+            if (base.faults().mockGameCrashAfterSeconds() >= 0) {
+                parts.add("crash after " + base.faults().mockGameCrashAfterSeconds() + " s");
             }
             if (!parts.isEmpty()) {
                 described.add(MultiPeerSession.labelFor(i) + ": " + String.join(", ", parts));

@@ -100,23 +100,23 @@ final class TestFixtures {
      */
     static void assertMatchesMinimalRequired(final MockClientConfig config) {
         assertEquals(URI.create(LOBBY_URL), config.lobbyWebSocketUrl());
-        assertEquals(URI.create(OAUTH_TOKEN_URL), config.oauthTokenUrl());
-        assertEquals(URI.create(OAUTH_AUTH_ENDPOINT), config.oauthAuthEndpoint());
-        assertEquals(URI.create(OAUTH_REDIRECT_URI), config.oauthRedirectUri());
-        assertEquals(OAUTH_SCOPES, config.oauthScopes());
-        assertEquals(OAUTH_CLIENT_ID, config.oauthClientId());
-        assertEquals(Path.of(OAUTH_REFRESH_TOKEN_FILE), config.oauthRefreshTokenFile());
+        assertEquals(URI.create(OAUTH_TOKEN_URL), config.oauth().tokenUrl());
+        assertEquals(URI.create(OAUTH_AUTH_ENDPOINT), config.oauth().authEndpoint());
+        assertEquals(URI.create(OAUTH_REDIRECT_URI), config.oauth().redirectUri());
+        assertEquals(OAUTH_SCOPES, config.oauth().scopes());
+        assertEquals(OAUTH_CLIENT_ID, config.oauth().clientId());
+        assertEquals(Path.of(OAUTH_REFRESH_TOKEN_FILE), config.oauth().refreshTokenFile());
         assertEquals(Optional.of(UNIQUE_ID), config.uniqueId());
-        assertEquals(Path.of(ICE_ADAPTER_BIN), config.iceAdapterBinaryPath());
-        assertEquals(Path.of(MOCK_GAME_BIN), config.mockGameBinaryPath());
-        assertEquals(7236, config.iceAdapterRpcPort());
-        assertEquals(7237, config.iceAdapterGpgNetPort());
-        assertEquals(7238, config.iceAdapterLobbyPort());
+        assertEquals(Path.of(ICE_ADAPTER_BIN), config.iceAdapter().binaryPath());
+        assertEquals(Path.of(MOCK_GAME_BIN), config.mockGame().binaryPath());
+        assertEquals(7236, config.iceAdapter().rpcPort());
+        assertEquals(7237, config.iceAdapter().gpgNetPort());
+        assertEquals(7238, config.iceAdapter().lobbyPort());
         assertEquals("0.0.0-mock", config.clientVersion());
         assertEquals("faf-test-harness", config.userAgent());
-        assertEquals("INFO", config.logLevel());
+        assertEquals("INFO", config.logging().level());
         assertEquals("mock-client", config.playerLogin());
-        assertTrue(config.logFile().isEmpty(), "logFile should default to empty");
+        assertTrue(config.logging().file().isEmpty(), "logFile should default to empty");
         assertTrue(config.uidBinaryPath().isEmpty(), "uidBinaryPath should default to empty");
         assertTrue(config.playerIdOverride().isEmpty(), "playerIdOverride should default to empty");
         assertTrue(config.hostConfig().isEmpty(), "hostConfig should default to empty");

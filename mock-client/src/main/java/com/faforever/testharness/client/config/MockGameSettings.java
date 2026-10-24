@@ -100,17 +100,17 @@ public record MockGameSettings(
     public static MockGameSettings from(final MockClientConfig config) {
         Objects.requireNonNull(config, "config");
         return new MockGameSettings(
-                config.mockGameBinaryPath(),
-                config.iceAdapterGpgNetPort(),
-                config.iceAdapterLobbyPort(),
-                config.iceAdapterGameId(),
+                config.mockGame().binaryPath(),
+                config.iceAdapter().gpgNetPort(),
+                config.iceAdapter().lobbyPort(),
+                config.iceAdapter().gameId(),
                 config.playerIdOverride(),
                 config.playerLogin(),
-                config.mockGameLaunchDelaySeconds(),
-                config.mockGameUdpDropPercent(),
-                config.mockGameCrashAfterSeconds(),
+                config.mockGame().launchDelaySeconds(),
+                config.faults().mockGameUdpDropPercent(),
+                config.faults().mockGameCrashAfterSeconds(),
                 config.hostConfig().map(GameHostConfig::gameOptions).orElseGet(Map::of),
-                config.logLevel(),
-                config.logFile());
+                config.logging().level(),
+                config.logging().file());
     }
 }

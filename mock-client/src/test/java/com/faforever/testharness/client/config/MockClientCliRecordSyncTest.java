@@ -5,23 +5,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.RecordComponent;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
 
 /**
- * Drift guard: every {@link MockClientConfig} record component must have a matching {@link
- * Option}-annotated field on {@link MockClientCli}, and vice versa. Names must agree under the
+ * Drift guard: every leaf component of {@link MockClientConfig}, its nested groups flattened under
+ * the names {@link ConfigLeaves} gives them, must have a matching {@link Option}-annotated field on
+ * {@link MockClientCli} or one of its {@link Mixin}s, and vice versa. Names must agree under the
  * kebab-case ↔ camelCase mapping. Without this test, adding a new field to one side and forgetting
- * the other compiles fine but produces a {@code null} value at runtime — the user sees a confusing
- * NPE instead of a config error.
+ * the other compiles fine but produces a {@code null} value at runtime, and the user sees a
+ * confusing NPE instead of a config error.
  *
  * <p>The 1:1 rule has three deliberate exceptions: {@code hostConfig} groups seven CLI options
  * ({@code hostTitle}, {@code hostMap}, {@code hostMod}, {@code hostVisibility}, {@code
@@ -73,7 +73,7 @@ final class MockClientCliRecordSyncTest {
         if (!missingFromCli.isEmpty()) {
             fail(
                     "MockClientConfig has record components with no matching @Option on "
-                            + "MockClientCli: "
+                            + "MockClientCli or its mixins: "
                             + missingFromCli);
         }
     }
@@ -90,19 +90,16 @@ final class MockClientCliRecordSyncTest {
 
         if (!extraOnCli.isEmpty()) {
             fail(
-                    "MockClientCli has @Option-annotated fields with no matching record "
-                            + "component on MockClientConfig: "
+                    "MockClientCli or a mixin has @Option-annotated fields with no matching "
+                            + "record component on MockClientConfig: "
                             + extraOnCli);
         }
     }
 
     @Test
     void cliOptionFieldNamesMatchTheirCliFlagsExactly() {
-        for (Field field : MockClientCli.class.getDeclaredFields()) {
+        for (Field field : cliOptionFields()) {
             Option option = field.getAnnotation(Option.class);
-            if (option == null) {
-                continue;
-            }
             String fieldName = field.getName();
             String firstFlag = option.names()[0];
             assertTrue(
@@ -134,42 +131,57 @@ final class MockClientCliRecordSyncTest {
         // queueConfig component).
         // Both went up by one for --mock-game-crash-after-seconds (WBS-5.2), which is an ordinary
         // ungrouped option: one flag, one record component, so the gap between the two is unmoved.
+        // The record side counts leaves, with the nested groups expanded by ConfigLeaves.
         long expectedRecordComponents = 29;
         long expectedCliOptionsExcludingHelpers = 38;
 
-        long actualRecordComponents = MockClientConfig.class.getRecordComponents().length;
-        long actualCliOptions =
-                Arrays.stream(MockClientCli.class.getDeclaredFields())
-                                .filter(f -> f.isAnnotationPresent(Option.class))
-                                .count()
-                        - CLI_ONLY_FIELD_NAMES.size();
+        List<String> leaves = ConfigLeaves.names();
+        assertEquals(leaves.size(), Set.copyOf(leaves).size(), "leaves share a name: " + leaves);
+        long actualRecordComponents = leaves.size();
+        long actualCliOptions = cliOptionFields().size() - CLI_ONLY_FIELD_NAMES.size();
 
         assertEquals(
                 expectedRecordComponents,
                 actualRecordComponents,
-                "MockClientConfig record-component count drifted; update this test if "
+                "MockClientConfig leaf-component count drifted; update this test if "
                         + "intentional.");
         assertEquals(
                 expectedCliOptionsExcludingHelpers,
                 actualCliOptions,
-                "MockClientCli @Option-annotated field count drifted; update this test if "
-                        + "intentional.");
+                "MockClientCli and mixin @Option-annotated field count drifted; update this test "
+                        + "if intentional.");
     }
 
     private static Set<String> collectRecordComponentNames() {
-        return Stream.of(MockClientConfig.class.getRecordComponents())
-                .map(RecordComponent::getName)
-                .collect(Collectors.toCollection(TreeSet::new));
+        return new TreeSet<>(ConfigLeaves.names());
     }
 
     private static Set<String> collectCliOptionFieldNames() {
         Set<String> out = new HashSet<>();
-        for (Field field : MockClientCli.class.getDeclaredFields()) {
-            if (field.isAnnotationPresent(Option.class)) {
-                out.add(field.getName());
-            }
+        for (Field field : cliOptionFields()) {
+            out.add(field.getName());
         }
         return out;
+    }
+
+    /**
+     * The {@link Option} fields declared on {@link MockClientCli} and on the type of each of its
+     * {@link Mixin} fields, which is where picocli finds them too.
+     */
+    private static List<Field> cliOptionFields() {
+        List<Field> fields = new ArrayList<>();
+        for (Field field : MockClientCli.class.getDeclaredFields()) {
+            if (field.isAnnotationPresent(Option.class)) {
+                fields.add(field);
+            } else if (field.isAnnotationPresent(Mixin.class)) {
+                for (Field mixed : field.getType().getDeclaredFields()) {
+                    if (mixed.isAnnotationPresent(Option.class)) {
+                        fields.add(mixed);
+                    }
+                }
+            }
+        }
+        return fields;
     }
 
     private static String kebabToCamelCase(final String kebab) {

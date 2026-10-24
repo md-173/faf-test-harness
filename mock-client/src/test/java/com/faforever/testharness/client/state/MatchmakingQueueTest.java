@@ -183,7 +183,7 @@ final class MatchmakingQueueTest {
         return new MockClientLifecycle(
                 config,
                 session,
-                new DummyIceAdapterConnection(config.iceAdapterRpcPort()),
+                new DummyIceAdapterConnection(config.iceAdapter().rpcPort()),
                 new DummyGameLauncher(config),
                 new DummyIceLauncher(config),
                 new SessionTeardown(lobby));

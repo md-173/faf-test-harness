@@ -57,7 +57,7 @@ final class ConfigLoaderSubcommandTest {
 
         assertEquals(URI.create(override), config.lobbyWebSocketUrl());
         // a non-overridden field still comes from the file
-        assertEquals(URI.create(TestFixtures.OAUTH_TOKEN_URL), config.oauthTokenUrl());
+        assertEquals(URI.create(TestFixtures.OAUTH_TOKEN_URL), config.oauth().tokenUrl());
     }
 
     @Test

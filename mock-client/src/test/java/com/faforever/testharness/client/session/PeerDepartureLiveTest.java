@@ -528,8 +528,8 @@ final class PeerDepartureLiveTest {
      * @param peer the peer whose game to kill
      */
     private static void killGameOf(final SessionPeer peer) {
-        String gameNeedle = peer.config().mockGameBinaryPath().getFileName().toString();
-        String portNeedle = "--gpgnet-port " + peer.config().iceAdapterGpgNetPort() + " ";
+        String gameNeedle = peer.config().mockGame().binaryPath().getFileName().toString();
+        String portNeedle = "--gpgnet-port " + peer.config().iceAdapter().gpgNetPort() + " ";
         List<ProcessHandle> matches =
                 ProcessHandle.current()
                         .descendants()

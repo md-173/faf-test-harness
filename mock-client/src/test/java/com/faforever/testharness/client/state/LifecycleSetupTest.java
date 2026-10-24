@@ -143,7 +143,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -180,7 +180,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -205,7 +205,7 @@ final class LifecycleSetupTest {
         // Guards the fixture itself. If SessionFixture ever drifted into matching the config, the
         // assertions above would pass while proving nothing.
         assertNotEquals(MINIMAL_CONFIG.playerLogin(), iceLauncher.getIdentity().login());
-        assertNotEquals(MINIMAL_CONFIG.iceAdapterGameId(), iceLauncher.getIdentity().gameUid());
+        assertNotEquals(MINIMAL_CONFIG.iceAdapter().gameId(), iceLauncher.getIdentity().gameUid());
     }
 
     @Test
@@ -216,7 +216,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -243,7 +243,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -269,7 +269,7 @@ final class LifecycleSetupTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG, true);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -294,7 +294,7 @@ final class LifecycleSetupTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG, true);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -319,7 +319,7 @@ final class LifecycleSetupTest {
         DummyGameLauncher gameLauncher = new DummyGameLauncher(MINIMAL_CONFIG);
         DummyIceLauncher iceLauncher = new DummyIceLauncher(MINIMAL_CONFIG);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort(), true);
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort(), true);
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
@@ -347,7 +347,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         iceConn.setupCallFail(method, new IceRpcException(-32000, "refused"));
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
@@ -381,7 +381,7 @@ final class LifecycleSetupTest {
     void aHostOrJoinCallTheAdapterRejectedFailsTheSession(
             final String method, final boolean errorAnswer) throws Exception {
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         iceConn.setupCallFail(
                 method,
                 errorAnswer ? new IceRpcException(-32000, "refused") : new TimeoutException());
@@ -416,7 +416,7 @@ final class LifecycleSetupTest {
     void aHostOrJoinCallWhoseConnectionClosedLeavesItToTheAdapter(final String method)
             throws Exception {
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         iceConn.setupCallFail(
                 method, new IOException("ICE adapter connection closed (REMOTE_CLOSE)"));
         MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
@@ -450,7 +450,7 @@ final class LifecycleSetupTest {
     void aHostOrJoinFrameTheClientCannotReadFailsTheSession(final String command) throws Exception {
         MockClientLifecycle lifecycle =
                 launchedLifecycle(
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()));
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()));
         CompletableFuture<Boolean> failedAtCommit =
                 lifecycle
                         .stateReached(ClientState.TERMINATED)
@@ -485,7 +485,7 @@ final class LifecycleSetupTest {
         gameLaunchers.add(gameLauncher);
         iceLaunchers.add(iceLauncher);
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         iceConn.setupCallThrow("setIceServers", new IllegalStateException("boom"));
         MockClientLifecycle lifecycle =
                 new MockClientLifecycle(
@@ -526,7 +526,7 @@ final class LifecycleSetupTest {
     @ValueSource(strings = {"hostGame", "joinGame"})
     void anUncheckedThrowInHostOrJoinEndsTheSession(final String method) throws Exception {
         DummyIceAdapterConnection iceConn =
-                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort());
+                new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort());
         iceConn.setupCallThrow(method, new IllegalStateException("boom"));
         MockClientLifecycle lifecycle = launchedLifecycle(iceConn);
         CompletableFuture<Boolean> failedAtCommit =
@@ -578,7 +578,7 @@ final class LifecycleSetupTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         gameLauncher,
                         iceLauncher,
                         new SessionTeardown(lobby));
@@ -669,7 +669,7 @@ final class LifecycleSetupTest {
                 new MockClientLifecycle(
                         MINIMAL_CONFIG,
                         session,
-                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapterRpcPort()),
+                        new DummyIceAdapterConnection(MINIMAL_CONFIG.iceAdapter().rpcPort()),
                         new DummyGameLauncher(MINIMAL_CONFIG),
                         new DummyIceLauncher(MINIMAL_CONFIG),
                         teardown);

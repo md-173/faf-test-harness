@@ -79,34 +79,27 @@ public final class MockClientConfigFixture {
         public MockClientConfig build() {
             return new MockClientConfig(
                     URI.create("wss://ws.faforever.xyz"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/token"),
-                    URI.create("https://hydra.faforever.xyz/oauth2/auth"),
-                    URI.create("http://127.0.0.1"),
-                    "openid offline lobby",
-                    "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
-                    oauthRefreshTokenFile,
-                    oauthAccessTokenFile,
+                    new OAuthConfig(
+                            URI.create("https://hydra.faforever.xyz/oauth2/token"),
+                            URI.create("https://hydra.faforever.xyz/oauth2/auth"),
+                            URI.create("http://127.0.0.1"),
+                            "openid offline lobby",
+                            "95ecec08-29c1-4c48-ae0a-b000ff349cb8",
+                            oauthRefreshTokenFile,
+                            oauthAccessTokenFile),
                     Optional.of("00000000-0000-0000-0000-000000000000"),
                     "0.0.0-mock",
                     "faf-test-harness",
                     Optional.empty(),
-                    Path.of("/bin/faf-ice-adapter"),
-                    Path.of("/bin/mock-game"),
-                    0,
-                    0,
-                    0,
-                    0,
-                    5,
-                    "WARN",
-                    Optional.empty(),
+                    new IceAdapterConfig(Path.of("/bin/faf-ice-adapter"), 0, 0, 0, 0),
+                    new MockGameConfig(Path.of("/bin/mock-game"), 5),
+                    new LoggingConfig("WARN", Optional.empty()),
                     OptionalInt.empty(),
                     "Rhiza",
                     hostConfig,
                     joinConfig,
                     queueConfig,
-                    0,
-                    0,
-                    -1);
+                    new FaultConfig(0, 0, -1));
         }
     }
 }
