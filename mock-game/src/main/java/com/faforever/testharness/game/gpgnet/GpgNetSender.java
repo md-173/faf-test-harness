@@ -15,10 +15,10 @@ import java.util.Set;
  * the host/lobby-config frames {@code GameOption}, {@code PlayerOption}, {@code GameMods}; the
  * answers to a peer leaving the lobby, {@code Disconnected} and {@code ClearSlot} from FA's custom
  * lobby (WBS-4.3.6) and {@code DisconnectedPeer} from its matchmaker lobby (WBS-3.2.4.1-fix, #506);
- * that lobby's {@code EstablishedPeer}; and the result frames {@code GameResult} and {@code
- * JsonStats}. The long tail ({@code AIOption}, {@code Chat}, …) and {@code BEAT} (Lockstep Tick,
- * #80) are added on demand, not here. There are deliberately no per-message-type classes, just
- * frame-builders.
+ * that lobby's {@code EstablishedPeer} and {@code LaunchStatus} (WBS-3.2.4.3-fix, #534); and the
+ * result frames {@code GameResult} and {@code JsonStats}. The long tail ({@code AIOption}, {@code
+ * Chat}, …) and {@code BEAT} (Lockstep Tick, #80) are added on demand, not here. There are
+ * deliberately no per-message-type classes, just frame-builders.
  */
 public final class GpgNetSender {
 
@@ -198,5 +198,19 @@ public final class GpgNetSender {
      */
     public void establishedPeer(final int playerId) throws IOException {
         sink.send(GpgNetFrame.of("EstablishedPeer", Integer.toString(playerId)));
+    }
+
+    /**
+     * Emit {@code LaunchStatus(status)}, FA's matchmaker lobby telling the server how ready this
+     * game is to launch (WBS-3.2.4.3-fix, #534): {@code Hosting} or {@code Connecting} on taking a
+     * role, then {@code Missing local peers} or {@code Ready} every 2 s ({@code
+     * AutolobbyController.lua}). faf-server takes it and does nothing ({@code
+     * handle_launch_status}).
+     *
+     * @param status the status, as FA spells it
+     * @throws IOException if the frame cannot be sent
+     */
+    public void launchStatus(final String status) throws IOException {
+        sink.send(GpgNetFrame.of("LaunchStatus", status));
     }
 }

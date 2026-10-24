@@ -80,6 +80,12 @@ public final class MockGameLifecycle {
      */
     private static final int GPGNET_CONNECTION_WAIT = 500;
 
+    /**
+     * How often a matchmaker game reports its {@code LaunchStatus}: FA's {@code
+     * ShareLaunchStatusThread} waits 2 s between reports (WBS-3.2.4.3-fix, #534).
+     */
+    private static final Duration LAUNCH_STATUS_PERIOD = Duration.ofSeconds(2);
+
     /** The internal state machine driving transitions. */
     private final StateMachine machine;
 
@@ -197,6 +203,27 @@ public final class MockGameLifecycle {
      * @param seat the seat its launch arguments gave it
      */
     private record SeatedPlayer(int playerId, Seat seat) {}
+
+    /**
+     * The peers a matchmaker game has sent {@code EstablishedPeer} for, which its {@code
+     * LaunchStatus} counts toward {@code Ready} (WBS-3.2.4.3-fix, #534). Never pruned, like FA's
+     * {@code ConnectionMatrix}, so a peer that left still counts. Touched only by FSM actions,
+     * under its monitor.
+     */
+    private final Set<Integer> establishedPeers = new HashSet<>();
+
+    /**
+     * The host a joiner was told to join, whose link starts the joiner's periodic {@code
+     * LaunchStatus} (WBS-3.2.4.3-fix, #534); {@code null} on a host. Touched only by FSM actions,
+     * under its monitor.
+     */
+    private Integer hostId;
+
+    /**
+     * Whether this matchmaker game has reported {@code Ready}, which is when it arms its launch
+     * delay (WBS-3.2.4.3-fix, #534). Touched only by FSM actions, under its monitor.
+     */
+    private boolean reportedReady;
 
     /**
      * Whether {@code CreateLobby} named init mode 1, for which FA loads its matchmaker lobby,
@@ -955,26 +982,25 @@ public final class MockGameLifecycle {
                                 + " GameOption",
                         config.gameOptions().size());
             }
-        } else {
-            try {
-                sendPlayerOptions(config.playerId());
+            sendLaunchStatus("Hosting");
+            // Last, as it arms timers: FA's host starts its 2 s status thread as it starts hosting.
+            // Hosting goes first here; FA's Lua does not fix which comes first.
+            shareLaunchStatus(GameState.HOSTING);
+            return;
+        }
 
-                // No game options are required, but any could be passed to test different
-                // properties.
-                for (var entry : config.gameOptions().entrySet()) {
-                    gpgnetSender.gameOption(entry.getKey(), entry.getValue());
-                }
-            } catch (IOException e) {
-                throw recordSendFailure(e);
+        try {
+            sendPlayerOptions(config.playerId());
+
+            // No game options are required, but any could be passed to test different properties.
+            for (var entry : config.gameOptions().entrySet()) {
+                gpgnetSender.gameOption(entry.getKey(), entry.getValue());
             }
+        } catch (IOException e) {
+            throw recordSendFailure(e);
         }
 
-        // Set up the scheduler if configured. Keeping the handle is what lets a manual
-        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
-        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
-        if (launchDelay != null) {
-            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
-        }
+        armLaunch();
     }
 
     /* Transition action for LOBBY -> JOIN. */
@@ -996,6 +1022,7 @@ public final class MockGameLifecycle {
                     address);
             peers.add(new Peer(address, login, playerId));
             present.add(playerId);
+            hostId = playerId;
             // The address is the host's relay socket inside our own adapter; sending to it is what
             // puts game traffic on the ICE path (WBS-4.3.2). The first peer starts the cadence.
             traffic.registerPeer(address, playerId);
@@ -1004,16 +1031,18 @@ public final class MockGameLifecycle {
             throw new FailedTransitionException(e.getMessage(), states.get(GameState.ENDED));
         }
 
-        // Set up the scheduler if configured. Keeping the handle is what lets a manual
-        // launchMatch() cancel the pending one; discarding it left an orphaned LaunchMatch to fire
-        // in a state with no matching transition and log "No matching transitions for LaunchMatch".
-        if (launchDelay != null) {
-            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
+        if (matchmakerLobby) {
+            // FA's joiner reports Connecting as it starts to connect, and its 2 s reports start
+            // only once its host's link is up (peerEstablished), as does its launch delay.
+            sendLaunchStatus("Connecting");
+        } else {
+            armLaunch();
         }
 
         // A peer is connected and traffic is flowing, so there is now a session to lose (WBS-5.2).
         // Armed after the launch timer, not before it (#357 review): armCrash reads that timer to
-        // tell whether the match will end before the crash fires.
+        // tell whether the match will end before the crash fires. A matchmaker joiner arms its
+        // launch later, so it gets no such warning.
         armCrash();
     }
 
@@ -1267,24 +1296,34 @@ public final class MockGameLifecycle {
      * player, as FA's host does on each {@code AddPlayer} (WBS-3.2.4.3-fix, #534). The receiver
      * hands over a sender's first datagram only once, so each peer is seated once.
      *
+     * <p>The peer counts toward this game's {@code Ready} from now on. A joiner whose host this is
+     * starts its periodic {@code LaunchStatus}, as FA's joiner does once its connection to the host
+     * is up ({@code ConnectionToHostEstablished}); the mock's first report follows the link report,
+     * an order FA's Lua does not fix.
+     *
      * @param event the {@link PeerEstablished} event; guaranteed by registration.
      * @throws FailedTransitionException into ENDED if a frame cannot be sent.
      */
     private void peerEstablished(Event event) throws FailedTransitionException {
-        PeerEstablished established = (PeerEstablished) event;
-        int playerId = established.playerId();
+        PeerEstablished link = (PeerEstablished) event;
+        int playerId = link.playerId();
         if (!present.contains(playerId)) {
             return;
         }
         LOG.info("Peer (ID: {}) link established", playerId);
+        establishedPeers.add(playerId);
         try {
             gpgnetSender.establishedPeer(playerId);
             if (getState() == GameState.HOSTING) {
-                seatPlayer(playerId, established.seat());
+                seatPlayer(playerId, link.seat());
                 sendSeatedPlayerOptions();
             }
         } catch (IOException e) {
             throw recordSendFailure(e);
+        }
+        // Last, as it arms timers.
+        if (getState() == GameState.JOINING && Integer.valueOf(playerId).equals(hostId)) {
+            shareLaunchStatus(GameState.JOINING);
         }
     }
 
@@ -1343,7 +1382,8 @@ public final class MockGameLifecycle {
             // agrees with it once every expected player is seated before launch: faf-server's
             // matchmaker puts slot i on team 2 when i is odd and team 3 when it is even
             // (ladder_service.py), which is teamForArmy(i), and with every slot seated each army
-            // is its slot. A launch before then, such as a manual one, leaves the two apart.
+            // is its slot. The auto-launch waits for that by arming only once the game reports
+            // Ready (armLaunch); a manual launch before then leaves the two apart.
             //
             // Games play on after a lobby-phase departure (WBS-4.3.6), and peers is never pruned,
             // so a departed player's army stays in the range of every game that knew them, and
@@ -1364,6 +1404,22 @@ public final class MockGameLifecycle {
         // Every closing frame was handed to the transport without error, which is as much as this
         // side can establish: see getExitStatus() for why that is not proof they were delivered.
         status = ExitStatus.OK;
+    }
+
+    /**
+     * Arms the auto-launch, if a launch delay is configured: a custom game on {@code HostGame} or
+     * {@code JoinGame}, a matchmaker game the first time it reports {@code Ready} (WBS-3.2.4.3-fix,
+     * #534), since FA's host launches only once every peer is ready, so every joiner is seated
+     * before the set it sends at launch.
+     *
+     * <p>Keeping the handle is what lets a manual {@link #launchMatch()} cancel the pending one;
+     * discarding it left an orphaned {@code LaunchMatch} to fire in a state with no matching
+     * transition and log "No matching transitions for LaunchMatch".
+     */
+    private void armLaunch() {
+        if (launchDelay != null) {
+            launchFuture = schedule(() -> machine.receiveEvent(new LaunchMatch()), launchDelay);
+        }
     }
 
     /**
@@ -1529,6 +1585,46 @@ public final class MockGameLifecycle {
             gpgnetSender.playerOption(player.playerId(), "StartSpot", seat.startSpot());
             gpgnetSender.playerOption(player.playerId(), "Faction", seat.faction());
         }
+    }
+
+    /* Sends a LaunchStatus, recording a failed send as connection loss (WBS-3.2.4.3-fix, #534). */
+    private void sendLaunchStatus(String launchStatus) throws FailedTransitionException {
+        try {
+            gpgnetSender.launchStatus(launchStatus);
+        } catch (IOException e) {
+            throw recordSendFailure(e);
+        }
+    }
+
+    /**
+     * Reports this matchmaker game's {@code LaunchStatus} and arms the next report, every {@link
+     * #LAUNCH_STATUS_PERIOD} until launch, as FA's {@code ShareLaunchStatusThread} does
+     * (WBS-3.2.4.3-fix, #534): {@code Ready} once {@code EstablishedPeer} has been sent for every
+     * expected player but this one ({@code CreateLaunchStatus}), else {@code Missing local peers}.
+     * The first {@code Ready} also arms the launch delay ({@link #armLaunch()}), so the game has
+     * reported it before it launches, as FA's does.
+     *
+     * <p>The next report is a self-loop FSM timeout on {@code state}, which the caller names
+     * because inside a transition action the machine still reports the state being left. A
+     * self-loop commits nothing, so the launch and crash timers stay armed, while the commit into
+     * LIVE or ENDED disarms it and teardown cancels the FSM's scheduling: nothing follows {@code
+     * GameState Launching}, as FA's thread ends with its lobby at launch. Both timers are armed
+     * after the send, so a failed send leaves neither behind.
+     *
+     * @param state HOSTING or JOINING, the state the reports run in
+     * @throws FailedTransitionException into ENDED if the report cannot be sent
+     */
+    private void shareLaunchStatus(GameState state) throws FailedTransitionException {
+        boolean ready = establishedPeers.size() >= config.expectedPlayers() - 1;
+        sendLaunchStatus(ready ? "Ready" : "Missing local peers");
+        if (ready && !reportedReady) {
+            reportedReady = true;
+            armLaunch();
+        }
+        machine.setTimeout(
+                LAUNCH_STATUS_PERIOD.toMillis(),
+                states.get(state),
+                ignored -> shareLaunchStatus(state));
     }
 
     /* The team an army plays on. Configured for a two-team game, so armies alternate between

@@ -2,6 +2,7 @@ package com.faforever.testharness.game.lifecycle;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import ch.qos.logback.classic.Logger;
@@ -19,6 +20,7 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -30,11 +32,12 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 /**
- * The peer frames of FA's matchmaker lobby (WBS-3.2.4.1-fix, #506), and its host's {@code
- * PlayerOption} frames (WBS-3.2.4.3-fix, #534). FA loads {@code autolobby.lua} rather than the
- * custom {@code lobby.lua} when {@code CreateLobby}'s init mode is 1, which the adapter sends for a
- * matchmaker game, and the two answer peer frames differently. The custom lobby's are pinned by
- * {@link LifecyclePeerConnectTest} and {@link LifecyclePeerDisconnectTest}.
+ * The peer frames of FA's matchmaker lobby (WBS-3.2.4.1-fix, #506), its host's {@code PlayerOption}
+ * frames, its {@code LaunchStatus} reports and its launch once {@code Ready} (WBS-3.2.4.3-fix,
+ * #534). FA loads {@code autolobby.lua} rather than the custom {@code lobby.lua} when {@code
+ * CreateLobby}'s init mode is 1, which the adapter sends for a matchmaker game, and the two answer
+ * peer frames differently. The custom lobby's are pinned by {@link LifecyclePeerConnectTest} and
+ * {@link LifecyclePeerDisconnectTest}.
  *
  * <p>As there, frames arrive over a real socket from {@link ScriptedGpgNetServer} and the game's
  * answers are read back from it, so the dispatcher registration is under test too. A link comes up
@@ -43,6 +46,10 @@ import org.slf4j.LoggerFactory;
  * sent once its peer is registered, or the report would be spent before there was anyone to report.
  * A matchmaker host answers {@code ConnectToPeer} with nothing, so {@link #announce} waits for the
  * line the game logs inside that action instead.
+ *
+ * <p>A matchmaker game also reports its {@code LaunchStatus} every 2 s, so a frame can land either
+ * side of one wherever a test is slow. {@link #nextFrame} and {@link #assertNoFrame} pass over
+ * those reports, and the tests about them read every frame in order with {@link #nextRawFrame}.
  */
 final class LifecycleMatchmakerLobbyTest {
 
@@ -60,6 +67,24 @@ final class LifecycleMatchmakerLobbyTest {
      * transition action, so anything it was going to send has arrived well within this.
      */
     private static final long NO_FRAME_MILLIS = 300;
+
+    /** Budget for a periodic {@code LaunchStatus}: one 2 s period, with room for a loaded box. */
+    private static final long STATUS_TIMEOUT_SECONDS = 10;
+
+    /** How long a launch that must not come is waited for, with a launch delay of zero. */
+    private static final long NO_LAUNCH_MILLIS = 500;
+
+    /** How long after {@code GameState Launching} no report may come: past one 2 s period. */
+    private static final long AFTER_LAUNCH_MILLIS = 2500;
+
+    /** How long the period test counts reports for. */
+    private static final long PERIOD_WINDOW_MILLIS = 4500;
+
+    /**
+     * The most reports that fit in {@link #PERIOD_WINDOW_MILLIS} at FA's 2 s period, with one to
+     * spare. A loaded machine can only delay a report, so this bound cannot fail spuriously.
+     */
+    private static final int MAX_STATUSES_IN_WINDOW = 3;
 
     /** PlayerOption frames a custom host emits per player it configures: Army through Color. */
     private static final int CUSTOM_PLAYER_OPTION_FRAMES = 5;
@@ -96,6 +121,12 @@ final class LifecycleMatchmakerLobbyTest {
     private static final Map<String, String> GAME_OPTION = Map.of("Victory", "demoralization");
 
     private MockGameConfig config;
+
+    /**
+     * The launch delay the lifecycle is built with: {@code null}, never launching on its own, but
+     * for the tests of the launch on {@code Ready}.
+     */
+    private Duration launchDelay;
 
     private ScriptedGpgNetServer gpgnet;
 
@@ -145,7 +176,7 @@ final class LifecycleMatchmakerLobbyTest {
     }
 
     @Test
-    void aHostAnswersHostGameWithNothingNotEvenItsGameOptions() throws Exception {
+    void aHostSendsNoPlayerOptionOrGameOptionOnHostGame() throws Exception {
         config = newConfig(GAME_OPTION);
 
         MockGameLifecycle lifecycle = hosting();
@@ -153,8 +184,93 @@ final class LifecycleMatchmakerLobbyTest {
         // FA's matchmaker host seats itself and reports nobody until a joiner is seated, and it
         // sends no GameOption (AutolobbyController.lua). The skipped option is logged instead.
         awaitLogged("not sending 1 --game-option");
-        assertNoFrame("the matchmaker lobby sends nothing on HostGame");
+        assertNoFrame("the matchmaker lobby sends only its LaunchStatus on HostGame");
         assertEquals(GameState.HOSTING, lifecycle.getState());
+    }
+
+    @Test
+    void aHostReportsHostingThenMissingLocalPeers() throws Exception {
+        hosting();
+
+        // FA's host reports Hosting as it starts hosting, and its 2 s reports start there too,
+        // with no peer linked yet. FA's Lua does not fix which of the two comes first.
+        assertEquals(launchStatus("Hosting"), nextRawFrame());
+        assertEquals(launchStatus("Missing local peers"), nextRawFrame());
+    }
+
+    @Test
+    void aHostReportsReadyOnceItsJoinerIsLinkedAndStaysReadyAfterItLeaves() throws Exception {
+        hosting();
+        announce(peer, PEER_ID);
+        sendDatagram(PEER_ID, 0);
+        assertEquals(established(PEER_ID), nextFrame());
+        drainFrames(2 * MATCHMAKER_PLAYER_OPTION_FRAMES);
+
+        // Of the 2 players expected, the one other than the host is linked.
+        assertEquals("Ready", nextStatus());
+
+        depart(PEER_ID);
+        assertEquals(GpgNetFrame.of("DisconnectedPeer", Integer.toString(PEER_ID)), nextFrame());
+
+        // FA never forgets a linked peer (ConnectionMatrix), so a departure leaves it Ready.
+        assertEquals("Ready", nextStatus());
+    }
+
+    @Test
+    void launchStatusRepeatsEveryTwoSecondsAndNoFaster() throws Exception {
+        hosting();
+        nextStatus();
+        nextStatus();
+
+        int statuses = 0;
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PERIOD_WINDOW_MILLIS);
+        while (true) {
+            long left = deadline - System.nanoTime();
+            if (left <= 0) {
+                break;
+            }
+            GpgNetFrame frame = pollOrNull(left);
+            if (frame != null) {
+                assertEquals("LaunchStatus", frame.command(), "only a LaunchStatus is due");
+                statuses++;
+            }
+        }
+
+        assertTrue(
+                statuses <= MAX_STATUSES_IN_WINDOW,
+                statuses + " LaunchStatus frames in " + PERIOD_WINDOW_MILLIS + " ms");
+    }
+
+    @Test
+    void noLaunchStatusFollowsTheLaunch() throws Exception {
+        MockGameLifecycle lifecycle = hosting();
+
+        lifecycle.launchMatch();
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 1);
+        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextFrame());
+
+        // FA's reports end with its lobby at launch. One still armed would come within a period.
+        assertNoRawFrameFor(AFTER_LAUNCH_MILLIS, "no LaunchStatus once the match is live");
+    }
+
+    @Test
+    void aHostLaunchesOnlyOnceItHasReportedReady() throws Exception {
+        launchDelay = Duration.ZERO;
+        hosting();
+
+        // With no delay, a launch armed on HostGame would come at once.
+        assertNoFrameFor(NO_LAUNCH_MILLIS, "no launch before the joiner is linked");
+
+        announce(peer, PEER_ID);
+        sendDatagram(PEER_ID, 0);
+        assertEquals(established(PEER_ID), nextFrame());
+        drainFrames(2 * MATCHMAKER_PLAYER_OPTION_FRAMES);
+
+        // Ready first, then the launch it arms: the set again, then Launching.
+        assertEquals("Ready", nextStatus());
+        assertPlayerOptions(PEER_ID, PEER_SEAT, 1);
+        assertPlayerOptions(OWN_ID, OWN_SEAT, 2);
+        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextFrame());
     }
 
     @Test
@@ -218,13 +334,51 @@ final class LifecycleMatchmakerLobbyTest {
     }
 
     @Test
-    void aJoinerAnswersJoinGameAndConnectToPeerWithNothing() throws Exception {
+    void aJoinerSendsNoPeerFrameOnJoinGameOrConnectToPeer() throws Exception {
         MockGameLifecycle lifecycle = joining();
 
         announce(otherPeer, OTHER_PEER_ID);
 
         assertNoFrame("the matchmaker lobby answers neither JoinGame nor ConnectToPeer");
         assertEquals(GameState.JOINING, lifecycle.getState());
+    }
+
+    @Test
+    void aJoinerReportsConnectingAndStartsItsReportsOnItsHostsLink() throws Exception {
+        config = newConfig(Map.of(), 3);
+        joining();
+        assertEquals(launchStatus("Connecting"), nextRawFrame());
+
+        // Another joiner's link is reported, but FA's joiner starts its 2 s reports only once its
+        // connection to the host is up (ConnectionToHostEstablished).
+        announce(otherPeer, OTHER_PEER_ID);
+        sendDatagram(OTHER_PEER_ID, 0);
+        assertEquals(established(OTHER_PEER_ID), nextRawFrame());
+        assertNoRawFrameFor(NO_FRAME_MILLIS, "no LaunchStatus before the host's link is up");
+
+        sendDatagram(PEER_ID, 0);
+
+        // Linked to both the others of the 3 expected: Ready. The mock reports it after the link
+        // report; FA's Lua does not fix the order.
+        assertEquals(established(PEER_ID), nextRawFrame());
+        assertEquals(launchStatus("Ready"), nextRawFrame());
+        // FA's lobby only lets its host send PlayerOption (SendPlayerOptionToServer).
+        assertNoFrame("a joiner reports no PlayerOption");
+    }
+
+    @Test
+    void aJoinerLaunchesOnlyOnceItHasReportedReady() throws Exception {
+        launchDelay = Duration.ZERO;
+        joining();
+
+        // With no delay, a launch armed on JoinGame would come at once.
+        assertNoFrameFor(NO_LAUNCH_MILLIS, "no launch before the host is linked");
+
+        sendDatagram(PEER_ID, 0);
+
+        assertEquals(established(PEER_ID), nextRawFrame());
+        assertEquals(launchStatus("Ready"), nextRawFrame());
+        assertEquals(GpgNetFrame.of("GameState", "Launching"), nextRawFrame());
     }
 
     @Test
@@ -345,7 +499,7 @@ final class LifecycleMatchmakerLobbyTest {
         sendDatagram(PEER_ID, 0);
         awaitLogged("first datagram from sender " + PEER_ID + " ");
 
-        assertNoFrame("FA's custom lobby sends no EstablishedPeer");
+        assertNoRawFrameFor(NO_FRAME_MILLIS, "FA's custom lobby sends no EstablishedPeer");
     }
 
     /** A matchmaker lifecycle in LOBBY, with the connection open and the lobby socket bound. */
@@ -360,7 +514,8 @@ final class LifecycleMatchmakerLobbyTest {
      */
     private MockGameLifecycle inLobby(final int initMode) throws Exception {
         MockGameLifecycle lifecycle =
-                new MockGameLifecycle(config, new GpgNetConnection(gpgnet.port()), null, null);
+                new MockGameLifecycle(
+                        config, new GpgNetConnection(gpgnet.port()), launchDelay, null);
         lifecycles.add(lifecycle);
         lifecycle.start();
 
@@ -456,12 +611,23 @@ final class LifecycleMatchmakerLobbyTest {
     }
 
     /**
-     * This test's config, with this game's seat and the given game options.
+     * This test's config, with this game's seat, the given game options and 2 players expected.
      *
      * @param gameOptions the game options a host would send
      */
     private static MockGameConfig newConfig(final Map<String, String> gameOptions)
             throws IOException {
+        return newConfig(gameOptions, 2);
+    }
+
+    /**
+     * This test's config, with this game's seat.
+     *
+     * @param gameOptions the game options a host would send
+     * @param expectedPlayers how many players the match has
+     */
+    private static MockGameConfig newConfig(
+            final Map<String, String> gameOptions, final int expectedPlayers) throws IOException {
         return new MockGameConfig(
                 50000,
                 TestPorts.freeUdpPort(),
@@ -474,12 +640,17 @@ final class LifecycleMatchmakerLobbyTest {
                 0,
                 -1,
                 OWN_SEAT,
-                2);
+                expectedPlayers);
     }
 
     /** The frame FA's matchmaker lobby reports a link with: the id as a string chunk. */
     private static GpgNetFrame established(final int playerId) {
         return GpgNetFrame.of("EstablishedPeer", Integer.toString(playerId));
+    }
+
+    /** The frame FA's matchmaker lobby reports {@code status} with. */
+    private static GpgNetFrame launchStatus(final String status) {
+        return GpgNetFrame.of("LaunchStatus", status);
     }
 
     /** Reads FA's matchmaker set for one seated player: Team, Army, StartSpot, Faction. */
@@ -499,24 +670,83 @@ final class LifecycleMatchmakerLobbyTest {
         return "127.0.0.1:" + relay.getLocalPort();
     }
 
-    /** The next frame the game emitted, failing after {@link #TIMEOUT_SECONDS}. */
+    /**
+     * The next frame the game emitted that is not a {@code LaunchStatus}, failing after {@link
+     * #TIMEOUT_SECONDS}.
+     */
     private GpgNetFrame nextFrame() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+        while (true) {
+            GpgNetFrame frame =
+                    gpgnet.pollReceived(
+                            Math.max(1, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+            if (!frame.command().equals("LaunchStatus")) {
+                return frame;
+            }
+        }
+    }
+
+    /** The next frame the game emitted, {@code LaunchStatus} included. */
+    private GpgNetFrame nextRawFrame() throws InterruptedException {
         return gpgnet.pollReceived(TIMEOUT_SECONDS, TimeUnit.SECONDS);
     }
 
-    /** Consumes {@code count} frames the game emitted, failing on one that does not come. */
+    /**
+     * The status of the next frame the game emitted, which must be a {@code LaunchStatus}, within
+     * {@link #STATUS_TIMEOUT_SECONDS}.
+     */
+    private String nextStatus() throws InterruptedException {
+        GpgNetFrame frame = gpgnet.pollReceived(STATUS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        assertEquals("LaunchStatus", frame.command(), "the next frame: " + frame);
+        return frame.stringArg(0);
+    }
+
+    /**
+     * Consumes {@code count} frames that are not a {@code LaunchStatus}, failing if one is late.
+     */
     private void drainFrames(final int count) throws InterruptedException {
         for (int i = 0; i < count; i++) {
             nextFrame();
         }
     }
 
-    /** Asserts the game emits nothing more within {@link #NO_FRAME_MILLIS}. */
-    private void assertNoFrame(final String why) {
+    /** Asserts the game emits nothing but {@code LaunchStatus} within {@link #NO_FRAME_MILLIS}. */
+    private void assertNoFrame(final String why) throws InterruptedException {
+        assertNoFrameFor(NO_FRAME_MILLIS, why);
+    }
+
+    /** Asserts the game emits nothing but {@code LaunchStatus} within {@code millis}. */
+    private void assertNoFrameFor(final long millis, final String why) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+        while (true) {
+            long left = deadline - System.nanoTime();
+            if (left <= 0) {
+                return;
+            }
+            GpgNetFrame frame = pollOrNull(left);
+            if (frame != null && !frame.command().equals("LaunchStatus")) {
+                fail(why + ": " + frame);
+            }
+        }
+    }
+
+    /**
+     * Asserts the game emits nothing at all, {@code LaunchStatus} included, within {@code millis}.
+     */
+    private void assertNoRawFrameFor(final long millis, final String why) {
         assertThrows(
                 AssertionError.class,
-                () -> gpgnet.pollReceived(NO_FRAME_MILLIS, TimeUnit.MILLISECONDS),
+                () -> gpgnet.pollReceived(millis, TimeUnit.MILLISECONDS),
                 why);
+    }
+
+    /** The next frame within {@code nanos}, or {@code null} if none comes. */
+    private GpgNetFrame pollOrNull(final long nanos) throws InterruptedException {
+        try {
+            return gpgnet.pollReceived(nanos, TimeUnit.NANOSECONDS);
+        } catch (AssertionError none) {
+            return null;
+        }
     }
 
     /** Bounded wait for a line that starts with {@code prefix}, which another thread logs. */
